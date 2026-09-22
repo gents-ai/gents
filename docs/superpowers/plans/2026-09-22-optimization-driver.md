@@ -2,61 +2,56 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the impure half of `gents::optimization`: an `OptimizationJob` journal document, a `Proposer` seam with a scripted implementation, a pure structural gate, a driver that runs rounds of native `EvalRun`s and decides them with `PolicyV2`, and operator-only `promote`/`revert` through the Track 0 compare-and-set.
+**Goal:** Land the impure half of `gents::optimization`: an `OptimizationJob` journal document, a `Proposer` seam with a scripted implementation, a pure structural gate, a driver that runs rounds of native `EvalRun`s and decides them with `PolicyV2`, the library functions `show`, `promote` and `revert` (the last two through the Track 0 compare-and-set), and a new unfrozen `eval::report` module holding the verdict-to-evidence projection both optimization and M4 consume.
 
-**Architecture:** Four stacked PRs over one rebased base. PR 1 adds the `OptimizationJob` collection and the typed, length-guarded journal that refines `Optimization.appendIf`. PR 2 adds the pure candidate machinery: the closure target, the candidate pack materializer, the `Proposer` trait with `ScriptedProposer`, and the structural gate. PR 3 adds the driver: it freezes a baseline, runs a train `EvalRun`, asks the proposer, gates the candidate, runs a two-cell validation `EvalRun` on shared seeds, projects verdicts into `Evidence`, calls `decide`, journals the result, and finalizes on the held-out split. PR 4 adds `promote` and `revert` over `DesiredStateApplyPlan::with_expected`, and one live accept plus one live reject, both ignored by default. No Lean is added.
+**Architecture:** Four stacked PRs over one base the orchestrator supplies. PR 1 adds the `OptimizationJob` collection, the one-field closure target, and the typed, length-guarded journal that refines `Optimization.appendIf`. PR 2 adds the candidate pack materializer, the `Proposer` trait with `ScriptedProposer`, and the structural gate. PR 3 adds `eval::report`, then the driver: it freezes a baseline, runs a train `EvalRun`, asks the proposer, gates the candidate, runs a two-cell validation `EvalRun` on shared seeds (re-runs add pairs), calls `decide`, journals the result, and finalizes on the held-out split; then `show`, and the scripted matrix. PR 4 adds `promote` and a terminal `revert` over `DesiredStateApplyPlan::with_expected`, and one live accept plus one live reject, ignored until M5. No Lean is added.
 
 **Tech Stack:** Rust 1.97.1, tokio, `async_trait`, DefraDB via `gents::defra_node::EmbeddedNode`, `serde_json`, `sha2`, `tempfile`, `tokio_util::sync::CancellationToken`.
 
-**Spec:** `docs/superpowers/specs/2026-09-21-optimization-on-eval-design.md` (all sections approved 2026-09-21). Umbrella: `2026-09-21-eval-and-optimization-umbrella.md` sections 4 to 7, milestone M6. Contract: `2026-09-21-eval-core-contract-design.md`. This plan covers everything in spec 5 that M6a did not: M6a delivered `Proofs/Optimization.lean`, its conformance emitter, and `PolicyV2`, and none of that is reopened here.
+**Spec:** `docs/superpowers/specs/2026-09-21-optimization-on-eval-design.md` (approved 2026-09-21; amended by orchestrator ruling R2 to one target field). Umbrella: `2026-09-21-eval-and-optimization-umbrella.md` sections 4 to 7, milestone M6. Contract: `2026-09-21-eval-core-contract-design.md`. This plan covers everything in spec 5 that M6a did not: M6a delivered `Proofs/Optimization.lean`, its conformance emitter, and `PolicyV2`, and none of that is reopened here. Orchestrator rulings R1–R9 and fixes F1–F12 are recorded in `.superpowers/sdd/m6b-plan-fixes.md` and applied throughout.
 
-**Depends on:** the M6b base, defined under "The M6b base" below. This plan runs under `docs/superpowers/orchestration/2026-09-21-parallel-coordinators.md`.
+**Depends on:** the M6b base, defined below. This plan runs under `docs/superpowers/orchestration/2026-09-21-parallel-coordinators.md`.
 
 ---
 
 ## The M6b base
 
-M6b consumes four landed branches that do not share a tip. Build the base once, before PR 1, in the coordinator's worktree:
+Finding F10: the M6b base is **`eval/13-runner-embedded` rebased onto the amended `eval/05-contract`**, built by the orchestrator at spin-up, with its commit filled in then. This plan pins no hash for it; earlier hashes of these branches are stale after the M1 amendment. The coordinator records the supplied commit in the ledger at first use, and every branch in this plan bases on it or on its predecessor in the stack.
 
-| Branch | Tip | What M6b needs from it |
+The base must carry four things. The first task's first step verifies them and stops, messaging the orchestrator, if any is missing:
+
+| Needed | Supplied by | Check |
 |---|---|---|
-| `eval/13-runner-embedded` | `028aa4188` | `gents::eval::runner`: `run`, `resume`, `RunRequest`, `CellSource`, `ScriptedExecutor`, `CheckRegistry` |
-| `eval/06-protected` | `9c8a590e0` | `PROTECTED_DATASTORE_COLLECTIONS` with the `"OptimizationJob"` reserved literal PR 1 replaces |
-| `optimization/01-lean` → `02-conformance` → `03-cas` | `f3ebf6b9f` | `DesiredStateApplyPlan::with_expected`, `DesiredStateExpectation`, `StaleExpectation`, `stale_expectation` |
-| `optimization/10-lean` → `11-conformance` → `12-policy` | `d0ab985ab` | `PolicyV2`, `Evidence`, `decide`, `evidence_from_pairs`, `Mode`, `DecisionReport` |
+| `gents::eval::runner` (`run`, `resume`, `RunRequest`, `CellSource`, `ScriptedExecutor`, `RunOptions`) and `CheckRegistry` | `eval/10..13` | `git grep -n "pub async fn resume" -- crates/gents/src/eval/runner/mod.rs` |
+| `PROTECTED_DATASTORE_COLLECTIONS` with the `"OptimizationJob"` reserved literal | `eval/06-protected` | `git grep -n '"OptimizationJob"' -- crates/gents/src/document_config/write_tool.rs` |
+| `DesiredStateApplyPlan::with_expected`, `DesiredStateExpectation`, `StaleExpectation`, `stale_expectation` | Track 0, `optimization/01..03` | `git grep -n "pub fn with_expected" -- crates/gents/src/config_client/desired_state.rs` |
+| `PolicyV2`, `Evidence`, `decide`, `evidence_from_pairs`, `Mode`, `DecisionReport` | `optimization/10..12` | `git grep -n "pub fn evidence_from_pairs" -- crates/gents/src/optimization/policy.rs` |
 
-`eval/13-runner-embedded`, `eval/06-protected` and `optimization/10..12` all share `eval/05-contract` at `851db85d6`. `optimization/01..03` shares `main` at `0deb7659c`, which is an ancestor of `eval/05-contract` (verified: `git merge-base --is-ancestor 0deb7659c eval/05-contract` succeeds). So every branch rebases onto a descendant of its own base and no rebase replays work onto an unrelated tree.
-
-**Build it by rebasing, not merging**, in this order, from the main checkout:
-
-```bash
-git rebase --onto eval/13-runner-embedded 851db85d6 eval/06-protected
-git rebase --onto eval/06-protected 0deb7659c optimization/03-cas
-git rebase --onto optimization/03-cas 851db85d6 optimization/12-policy
-```
-
-(`optimization/03-cas` and `optimization/12-policy` are the tips of their own three- and two-commit stacks; rebasing the tip carries the stack, because each stack is linear.)
-
-**Why rebase and not merge.** These four lines become four GitHub pull requests that each target their immediate parent, per CLAUDE.md's stacked-PR rule. A merge commit gives a PR two parents, so GitHub's diff against the parent branch would carry the merge resolution into the descendant's review; a rebase keeps every PR a single-parent, reviewable range. It also keeps `git log --oneline optimization/23-promote --not <parent>` an exact statement of what each PR adds, which is how each PR description's "baseline" line is written.
-
-**"The M6b base" is the resulting `optimization/12-policy` tip.** Record its commit in the ledger at first use; every branch in this plan bases on it or on its predecessor in the stack.
-
-Two facts that this base makes true and that tasks below rely on:
-
-- `crates/gents/src/document_config/write_tool.rs` contains `PROTECTED_DATASTORE_COLLECTIONS` with the literal `"OptimizationJob"` and the doc comment "replace it with the schema constant there". Without `eval/06-protected` in the base that literal does not exist anywhere in the tree (verified: `git grep OptimizationJob` is empty on `eval/13-runner-embedded`), and PR 1 Task 2 would have nothing to replace.
-- `crates/gents/src/config_client/desired_state.rs` contains `DesiredStateApplyPlan::with_expected`. Without `optimization/03-cas` in the base it does not exist (verified: `git grep with_expected 028aa4188 -- crates/gents/src/config_client/desired_state.rs` is empty), and PR 4 could not be written at all.
+Each check prints one line on a correct base and nothing on a wrong one. If the orchestrator's base arrives as a rebase rather than a merge, each PR in this plan stays a single-parent range against its immediate parent, which CLAUDE.md's stacked-PR rule requires.
 
 ## Deviations from the spec and from the brief, decided at planning
 
-- **`evidence_from_paired` is spelled `evidence_from_pairs`.** `crates/gents/src/optimization/mod.rs` on `optimization/12-policy` exports `evidence_from_pairs`; there is no `evidence_from_paired`. Every task below uses the name the code has.
-- **`AgentContext` lives in `crates/gents/src/document_config/context.rs`, not `agent_context.rs`.** Verified by reading the file: the struct is declared at `context.rs:10-55` and `system_prompt` is `Option<String>`.
-- **The structural gate's `validate_desired_state_plan` check becomes a pure pack-closure check.** The spec's step 3 says "`validate_desired_state_plan` passes on the patched closure". That function is `pub(crate) async fn validate_desired_state_plan(txn: &ConfigApplyTxn<'_>, plan: &DesiredStateApplyPlan) -> Result<()>` (`desired_state.rs:233`): it needs a transaction, and it validates the *operator's* closure, which a candidate never touches until promotion. A candidate is evaluated as a pack in a throwaway trial home. So the gate validates the candidate's own reference closure purely, with `DesiredStateApplyPlan::from_pack_config` plus `ConfigReferences::from_documents(...).validate()` — the same rule `validate_desired_state_plan` applies, minus the live read. The operator-closure form of the check runs where it belongs: inside `promote`'s transaction in PR 4.
-- **`TargetField` ships one variant in M6b.** The brief fixes every candidate as "the same pack with ONE field changed (`AgentContext.system_prompt` of the subject behavior's context)". `TargetField::TaskPromptTemplate` and its placeholder-set check are therefore not implemented here; the enum is declared with both variants so the frozen `origin` wire form does not change later, and the Task variant returns a `StructuralRejection` naming it unsupported. Recorded again under "Plan defects I could not resolve".
-- **`run_job` takes a `&CheckRegistry`.** The brief's signature is `run_job(access, request, executor, proposer, policy, cancel)`. `gents::eval::runner::run` requires `registry: &CheckRegistry` (`runner/mod.rs:116-127`) and `CheckRegistry` is neither `Clone` nor serializable, so it cannot ride on the frozen `JobRequest`. It is added as a parameter beside `executor`.
-- **"Stale baseline on promote" is split across PR 3 and PR 4.** The brief lists it in PR 3's matrix, but a promote-time `StaleExpectation` needs `promote`, which PR 4 introduces. PR 3's matrix therefore covers *stale baseline at job start* (`Failed(baseline_drifted)`, spec section 6 "Baseline drift"), and PR 4's matrix covers *stale closure at promote* (`PromotionRefused`, spec section 7). Both cases are tested; neither is dropped.
-- **The scripted matrix is a library test, not an integration test.** The canary at `crates/gents/tests/eval_runner_canary.rs` is the shape being copied, but the matrix needs `CheckRegistry::with` (`checks/mod.rs:72`, `#[cfg(test)] pub(crate)`) to register a feedback-emitting check, and it reuses the `Launching` harness at `crates/gents/src/eval/runner/freeze.rs:839-985` (`pub(crate) mod tests`). Both are crate-internal, so the matrix lives at `crates/gents/src/optimization/driver/matrix.rs` under `#[cfg(test)]`. It still runs under `cargo test -p gents`, which is what spec section 9 requires. The eval runner's own end-to-end loop tests sit in the library for the same reason (`runner/mod.rs:602`).
-- **The verdict-to-score projection is owned here and flagged for M4.** Nothing in `gents::eval` turns `VerdictRecord` rows into `TrialScore` values: `scoring::case_trial_score` takes `VerdictView`, which carries `stage_index` while `VerdictRecord` carries `stage_id`, and the latest-attempt-per-slot selection the umbrella fixes for M4 (section 7) has no implementation. PR 3 Task 1 writes it as `gents::optimization::evidence`. See "Plan defects I could not resolve" for the handoff.
-- **`gents optimization show | promote | revert` CLI wrappers are not in this plan.** The brief scopes M6b to the library. PR 4 ships `promote`/`revert` as library functions with the whole refusal matrix; `show` ships as `recompute_decisions`, the library half of the "recompute every decision from the `EvalVerdict` rows and flag a mismatch" guarantee. The CLI is spec 4a's. Recorded under defects.
+Orchestrator rulings (from `.superpowers/sdd/m6b-plan-fixes.md`):
+
+- **R1 — The CLI is M4's.** `gents optimization show | promote | revert` are spec 4a's commands. M6b delivers the library functions they wrap: `show(access, owner, job_id) -> JobView` (PR 3 Task 6), `promote` and `revert` (PR 4 Task 1). No CLI task is in this plan.
+- **R2 — One target field.** v1 optimizes exactly `AgentContext.system_prompt`. `TargetField` has one variant, the Task `prompt_template` target and its placeholder-set check are deferred, and the spec is amended accordingly (sections 1 and 3).
+- **R3 — `eval::report` owns the verdict projection.** Latest-attempt-per-slot selection, `VerdictRecord → VerdictView`, per-run pairing and usage live in a new, unfrozen `crates/gents/src/eval/report/` module (PR 3 Task 1). `optimization` consumes it; M4 will too. Nothing new goes into the frozen `eval::scoring`.
+- **R4 — `Reverted` is terminal**, as spec section 6 draws it. `JobState::Reverted` exists; a further promotion is a new job.
+- **R5 — The subject pack is operator-supplied.** Spec section 1 says the baseline subject is the owner's configuration exported as a pack snapshot. Here the operator supplies the pack (`JobRequest::baseline_pack`, a directory), and freeze cross-checks that the pack's context `system_prompt` equals the live closure's text for the same context, refusing the job otherwise. The live closure is still what promotion guards; the pack is what trials run.
+- **R6 — Verb signatures.** `promote` and `revert` take the job's identity `(access, owner, job_id)`, plus spec section 7's `digest` and `by`, the acting DID. `jobs_dir` and `behavior_id` are persisted in `JobOrigin` (`jobs_dir`, `subject.behavior_id`), so neither verb needs the original request. `by` is the launching home's identity supplied by the caller, the same pattern as the runner's `evaluator_did`, and is compared against `origin.owner`; an authenticated, enforced identity boundary is spec 2b's.
+- **R7 — The live scenarios run in M5.** They take the M3 definition pack directory and the definition id from environment variables and stay `#[ignore]`.
+- **R8 — Job directories** live under `<launching home>/eval/jobs/<job_id>/`. Retention is M4's `gents optimization rm`; there is no TTL.
+- **R9 — No driver fault-injection seam.** Resume is covered by interrupting a job with a cancelled token and with an erroring proposer, then comparing its journal against an uninterrupted twin job (PR 3 Task 5).
+
+Planning deviations, verified against the code:
+
+- **`evidence_from_paired` is spelled `evidence_from_pairs`,** and it lives at `crate::optimization::policy::evidence_from_pairs` (finding F4); there is no `evidence_from_paired`.
+- **`AgentContext` lives in `crates/gents/src/document_config/context.rs`,** not `agent_context.rs`; `system_prompt` is `Option<String>`.
+- **The structural gate's closure check is pure.** `validate_desired_state_plan` (`desired_state.rs:233`) is `pub(crate)`, needs a transaction, and validates the operator's closure, which a candidate never touches until promotion. The gate applies the same rule to the candidate pack's own documents with `DesiredStateApplyPlan::from_pack_config` and `ConfigReferences::from_documents(...).validate()`; the live form runs inside `promote`'s transaction.
+- **`run_job` takes a `&CheckRegistry`.** `gents::eval::runner::run` requires one, and `CheckRegistry` is neither `Clone` nor serializable, so it cannot ride on the request.
+- **Stale baseline is tested twice.** At job start (`Failed(baseline_drifted)`, PR 3 Task 5) and at promote time (`PromotionRefused`, PR 4 Task 1).
+- **The scripted matrix is a library test.** It needs `CheckRegistry::with` (`#[cfg(test)] pub(crate)`) and the `Launching` harness in `eval/runner/freeze.rs`'s `pub(crate) mod tests`, so it lives at `crates/gents/src/optimization/driver/matrix.rs`. It still runs under `cargo test -p gents`.
+- **The closure excludes `EvalDefinition`** (finding F5). `Collection::ALL` includes it, so without the exclusion a definition edit would read as `baseline_drifted`; the driver also checks definition drift first.
 
 ## Global Constraints
 
@@ -73,15 +68,16 @@ Standing rules carried verbatim from `docs/superpowers/orchestration/2026-09-21-
 
 Plus the constraints this milestone adds:
 
-9. **No Lean is edited.** `Proofs/Optimization.lean` and `Proofs/Conformance/Optimization.lean` are complete for M6b. The conformance emitter `optimizationCasesJson` emits `params`, `decisions`, `gates` and `costs` only — it emits **no journal cases** (verified by reading `Proofs/Conformance/Optimization.lean:83-94`), so no journal conformance consumer is written. The Rust journal refines the Lean model through the ordinary unit test in PR 1 Task 3, which reproduces `appendIf_match`, `appendIf_stale_unchanged` and `appendIf_prefix` over the real document. If an implementer believes a Lean change is needed, stop and message the orchestrator.
-10. **One field, one pack.** Every candidate is the baseline subject pack with exactly one field changed: `AgentContext.system_prompt` of the context the subject behavior names. It is materialized as a directory pack under the job's directory and handed to the runner as `CellSource::Directory(<job dir>/rounds/<round>/candidate)`. No other candidate shape exists.
+9. **No Lean is edited.** `Proofs/Optimization.lean` and `Proofs/Conformance/Optimization.lean` are complete for M6b. The conformance emitter `optimizationCasesJson` emits `params`, `decisions`, `gates` and `costs` only — it emits **no journal cases** (`Proofs/Conformance/Optimization.lean:83-94`), so no journal conformance consumer is written. The Rust journal refines the Lean model through the ordinary unit tests in PR 1 Task 4, which reproduce `appendIf_match`, `appendIf_stale_unchanged` and `appendIf_prefix` over the real document. If an implementer believes a Lean change is needed, stop and message the orchestrator.
+10. **One field, one pack.** Every candidate is the baseline subject pack with exactly one field changed: `AgentContext.system_prompt` of the context the subject behavior names. It is materialized as a directory pack under the job's directory and handed to the runner as `CellSource::Directory(<launching home>/eval/jobs/<job_id>/rounds/<round>/candidate)`. No other candidate shape exists.
 11. **The proposer holds no `ConfigAccess`.** `Proposer::propose` takes a `ProposalInput` value and returns a `Proposal` value. The trait's signature admits no node, no transaction and no path. `target.rs` and `subject.rs` build the patch deterministically from the returned text.
 12. **Feedback is read only from the train run's verdicts.** The driver reads `feedback` from the `EvalVerdict` rows of the round's train run and from nowhere else. The runner already nulls `feedback` off the train split (`runner/mod.rs:529-534`) and `append_verdict` refuses it there (`documents.rs:525-527`); this constraint is the driver-side half of the same rule.
-13. **Nothing protected reaches the proposer.** `ProposalInput` carries the current target text, per-check feedback strings and scores, and the rejection history. It carries no `case_id`, no stage prompt, no check params, no tier or split label, no `raw` verdict payload and no other case's body. A test asserts the type has no such field.
-14. **`promote` uses `with_expected` on the baseline context's digest and refuses on `StaleExpectation`.** The plan expects the entire frozen closure and writes only the target document. There is no force flag. `revert` restores `previous_text` the same way, expecting the digest `promote` journaled.
-15. **rustfmt is a CI gate.** `cargo fmt --all --check` exits 0 before every commit. Where a task says "add a module", place the `mod` line where rustfmt sorts it.
-16. **No `unwrap`/`expect` on input-dependent paths outside tests.**
-17. `OptimizationJob` stays out of the `Collection` enum, out of `BRANCHABLE_COLLECTION_NAMES`, and out of `CONVERSATION_COLLECTIONS`, `CLIENT_COLLECTIONS` and `CLIENT_TO_RUNTIME_COLLECTIONS` in `crates/gents/src/agent/p2p_reconcile/templates.rs`. It goes into `LOCAL_AUDIT_COLLECTION_NAMES`, because its journal holds candidate prompts.
+13. **Nothing protected reaches the proposer.** `ProposalInput` carries the current target text, per-check feedback strings and scores, and the rejection history. It carries no `case_id`, no stage prompt, no check params, no tier or split label, no `raw` verdict payload and no other case's body. A test pins the type's field list.
+14. **`promote` uses `with_expected` on the frozen closure, including the baseline context's digest, and refuses on `StaleExpectation`.** The plan writes only the target document. There is no force flag. `revert` restores `previous_text` the same way, expecting the digest `promote` journaled, and ends the job.
+15. **After freeze, only the origin decides** (finding F2). `run_job` reads policy, budgets, seed base, trials per case, inference profile, text cap and job directory from `JobOrigin`; a resume request that disagrees is refused.
+16. **rustfmt is a CI gate.** `cargo fmt --all --check` exits 0 before every commit. Where a task says "add a module", place the `mod` line where rustfmt sorts it.
+17. **No `unwrap`/`expect` on input-dependent paths outside tests.**
+18. `OptimizationJob` stays out of the `Collection` enum, out of `BRANCHABLE_COLLECTION_NAMES`, and out of `CONVERSATION_COLLECTIONS`, `CLIENT_COLLECTIONS` and `CLIENT_TO_RUNTIME_COLLECTIONS` in `crates/gents/src/agent/p2p_reconcile/templates.rs`. It goes into `LOCAL_AUDIT_COLLECTION_NAMES`, because its journal holds candidate prompts. Job directories under `<launching home>/eval/jobs/` hold the same prompts on disk; their removal is M4's `gents optimization rm` (ruling R8).
 
 ## File Structure
 
@@ -92,16 +88,18 @@ Plus the constraints this milestone adds:
 | `crates/gents-protocol/src/schemas.rs` | 1 | The mirror: re-export plus `ALL` and `ALL_COLLECTION_NAMES` |
 | `crates/gents-migration/src/registry.rs` | 1 | The `DEFAULT_BASELINE` pin |
 | `crates/gents/src/document_config/write_tool.rs` | 1 | Replace the `"OptimizationJob"` literal with the schema constant |
-| `crates/gents/src/optimization/job.rs` | 1 | `JobOrigin`, `Budgets`, `JournalEntry`, `JobState`, `JobRecord`, `derive_state`, `checkpoint`, `create_job`, `load_job`, `load_job_in_txn`, `append`, `append_in_txn`, `JournalConflict` |
-| `crates/gents/src/optimization/target.rs` | 1 | `TargetField`, `Target`, `Closure`, `FrozenDocument`, `capture_closure`, `closure_digests`, `current_text`, `apply_text`, `target_digest`, `expectations`, `target_plan` |
-| `crates/gents/src/optimization/subject.rs` | 2 | `MaterializedPack`, `materialize_pack`, `materialize_candidate`, `prompt_asset` |
+| `crates/gents/src/optimization/target.rs` | 1 | `TargetField` (one variant), `Target`, `Closure`, `FrozenDocument`, `capture_closure` (without `EvalDefinition`), `closure_digests`, `current_text`, `apply_text`, `target_digest`, `expectations`, `target_plan` |
+| `crates/gents/src/optimization/job.rs` | 1 | `JobOrigin`, `Budgets`, `JournalEntry`, `JobState` (with terminal `Reverted`), `JobRecord`, `derive_state`, `checkpoint`, `create_job`, `load_job`, `load_job_in_txn`, `append`, `append_in_txn`, `JournalConflict` |
+| `crates/gents/src/optimization/subject.rs` | 2 | `MaterializedPack`, `materialize_pack`, `materialize_candidate`, `baseline_text` |
 | `crates/gents/src/optimization/proposer.rs` | 2 | `ProposalInput`, `CheckFeedback`, `Rejection`, `Proposal`, `Proposer`, `ScriptedProposer` |
 | `crates/gents/src/optimization/gate.rs` | 2 | `StructuralRejection`, `structural_gate` |
-| `crates/gents/src/optimization/evidence.rs` | 3 | `cell_trial_scores`, `token_totals`, `train_feedback`, `decision_seed`, `recompute_decisions` |
-| `crates/gents/src/optimization/driver.rs` | 3 | `JobRequest`, `JobOutcome`, `Checkpoint`, `JobRefused`, `run_job`, round loop, finalization |
-| `crates/gents/src/optimization/driver/matrix.rs` | 3 | The scripted end-to-end matrix |
+| `crates/gents/src/eval/report/{mod.rs,evidence.rs}` | 3 | `RunRows`, `load_run_rows`, `latest_attempts`, `cell_trial_scores`, `paired_evidence`, `concat_paired`, `cell_usage` |
+| `crates/gents/src/optimization/evidence.rs` | 3 | `decision_evidence`, `token_totals`, `train_feedback`, `decision_seed`, the cell ids |
+| `crates/gents/src/optimization/driver.rs` | 3 | `JobRequest`, job paths, run plans, the budget, `run_job` |
+| `crates/gents/src/optimization/driver/matrix.rs` | 3 | The scripted end-to-end matrix and its `pub(crate)` harness |
+| `crates/gents/src/optimization/show.rs` | 3 | `show`, `JobView`, `DecisionView` |
 | `crates/gents/src/optimization/promote.rs` | 4 | `promote`, `revert`, `Promotion`, `PromoteRefused`, `promote_refused` |
-| `crates/gents/tests/optimization_live.rs` | 4 | One live accept and one live reject, both `#[ignore]` |
+| `crates/gents/tests/optimization_live.rs` | 4 | One live accept and one live reject, both `#[ignore]` until M5 |
 | `crates/gents/src/optimization/mod.rs` | 1-4 | Module wiring and the crate's `pub use` surface |
 
 ---
@@ -126,6 +124,19 @@ Branch: `optimization/20-job`, base: the M6b base. Deliverable: a registered, pi
   pub const OPTIMIZATION_JOB_NAME: &str = "OptimizationJob";
   pub const OPTIMIZATION_JOB: &str = include_str!("../schemas/agent/optimization_job.graphql");
   ```
+
+- [ ] **Step 0: Verify the M6b base**
+
+Run, from the worktree root:
+
+```bash
+git grep -n "pub async fn resume" -- crates/gents/src/eval/runner/mod.rs
+git grep -n '"OptimizationJob"' -- crates/gents/src/document_config/write_tool.rs
+git grep -n "pub fn with_expected" -- crates/gents/src/config_client/desired_state.rs
+git grep -n "pub fn evidence_from_pairs" -- crates/gents/src/optimization/policy.rs
+```
+
+Expected: exactly one line from each command. If any prints nothing, the base is wrong: stop and message the orchestrator; do not rebuild it yourself.
 
 - [ ] **Step 1: Write the failing test** — append to the `#[cfg(test)] mod tests` block in `crates/gents-schemas/src/lib.rs`, immediately after `eval_placement_is_decided_per_collection` (which ends at line 624):
 
@@ -334,6 +345,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 This file is the one the spec calls "`target.rs` carries over" (spec section 10). It is pure apart from one transactional read, and it is the only thing that builds a patch from a proposed text. It lands in PR 1 rather than PR 2 because `JobOrigin` in Task 4 is declared against `Target` and `FrozenDocument`; a forward declaration would be the alternative and this is cheaper.
 
+Two rulings shape it. R2: v1 has exactly one target field, `AgentContext.system_prompt`, so `TargetField` has one variant and no placeholder-set check exists. F5: the frozen closure excludes `EvalDefinition` documents. `Collection::ALL` includes `EvalDefinition` (`crates/gents/src/collection.rs`, `ALL` array), so `ConfigReferences::load_in_txn` returns the owner's definitions too; a definition is the instrument, not the subject, and it is frozen separately in `JobOrigin::definition`. Without the exclusion, editing a definition would read as `baseline_drifted` and promotion would demand the definition be unchanged, when the spec calls the first `definition_changed` and never mentions the second.
+
 **Interfaces:**
 - Consumes:
   ```rust
@@ -357,7 +370,7 @@ This file is the one the spec calls "`target.rs` carries over" (spec section 10)
 - Produces:
   ```rust
   pub const MAX_TARGET_TEXT_BYTES: usize = 32 * 1024;
-  pub enum TargetField { AgentContextSystemPrompt, TaskPromptTemplate }
+  pub enum TargetField { AgentContextSystemPrompt }
   impl TargetField {
       pub fn collection(&self) -> Collection;
       pub fn field_name(&self) -> &'static str;
@@ -365,7 +378,9 @@ This file is the one the spec calls "`target.rs` carries over" (spec section 10)
   pub struct Target { pub field: TargetField, pub owner: String, pub id: String }
   pub struct FrozenDocument { pub collection: Collection, pub owner: String, pub id: String, pub digest: String }
   pub type Closure = Vec<(Collection, Value)>;
+  /// Every document `ConfigReferences::load_in_txn` returns except `EvalDefinition`.
   pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Closure>;
+  pub(crate) fn is_closure_collection(collection: Collection) -> bool;
   pub fn closure_digests(closure: &Closure) -> Result<Vec<FrozenDocument>>;
   pub fn current_text(closure: &Closure, target: &Target) -> Result<String>;
   pub fn apply_text(closure: &Closure, target: &Target, text: &str) -> Result<Closure>;
@@ -472,8 +487,9 @@ mod tests {
             .all(|expectation| expectation.digest.is_some()));
     }
 
+    /// Ruling R2: v1 has exactly one target field.
     #[test]
-    fn the_field_names_are_the_document_fields_the_spec_allows() {
+    fn the_one_target_field_is_the_context_system_prompt() {
         assert_eq!(
             TargetField::AgentContextSystemPrompt.collection(),
             Collection::AgentContext
@@ -482,8 +498,24 @@ mod tests {
             TargetField::AgentContextSystemPrompt.field_name(),
             "system_prompt"
         );
-        assert_eq!(TargetField::TaskPromptTemplate.collection(), Collection::Task);
-        assert_eq!(TargetField::TaskPromptTemplate.field_name(), "prompt_template");
+        assert_eq!(
+            serde_json::to_value(TargetField::AgentContextSystemPrompt).unwrap(),
+            json!("agent_context_system_prompt"),
+            "the frozen wire form of the target field"
+        );
+        assert!(
+            serde_json::from_value::<TargetField>(json!("task_prompt_template")).is_err(),
+            "no second target field exists in v1"
+        );
+    }
+
+    /// Finding F5: a definition is frozen in `JobOrigin::definition`, never in
+    /// the closure, so editing it is `definition_changed` and not drift.
+    #[test]
+    fn eval_definitions_never_enter_the_closure() {
+        assert!(!is_closure_collection(Collection::EvalDefinition));
+        assert!(is_closure_collection(Collection::AgentContext));
+        assert!(is_closure_collection(Collection::AgentBehavior));
     }
 }
 ```
@@ -516,29 +548,25 @@ use crate::Collection;
 /// The cap the structural gate holds a proposed text to.
 pub const MAX_TARGET_TEXT_BYTES: usize = 32 * 1024;
 
-/// The only fields an optimization job may change. `TaskPromptTemplate` is
-/// declared so the frozen wire form does not change when it is implemented;
-/// M6b evaluates only [`Self::AgentContextSystemPrompt`], and the structural
-/// gate refuses the other variant by name.
+/// The one field an optimization job may change in v1 (ruling R2). A Task's
+/// `prompt_template` is deferred; adding it is a new variant and a new
+/// structural check, not a flag on this one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TargetField {
     AgentContextSystemPrompt,
-    TaskPromptTemplate,
 }
 
 impl TargetField {
     pub fn collection(&self) -> Collection {
         match self {
             Self::AgentContextSystemPrompt => Collection::AgentContext,
-            Self::TaskPromptTemplate => Collection::Task,
         }
     }
 
     pub fn field_name(&self) -> &'static str {
         match self {
             Self::AgentContextSystemPrompt => "system_prompt",
-            Self::TaskPromptTemplate => "prompt_template",
         }
     }
 }
@@ -561,12 +589,20 @@ pub struct FrozenDocument {
 /// The owner's full desired configuration, in canonical projection form.
 pub type Closure = Vec<(Collection, Value)>;
 
-/// Read the owner's whole configuration inside `txn`, ordered so two reads of
-/// the same state produce the same closure.
+/// Whether documents of `collection` belong to the frozen closure. An eval
+/// definition is the instrument, not the subject: it is frozen separately in
+/// `JobOrigin::definition`, and editing it is `definition_changed`.
+pub(crate) fn is_closure_collection(collection: Collection) -> bool {
+    collection != Collection::EvalDefinition
+}
+
+/// Read the owner's configuration inside `txn`, ordered so two reads of the
+/// same state produce the same closure.
 pub async fn capture_closure(txn: &ConfigApplyTxn<'_>, owner: &str) -> Result<Closure> {
     let references = crate::ConfigReferences::load_in_txn(txn, owner).await?;
     let mut closure: Closure = references
         .documents()
+        .filter(|((collection, _), _)| is_closure_collection(*collection))
         .map(|((collection, _), value)| (*collection, value.clone()))
         .collect();
     closure.sort_by_key(|(collection, value)| {
@@ -691,7 +727,7 @@ pub use target::{
 - [ ] **Step 5: Run the tests**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::target`
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -745,9 +781,10 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
       pub deadline_unix_secs: Option<u64> }
   pub struct JobOrigin { pub target: Target, pub closure: Vec<FrozenDocument>, pub subject: SubjectRef,
       pub definition: DefinitionRef, pub policy: PolicyV2, pub trials_per_case: u32,
-      pub budgets: Budgets, pub baseline_text: String, pub owner: String, pub seed_base: i64 }
+      pub budgets: Budgets, pub baseline_text: String, pub owner: String, pub seed_base: i64,
+      pub inference_profile_id: String, pub max_text_bytes: usize, pub jobs_dir: PathBuf }
   pub enum JobState { Running, ReadyToPromote, NothingToPromote, Exhausted,
-      Failed { reason: String }, Promoted, Stale }
+      Failed { reason: String }, Promoted, Stale, Reverted }
   impl JobState { pub fn label(&self) -> &'static str; }
   pub struct DriftedRef { pub collection: String, pub id: String }
   pub struct DecisionSummary { pub improved: u32, pub tied: u32, pub worsened: u32,
@@ -827,6 +864,9 @@ mod tests {
             baseline_text: "Watch the mailbox.\n".into(),
             owner: OWNER.into(),
             seed_base: 1_000,
+            inference_profile_id: "local".into(),
+            max_text_bytes: 32 * 1024,
+            jobs_dir: std::path::PathBuf::from("/home/eval/jobs"),
         }
     }
 
@@ -960,7 +1000,12 @@ mod tests {
         });
         assert_eq!(derive_state(&journal), JobState::Promoted);
         journal.push(JournalEntry::Reverted { by: OWNER.into() });
-        assert_eq!(derive_state(&journal), JobState::ReadyToPromote, "a revert restores the offer");
+        assert_eq!(
+            derive_state(&journal),
+            JobState::Reverted,
+            "ruling R4: a revert is terminal; a further promotion is a new job"
+        );
+        assert_eq!(JobState::Reverted.label(), "reverted");
     }
 }
 ```
@@ -983,6 +1028,8 @@ Expected: FAIL to compile, `cannot find function create_job in this scope`.
 //!
 //! The job is the driver's notebook, not a request. `state` is derived, never
 //! claimed, and no runtime ever reconciles this collection.
+
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -1025,6 +1072,14 @@ pub struct JobOrigin {
     pub baseline_text: String,
     pub owner: String,
     pub seed_base: i64,
+    /// Frozen so a resumed job cannot silently change the model both arms run
+    /// on; a resume that names another profile is refused.
+    pub inference_profile_id: String,
+    pub max_text_bytes: usize,
+    /// `<launching home>/eval/jobs` (ruling R8). The job owns
+    /// `<jobs_dir>/<job_id>/`; `promote` rebuilds the checkpoint from the
+    /// baseline copy there, so the operator's verb needs only the job id.
+    pub jobs_dir: PathBuf,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1037,6 +1092,8 @@ pub enum JobState {
     Failed { reason: String },
     Promoted,
     Stale,
+    /// Terminal (ruling R4). A further promotion is a new job.
+    Reverted,
 }
 
 impl JobState {
@@ -1049,6 +1106,7 @@ impl JobState {
             Self::Failed { .. } => "failed",
             Self::Promoted => "promoted",
             Self::Stale => "stale",
+            Self::Reverted => "reverted",
         }
     }
 }
@@ -1060,7 +1118,7 @@ pub struct DriftedRef {
 }
 
 /// The convenience numbers behind a decision. The authority is the referenced
-/// runs' `EvalVerdict` rows; `optimization::evidence::recompute_decisions`
+/// runs' `EvalVerdict` rows; `optimization::show::show`
 /// recomputes every decision from them and flags a mismatch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionSummary {
@@ -1149,9 +1207,8 @@ pub fn derive_state(journal: &[JournalEntry]) -> JobState {
             JournalEntry::Finalized { state: finalized } => state = finalized.clone(),
             JournalEntry::Promoted { .. } => state = JobState::Promoted,
             JournalEntry::PromotionRefused { .. } => state = JobState::Stale,
-            // A revert returns the job to the offer it was before the promote:
-            // the checkpoint still stands and an operator may promote again.
-            JournalEntry::Reverted { .. } => state = JobState::ReadyToPromote,
+            // Terminal, as spec section 6 draws it: `Promoted -> Reverted`.
+            JournalEntry::Reverted { .. } => state = JobState::Reverted,
             _ => {}
         }
     }
@@ -1418,11 +1475,12 @@ Branch: `optimization/21-proposer`, base `optimization/20-job`. Deliverable: eve
   // crates/gents/src/pack.rs
   pub fn declared_paths(manifest: &PackManifest) -> Vec<String>;
   pub fn digest_declared_assets<'a>(manifest: &PackManifest, asset: impl Fn(&str) -> Result<&'a [u8]>) -> Result<String>;
-  pub(crate) fn load_pack_config(
+  // crates/gents/src/pack/loader.rs, re-exported as crate::pack::load_pack_config
+  pub fn load_pack_config(
       manifest: &PackManifest,
       options: &PackInstallOptions,
-      asset: &dyn Fn(&str) -> Result<Vec<u8>>,
-      env: &dyn Fn(&str) -> Option<String>,
+      read_asset: &dyn Fn(&str) -> Result<Vec<u8>>,
+      environment: &dyn Fn(&str) -> Option<String>,
   ) -> Result<PackConfig>;
   pub struct PackInstallOptions { pub agent_did: String }
   // crates/gents/src/document_config/pack_config.rs
@@ -1435,7 +1493,7 @@ Branch: `optimization/21-proposer`, base `optimization/20-job`. Deliverable: eve
   pub struct AgentContext { pub context_id: String, pub agent_did: String,
       pub system_prompt: Option<String>, pub tools_id: Option<String>, /* … */ }
   ```
-  The exact parameter list of `load_pack_config` is read from its one existing call site, `crates/gents/src/eval/runner/freeze.rs` in `fn load_pack`, inside the `CellSource::Directory` arm. Copy that call verbatim.
+  `load_pack_config` resolves a `./`-prefixed `AgentContext.system_prompt` into the sidecar's text (`pack/loader.rs:105-107`), which is why `subject.rs` reads the raw `pack_config.json` to find the sidecar path. Its one existing caller, `fn load_pack` in `crates/gents/src/eval/runner/freeze.rs`, is the shape copied below.
 - Produces:
   ```rust
   pub struct MaterializedPack {
@@ -1454,25 +1512,29 @@ Branch: `optimization/21-proposer`, base `optimization/20-job`. Deliverable: eve
   pub fn materialize_pack(dir: &Path, owner: &str, behavior_id: &str) -> Result<MaterializedPack>;
   pub fn baseline_text(pack: &MaterializedPack) -> Result<String>;
   pub fn materialize_candidate(baseline: &MaterializedPack, owner: &str, text: &str, dir: &Path) -> Result<MaterializedPack>;
+  // test fixtures in subject.rs's `pub(crate) mod tests`, consumed by the gate's tests
+  pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";
+  pub(crate) fn write_fixture_pack(root: &Path);         // sidecar prompt
+  pub(crate) fn write_inline_fixture_pack(root: &Path);  // inline prompt, no sidecar asset
   ```
 
 - [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/subject.rs` holding only this test module:
 
 ```rust
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use serde_json::json;
 
     const OWNER: &str = "did:key:subject-owner";
-    const PROMPT: &str = "Watch the mailbox.\n";
+    pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";
 
     /// The shape of the eval runner's own fixture pack: a manifest, a README,
     /// the canonical config bundle and one behavior sidecar.
-    fn write_pack(root: &Path) {
+    pub(crate) fn write_fixture_pack(root: &Path) {
         std::fs::create_dir_all(root.join("agent_behaviors/monitor")).unwrap();
         std::fs::write(root.join("README.md"), "# monitor fixture\n").unwrap();
-        std::fs::write(root.join("agent_behaviors/monitor/system_prompt.md"), PROMPT).unwrap();
+        std::fs::write(root.join("agent_behaviors/monitor/system_prompt.md"), FIXTURE_PROMPT).unwrap();
         let manifest = json!({
             "manifest_version": 1,
             "name": "monitor_fixture",
@@ -1528,7 +1590,7 @@ mod tests {
     fn a_candidate_is_the_baseline_pack_with_one_file_rewritten() {
         let dirs = tempfile::tempdir().unwrap();
         let baseline_dir = dirs.path().join("baseline");
-        write_pack(&baseline_dir);
+        write_fixture_pack(&baseline_dir);
         let baseline = materialize_pack(&baseline_dir, OWNER, "monitor").unwrap();
 
         assert_eq!(baseline.context_id, "monitor-context");
@@ -1536,7 +1598,7 @@ mod tests {
             baseline.prompt_asset.as_deref(),
             Some("agent_behaviors/monitor/system_prompt.md")
         );
-        assert_eq!(baseline_text(&baseline).unwrap(), PROMPT);
+        assert_eq!(baseline_text(&baseline).unwrap(), FIXTURE_PROMPT);
         assert!(baseline.digest.starts_with("sha256:"));
 
         let candidate_dir = dirs.path().join("candidate");
@@ -1565,14 +1627,14 @@ mod tests {
     fn the_same_text_materializes_to_the_same_digest() {
         let dirs = tempfile::tempdir().unwrap();
         let baseline_dir = dirs.path().join("baseline");
-        write_pack(&baseline_dir);
+        write_fixture_pack(&baseline_dir);
         let baseline = materialize_pack(&baseline_dir, OWNER, "monitor").unwrap();
 
         let one = materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("one")).unwrap();
         let two = materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("two")).unwrap();
         assert_eq!(one.digest, two.digest, "the digest is over content, not location");
 
-        let same = materialize_candidate(&baseline, OWNER, PROMPT, &dirs.path().join("same")).unwrap();
+        let same = materialize_candidate(&baseline, OWNER, FIXTURE_PROMPT, &dirs.path().join("same")).unwrap();
         assert_eq!(
             same.digest, baseline.digest,
             "rewriting the prompt with its own text is the baseline pack"
@@ -1583,12 +1645,42 @@ mod tests {
     fn a_behavior_the_pack_does_not_declare_is_an_error() {
         let dirs = tempfile::tempdir().unwrap();
         let baseline_dir = dirs.path().join("baseline");
-        write_pack(&baseline_dir);
+        write_fixture_pack(&baseline_dir);
         let error = materialize_pack(&baseline_dir, OWNER, "no-such-behavior").unwrap_err();
         assert!(
             format!("{error:#}").contains("no-such-behavior"),
             "{error:#}"
         );
+    }
+
+    /// The same pack with the prompt inline in `pack_config.json` and no
+    /// sidecar asset, for the structural gate's inline branch.
+    pub(crate) fn write_inline_fixture_pack(root: &Path) {
+        write_fixture_pack(root);
+        std::fs::remove_file(root.join("agent_behaviors/monitor/system_prompt.md")).unwrap();
+        let manifest_path = root.join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["assets"] = json!(["README.md", "pack_config.json"]);
+        std::fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+        let config_path = root.join("pack_config.json");
+        let mut config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+        config["contexts"][0]["system_prompt"] = json!(FIXTURE_PROMPT);
+        std::fs::write(&config_path, serde_json::to_vec_pretty(&config).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn an_inline_prompt_is_rewritten_in_the_config_and_nowhere_else() {
+        let dirs = tempfile::tempdir().unwrap();
+        write_inline_fixture_pack(&dirs.path().join("baseline"));
+        let baseline = materialize_pack(&dirs.path().join("baseline"), OWNER, "monitor").unwrap();
+        assert_eq!(baseline.prompt_asset, None);
+        assert_eq!(baseline_text(&baseline).unwrap(), FIXTURE_PROMPT);
+        let candidate =
+            materialize_candidate(&baseline, OWNER, "New text.\n", &dirs.path().join("c")).unwrap();
+        assert_eq!(baseline_text(&candidate).unwrap(), "New text.\n");
+        assert_ne!(candidate.digest, baseline.digest);
     }
 }
 ```
@@ -1800,7 +1892,7 @@ pub use subject::{baseline_text, materialize_candidate, materialize_pack, Materi
 - [ ] **Step 5: Run the tests**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::subject`
-Expected: PASS, 3 tests.
+Expected: PASS, 4 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -2070,6 +2162,8 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Create: `crates/gents/src/optimization/gate.rs`
 - Modify: `crates/gents/src/optimization/mod.rs`
 
+Ruling R2 removes the Task target, so the gate has no `unsupported_target` check and takes no `Target`. Finding F6 makes "the patch touches only the allowed field" exact in both pack shapes: for a sidecar prompt the one changed asset must hold exactly the proposed bytes; for an inline prompt both raw `pack_config.json` values must be equal once `contexts[<context_id>].system_prompt` is masked, and the candidate's unmasked value must be exactly the proposed text.
+
 **Interfaces:**
 - Consumes:
   ```rust
@@ -2077,9 +2171,12 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   pub struct MaterializedPack { pub dir: PathBuf, pub digest: String, pub config: PackConfig,
       pub manifest: PackManifest, pub files: BTreeMap<String, Vec<u8>>,
       pub context_id: String, pub prompt_asset: Option<String> }
-  // crates/gents/src/optimization/target.rs, PR 1 Task 3
-  pub enum TargetField { AgentContextSystemPrompt, TaskPromptTemplate }
-  pub struct Target { pub field: TargetField, pub owner: String, pub id: String }
+  pub fn materialize_pack(dir: &Path, owner: &str, behavior_id: &str) -> Result<MaterializedPack>;
+  pub fn materialize_candidate(baseline: &MaterializedPack, owner: &str, text: &str, dir: &Path) -> Result<MaterializedPack>;
+  // subject.rs test module, PR 2 Task 1 (pub(crate))
+  pub(crate) const FIXTURE_PROMPT: &str;
+  pub(crate) fn write_fixture_pack(root: &Path);
+  pub(crate) fn write_inline_fixture_pack(root: &Path);
   // crates/gents/src/config_client/desired_state.rs
   impl DesiredStateApplyPlan {
       pub fn from_pack_config(config: &PackConfig) -> Result<Self>;
@@ -2098,33 +2195,27 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   pub fn structural_gate(
       baseline: &MaterializedPack,
       candidate: &MaterializedPack,
-      target: &Target,
       text: &str,
       max_text_bytes: usize,
       seen_digests: &[String],
       owner: &str,
   ) -> Result<(), StructuralRejection>;
   ```
+  `reason` is one of `empty_text`, `text_too_long`, `unexpected_change`, `text_mismatch`, `invalid_closure`, `duplicate_candidate`.
 
-- [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/gate.rs` holding only this test module. It reuses the fixture writer from Task 1's tests through a small crate-internal helper, so the fixture exists in one place:
+- [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/gate.rs` holding only this test module:
 
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::optimization::subject::tests::{write_fixture_pack, FIXTURE_PROMPT};
+    use crate::optimization::subject::tests::{
+        write_fixture_pack, write_inline_fixture_pack, FIXTURE_PROMPT,
+    };
     use crate::optimization::subject::{materialize_candidate, materialize_pack};
-    use crate::optimization::target::{Target, TargetField};
 
     const OWNER: &str = "did:key:gate-owner";
-
-    fn target() -> Target {
-        Target {
-            field: TargetField::AgentContextSystemPrompt,
-            owner: OWNER.into(),
-            id: "monitor-context".into(),
-        }
-    }
+    const TEXT: &str = "Watch the mailbox, and say why.\n";
 
     struct Fixture {
         _dirs: tempfile::TempDir,
@@ -2132,10 +2223,14 @@ mod tests {
         baseline: MaterializedPack,
     }
 
-    fn fixture() -> Fixture {
+    fn fixture(inline: bool) -> Fixture {
         let dirs = tempfile::tempdir().unwrap();
         let root = dirs.path().to_path_buf();
-        write_fixture_pack(&root.join("baseline"));
+        if inline {
+            write_inline_fixture_pack(&root.join("baseline"));
+        } else {
+            write_fixture_pack(&root.join("baseline"));
+        }
         let baseline = materialize_pack(&root.join("baseline"), OWNER, "monitor").unwrap();
         Fixture {
             _dirs: dirs,
@@ -2144,58 +2239,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_one_field_candidate_of_a_new_digest_passes() {
-        let fixture = fixture();
-        let text = "Watch the mailbox, and say why.\n";
-        let candidate =
-            materialize_candidate(&fixture.baseline, OWNER, text, &fixture.root.join("c1")).unwrap();
+    fn candidate(fixture: &Fixture, text: &str, name: &str) -> MaterializedPack {
+        materialize_candidate(&fixture.baseline, OWNER, text, &fixture.root.join(name)).unwrap()
+    }
+
+    fn gate(fixture: &Fixture, candidate: &MaterializedPack, text: &str) -> Result<(), StructuralRejection> {
         structural_gate(
             &fixture.baseline,
-            &candidate,
-            &target(),
+            candidate,
             text,
             32 * 1024,
             &[fixture.baseline.digest.clone()],
             OWNER,
         )
-        .unwrap();
+    }
+
+    #[test]
+    fn a_one_field_sidecar_candidate_of_a_new_digest_passes() {
+        let fixture = fixture(false);
+        let candidate = candidate(&fixture, TEXT, "c1");
+        gate(&fixture, &candidate, TEXT).unwrap();
+    }
+
+    #[test]
+    fn a_one_field_inline_candidate_of_a_new_digest_passes() {
+        let fixture = fixture(true);
+        assert_eq!(fixture.baseline.prompt_asset, None);
+        let candidate = candidate(&fixture, TEXT, "c1");
+        gate(&fixture, &candidate, TEXT).unwrap();
     }
 
     #[test]
     fn a_candidate_that_repeats_a_digest_is_rejected_as_a_duplicate() {
-        let fixture = fixture();
-        let candidate = materialize_candidate(
-            &fixture.baseline,
-            OWNER,
-            FIXTURE_PROMPT,
-            &fixture.root.join("c2"),
-        )
-        .unwrap();
-        let rejection = structural_gate(
-            &fixture.baseline,
-            &candidate,
-            &target(),
-            FIXTURE_PROMPT,
-            32 * 1024,
-            &[fixture.baseline.digest.clone()],
-            OWNER,
-        )
-        .unwrap_err();
+        let fixture = fixture(false);
+        let candidate = candidate(&fixture, FIXTURE_PROMPT, "c2");
+        let rejection = gate(&fixture, &candidate, FIXTURE_PROMPT).unwrap_err();
         assert_eq!(rejection.reason, "duplicate_candidate");
-        assert!(rejection.diagnostics().contains("duplicate_candidate"));
+        assert!(rejection.diagnostics().starts_with("duplicate_candidate: "));
     }
 
     #[test]
-    fn a_text_over_the_cap_is_rejected_before_anything_else() {
-        let fixture = fixture();
+    fn an_empty_or_oversized_text_is_rejected_before_anything_else() {
+        let fixture = fixture(false);
+        let empty = candidate(&fixture, "", "c3");
+        assert_eq!(gate(&fixture, &empty, "").unwrap_err().reason, "empty_text");
+
         let long = "x".repeat(33);
-        let candidate =
-            materialize_candidate(&fixture.baseline, OWNER, &long, &fixture.root.join("c3")).unwrap();
+        let oversized = candidate(&fixture, &long, "c4");
         let rejection = structural_gate(
             &fixture.baseline,
-            &candidate,
-            &target(),
+            &oversized,
             &long,
             32,
             &[fixture.baseline.digest.clone()],
@@ -2207,107 +2300,79 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_text_is_rejected() {
-        let fixture = fixture();
-        let candidate =
-            materialize_candidate(&fixture.baseline, OWNER, "", &fixture.root.join("c4")).unwrap();
-        let rejection = structural_gate(
-            &fixture.baseline,
-            &candidate,
-            &target(),
-            "",
-            32 * 1024,
-            &[fixture.baseline.digest.clone()],
-            OWNER,
-        )
-        .unwrap_err();
-        assert_eq!(rejection.reason, "empty_text");
-    }
-
-    #[test]
-    fn a_candidate_that_changed_anything_else_is_rejected() {
-        let fixture = fixture();
-        let text = "Watch the mailbox, and say why.\n";
-        let candidate =
-            materialize_candidate(&fixture.baseline, OWNER, text, &fixture.root.join("c5")).unwrap();
-        // An edit the materializer would never make: the second changed asset
-        // stands in for any patch that reaches past the target field.
-        let mut tampered = candidate.clone();
+    fn a_sidecar_candidate_that_changed_another_asset_is_rejected() {
+        let fixture = fixture(false);
+        let mut tampered = candidate(&fixture, TEXT, "c5");
         tampered
             .files
             .insert("README.md".into(), b"# tampered\n".to_vec());
-        let rejection = structural_gate(
-            &fixture.baseline,
-            &tampered,
-            &target(),
-            text,
-            32 * 1024,
-            &[fixture.baseline.digest.clone()],
-            OWNER,
-        )
-        .unwrap_err();
+        let rejection = gate(&fixture, &tampered, TEXT).unwrap_err();
         assert_eq!(rejection.reason, "unexpected_change");
         assert!(rejection.detail.contains("README.md"), "{}", rejection.detail);
     }
 
+    /// F6: the one changed asset must hold exactly the proposed bytes.
     #[test]
-    fn the_task_prompt_template_target_is_refused_by_name() {
-        let fixture = fixture();
-        let text = "Watch the mailbox, and say why.\n";
-        let candidate =
-            materialize_candidate(&fixture.baseline, OWNER, text, &fixture.root.join("c6")).unwrap();
-        let rejection = structural_gate(
-            &fixture.baseline,
-            &candidate,
-            &Target {
-                field: TargetField::TaskPromptTemplate,
-                ..target()
-            },
-            text,
-            32 * 1024,
-            &[],
-            OWNER,
-        )
-        .unwrap_err();
-        assert_eq!(rejection.reason, "unsupported_target");
+    fn a_sidecar_whose_bytes_are_not_the_proposed_text_is_rejected() {
+        let fixture = fixture(false);
+        let candidate = candidate(&fixture, TEXT, "c6");
+        let rejection = gate(&fixture, &candidate, "Some other text.\n").unwrap_err();
+        assert_eq!(rejection.reason, "text_mismatch");
+    }
+
+    /// F6: in an inline pack the whole config may differ only at the target.
+    #[test]
+    fn an_inline_candidate_that_changed_another_config_field_is_rejected() {
+        let fixture = fixture(true);
+        let mut tampered = candidate(&fixture, TEXT, "c7");
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&tampered.files["pack_config.json"]).unwrap();
+        raw["contexts"][0]["display_name"] = serde_json::json!("Renamed");
+        tampered
+            .files
+            .insert("pack_config.json".into(), serde_json::to_vec_pretty(&raw).unwrap());
+        let rejection = gate(&fixture, &tampered, TEXT).unwrap_err();
+        assert_eq!(rejection.reason, "unexpected_change");
+        assert!(
+            rejection.detail.contains("besides contexts"),
+            "{}",
+            rejection.detail
+        );
+
+        let untampered = candidate(&fixture, TEXT, "c8");
+        let rejection = gate(&fixture, &untampered, "Not what was written.\n").unwrap_err();
+        assert_eq!(rejection.reason, "text_mismatch");
+    }
+
+    /// The pack loader reads an inline value beginning with `./` as a sidecar
+    /// path, so such a text would silently become a different field's meaning.
+    #[test]
+    fn an_inline_text_that_reads_as_a_sidecar_path_is_rejected() {
+        let fixture = fixture(true);
+        let rejection = gate(&fixture, &fixture.baseline.clone(), "./README.md").unwrap_err();
+        assert_eq!(rejection.reason, "unexpected_change");
+        assert!(rejection.detail.contains("./"), "{}", rejection.detail);
     }
 
     #[test]
     fn a_candidate_whose_references_no_longer_resolve_is_rejected() {
-        let fixture = fixture();
-        let text = "Watch the mailbox, and say why.\n";
-        let mut candidate =
-            materialize_candidate(&fixture.baseline, OWNER, text, &fixture.root.join("c7")).unwrap();
+        let fixture = fixture(false);
+        let mut candidate = candidate(&fixture, TEXT, "c9");
         // The context points at a tools document the pack does not declare.
         candidate.config.contexts[0].tools_id = Some("no-such-tools".into());
-        let rejection = structural_gate(
-            &fixture.baseline,
-            &candidate,
-            &target(),
-            text,
-            32 * 1024,
-            &[],
-            OWNER,
-        )
-        .unwrap_err();
+        let rejection = gate(&fixture, &candidate, TEXT).unwrap_err();
         assert_eq!(rejection.reason, "invalid_closure");
-        assert!(
-            rejection.detail.contains("no-such-tools"),
-            "{}",
-            rejection.detail
-        );
+        assert!(rejection.detail.contains("no-such-tools"), "{}", rejection.detail);
     }
 }
 ```
 
-- [ ] **Step 2: Make the fixture writer visible** — in `crates/gents/src/optimization/subject.rs`, change the test module header to `pub(crate) mod tests`, rename `write_pack` to `pub(crate) fn write_fixture_pack`, promote the prompt constant to `pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";`, and update the three call sites inside that module. Nothing else changes.
-
-- [ ] **Step 3: Run it to see it fail**
+- [ ] **Step 2: Run it to see it fail**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::gate`
 Expected: FAIL to compile, `cannot find function structural_gate in this scope`.
 
-- [ ] **Step 4: Write the implementation** — above the test module in `gate.rs`:
+- [ ] **Step 3: Write the implementation** — above the test module in `gate.rs`:
 
 ```rust
 //! The structural gate: everything that can be decided about a candidate
@@ -2321,9 +2386,12 @@ Expected: FAIL to compile, `cannot find function structural_gate in this scope`.
 
 use std::collections::BTreeSet;
 
+use serde_json::Value;
+
 use crate::config_client::DesiredStateApplyPlan;
 use crate::optimization::subject::MaterializedPack;
-use crate::optimization::target::{Target, TargetField};
+
+const CONFIG_ASSET: &str = "pack_config.json";
 
 /// Why a candidate never reached a validation run. `reason` is a closed
 /// vocabulary for the journal; `detail` is diagnostics for an operator.
@@ -2354,6 +2422,27 @@ fn reject(reason: &'static str, detail: impl Into<String>) -> StructuralRejectio
     }
 }
 
+fn raw_config(pack: &MaterializedPack) -> Result<Value, StructuralRejection> {
+    let bytes = pack
+        .files
+        .get(CONFIG_ASSET)
+        .ok_or_else(|| reject("unexpected_change", format!("the pack has no {CONFIG_ASSET}")))?;
+    serde_json::from_slice(bytes)
+        .map_err(|error| reject("unexpected_change", format!("{CONFIG_ASSET} does not parse: {error}")))
+}
+
+/// The raw `system_prompt` of `context_id`, and the config with it masked.
+fn split_prompt(mut raw: Value, context_id: &str) -> Result<(Value, Value), StructuralRejection> {
+    let context = raw["contexts"]
+        .as_array_mut()
+        .into_iter()
+        .flatten()
+        .find(|context| context["context_id"].as_str() == Some(context_id))
+        .ok_or_else(|| reject("unexpected_change", format!("no context {context_id:?}")))?;
+    let prompt = context["system_prompt"].take();
+    Ok((prompt, raw))
+}
+
 /// Decide whether `candidate` may be evaluated at all.
 ///
 /// The checks run in the order a rejection is cheapest to explain, and the
@@ -2362,21 +2451,11 @@ fn reject(reason: &'static str, detail: impl Into<String>) -> StructuralRejectio
 pub fn structural_gate(
     baseline: &MaterializedPack,
     candidate: &MaterializedPack,
-    target: &Target,
     text: &str,
     max_text_bytes: usize,
     seen_digests: &[String],
     owner: &str,
 ) -> Result<(), StructuralRejection> {
-    if target.field != TargetField::AgentContextSystemPrompt {
-        return Err(reject(
-            "unsupported_target",
-            format!(
-                "{:?} is declared but not implemented; M6b optimizes AgentContext.system_prompt only",
-                target.field
-            ),
-        ));
-    }
     if text.trim().is_empty() {
         return Err(reject("empty_text", "a candidate prompt must say something"));
     }
@@ -2384,6 +2463,12 @@ pub fn structural_gate(
         return Err(reject(
             "text_too_long",
             format!("{} bytes exceeds the {max_text_bytes} byte cap", text.len()),
+        ));
+    }
+    if baseline.prompt_asset.is_none() && text.starts_with("./") {
+        return Err(reject(
+            "unexpected_change",
+            "an inline prompt beginning with ./ is read by the pack loader as a sidecar path",
         ));
     }
 
@@ -2406,7 +2491,7 @@ pub fn structural_gate(
     let allowed = baseline
         .prompt_asset
         .clone()
-        .unwrap_or_else(|| "pack_config.json".to_owned());
+        .unwrap_or_else(|| CONFIG_ASSET.to_owned());
     if changed.len() != 1 || changed[0] != &allowed {
         return Err(reject(
             "unexpected_change",
@@ -2421,6 +2506,40 @@ pub fn structural_gate(
                 baseline.context_id, candidate.context_id
             ),
         ));
+    }
+
+    match &baseline.prompt_asset {
+        // Sidecar: the one changed asset holds exactly the proposed bytes.
+        Some(asset) => {
+            if candidate.files.get(asset).map(Vec::as_slice) != Some(text.as_bytes()) {
+                return Err(reject(
+                    "text_mismatch",
+                    format!("{asset:?} does not hold the proposed text"),
+                ));
+            }
+        }
+        // Inline: the configs agree once the target is masked, and the
+        // candidate's target is exactly the proposed text.
+        None => {
+            let (_, baseline_rest) = split_prompt(raw_config(baseline)?, &baseline.context_id)?;
+            let (prompt, candidate_rest) =
+                split_prompt(raw_config(candidate)?, &candidate.context_id)?;
+            if baseline_rest != candidate_rest {
+                return Err(reject(
+                    "unexpected_change",
+                    format!(
+                        "{CONFIG_ASSET} changed besides contexts[{:?}].system_prompt",
+                        baseline.context_id
+                    ),
+                ));
+            }
+            if prompt.as_str() != Some(text) {
+                return Err(reject(
+                    "text_mismatch",
+                    "the inline system_prompt is not the proposed text",
+                ));
+            }
+        }
     }
 
     // The same closure rule `validate_desired_state_plan` applies to a live
@@ -2449,18 +2568,18 @@ pub fn structural_gate(
 }
 ```
 
-- [ ] **Step 5: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod gate;` in rustfmt order and:
+- [ ] **Step 4: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod gate;` in rustfmt order and:
 
 ```rust
 pub use gate::{structural_gate, StructuralRejection};
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::`
-Expected: PASS, including the 7 gate tests, the 3 subject tests, the 3 proposer tests, the 4 target tests, the 5 job tests and M6a's 11 policy tests.
+Expected: PASS, including the 9 gate tests, the 4 subject tests, the 3 proposer tests, the 5 target tests, the 5 job tests and M6a's 11 policy tests.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/gents/src/optimization
@@ -2481,20 +2600,24 @@ Run: `cargo fmt --all --check`
 
 ## PR 3: The driver
 
-Branch: `optimization/22-driver`, base `optimization/21-proposer`. Deliverable: `run_job`, the loop the spec's section 6 diagram describes, and the scripted matrix that proves it.
+Branch: `optimization/22-driver`, base `optimization/21-proposer`. Deliverable: the verdict projection in a new unfrozen `eval::report` module (ruling R3), `run_job` (the loop spec section 6 draws), `show` (ruling R1), and the scripted matrix covering every end-to-end case spec section 9 lists.
 
-### Task 1: Verdicts to evidence
+### Task 1: `eval::report` — verdicts to paired evidence
 
 **Files:**
-- Create: `crates/gents/src/optimization/evidence.rs`
-- Modify: `crates/gents/src/optimization/mod.rs`
+- Create: `crates/gents/src/eval/report/mod.rs`, `crates/gents/src/eval/report/evidence.rs`
+- Modify: `crates/gents/src/eval/mod.rs` (add `pub mod report;` in rustfmt order, between `pub mod outcome;` and `pub mod runner;`)
 
-Nothing in `gents::eval` turns `VerdictRecord` rows into `TrialScore` values: `scoring::case_trial_score` takes `VerdictView`, which carries `stage_index`, while `VerdictRecord` carries `stage_id`, and the latest-attempt-per-slot selection the umbrella fixes for M4 has no implementation anywhere. This module is that projection.
+Ruling R3: nothing in `gents::eval` turns `VerdictRecord` rows into `TrialScore` values — `scoring::case_trial_score` takes `VerdictView`, which carries `stage_index` while `VerdictRecord` carries `stage_id`, and the latest-attempt-per-slot rule the umbrella fixes for M4 (section 7) has no implementation. That projection is an eval concern, so it lives in a new, unfrozen `eval::report` module that optimization consumes now and M4's report will consume later. Nothing new goes into the frozen `eval::scoring`, and `eval::report` imports nothing from `optimization`.
+
+Finding F1: a decision that reads several runs must *add* their pairs, not merge their slots. Two validation attempts share every `(case_id, trial_index)` key, and `pair_trials` reads a repeated key in one cell as `Unknown`, so feeding both runs' trials to one `pair_trials` call would turn every re-run into worst-case imputation. Slots are therefore keyed by `(run_id, case_id, trial_index)`; each run is paired on its own; and `concat_paired` sums the per-run results.
 
 **Interfaces:**
 - Consumes:
   ```rust
-  // crates/gents/src/eval/documents.rs
+  // crates/gents/src/eval/documents.rs (frozen)
+  pub struct RunRecord { pub run_id: String, pub owner: String, pub evaluator_did: String,
+      pub origin: RunOrigin, pub created_at: String, pub invalidated: Option<Invalidation> }
   pub struct TrialRecord { pub identity: TrialIdentity, pub created_at: String, pub completion: Option<TrialCompletion> }
   pub struct TrialIdentity { pub trial_id: String, pub run_id: String, pub cell_id: String,
       pub case_id: String, pub trial_index: u32, pub attempt: u32, pub trial_agent_did: String,
@@ -2502,55 +2625,53 @@ Nothing in `gents::eval` turns `VerdictRecord` rows into `TrialScore` values: `s
   pub struct TrialCompletion { pub ended_at: String, pub stages: Vec<StageCompletion>,
       pub usage: TrialUsage, pub anchor: Anchor }
   pub struct TrialUsage { pub input_tokens: Option<u64>, pub output_tokens: Option<u64> }
-  pub struct VerdictDraft { pub verdict_id: String, pub run_id: String, pub trial_id: String,
-      pub stage_id: String, pub check: String, pub check_version: String, pub tier: EvalTier,
-      pub kind: OutcomeKind, pub provider_reason: Option<ProviderReason>, pub score_bp: Option<u32>,
-      pub weight: u32, pub raw: Value, pub feedback: Option<String>, pub regrade_of: Option<String> }
-  pub type VerdictRecord = VerdictDraft;
+  pub type VerdictRecord = VerdictDraft; // verdict_id, run_id, trial_id, stage_id, check, check_version,
+      // tier, kind, provider_reason, score_bp: Option<u32>, weight: u32, raw, feedback, regrade_of
   pub async fn load_run(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<Option<RunRecord>>;
   pub async fn load_trials(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>>;
   pub async fn load_verdicts(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<Vec<VerdictRecord>>;
-  // crates/gents/src/eval/scoring.rs
+  // crates/gents/src/eval/scoring.rs (frozen)
   pub struct VerdictView { pub verdict_id: String, pub stage_index: usize, pub check: String,
       pub tier: EvalTier, pub kind: OutcomeKind, pub provider_reason: Option<ProviderReason>,
       pub score_bp: Option<u32>, pub weight: u32, pub regrade_of: Option<String> }
   pub fn latest_verdicts(verdicts: Vec<VerdictView>) -> Vec<VerdictView>;
   pub fn case_trial_score(reducer: EvalReducer, verdicts: &[VerdictView]) -> CaseTrialScore;
   pub struct TrialScore { pub case_id: String, pub trial_index: u32, pub score: CaseTrialScore }
+  pub struct PairedEvidence { pub pairs: Vec<Pair>, pub keys: usize, pub dropped_baseline: usize,
+      pub dropped_candidate: usize } // derives Default
   pub fn pair_trials(baseline: &[TrialScore], candidate: &[TrialScore]) -> PairedEvidence;
-  // crates/gents/src/optimization/policy.rs
-  pub fn evidence_from_pairs(paired: &PairedEvidence, expected_cases: &[String], tokens: Option<TokenTotals>) -> Evidence;
-  pub struct TokenTotals { pub baseline_tokens: u64, pub baseline_trials: u64,
-      pub candidate_tokens: u64, pub candidate_trials: u64 }
-  pub fn decide(mode: Mode, policy: &PolicyV2, evidence: &Evidence, seed: u64) -> DecisionReport;
   ```
 - Produces:
   ```rust
+  // crates/gents/src/eval/report/evidence.rs, re-exported from gents::eval::report
+  pub struct RunRows { pub run_id: String, pub case_ids: Vec<String>, pub invalidated: bool,
+      pub trials: Vec<TrialRecord>, pub verdicts: Vec<VerdictRecord> }
+  pub async fn load_run_rows(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<RunRows>;
   pub fn latest_attempts<'a>(trials: &'a [TrialRecord], cell_id: &str) -> Vec<&'a TrialRecord>;
-  pub fn cell_trial_scores(definition: &EvalDefinition, trials: &[TrialRecord],
-      verdicts: &[VerdictRecord], cell_id: &str) -> Vec<TrialScore>;
-  pub fn token_totals(trials: &[TrialRecord], baseline_cell: &str, candidate_cell: &str,
-      max_missing_usage_bp: u64) -> Option<TokenTotals>;
-  pub fn train_feedback(verdicts: &[VerdictRecord]) -> Vec<CheckFeedback>;
-  pub fn decision_seed(run_ids: &[String]) -> u64;
-  pub fn paired_evidence(definition: &EvalDefinition, trials: &[TrialRecord],
-      verdicts: &[VerdictRecord], baseline_cell: &str, candidate_cell: &str,
-      expected_cases: &[String], max_missing_usage_bp: u64) -> Evidence;
-  pub struct DecisionMismatch { pub round: Option<u32>, pub run_ids: Vec<String>,
-      pub journaled: Decision, pub recomputed: Decision, pub invalidated: bool }
-  pub async fn recompute_decisions(access: &ConfigAccess, job: &JobRecord) -> Result<Vec<DecisionMismatch>>;
+  pub fn cell_trial_scores(definition: &EvalDefinition, rows: &RunRows, cell_id: &str) -> Vec<TrialScore>;
+  pub fn paired_evidence(definition: &EvalDefinition, rows: &RunRows, baseline_cell: &str,
+      candidate_cell: &str) -> PairedEvidence;
+  pub fn concat_paired(parts: &[PairedEvidence]) -> PairedEvidence;
+  pub struct CellUsage { pub tokens: u64, pub trials: u64, pub missing: u64 }
+  pub fn cell_usage(rows: &RunRows, cell_id: &str) -> CellUsage;
+  // test fixtures, pub(crate) in evidence.rs's `pub(crate) mod tests`
+  pub(crate) fn one_case_definition() -> EvalDefinition;
+  pub(crate) fn run_rows(run_id: &str, slots: &[Slot]) -> RunRows;
+  pub(crate) struct Slot { pub cell: &'static str, pub trial_index: u32, pub attempt: u32,
+      pub score_bp: Option<u32>, pub tokens: Option<u64>, pub feedback: Option<&'static str> }
   ```
 
-- [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/evidence.rs` holding only this test module:
+- [ ] **Step 1: Write the failing test** — create `crates/gents/src/eval/report/evidence.rs` holding only this test module:
 
 ```rust
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
-    use crate::eval::{Anchor, StageCompletion, TrialIdentity};
+    use crate::document_config::EvalTier;
+    use crate::eval::{Anchor, OutcomeKind, StageCompletion, TrialCompletion, TrialIdentity};
     use serde_json::json;
 
-    fn definition() -> EvalDefinition {
+    pub(crate) fn one_case_definition() -> EvalDefinition {
         serde_json::from_value(json!({
             "definition_id": "monitor-findings",
             "agent_did": "did:key:o",
@@ -2570,227 +2691,289 @@ mod tests {
         .unwrap()
     }
 
-    fn trial(cell: &str, index: u32, attempt: u32, tokens: Option<u64>, completed: bool) -> TrialRecord {
-        TrialRecord {
-            identity: TrialIdentity {
-                trial_id: format!("{cell}-{index}-{attempt}"),
-                run_id: "run".into(),
-                cell_id: cell.into(),
-                case_id: "disk-warning".into(),
-                trial_index: index,
-                attempt,
-                trial_agent_did: "did:key:trial".into(),
-                session_id: "session".into(),
-                seed: 1_000 + index as i64,
-                home_hint: None,
-            },
-            created_at: "2026-09-22T00:00:00Z".into(),
-            completion: completed.then(|| TrialCompletion {
-                ended_at: "2026-09-22T00:01:00Z".into(),
-                stages: vec![StageCompletion {
-                    stage_id: "check".into(),
-                    request_id: None,
-                    terminal_state: None,
-                    failure_kind: None,
-                    provider_reason: None,
-                }],
-                usage: TrialUsage {
-                    input_tokens: tokens,
-                    output_tokens: tokens,
-                },
-                anchor: Anchor {
-                    terminal_states: Vec::new(),
-                    requests: 1,
-                    inference_calls: 1,
-                },
-            }),
+    /// One trial slot of case `disk-warning`. `score_bp: None` leaves the
+    /// attempt unfinished (null completion, no verdict).
+    pub(crate) struct Slot {
+        pub cell: &'static str,
+        pub trial_index: u32,
+        pub attempt: u32,
+        pub score_bp: Option<u32>,
+        pub tokens: Option<u64>,
+        pub feedback: Option<&'static str>,
+    }
+
+    pub(crate) fn slot(cell: &'static str, trial_index: u32, score_bp: u32) -> Slot {
+        Slot {
+            cell,
+            trial_index,
+            attempt: 1,
+            score_bp: Some(score_bp),
+            tokens: Some(10),
+            feedback: None,
         }
     }
 
-    fn verdict(trial_id: &str, score_bp: u32, feedback: Option<&str>) -> VerdictRecord {
-        VerdictRecord {
-            verdict_id: format!("{trial_id}-v"),
-            run_id: "run".into(),
-            trial_id: trial_id.into(),
-            stage_id: "check".into(),
-            check: "captured_rows_count".into(),
-            check_version: "1".into(),
-            tier: EvalTier::Acceptance,
-            kind: OutcomeKind::Passed,
-            provider_reason: None,
-            score_bp: Some(score_bp),
-            weight: 1,
-            raw: json!({"reason_code": "in_range"}),
-            feedback: feedback.map(str::to_owned),
-            regrade_of: None,
+    pub(crate) fn run_rows(run_id: &str, slots: &[Slot]) -> RunRows {
+        let mut rows = RunRows {
+            run_id: run_id.into(),
+            case_ids: vec!["disk-warning".into()],
+            invalidated: false,
+            trials: Vec::new(),
+            verdicts: Vec::new(),
+        };
+        for slot in slots {
+            let trial_id = format!("{run_id}-{}-{}-{}", slot.cell, slot.trial_index, slot.attempt);
+            rows.trials.push(TrialRecord {
+                identity: TrialIdentity {
+                    trial_id: trial_id.clone(),
+                    run_id: run_id.into(),
+                    cell_id: slot.cell.into(),
+                    case_id: "disk-warning".into(),
+                    trial_index: slot.trial_index,
+                    attempt: slot.attempt,
+                    trial_agent_did: "did:key:trial".into(),
+                    session_id: "session".into(),
+                    seed: 1_000 + slot.trial_index as i64,
+                    home_hint: None,
+                },
+                created_at: "2026-09-22T00:00:00Z".into(),
+                completion: slot.score_bp.map(|_| TrialCompletion {
+                    ended_at: "2026-09-22T00:01:00Z".into(),
+                    stages: vec![StageCompletion {
+                        stage_id: "check".into(),
+                        request_id: None,
+                        terminal_state: None,
+                        failure_kind: None,
+                        provider_reason: None,
+                    }],
+                    usage: TrialUsage {
+                        input_tokens: slot.tokens,
+                        output_tokens: slot.tokens,
+                    },
+                    anchor: Anchor {
+                        terminal_states: Vec::new(),
+                        requests: 1,
+                        inference_calls: 1,
+                    },
+                }),
+            });
+            if let Some(score_bp) = slot.score_bp {
+                rows.verdicts.push(VerdictRecord {
+                    verdict_id: format!("{trial_id}-v"),
+                    run_id: run_id.into(),
+                    trial_id,
+                    stage_id: "check".into(),
+                    check: "captured_rows_count".into(),
+                    check_version: "1".into(),
+                    tier: EvalTier::Acceptance,
+                    kind: if score_bp > 0 {
+                        OutcomeKind::Passed
+                    } else {
+                        OutcomeKind::ModelAcceptance
+                    },
+                    provider_reason: None,
+                    score_bp: Some(score_bp),
+                    weight: 1,
+                    raw: json!({"reason_code": "in_range"}),
+                    feedback: slot.feedback.map(str::to_owned),
+                    regrade_of: None,
+                });
+            }
         }
+        rows
     }
 
     #[test]
-    fn a_slot_is_read_at_its_latest_attempt_only() {
-        let trials = [
-            trial("base", 0, 0, Some(10), true),
-            trial("base", 0, 1, Some(10), true),
-        ];
-        let verdicts = [
-            verdict("base-0-0", 0, None),
-            verdict("base-0-1", 10_000, None),
-        ];
-        let scores = cell_trial_scores(&definition(), &trials, &verdicts, "base");
+    fn a_slot_is_read_at_its_latest_completed_attempt() {
+        let mut later = slot("base", 0, 10_000);
+        later.attempt = 2;
+        let rows = run_rows("run", &[slot("base", 0, 0), later]);
+        let scores = cell_trial_scores(&one_case_definition(), &rows, "base");
         assert_eq!(scores.len(), 1, "one slot, one score: {scores:?}");
         assert_eq!(scores[0].score, CaseTrialScore::Scored(10_000));
     }
 
     #[test]
     fn an_unfinished_attempt_contributes_nothing_and_falls_back_to_a_finished_one() {
-        let trials = [
-            trial("base", 0, 0, Some(10), true),
-            trial("base", 0, 1, None, false),
-        ];
-        let verdicts = [verdict("base-0-0", 10_000, None)];
-        let scores = cell_trial_scores(&definition(), &trials, &verdicts, "base");
-        assert_eq!(scores.len(), 1);
-        assert_eq!(scores[0].score, CaseTrialScore::Scored(10_000));
+        let open = Slot {
+            attempt: 2,
+            score_bp: None,
+            ..slot("base", 0, 0)
+        };
+        let rows = run_rows("run", &[slot("base", 0, 10_000), open]);
+        let scores = cell_trial_scores(&one_case_definition(), &rows, "base");
+        assert_eq!(scores, vec![TrialScore {
+            case_id: "disk-warning".into(),
+            trial_index: 0,
+            score: CaseTrialScore::Scored(10_000),
+        }]);
+        let only_open = run_rows("run", &[Slot { score_bp: None, ..slot("base", 0, 0) }]);
+        assert!(cell_trial_scores(&one_case_definition(), &only_open, "base").is_empty());
+    }
 
-        let only_open = [trial("base", 0, 0, None, false)];
-        assert!(cell_trial_scores(&definition(), &only_open, &[], "base").is_empty());
+    /// F1: slots are keyed by run as well, so the same `(case, trial_index)` in
+    /// two runs is two slots, never one ambiguous one.
+    #[test]
+    fn the_same_slot_in_two_runs_is_two_slots() {
+        let mut first = run_rows("run-a", &[slot("base", 0, 10_000)]);
+        let second = run_rows("run-b", &[slot("base", 0, 0)]);
+        first.trials.extend(second.trials);
+        assert_eq!(latest_attempts(&first.trials, "base").len(), 2);
     }
 
     #[test]
-    fn the_cost_gate_is_skipped_when_too_many_trials_report_no_usage() {
-        let with_usage = [
-            trial("base", 0, 0, Some(100), true),
-            trial("cand", 0, 0, Some(150), true),
-        ];
-        let totals = token_totals(&with_usage, "base", "cand", 2_000).expect("usage is present");
+    fn a_run_is_paired_on_its_shared_seed() {
+        let rows = run_rows(
+            "run",
+            &[
+                slot("base", 0, 0),
+                slot("base", 1, 0),
+                slot("cand", 0, 10_000),
+                slot("cand", 1, 10_000),
+            ],
+        );
+        let paired = paired_evidence(&one_case_definition(), &rows, "base", "cand");
+        assert_eq!(paired.keys, 2);
+        assert_eq!(paired.pairs.len(), 2);
+        assert!(paired
+            .pairs
+            .iter()
+            .all(|pair| (pair.baseline_bp, pair.candidate_bp) == (0, 10_000)));
+    }
+
+    /// F1: a re-run adds pairs; it never replaces them and never makes a
+    /// shared key ambiguous.
+    #[test]
+    fn concatenating_two_runs_adds_their_pairs() {
+        let definition = one_case_definition();
+        let slots = || {
+            [
+                slot("base", 0, 0),
+                slot("base", 1, 0),
+                slot("cand", 0, 10_000),
+                slot("cand", 1, 10_000),
+            ]
+        };
+        let one = paired_evidence(&definition, &run_rows("run-a", &slots()), "base", "cand");
+        let two = paired_evidence(&definition, &run_rows("run-b", &slots()), "base", "cand");
+        let both = concat_paired(&[one.clone(), two]);
+        assert_eq!(both.pairs.len(), 4);
+        assert_eq!(both.keys, 4);
+        assert_eq!((both.dropped_baseline, both.dropped_candidate), (0, 0));
+        assert!(both
+            .pairs
+            .iter()
+            .all(|pair| pair.candidate_bp == 10_000), "no pair was imputed: {both:?}");
+        assert_eq!(concat_paired(&[one.clone()]), one);
+    }
+
+    #[test]
+    fn usage_counts_trials_and_the_ones_that_reported_nothing() {
+        let rows = run_rows(
+            "run",
+            &[
+                slot("base", 0, 10_000),
+                Slot {
+                    tokens: None,
+                    ..slot("base", 1, 10_000)
+                },
+            ],
+        );
         assert_eq!(
-            (totals.baseline_tokens, totals.baseline_trials),
-            (200, 1),
-            "input and output are summed"
+            cell_usage(&rows, "base"),
+            CellUsage {
+                tokens: 20,
+                trials: 2,
+                missing: 1,
+            },
+            "input and output are summed; a trial with neither is missing"
         );
-        assert_eq!((totals.candidate_tokens, totals.candidate_trials), (300, 1));
-
-        let half_missing = [
-            trial("base", 0, 0, Some(100), true),
-            trial("cand", 0, 0, None, true),
-        ];
-        assert_eq!(
-            token_totals(&half_missing, "base", "cand", 2_000),
-            None,
-            "half the trials without usage is past a 20% tolerance"
-        );
-    }
-
-    #[test]
-    fn feedback_reaches_the_proposer_as_check_name_score_and_text_only() {
-        let verdicts = [
-            verdict("base-0-0", 0, Some("name the collection")),
-            verdict("base-1-0", 10_000, None),
-        ];
-        let feedback = train_feedback(&verdicts);
-        assert_eq!(feedback.len(), 2);
-        assert_eq!(feedback[0].check, "captured_rows_count");
-        assert_eq!(feedback[0].score_bp, Some(0));
-        assert_eq!(feedback[0].feedback.as_deref(), Some("name the collection"));
-        // The raw payload and the trial reference stay behind.
-        let rendered = serde_json::to_string(&feedback).unwrap();
-        for forbidden in ["reason_code", "trial", "disk-warning", "stage"] {
-            assert!(!rendered.contains(forbidden), "{forbidden} leaked: {rendered}");
-        }
-    }
-
-    #[test]
-    fn the_decision_seed_follows_the_run_ids_and_nothing_else() {
-        let one = decision_seed(&["job-r1-v0".to_owned()]);
-        assert_eq!(one, decision_seed(&["job-r1-v0".to_owned()]));
-        assert_ne!(one, decision_seed(&["job-r1-v1".to_owned()]));
-        assert_ne!(
-            one,
-            decision_seed(&["job-r1-v0".to_owned(), "job-r1-v1".to_owned()]),
-            "a re-run changes the seed, because it changes the evidence"
-        );
-    }
-
-    #[test]
-    fn paired_evidence_pairs_the_two_cells_on_the_shared_seed() {
-        let trials = [
-            trial("base", 0, 0, Some(10), true),
-            trial("base", 1, 0, Some(10), true),
-            trial("cand", 0, 0, Some(10), true),
-            trial("cand", 1, 0, Some(10), true),
-        ];
-        let verdicts = [
-            verdict("base-0-0", 0, None),
-            verdict("base-1-0", 0, None),
-            verdict("cand-0-0", 10_000, None),
-            verdict("cand-1-0", 10_000, None),
-        ];
-        let evidence = paired_evidence(
-            &definition(),
-            &trials,
-            &verdicts,
-            "base",
-            "cand",
-            &["disk-warning".to_owned()],
-            2_000,
-        );
-        assert!(evidence.cases_match);
-        assert_eq!(evidence.cases.len(), 1);
-        assert_eq!(evidence.cases[0].pairs, 2);
-        assert_eq!(evidence.cases[0].sum_baseline_bp, 0);
-        assert_eq!(evidence.cases[0].sum_candidate_bp, 20_000);
-        assert_eq!(evidence.keys, 2);
-        assert_eq!((evidence.dropped_baseline, evidence.dropped_candidate), (0, 0));
     }
 }
 ```
 
 - [ ] **Step 2: Run it to see it fail**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::evidence`
-Expected: FAIL to compile, `cannot find function cell_trial_scores in this scope`.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report`
+Expected: FAIL to compile, `unresolved module report` until the module lines exist, then `cannot find function cell_trial_scores`.
 
-- [ ] **Step 3: Write the implementation** — above the test module:
+- [ ] **Step 3: Write the module root** — create `crates/gents/src/eval/report/mod.rs`:
 
 ```rust
-//! Turning a run's rows into the [`Evidence`] the policy decides on.
+//! Pure projections from eval documents to comparable numbers.
 //!
-//! Three judgements live here and nowhere else. A slot is read at its latest
-//! *completed* attempt, because a resumed run writes a new row per attempt and
-//! reading both would make the slot ambiguous. A verdict's `stage_id` becomes
-//! the `stage_index` its case declares, which is what `case_trial_score`
-//! reduces over. And the cost gate is skipped when too many trials report no
-//! usage, rather than averaging over a fabricated zero.
+//! Unfrozen by design (ruling R3): spec 4a's versioned report grows here.
+//! `gents::optimization` consumes it today and M4's CLI will consume it too,
+//! so neither re-derives how a run's rows become paired evidence. Nothing in
+//! this module imports from `optimization`.
+
+pub mod evidence;
+
+pub use evidence::{
+    cell_trial_scores, cell_usage, concat_paired, latest_attempts, load_run_rows,
+    paired_evidence, CellUsage, RunRows,
+};
+```
+
+- [ ] **Step 4: Write the implementation** — above the test module in `evidence.rs`:
+
+```rust
+//! One run's rows, projected into paired evidence.
 //!
-//! What reaches a proposer is narrower still: a check's name, what it scored
-//! and what it said. Never a case, a stage, a raw payload or a trial.
+//! Three judgements live here and nowhere else. A slot is
+//! `(run_id, cell_id, case_id, trial_index)` and is read at its latest
+//! *completed* attempt, because a resumed run writes a new row per attempt.
+//! A verdict's `stage_id` becomes the `stage_index` its case declares, which
+//! is what `case_trial_score` reduces over. And several runs are paired one at
+//! a time and then concatenated, so a re-run adds pairs.
 
 use std::collections::BTreeMap;
 
-use anyhow::Result;
-use sha2::{Digest, Sha256};
+use anyhow::{Context, Result};
 
 use crate::config_client::ConfigAccess;
-use crate::document_config::{EvalDefinition, EvalTier};
+use crate::document_config::EvalDefinition;
 use crate::eval::{
-    case_trial_score, evidence_from_pairs, latest_verdicts, load_run, load_trials, load_verdicts,
-    pair_trials, CaseTrialScore, OutcomeKind, ProviderReason, TrialRecord, TrialScore,
-    TrialUsage, VerdictRecord, VerdictView,
+    case_trial_score, latest_verdicts, load_run, load_trials, load_verdicts, pair_trials,
+    CaseTrialScore, PairedEvidence, TrialRecord, TrialScore, TrialUsage, VerdictRecord,
+    VerdictView,
 };
-use crate::optimization::job::{JobRecord, JournalEntry};
-use crate::optimization::policy::{decide, Decision, Evidence, Mode, TokenTotals};
-use crate::optimization::proposer::CheckFeedback;
 
-/// One trial per `(case_id, trial_index)` slot of `cell_id`: the completed
-/// attempt with the highest number. A slot whose every attempt is still open
-/// contributes nothing, and the pairing counts it as a dropped key.
+/// Everything one run wrote, read once.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunRows {
+    pub run_id: String,
+    /// The run's frozen case list: the cases a decision over it expects.
+    pub case_ids: Vec<String>,
+    pub invalidated: bool,
+    pub trials: Vec<TrialRecord>,
+    pub verdicts: Vec<VerdictRecord>,
+}
+
+pub async fn load_run_rows(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<RunRows> {
+    let record = load_run(access, owner, run_id)
+        .await?
+        .with_context(|| format!("no eval run {run_id:?} for {owner}"))?;
+    Ok(RunRows {
+        run_id: run_id.to_owned(),
+        case_ids: record.origin.case_ids.clone(),
+        invalidated: record.invalidated.is_some(),
+        trials: load_trials(access, owner, run_id).await?,
+        verdicts: load_verdicts(access, owner, run_id).await?,
+    })
+}
+
+/// One trial per `(run_id, case_id, trial_index)` slot of `cell_id`: the
+/// completed attempt with the highest number. A slot whose every attempt is
+/// still open contributes nothing, and pairing counts it as a dropped key.
 pub fn latest_attempts<'a>(trials: &'a [TrialRecord], cell_id: &str) -> Vec<&'a TrialRecord> {
-    let mut latest: BTreeMap<(&str, u32), &TrialRecord> = BTreeMap::new();
+    let mut latest: BTreeMap<(&str, &str, u32), &TrialRecord> = BTreeMap::new();
     for record in trials
         .iter()
         .filter(|record| record.identity.cell_id == cell_id && record.completion.is_some())
     {
         let key = (
+            record.identity.run_id.as_str(),
             record.identity.case_id.as_str(),
             record.identity.trial_index,
         );
@@ -2806,43 +2989,31 @@ pub fn latest_attempts<'a>(trials: &'a [TrialRecord], cell_id: &str) -> Vec<&'a 
     latest.into_values().collect()
 }
 
-fn stage_indices(definition: &EvalDefinition, case_id: &str) -> Option<BTreeMap<String, usize>> {
-    let case = definition
-        .cases
-        .iter()
-        .find(|case| case.case_id == case_id)?;
-    Some(
-        case.stages
-            .iter()
-            .enumerate()
-            .map(|(index, stage)| (stage.stage_id.clone(), index))
-            .collect(),
-    )
-}
-
-/// One [`TrialScore`] per completed slot of `cell_id`.
+/// One [`TrialScore`] per completed slot of `cell_id` in one run.
 pub fn cell_trial_scores(
     definition: &EvalDefinition,
-    trials: &[TrialRecord],
-    verdicts: &[VerdictRecord],
+    rows: &RunRows,
     cell_id: &str,
 ) -> Vec<TrialScore> {
     let mut by_trial: BTreeMap<&str, Vec<&VerdictRecord>> = BTreeMap::new();
-    for verdict in verdicts {
+    for verdict in &rows.verdicts {
         by_trial
             .entry(verdict.trial_id.as_str())
             .or_default()
             .push(verdict);
     }
     let mut scores = Vec::new();
-    for record in latest_attempts(trials, cell_id) {
+    for record in latest_attempts(&rows.trials, cell_id) {
         let case_id = record.identity.case_id.as_str();
         let Some(case) = definition.cases.iter().find(|case| case.case_id == case_id) else {
             continue;
         };
-        let Some(indices) = stage_indices(definition, case_id) else {
-            continue;
-        };
+        let indices: BTreeMap<&str, usize> = case
+            .stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| (stage.stage_id.as_str(), index))
+            .collect();
         let views: Vec<VerdictView> = by_trial
             .get(record.identity.trial_id.as_str())
             .into_iter()
@@ -2850,7 +3021,7 @@ pub fn cell_trial_scores(
             .filter_map(|verdict| {
                 Some(VerdictView {
                     verdict_id: verdict.verdict_id.clone(),
-                    stage_index: *indices.get(&verdict.stage_id)?,
+                    stage_index: *indices.get(verdict.stage_id.as_str())?,
                     check: verdict.check.clone(),
                     tier: verdict.tier,
                     kind: verdict.kind,
@@ -2870,6 +3041,40 @@ pub fn cell_trial_scores(
     scores
 }
 
+/// One run's two cells, paired on their shared seed.
+pub fn paired_evidence(
+    definition: &EvalDefinition,
+    rows: &RunRows,
+    baseline_cell: &str,
+    candidate_cell: &str,
+) -> PairedEvidence {
+    pair_trials(
+        &cell_trial_scores(definition, rows, baseline_cell),
+        &cell_trial_scores(definition, rows, candidate_cell),
+    )
+}
+
+/// Several runs' pairs as one body of evidence. Pairs are appended and the
+/// counters summed: a re-run adds pairs and never replaces them.
+pub fn concat_paired(parts: &[PairedEvidence]) -> PairedEvidence {
+    let mut total = PairedEvidence::default();
+    for part in parts {
+        total.pairs.extend(part.pairs.iter().cloned());
+        total.keys += part.keys;
+        total.dropped_baseline += part.dropped_baseline;
+        total.dropped_candidate += part.dropped_candidate;
+    }
+    total
+}
+
+/// Tokens reported by one cell's counted trials, and how many reported none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CellUsage {
+    pub tokens: u64,
+    pub trials: u64,
+    pub missing: u64,
+}
+
 fn trial_tokens(usage: &TrialUsage) -> Option<u64> {
     match (usage.input_tokens, usage.output_tokens) {
         (None, None) => None,
@@ -2877,38 +3082,209 @@ fn trial_tokens(usage: &TrialUsage) -> Option<u64> {
     }
 }
 
-/// Mean tokens per case-trial for both cells, or `None` when more than
-/// `max_missing_usage_bp` of the counted trials reported no usage at all.
-pub fn token_totals(
-    trials: &[TrialRecord],
-    baseline_cell: &str,
-    candidate_cell: &str,
-    max_missing_usage_bp: u64,
-) -> Option<TokenTotals> {
-    let mut totals = TokenTotals {
-        baseline_tokens: 0,
-        baseline_trials: 0,
-        candidate_tokens: 0,
-        candidate_trials: 0,
-    };
-    let (mut counted, mut missing) = (0u128, 0u128);
-    for (cell, tokens, count) in [
-        (baseline_cell, &mut totals.baseline_tokens, &mut totals.baseline_trials),
-        (candidate_cell, &mut totals.candidate_tokens, &mut totals.candidate_trials),
-    ] {
-        for record in latest_attempts(trials, cell) {
-            let Some(completion) = &record.completion else {
-                continue;
-            };
-            counted += 1;
-            *count += 1;
-            match trial_tokens(&completion.usage) {
-                Some(seen) => *tokens += seen,
-                None => missing += 1,
-            }
+pub fn cell_usage(rows: &RunRows, cell_id: &str) -> CellUsage {
+    let mut usage = CellUsage::default();
+    for record in latest_attempts(&rows.trials, cell_id) {
+        let Some(completion) = &record.completion else {
+            continue;
+        };
+        usage.trials += 1;
+        match trial_tokens(&completion.usage) {
+            Some(tokens) => usage.tokens += tokens,
+            None => usage.missing += 1,
         }
     }
-    if counted == 0 || missing * 10_000 > max_missing_usage_bp as u128 * counted {
+    usage
+}
+```
+
+`CaseTrialScore` is used only by the test module's assertions; if rustc reports it unused in the non-test build, move it into the test module's imports.
+
+- [ ] **Step 5: Run the tests**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report`
+Expected: PASS, 6 tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/gents/src/eval
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
+  commit -m "feat(eval): report projection from verdict rows to paired evidence (#1455)
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
+### Task 2: Decision evidence, feedback and the seed
+
+**Files:**
+- Create: `crates/gents/src/optimization/evidence.rs`
+- Modify: `crates/gents/src/optimization/mod.rs`
+
+The optimization half of the projection: several runs' pairs into one `Evidence` (F1), the cost gate's `TokenTotals` with the missing-usage skip, what the proposer may read from a train run, and the Monte Carlo seed.
+
+**Interfaces:**
+- Consumes:
+  ```rust
+  // crates/gents/src/eval/report/evidence.rs, PR 3 Task 1
+  pub struct RunRows { pub run_id: String, pub case_ids: Vec<String>, pub invalidated: bool,
+      pub trials: Vec<TrialRecord>, pub verdicts: Vec<VerdictRecord> }
+  pub fn paired_evidence(definition: &EvalDefinition, rows: &RunRows, baseline_cell: &str,
+      candidate_cell: &str) -> PairedEvidence;
+  pub fn concat_paired(parts: &[PairedEvidence]) -> PairedEvidence;
+  pub struct CellUsage { pub tokens: u64, pub trials: u64, pub missing: u64 }
+  pub fn cell_usage(rows: &RunRows, cell_id: &str) -> CellUsage;
+  // crates/gents/src/optimization/policy.rs (finding F4: this is where it lives)
+  pub fn evidence_from_pairs(paired: &PairedEvidence, expected_cases: &[String],
+      tokens: Option<TokenTotals>) -> Evidence;
+  pub struct TokenTotals { pub baseline_tokens: u64, pub baseline_trials: u64,
+      pub candidate_tokens: u64, pub candidate_trials: u64 }
+  // crates/gents/src/optimization/proposer.rs, PR 2 Task 2
+  pub struct CheckFeedback { pub check: String, pub score_bp: Option<u32>, pub feedback: Option<String> }
+  ```
+- Produces:
+  ```rust
+  pub const BASELINE_CELL: &str = "baseline";
+  pub const CANDIDATE_CELL: &str = "candidate";
+  pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals>;
+  pub fn decision_evidence(definition: &EvalDefinition, runs: &[RunRows], max_missing_usage_bp: u64) -> Evidence;
+  pub fn train_feedback(verdicts: &[VerdictRecord]) -> Vec<CheckFeedback>;
+  pub fn decision_seed(run_ids: &[String]) -> u64;
+  ```
+
+- [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/evidence.rs` holding only this test module:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::report::evidence::tests::{one_case_definition, run_rows, slot, Slot};
+
+    fn improving(run_id: &str) -> RunRows {
+        run_rows(
+            run_id,
+            &[
+                slot(BASELINE_CELL, 0, 0),
+                slot(BASELINE_CELL, 1, 0),
+                slot(CANDIDATE_CELL, 0, 10_000),
+                slot(CANDIDATE_CELL, 1, 10_000),
+            ],
+        )
+    }
+
+    /// F1: a re-run adds pairs, so two identical runs double the case's pairs
+    /// and sums instead of collapsing to worst-case imputation.
+    #[test]
+    fn a_rerun_adds_pairs_to_the_decision() {
+        let definition = one_case_definition();
+        let once = decision_evidence(&definition, &[improving("v0")], 2_000);
+        let twice = decision_evidence(&definition, &[improving("v0"), improving("v1")], 2_000);
+        assert_eq!(once.cases[0].pairs, 2);
+        assert_eq!(twice.cases[0].pairs, 4);
+        assert_eq!(twice.cases[0].sum_baseline_bp, 0);
+        assert_eq!(twice.cases[0].sum_candidate_bp, 40_000);
+        assert_eq!(twice.keys, 4);
+        assert!(twice.cases_match);
+    }
+
+    #[test]
+    fn the_cost_gate_is_skipped_when_too_many_trials_report_no_usage() {
+        let runs = [improving("v0")];
+        let totals = token_totals(&runs, 2_000).expect("every trial reported usage");
+        assert_eq!((totals.baseline_tokens, totals.baseline_trials), (40, 2));
+        assert_eq!((totals.candidate_tokens, totals.candidate_trials), (40, 2));
+
+        let half = run_rows(
+            "v0",
+            &[
+                slot(BASELINE_CELL, 0, 0),
+                Slot { tokens: None, ..slot(CANDIDATE_CELL, 0, 10_000) },
+            ],
+        );
+        assert_eq!(
+            token_totals(&[half], 2_000),
+            None,
+            "one trial in two without usage is past a 20% tolerance"
+        );
+    }
+
+    #[test]
+    fn feedback_reaches_the_proposer_as_check_name_score_and_text_only() {
+        let rows = run_rows(
+            "train",
+            &[
+                Slot { feedback: Some("name the collection"), ..slot(BASELINE_CELL, 0, 0) },
+                slot(BASELINE_CELL, 1, 10_000),
+            ],
+        );
+        let feedback = train_feedback(&rows.verdicts);
+        assert_eq!(feedback.len(), 2);
+        assert_eq!(feedback[0].check, "captured_rows_count");
+        assert!(feedback
+            .iter()
+            .any(|entry| entry.feedback.as_deref() == Some("name the collection")));
+        let rendered = serde_json::to_string(&feedback).unwrap();
+        for forbidden in ["reason_code", "trial", "disk-warning", "stage", "train-"] {
+            assert!(!rendered.contains(forbidden), "{forbidden} leaked: {rendered}");
+        }
+    }
+
+    #[test]
+    fn the_decision_seed_follows_the_run_ids_and_nothing_else() {
+        let one = decision_seed(&["job-r1-v0".to_owned()]);
+        assert_eq!(one, decision_seed(&["job-r1-v0".to_owned()]));
+        assert_ne!(one, decision_seed(&["job-r1-v1".to_owned()]));
+        assert_ne!(
+            one,
+            decision_seed(&["job-r1-v0".to_owned(), "job-r1-v1".to_owned()]),
+            "a re-run changes the seed, because it changes the evidence"
+        );
+    }
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::evidence`
+Expected: FAIL to compile, `cannot find function decision_evidence in this scope`.
+
+- [ ] **Step 3: Write the implementation** — above the test module:
+
+```rust
+//! What a decision reads, and what a proposer may read.
+//!
+//! The runs of one decision are paired one at a time by `eval::report` and
+//! concatenated, so a re-run adds pairs (finding F1). What reaches a proposer
+//! is narrower still: a check's name, what it scored and what it said.
+
+use sha2::{Digest, Sha256};
+
+use crate::document_config::EvalDefinition;
+use crate::eval::report::{cell_usage, concat_paired, paired_evidence, RunRows};
+use crate::eval::VerdictRecord;
+use crate::optimization::policy::{evidence_from_pairs, Evidence, TokenTotals};
+use crate::optimization::proposer::CheckFeedback;
+
+/// The two cell ids every optimization run uses. A train run has only
+/// [`BASELINE_CELL`], the checkpoint; the held-out run compares the original
+/// baseline against the final checkpoint under the same two ids.
+pub const BASELINE_CELL: &str = "baseline";
+pub const CANDIDATE_CELL: &str = "candidate";
+
+/// Mean tokens per case-trial for both cells across `runs`, or `None` when
+/// more than `max_missing_usage_bp` of the counted trials reported no usage.
+pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals> {
+    let (mut baseline, mut candidate) = ((0u64, 0u64), (0u64, 0u64));
+    let (mut counted, mut missing) = (0u128, 0u128);
+    for rows in runs {
+        let base = cell_usage(rows, BASELINE_CELL);
+        let cand = cell_usage(rows, CANDIDATE_CELL);
+        baseline = (baseline.0 + base.tokens, baseline.1 + base.trials);
+        candidate = (candidate.0 + cand.tokens, candidate.1 + cand.trials);
+        counted += u128::from(base.trials + cand.trials);
+        missing += u128::from(base.missing + cand.missing);
+    }
+    if counted == 0 || missing * 10_000 > u128::from(max_missing_usage_bp) * counted {
         tracing::info!(
             counted = counted as u64,
             missing = missing as u64,
@@ -2916,10 +3292,38 @@ pub fn token_totals(
         );
         return None;
     }
-    Some(totals)
+    Some(TokenTotals {
+        baseline_tokens: baseline.0,
+        baseline_trials: baseline.1,
+        candidate_tokens: candidate.0,
+        candidate_trials: candidate.1,
+    })
 }
 
-/// What a proposer may read from the train run. A check's name, what it
+/// The evidence one decision reads: every run paired separately, the pairs
+/// concatenated, over the cases the first run froze. All runs of one decision
+/// share a definition and a split, so they froze the same case list.
+pub fn decision_evidence(
+    definition: &EvalDefinition,
+    runs: &[RunRows],
+    max_missing_usage_bp: u64,
+) -> Evidence {
+    let parts: Vec<_> = runs
+        .iter()
+        .map(|rows| paired_evidence(definition, rows, BASELINE_CELL, CANDIDATE_CELL))
+        .collect();
+    let expected = runs
+        .first()
+        .map(|rows| rows.case_ids.clone())
+        .unwrap_or_default();
+    evidence_from_pairs(
+        &concat_paired(&parts),
+        &expected,
+        token_totals(runs, max_missing_usage_bp),
+    )
+}
+
+/// What a proposer may read from the train run: a check's name, what it
 /// scored, and what it said. Ordered so two reads produce the same input.
 pub fn train_feedback(verdicts: &[VerdictRecord]) -> Vec<CheckFeedback> {
     let mut ordered: Vec<&VerdictRecord> = verdicts.iter().collect();
@@ -2940,151 +3344,42 @@ pub fn train_feedback(verdicts: &[VerdictRecord]) -> Vec<CheckFeedback> {
 /// recomputed decision is identical.
 pub fn decision_seed(run_ids: &[String]) -> u64 {
     let digest = Sha256::digest(run_ids.join("\n").as_bytes());
-    u64::from_le_bytes(digest[..8].try_into().unwrap_or([0; 8]))
-}
-
-/// The evidence one decision reads: both cells' slots paired on their shared
-/// seed, over `expected_cases`.
-#[allow(clippy::too_many_arguments)]
-pub fn paired_evidence(
-    definition: &EvalDefinition,
-    trials: &[TrialRecord],
-    verdicts: &[VerdictRecord],
-    baseline_cell: &str,
-    candidate_cell: &str,
-    expected_cases: &[String],
-    max_missing_usage_bp: u64,
-) -> Evidence {
-    let baseline = cell_trial_scores(definition, trials, verdicts, baseline_cell);
-    let candidate = cell_trial_scores(definition, trials, verdicts, candidate_cell);
-    let paired = pair_trials(&baseline, &candidate);
-    let tokens = token_totals(trials, baseline_cell, candidate_cell, max_missing_usage_bp);
-    evidence_from_pairs(&paired, expected_cases, tokens)
-}
-
-/// A journaled decision that does not match what its runs say today.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DecisionMismatch {
-    pub round: Option<u32>,
-    pub run_ids: Vec<String>,
-    pub journaled: Decision,
-    pub recomputed: Decision,
-    /// One of the referenced runs has since been invalidated.
-    pub invalidated: bool,
-}
-
-/// Recompute every journaled decision from the `EvalVerdict` rows of the runs
-/// it names, and report the ones that no longer agree. The summary in the
-/// journal is a convenience; these rows are the authority.
-pub async fn recompute_decisions(
-    access: &ConfigAccess,
-    job: &JobRecord,
-) -> Result<Vec<DecisionMismatch>> {
-    let owner = job.origin.owner.as_str();
-    let definition_id = job.origin.definition.definition_id.as_str();
-    let mut mismatches = Vec::new();
-    for entry in &job.journal {
-        let JournalEntry::Decided {
-            round,
-            run_ids,
-            mode,
-            decision,
-            ..
-        } = entry
-        else {
-            continue;
-        };
-        let (mut trials, mut verdicts, mut cases, mut invalidated) =
-            (Vec::new(), Vec::new(), Vec::new(), false);
-        for run_id in run_ids {
-            let Some(record) = load_run(access, owner, run_id).await? else {
-                continue;
-            };
-            invalidated |= record.invalidated.is_some();
-            cases = record.origin.case_ids.clone();
-            trials.extend(load_trials(access, owner, run_id).await?);
-            verdicts.extend(load_verdicts(access, owner, run_id).await?);
-        }
-        let definition = definition_of(access, owner, definition_id).await?;
-        let evidence = paired_evidence(
-            &definition,
-            &trials,
-            &verdicts,
-            BASELINE_CELL,
-            CANDIDATE_CELL,
-            &cases,
-            job.origin.policy.max_missing_usage_bp,
-        );
-        let recomputed = decide(
-            *mode,
-            &job.origin.policy,
-            &evidence,
-            decision_seed(run_ids),
-        )
-        .decision;
-        if recomputed != *decision || invalidated {
-            mismatches.push(DecisionMismatch {
-                round: *round,
-                run_ids: run_ids.clone(),
-                journaled: *decision,
-                recomputed,
-                invalidated,
-            });
-        }
-    }
-    Ok(mismatches)
-}
-
-/// The cell ids every optimization run uses. `Confirm` mode compares the
-/// original baseline against the final checkpoint under the same two ids, so
-/// one projection serves both modes.
-pub const BASELINE_CELL: &str = "baseline";
-pub const CANDIDATE_CELL: &str = "candidate";
-
-async fn definition_of(
-    access: &ConfigAccess,
-    owner: &str,
-    definition_id: &str,
-) -> Result<EvalDefinition> {
-    crate::optimization::driver::load_definition(access, owner, definition_id).await
+    let mut bytes = [0u8; 8];
+    bytes.copy_from_slice(&digest[..8]);
+    u64::from_le_bytes(bytes)
 }
 ```
 
-Two notes for the implementer. `EvalTier`, `OutcomeKind` and `ProviderReason` are imported for the test module's literals; if rustc reports them unused in the non-test build, move those three into the `use super::*` of the test module. `definition_of` forwards to PR 3 Task 3's `driver::load_definition`; until that task lands, `recompute_decisions` does not compile, so **implement `recompute_decisions` and its test in Task 3, not here** — Steps 1 and 3 of this task ship everything above it, and Task 3 appends `recompute_decisions`, `DecisionMismatch`, `definition_of` and the cell constants.
-
-- [ ] **Step 4: Move the deferred half out of this task**
-
-Delete `DecisionMismatch`, `recompute_decisions` and `definition_of` from the file for now, keeping `BASELINE_CELL` and `CANDIDATE_CELL`. Task 3 restores them verbatim once `driver::load_definition` exists.
-
-- [ ] **Step 5: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod evidence;` in rustfmt order and:
+- [ ] **Step 4: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod evidence;` in rustfmt order and:
 
 ```rust
 pub use evidence::{
-    cell_trial_scores, decision_seed, latest_attempts, paired_evidence, token_totals,
-    train_feedback, BASELINE_CELL, CANDIDATE_CELL,
+    decision_evidence, decision_seed, token_totals, train_feedback, BASELINE_CELL, CANDIDATE_CELL,
 };
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::evidence`
-Expected: PASS, 6 tests.
+Expected: PASS, 4 tests.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/gents/src/optimization
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
-  commit -m "feat(optimization): project eval verdicts into policy evidence (#1455)
+  commit -m "feat(optimization): decision evidence adds pairs across re-runs (#1455)
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
-### Task 2: The eval-run bridge and the budget
+### Task 3: The eval-run bridge and the budget
 
 **Files:**
 - Create: `crates/gents/src/optimization/driver.rs` (this task writes the first half of the file)
 - Modify: `crates/gents/src/optimization/mod.rs`
+
+Finding F2 governs every function here: once a job is frozen, what a run *means* — its trials per case, its seed, its subject behavior, its inference profile, its definition — comes from `JobOrigin`, never from the request. The request contributes only operational settings that cannot change a result (concurrency, retries, the breaker, deadlines, directories, poll backoff).
 
 **Interfaces:**
 - Consumes:
@@ -3105,27 +3400,42 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   pub async fn resume(access: &ConfigAccess, owner: &str, run_id: &str, runs_dir: &Path,
       executor: &dyn TrialExecutor, registry: &CheckRegistry, cancel: CancellationToken,
       options: &RunOptions) -> Result<RunOutcome>;
-  pub struct RunOutcome { pub run_id: String, pub completed: u32, pub abandoned: u32,
-      pub not_evidence: u32, pub breaker_tripped: bool }
-  pub struct RunOptions { pub poll_backoff_base: Duration, pub poll_backoff_cap: Duration }
+  pub struct RunOptions { pub poll_backoff_base: Duration, pub poll_backoff_cap: Duration } // Default: 5 s, 60 s
+  // crates/gents/src/config_client/mod.rs
+  pub use desired_state::read_record as read_desired_state_record_in_txn;
+  // i.e. pub async fn read_record(txn: &ConfigApplyTxn<'_>, collection: Collection, owner: &str,
+  //     id: &str) -> Result<Option<(String, Value)>>
+  // crates/gents/src/optimization/job.rs, PR 1 Task 4
+  pub struct JobOrigin { /* … */ pub subject: SubjectRef, pub definition: DefinitionRef,
+      pub trials_per_case: u32, pub seed_base: i64, pub inference_profile_id: String,
+      pub jobs_dir: PathBuf, /* … */ }
+  pub struct Budgets { pub max_rounds: u32, pub max_case_trials: u64, pub max_tokens: u64,
+      pub deadline_unix_secs: Option<u64> }
   ```
 - Produces:
   ```rust
-  pub struct JobRequest { /* fields listed in the implementation below */ }
+  pub struct JobRequest { /* fields in the implementation below */ }
+  pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf;
+  pub fn baseline_dir(jobs_dir: &Path, job_id: &str) -> PathBuf;
+  pub fn candidate_dir(jobs_dir: &Path, job_id: &str, round: u32) -> PathBuf;
+  pub(crate) fn candidate_staging_dir(jobs_dir: &Path, job_id: &str, round: u32) -> PathBuf;
   pub struct Spend { pub case_trials: u64, pub tokens: u64 }
   pub(crate) struct RunPlan { pub run_id: String, pub split: EvalSplit, pub round: Option<u32>,
       pub cells: Vec<(&'static str, PathBuf)>, pub seed_base: i64 }
-  pub(crate) fn train_plan(request: &JobRequest, round: u32, checkpoint: &Path) -> RunPlan;
-  pub(crate) fn validation_plan(request: &JobRequest, origin: &JobOrigin, round: u32, attempt: u32,
+  pub(crate) fn train_plan(job_id: &str, origin: &JobOrigin, round: u32, checkpoint: &Path) -> RunPlan;
+  pub(crate) fn validation_plan(job_id: &str, origin: &JobOrigin, round: u32, attempt: u32,
       checkpoint: &Path, candidate: &Path) -> RunPlan;
-  pub(crate) fn held_out_plan(request: &JobRequest, origin: &JobOrigin, baseline: &Path,
-      checkpoint: &Path) -> RunPlan;
-  pub(crate) fn run_request(request: &JobRequest, plan: &RunPlan) -> RunRequest;
-  pub(crate) async fn execute_run(access: &ConfigAccess, request: &JobRequest, plan: &RunPlan,
-      executor: &dyn TrialExecutor, registry: &CheckRegistry, cancel: CancellationToken) -> Result<RunOutcome>;
+  pub(crate) fn held_out_plan(job_id: &str, origin: &JobOrigin, baseline: &Path, checkpoint: &Path) -> RunPlan;
+  pub(crate) fn run_request(request: &JobRequest, origin: &JobOrigin, plan: &RunPlan) -> RunRequest;
+  pub(crate) async fn execute_run(access: &ConfigAccess, request: &JobRequest, origin: &JobOrigin,
+      plan: &RunPlan, executor: &dyn TrialExecutor, registry: &CheckRegistry,
+      cancel: CancellationToken) -> Result<RunOutcome>;
   pub fn split_case_count(definition: &EvalDefinition, split: EvalSplit) -> u64;
   pub fn run_cost(definition: &EvalDefinition, split: EvalSplit, trials_per_case: u32, cells: u64) -> u64;
   pub async fn spend_so_far(access: &ConfigAccess, owner: &str, journal: &[JournalEntry]) -> Result<Spend>;
+  pub(crate) async fn load_definition(access: &ConfigAccess, owner: &str, definition_id: &str) -> Result<EvalDefinition>;
+  pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef>;
+  pub(crate) fn now_unix_secs() -> u64;
   ```
 
 - [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/driver.rs` holding only this test module:
@@ -3134,6 +3444,9 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::eval::{DefinitionRef, SubjectRef};
+    use crate::optimization::policy::PolicyV2;
+    use crate::optimization::target::{Target, TargetField};
     use serde_json::json;
     use std::path::PathBuf;
 
@@ -3165,7 +3478,16 @@ mod tests {
         .unwrap()
     }
 
-    fn request() -> JobRequest {
+    fn budgets() -> Budgets {
+        Budgets {
+            max_rounds: 3,
+            max_case_trials: 1_000,
+            max_tokens: 1_000_000,
+            deadline_unix_secs: None,
+        }
+    }
+
+    pub(super) fn request() -> JobRequest {
         JobRequest {
             job_id: "job-1".into(),
             owner: "did:key:o".into(),
@@ -3175,70 +3497,122 @@ mod tests {
             inference_profile_id: "local".into(),
             baseline_pack: PathBuf::from("/tmp/baseline"),
             trials_per_case: 2,
-            budgets: Budgets {
-                max_rounds: 3,
-                max_case_trials: 1_000,
-                max_tokens: 1_000_000,
-                deadline_unix_secs: None,
-            },
+            budgets: budgets(),
             max_text_bytes: 32 * 1024,
             seed_base: 1_000,
-            jobs_dir: PathBuf::from("/tmp/jobs"),
-            runs_dir: PathBuf::from("/tmp/runs"),
+            jobs_dir: PathBuf::from("/home/eval/jobs"),
+            runs_dir: PathBuf::from("/home/eval/runs"),
             source_commit: "0deb7659c".into(),
             source_dirty: false,
             concurrency: 1,
             max_infra_retries: 1,
             breaker_threshold: 5,
             deadline_secs: Some(600),
+            run_options: RunOptions::default(),
+        }
+    }
+
+    /// The origin `request()` would freeze.
+    pub(super) fn origin() -> JobOrigin {
+        JobOrigin {
+            target: Target {
+                field: TargetField::AgentContextSystemPrompt,
+                owner: "did:key:o".into(),
+                id: "monitor-context".into(),
+            },
+            closure: Vec::new(),
+            subject: SubjectRef {
+                pack_digest: "sha256:baseline".into(),
+                behavior_id: "monitor".into(),
+            },
+            definition: DefinitionRef {
+                definition_id: "monitor-findings".into(),
+                comparability_version: 1,
+                digest: "sha256:definition".into(),
+            },
+            policy: PolicyV2::uncalibrated(),
+            trials_per_case: 2,
+            budgets: budgets(),
+            baseline_text: "Watch the mailbox.\n".into(),
+            owner: "did:key:o".into(),
+            seed_base: 1_000,
+            inference_profile_id: "local".into(),
+            max_text_bytes: 32 * 1024,
+            jobs_dir: PathBuf::from("/home/eval/jobs"),
         }
     }
 
     #[test]
     fn a_train_run_has_one_cell_and_a_validation_run_has_two_on_one_seed() {
-        let train = train_plan(&request(), 1, Path::new("/tmp/jobs/job-1/baseline"));
+        let origin = origin();
+        let baseline = baseline_dir(&origin.jobs_dir, "job-1");
+        assert_eq!(baseline, PathBuf::from("/home/eval/jobs/job-1/baseline"));
+
+        let train = train_plan("job-1", &origin, 1, &baseline);
         assert_eq!(train.split, EvalSplit::Train);
         assert_eq!(train.cells.len(), 1);
         assert_eq!(train.cells[0].0, BASELINE_CELL);
         assert_eq!(train.run_id, "job-1-r1-train");
 
-        let validation = validation_plan(
-            &request(),
-            1,
-            0,
-            Path::new("/tmp/jobs/job-1/baseline"),
-            Path::new("/tmp/jobs/job-1/rounds/1/candidate"),
-        );
+        let candidate = candidate_dir(&origin.jobs_dir, "job-1", 1);
+        assert_eq!(candidate, PathBuf::from("/home/eval/jobs/job-1/rounds/1/candidate"));
+        let validation = validation_plan("job-1", &origin, 1, 0, &baseline, &candidate);
         assert_eq!(validation.run_id, "job-1-r1-v0");
-        assert_eq!(validation.split, EvalSplit::Validation);
         assert_eq!(
             validation.cells.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![BASELINE_CELL, CANDIDATE_CELL]
         );
 
-        let frozen = run_request(&request(), &validation);
+        let frozen = run_request(&request(), &origin, &validation);
         assert_eq!(frozen.purpose, "optimization:job-1");
         assert_eq!(frozen.cells.len(), 2);
+        assert_eq!(frozen.cells[0].label, BASELINE_CELL, "labels are what scripts key on");
         assert_eq!(
             frozen.cells[0].inference_profile_id,
             frozen.cells[1].inference_profile_id,
             "both arms run the same inference binding"
         );
         assert!(frozen.captures.is_empty());
-        // One seed_base per run is how the runner shares a seed across cells.
         assert_eq!(frozen.seed_base, validation.seed_base);
+    }
+
+    /// F2: a run's meaning comes from the frozen origin, never the request.
+    #[test]
+    fn a_run_request_reads_what_a_run_means_from_the_origin() {
+        let mut drifted = request();
+        drifted.trials_per_case = 5;
+        drifted.seed_base = 9_999;
+        drifted.behavior_id = "other".into();
+        drifted.inference_profile_id = "other".into();
+        drifted.definition_id = "other".into();
+        let origin = origin();
+        let plan = validation_plan("job-1", &origin, 1, 0, Path::new("a"), Path::new("b"));
+        let frozen = run_request(&drifted, &origin, &plan);
+        assert_eq!(frozen.trials_per_case, 2);
+        assert_eq!(frozen.definition_id, "monitor-findings");
+        assert!(frozen
+            .cells
+            .iter()
+            .all(|cell| cell.behavior_id == "monitor" && cell.inference_profile_id == "local"));
+        assert_eq!(
+            plan.seed_base,
+            validation_plan("job-1", &origin, 1, 0, Path::new("a"), Path::new("b")).seed_base
+        );
+        assert!(plan.seed_base < 9_999, "the seed follows origin.seed_base");
     }
 
     #[test]
     fn a_rerun_draws_a_new_seed_base_and_a_later_round_never_collides() {
-        let first = validation_plan(&request(), 1, 0, Path::new("a"), Path::new("b")).seed_base;
-        let rerun = validation_plan(&request(), 1, 1, Path::new("a"), Path::new("b")).seed_base;
-        let next_round = validation_plan(&request(), 2, 0, Path::new("a"), Path::new("b")).seed_base;
+        let origin = origin();
+        let seed = |round, attempt| {
+            validation_plan("job-1", &origin, round, attempt, Path::new("a"), Path::new("b")).seed_base
+        };
+        let (first, rerun, next_round) = (seed(1, 0), seed(1, 1), seed(2, 0));
         assert_ne!(first, rerun);
         assert_ne!(first, next_round);
         assert_ne!(rerun, next_round);
-        // A run's trials draw `seed_base + trial_index`, so the gaps must be
-        // wider than any run's trial count.
+        // A trial draws `seed_base + trial_index`, so the gaps must be wider
+        // than any run's trials per case.
         assert!(rerun - first >= 100, "{first} {rerun}");
         assert!(next_round - first >= 1_000, "{first} {next_round}");
     }
@@ -3255,18 +3629,20 @@ mod tests {
 
     #[test]
     fn the_held_out_run_compares_the_original_baseline_with_the_final_checkpoint() {
+        let origin = origin();
         let plan = held_out_plan(
-            &request(),
-            Path::new("/tmp/jobs/job-1/baseline"),
-            Path::new("/tmp/jobs/job-1/rounds/2/candidate"),
+            "job-1",
+            &origin,
+            &baseline_dir(&origin.jobs_dir, "job-1"),
+            &candidate_dir(&origin.jobs_dir, "job-1", 2),
         );
         assert_eq!(plan.run_id, "job-1-held-out");
         assert_eq!(plan.split, EvalSplit::HeldOut);
         assert_eq!(plan.round, None);
-        assert_eq!(plan.cells[0].1, PathBuf::from("/tmp/jobs/job-1/baseline"));
+        assert_eq!(plan.cells[0].1, PathBuf::from("/home/eval/jobs/job-1/baseline"));
         assert_eq!(
             plan.cells[1].1,
-            PathBuf::from("/tmp/jobs/job-1/rounds/2/candidate")
+            PathBuf::from("/home/eval/jobs/job-1/rounds/2/candidate")
         );
     }
 }
@@ -3283,9 +3659,9 @@ Expected: FAIL to compile, `cannot find type JobRequest in this scope`.
 //! The driver: the loop that turns a frozen baseline into a checkpoint.
 //!
 //! Everything the driver decides comes from the job's frozen origin and its
-//! journal, so a resumed job and an uninterrupted one reach the same state.
-//! The driver is the only writer of the job, as the owner DID; it never claims
-//! a request, and no runtime reconciles what it writes.
+//! journal (finding F2), so a resumed job and an uninterrupted one reach the
+//! same state. The driver is the only writer of the job, as the owner DID; it
+//! never claims a request, and no runtime reconciles what it writes.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -3293,17 +3669,19 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{desired_state_document_digest, ConfigAccess};
 use crate::document_config::{EvalDefinition, EvalSplit};
 use crate::eval::checks::CheckRegistry;
 use crate::eval::runner::{
     resume, run, CellRequest, CellSource, RunOptions, RunOutcome, RunRequest, TrialExecutor,
 };
-use crate::eval::{load_run, load_trials};
+use crate::eval::{load_run, load_trials, DefinitionRef};
 use crate::optimization::evidence::{BASELINE_CELL, CANDIDATE_CELL};
-use crate::optimization::job::{Budgets, JournalEntry};
+use crate::optimization::job::{Budgets, JobOrigin, JournalEntry};
 
-/// Everything an operator chose about a job before any of it is checked.
+/// Everything an operator chose about a job. Read in full only when the job
+/// is created; a resume must repeat it, and `run_job` refuses one that does
+/// not (finding F2).
 #[derive(Clone, Debug)]
 pub struct JobRequest {
     pub job_id: String,
@@ -3315,14 +3693,16 @@ pub struct JobRequest {
     pub behavior_id: String,
     pub definition_id: String,
     pub inference_profile_id: String,
-    /// The exported baseline subject pack. Copied into the job's directory at
-    /// freeze; the copy is what every run reads.
+    /// The operator-supplied baseline subject pack (ruling R5). Copied into the
+    /// job's directory at freeze, after its prompt is cross-checked against the
+    /// live configuration; the copy is what every run reads.
     pub baseline_pack: PathBuf,
     pub trials_per_case: u32,
     pub budgets: Budgets,
     pub max_text_bytes: usize,
     pub seed_base: i64,
-    /// `<launching home>/optimization/jobs`. This job owns `<jobs_dir>/<job_id>`.
+    /// `<launching home>/eval/jobs` (ruling R8). This job owns
+    /// `<jobs_dir>/<job_id>/`; M4's `gents optimization rm` removes it.
     pub jobs_dir: PathBuf,
     /// `<launching home>/eval/runs`, handed to the runner unchanged.
     pub runs_dir: PathBuf,
@@ -3332,20 +3712,32 @@ pub struct JobRequest {
     pub max_infra_retries: u32,
     pub breaker_threshold: u32,
     pub deadline_secs: Option<u64>,
+    /// Not comparability data: how long the runner backs off between passes.
+    pub run_options: RunOptions,
 }
 
-impl JobRequest {
-    pub fn job_dir(&self) -> PathBuf {
-        self.jobs_dir.join(&self.job_id)
-    }
+pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf {
+    jobs_dir.join(job_id)
+}
 
-    pub fn baseline_dir(&self) -> PathBuf {
-        self.job_dir().join("baseline")
-    }
+pub fn baseline_dir(jobs_dir: &Path, job_id: &str) -> PathBuf {
+    job_dir(jobs_dir, job_id).join("baseline")
+}
 
-    pub fn candidate_dir(&self, round: u32) -> PathBuf {
-        self.job_dir().join("rounds").join(round.to_string()).join("candidate")
-    }
+pub fn candidate_dir(jobs_dir: &Path, job_id: &str, round: u32) -> PathBuf {
+    job_dir(jobs_dir, job_id)
+        .join("rounds")
+        .join(round.to_string())
+        .join("candidate")
+}
+
+/// Where a round's candidate is written before its `Proposed` entry exists
+/// (finding F7). Only after the journal names it is it renamed into place.
+pub(crate) fn candidate_staging_dir(jobs_dir: &Path, job_id: &str, round: u32) -> PathBuf {
+    job_dir(jobs_dir, job_id)
+        .join("rounds")
+        .join(round.to_string())
+        .join("candidate.staging")
 }
 
 /// What the job has spent so far, read from the runs its journal names.
@@ -3373,60 +3765,64 @@ fn seed_base_for(base: i64, round: u32, attempt: u32) -> i64 {
     base + i64::from(round) * 1_000 + i64::from(attempt) * 100
 }
 
-pub(crate) fn train_plan(request: &JobRequest, round: u32, checkpoint: &Path) -> RunPlan {
+pub(crate) fn train_plan(job_id: &str, origin: &JobOrigin, round: u32, checkpoint: &Path) -> RunPlan {
     RunPlan {
-        run_id: format!("{}-r{round}-train", request.job_id),
+        run_id: format!("{job_id}-r{round}-train"),
         split: EvalSplit::Train,
         round: Some(round),
         cells: vec![(BASELINE_CELL, checkpoint.to_path_buf())],
-        seed_base: seed_base_for(request.seed_base, round, 0),
+        seed_base: seed_base_for(origin.seed_base, round, 0),
     }
 }
 
 pub(crate) fn validation_plan(
-    request: &JobRequest,
+    job_id: &str,
+    origin: &JobOrigin,
     round: u32,
     attempt: u32,
     checkpoint: &Path,
     candidate: &Path,
 ) -> RunPlan {
     RunPlan {
-        run_id: format!("{}-r{round}-v{attempt}", request.job_id),
+        run_id: format!("{job_id}-r{round}-v{attempt}"),
         split: EvalSplit::Validation,
         round: Some(round),
         cells: vec![
             (BASELINE_CELL, checkpoint.to_path_buf()),
             (CANDIDATE_CELL, candidate.to_path_buf()),
         ],
-        seed_base: seed_base_for(request.seed_base, round, attempt),
+        seed_base: seed_base_for(origin.seed_base, round, attempt),
     }
 }
 
 /// The one held-out run of a job: the original baseline against the final
-/// checkpoint. It is run once and never re-run.
+/// checkpoint. Run once, never re-run.
 pub(crate) fn held_out_plan(
-    request: &JobRequest,
+    job_id: &str,
+    origin: &JobOrigin,
     baseline: &Path,
     checkpoint: &Path,
 ) -> RunPlan {
     RunPlan {
-        run_id: format!("{}-held-out", request.job_id),
+        run_id: format!("{job_id}-held-out"),
         split: EvalSplit::HeldOut,
         round: None,
         cells: vec![
             (BASELINE_CELL, baseline.to_path_buf()),
             (CANDIDATE_CELL, checkpoint.to_path_buf()),
         ],
-        seed_base: seed_base_for(request.seed_base, 0, 0),
+        seed_base: seed_base_for(origin.seed_base, 0, 0),
     }
 }
 
-pub(crate) fn run_request(request: &JobRequest, plan: &RunPlan) -> RunRequest {
+/// What a run means comes from `origin`; how it is executed comes from
+/// `request`.
+pub(crate) fn run_request(request: &JobRequest, origin: &JobOrigin, plan: &RunPlan) -> RunRequest {
     RunRequest {
         run_id: plan.run_id.clone(),
-        owner: request.owner.clone(),
+        owner: origin.owner.clone(),
         evaluator_did: request.evaluator_did.clone(),
-        definition_id: request.definition_id.clone(),
+        definition_id: origin.definition.definition_id.clone(),
         split: plan.split,
         case_ids: None,
         cells: plan
@@ -3436,11 +3832,11 @@ pub(crate) fn run_request(request: &JobRequest, plan: &RunPlan) -> RunRequest {
                 cell_id: (*cell_id).to_owned(),
                 label: (*cell_id).to_owned(),
                 source: CellSource::Directory(pack.clone()),
-                behavior_id: request.behavior_id.clone(),
-                inference_profile_id: request.inference_profile_id.clone(),
+                behavior_id: origin.subject.behavior_id.clone(),
+                inference_profile_id: origin.inference_profile_id.clone(),
             })
             .collect(),
-        trials_per_case: request.trials_per_case,
+        trials_per_case: origin.trials_per_case,
         seed_base: plan.seed_base,
         deadline_secs: request.deadline_secs,
         concurrency: request.concurrency,
@@ -3456,40 +3852,37 @@ pub(crate) fn run_request(request: &JobRequest, plan: &RunPlan) -> RunRequest {
     }
 }
 
-fn run_options() -> RunOptions {
-    RunOptions::default()
-}
-
 /// Freeze and run `plan`, or resume it when its row already exists.
 pub(crate) async fn execute_run(
     access: &ConfigAccess,
     request: &JobRequest,
+    origin: &JobOrigin,
     plan: &RunPlan,
     executor: &dyn TrialExecutor,
     registry: &CheckRegistry,
     cancel: CancellationToken,
 ) -> Result<RunOutcome> {
-    if load_run(access, &request.owner, &plan.run_id).await?.is_some() {
+    if load_run(access, &origin.owner, &plan.run_id).await?.is_some() {
         tracing::info!(run_id = %plan.run_id, "optimization run resumed");
         return resume(
             access,
-            &request.owner,
+            &origin.owner,
             &plan.run_id,
             &request.runs_dir,
             executor,
             registry,
             cancel,
-            &run_options(),
+            &request.run_options,
         )
         .await;
     }
     run(
         access,
-        &run_request(request, plan),
+        &run_request(request, origin, plan),
         executor,
         registry,
         cancel,
-        &run_options(),
+        &request.run_options,
     )
     .await
 }
@@ -3555,13 +3948,21 @@ pub(crate) async fn load_definition(
             })
         })
         .await?;
-    let (_, value) = found
-        .with_context(|| format!("no eval definition {definition_id:?} for {owner}"))?;
-    serde_json::from_value(value).with_context(|| format!("decoding eval definition {definition_id:?}"))
+    let (_, value) =
+        found.with_context(|| format!("no eval definition {definition_id:?} for {owner}"))?;
+    serde_json::from_value(value)
+        .with_context(|| format!("decoding eval definition {definition_id:?}"))
 }
 
-/// Unused until Task 3; declared here so the module's one timing helper lives
-/// beside the budget it serves.
+/// The same identity `eval::runner::freeze` records on a run's origin.
+pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef> {
+    Ok(DefinitionRef {
+        definition_id: definition.definition_id.clone(),
+        comparability_version: definition.comparability_version,
+        digest: desired_state_document_digest(&serde_json::to_value(definition)?)?,
+    })
+}
+
 pub(crate) fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -3573,39 +3974,54 @@ pub(crate) fn now_unix_secs() -> u64 {
 - [ ] **Step 4: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod driver;` in rustfmt order and:
 
 ```rust
-pub use driver::{run_cost, spend_so_far, split_case_count, JobRequest, Spend};
+pub use driver::{
+    baseline_dir, candidate_dir, job_dir, run_cost, spend_so_far, split_case_count, JobRequest,
+    Spend,
+};
 ```
 
 - [ ] **Step 5: Run the tests**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::driver`
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add crates/gents/src/optimization
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
-  commit -m "feat(optimization): eval-run plans and the job budget (#1455)
+  commit -m "feat(optimization): eval-run plans from the frozen origin, and the budget (#1455)
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
-### Task 3: `run_job`
+### Task 4: `run_job`
 
 **Files:**
-- Modify: `crates/gents/src/optimization/driver.rs` (append to the file Task 2 created)
-- Modify: `crates/gents/src/optimization/evidence.rs` (restore `DecisionMismatch`, `recompute_decisions` and `definition_of`)
+- Modify: `crates/gents/src/optimization/driver.rs` (append to the file Task 3 created)
 - Modify: `crates/gents/src/optimization/mod.rs`
 
+What this task settles, finding by finding:
+
+- **F2.** After freeze every decision reads `job.origin`: `policy`, `budgets`, `seed_base`, `trials_per_case`, `inference_profile_id`, `max_text_bytes`, `jobs_dir`. A resume whose request disagrees with the origin is `JobRefused` and writes nothing.
+- **F5.** Definition drift is checked before closure drift, and the closure excludes `EvalDefinition` (PR 1 Task 3), so a definition edit is `Failed(definition_changed)` and never `baseline_drifted`.
+- **F7.** A round's candidate is written into `candidate.staging` and renamed to `candidate` only after its `Proposed` entry is journaled; at the start of an unproposed round both paths are removed. `Exhausted` is derived from the journal, not from a local flag, so a resumed job finalizes the same way.
+- **R5.** At freeze the operator-supplied pack's context prompt must equal the live closure's text for the same context, or the job is refused.
+- **R9.** There is no fault-injection seam. A cancelled token makes `run_job` return `Ok` with the job still `Running` after the run in progress; an erroring proposer returns `Err` with nothing journaled for the round's proposal. Both are resumable, and PR 3 Task 5 compares such a job against an uninterrupted twin.
+
 **Interfaces:**
-- Consumes: everything PR 1, PR 2 and PR 3 Tasks 1 and 2 produced, plus
+- Consumes: everything PR 1, PR 2 and PR 3 Tasks 1 to 3 produced, plus
   ```rust
   // crates/gents/src/optimization/policy.rs
   pub fn decide(mode: Mode, policy: &PolicyV2, evidence: &Evidence, seed: u64) -> DecisionReport;
   pub enum Decision { Accept, Reject(RejectReason), Inconclusive(InconclusiveReason) }
-  // crates/gents/src/config_client/desired_state.rs
-  pub fn desired_state_document_digest(value: &Value) -> Result<String>;
+  pub struct DecisionReport { pub decision: Decision, pub policy_version: String, pub improved: u32,
+      pub tied: u32, pub worsened: u32, pub mean_diff_bp: Option<i64>, pub p_ppm: Option<u64>,
+      pub alpha_effective_ppm: u64, pub cost_skipped: bool }
+  // crates/gents/src/eval/report/evidence.rs
+  pub async fn load_run_rows(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<RunRows>;
+  // crates/gents/src/eval/documents.rs
+  pub async fn load_verdicts(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<Vec<VerdictRecord>>;
   ```
 - Produces:
   ```rust
@@ -3622,10 +4038,12 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
       policy: &PolicyV2,
       cancel: CancellationToken,
   ) -> Result<JobOutcome>;
-  // crates/gents/src/optimization/evidence.rs
-  pub struct DecisionMismatch { pub round: Option<u32>, pub run_ids: Vec<String>,
-      pub journaled: Decision, pub recomputed: Decision, pub invalidated: bool }
-  pub async fn recompute_decisions(access: &ConfigAccess, job: &JobRecord) -> Result<Vec<DecisionMismatch>>;
+  pub(crate) fn check_policy(request: &JobRequest, policy: &PolicyV2) -> Result<()>;
+  pub(crate) fn check_resume(request: &JobRequest, policy: &PolicyV2, origin: &JobOrigin) -> Result<()>;
+  pub(crate) fn proposed_for(journal: &[JournalEntry], round: u32) -> Option<(String, String, String)>;
+  pub(crate) fn round_is_closed(journal: &[JournalEntry], round: u32) -> bool;
+  pub(crate) fn seen_digests(baseline_digest: &str, journal: &[JournalEntry], round: u32) -> Vec<String>;
+  pub(crate) fn budget_exhausted(journal: &[JournalEntry]) -> bool;
   ```
 
 - [ ] **Step 1: Write the failing test** — append to the `#[cfg(test)] mod tests` in `driver.rs`:
@@ -3638,10 +4056,31 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
         let error = check_policy(&request(), &policy).unwrap_err();
         let refusal = job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
         assert!(refusal.0.contains("max_rounds"), "{}", refusal.0);
-        assert!(refusal.0.contains('5') && refusal.0.contains('3'), "{}", refusal.0);
 
         policy.max_rounds = 3;
         check_policy(&request(), &policy).unwrap();
+    }
+
+    /// F2: a resume must repeat the request the job was frozen from.
+    #[test]
+    fn a_resume_that_disagrees_with_the_origin_is_refused_by_field() {
+        let policy = PolicyV2::uncalibrated();
+        check_resume(&request(), &policy, &origin()).unwrap();
+
+        let mut drifted = request();
+        drifted.seed_base = 7;
+        drifted.trials_per_case = 3;
+        let error = check_resume(&drifted, &policy, &origin()).unwrap_err();
+        let refusal = job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        assert!(refusal.0.contains("seed_base"), "{}", refusal.0);
+        assert!(refusal.0.contains("trials_per_case"), "{}", refusal.0);
+
+        let other_policy = PolicyV2 {
+            alpha_ppm: 10_000,
+            ..PolicyV2::uncalibrated()
+        };
+        let error = check_resume(&request(), &other_policy, &origin()).unwrap_err();
+        assert!(job_refused(&error).unwrap().0.contains("policy"));
     }
 
     #[test]
@@ -3661,53 +4100,49 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
             },
         ];
         let proposed = proposed_for(&journal, 1).expect("round 1 already proposed");
-        assert_eq!(proposed.0, "candidate one");
-        assert_eq!(proposed.2, "sha256:one");
+        assert_eq!((proposed.0.as_str(), proposed.2.as_str()), ("candidate one", "sha256:one"));
         assert!(!round_is_closed(&journal, 1), "no Decided and no StructuralReject");
         assert!(proposed_for(&journal, 2).is_none());
+        assert!(!budget_exhausted(&journal));
 
         let mut closed = journal.clone();
         closed.push(JournalEntry::StructuralReject {
             round: 1,
-            diagnostics: "duplicate_candidate: …".into(),
+            diagnostics: "duplicate_candidate: already evaluated".into(),
         });
         assert!(round_is_closed(&closed, 1));
+
+        closed.push(JournalEntry::BudgetExhausted {
+            round: Some(2),
+            reason: "no budget".into(),
+        });
+        assert!(budget_exhausted(&closed), "F7: exhaustion is read from the journal");
     }
 
     #[test]
     fn the_seen_digests_are_the_baseline_and_every_earlier_candidate() {
+        let proposed = |round: u32, digest: &str| JournalEntry::Proposed {
+            round,
+            text: String::new(),
+            rationale: String::new(),
+            candidate_digest: digest.into(),
+        };
         let journal = vec![
             JournalEntry::Frozen,
-            JournalEntry::Proposed {
-                round: 1,
-                text: "one".into(),
-                rationale: String::new(),
-                candidate_digest: "sha256:one".into(),
-            },
-            JournalEntry::Proposed {
-                round: 2,
-                text: "two".into(),
-                rationale: String::new(),
-                candidate_digest: "sha256:two".into(),
-            },
+            proposed(1, "sha256:one"),
+            proposed(2, "sha256:two"),
         ];
         assert_eq!(
             seen_digests("sha256:baseline", &journal, 3),
-            vec![
-                "sha256:baseline".to_owned(),
-                "sha256:one".to_owned(),
-                "sha256:two".to_owned()
-            ]
+            vec!["sha256:baseline", "sha256:one", "sha256:two"]
         );
         assert_eq!(
             seen_digests("sha256:baseline", &journal, 2),
-            vec!["sha256:baseline".to_owned(), "sha256:one".to_owned()],
+            vec!["sha256:baseline", "sha256:one"],
             "a replayed round never compares itself against its own digest"
         );
     }
 ```
-
-Add `use crate::optimization::policy::PolicyV2;` to the test module's imports.
 
 - [ ] **Step 2: Run it to see it fail**
 
@@ -3717,8 +4152,8 @@ Expected: FAIL to compile, `cannot find function check_policy in this scope`.
 - [ ] **Step 3: Write the implementation** — append to `driver.rs`, above its test module:
 
 ```rust
-/// A job that will not start, and why. Distinct from a `Failed` job: nothing
-/// was written, so there is no journal to read.
+/// A job that will not start or resume, and why. Distinct from a `Failed`
+/// job: nothing was written.
 #[derive(Debug)]
 pub struct JobRefused(pub String);
 
@@ -3742,6 +4177,7 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobOutcome {
     pub job_id: String,
+    /// `Running` when the pass stopped on cancellation; call again to resume.
     pub state: JobState,
     /// The retained checkpoint, never the best candidate the job ever saw.
     pub checkpoint: Option<Checkpoint>,
@@ -3750,7 +4186,7 @@ pub struct JobOutcome {
 
 /// `alpha_effective = alpha / max_rounds` is a Bonferroni correction for an
 /// optimizer that tries several candidates on one validation split, so the
-/// divisor has to be the number of candidates the budget actually allows.
+/// divisor has to be the number of candidates the budget allows.
 pub(crate) fn check_policy(request: &JobRequest, policy: &PolicyV2) -> Result<()> {
     if policy.max_rounds == request.budgets.max_rounds {
         return Ok(());
@@ -3758,6 +4194,54 @@ pub(crate) fn check_policy(request: &JobRequest, policy: &PolicyV2) -> Result<()
     Err(refused(format!(
         "policy max_rounds {} does not match the budget's max_rounds {}; the Bonferroni divisor must be the number of candidates the job may try",
         policy.max_rounds, request.budgets.max_rounds
+    )))
+}
+
+/// Finding F2: a resume must repeat the request the job was frozen from. The
+/// origin is authoritative; this only refuses a caller who believes otherwise.
+pub(crate) fn check_resume(
+    request: &JobRequest,
+    policy: &PolicyV2,
+    origin: &JobOrigin,
+) -> Result<()> {
+    let mut differs = Vec::new();
+    if &origin.policy != policy {
+        differs.push("policy");
+    }
+    if origin.budgets != request.budgets {
+        differs.push("budgets");
+    }
+    if origin.trials_per_case != request.trials_per_case {
+        differs.push("trials_per_case");
+    }
+    if origin.seed_base != request.seed_base {
+        differs.push("seed_base");
+    }
+    if origin.subject.behavior_id != request.behavior_id {
+        differs.push("behavior_id");
+    }
+    if origin.definition.definition_id != request.definition_id {
+        differs.push("definition_id");
+    }
+    if origin.inference_profile_id != request.inference_profile_id {
+        differs.push("inference_profile_id");
+    }
+    if origin.max_text_bytes != request.max_text_bytes {
+        differs.push("max_text_bytes");
+    }
+    if origin.jobs_dir != request.jobs_dir {
+        differs.push("jobs_dir");
+    }
+    if origin.owner != request.owner {
+        differs.push("owner");
+    }
+    if differs.is_empty() {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "job {} was frozen with a different {}; a resume must repeat the request the job was created from",
+        request.job_id,
+        differs.join(", ")
     )))
 }
 
@@ -3797,6 +4281,13 @@ pub(crate) fn round_is_closed(journal: &[JournalEntry], round: u32) -> bool {
         } => *exhausted == round,
         _ => false,
     })
+}
+
+/// Finding F7: whether the job ran out of budget is a fact of the journal.
+pub(crate) fn budget_exhausted(journal: &[JournalEntry]) -> bool {
+    journal
+        .iter()
+        .any(|entry| matches!(entry, JournalEntry::BudgetExhausted { .. }))
 }
 
 /// Every digest this job has already evaluated, before `round`.
@@ -3865,32 +4356,117 @@ fn run_started(journal: &[JournalEntry], run_id: &str) -> bool {
     })
 }
 
-/// The pack a directory already holds, or a fresh candidate written into it.
-fn candidate_pack(
-    baseline: &MaterializedPack,
-    owner: &str,
-    text: &str,
-    dir: &Path,
-) -> Result<MaterializedPack> {
+fn remove_if_present(dir: &Path) -> Result<()> {
     if dir.exists() {
-        let behavior_id = baseline
-            .config
-            .agent_behaviors
-            .iter()
-            .find(|behavior| behavior.context_id.as_deref() == Some(baseline.context_id.as_str()))
-            .map(|behavior| behavior.behavior_id.clone())
-            .with_context(|| format!("no behavior names context {:?}", baseline.context_id))?;
-        return materialize_pack(dir, owner, &behavior_id);
+        std::fs::remove_dir_all(dir).with_context(|| format!("removing {}", dir.display()))?;
     }
-    materialize_candidate(baseline, owner, text, dir)
+    Ok(())
 }
 
-/// Freeze a baseline, run rounds against it, and finalize.
+/// Finding F7: the journaled round's candidate, in place and still digesting to
+/// what `Proposed` recorded. A crash between the journal write and the rename
+/// leaves only the staging directory, which is renamed here.
+fn proposed_candidate(
+    origin: &JobOrigin,
+    job_id: &str,
+    round: u32,
+    digest: &str,
+) -> Result<MaterializedPack> {
+    let final_dir = candidate_dir(&origin.jobs_dir, job_id, round);
+    let staging = candidate_staging_dir(&origin.jobs_dir, job_id, round);
+    if !final_dir.exists() {
+        std::fs::rename(&staging, &final_dir).with_context(|| {
+            format!(
+                "round {round} was proposed but neither {} nor {} holds its candidate",
+                final_dir.display(),
+                staging.display()
+            )
+        })?;
+    }
+    let candidate = materialize_pack(&final_dir, &origin.owner, &origin.subject.behavior_id)?;
+    anyhow::ensure!(
+        candidate.digest == digest,
+        "round {round}'s candidate digests to {}, not the journaled {digest}",
+        candidate.digest
+    );
+    Ok(candidate)
+}
+
+async fn read_closure(access: &ConfigAccess, owner: &str) -> Result<Closure> {
+    let owner = owner.to_owned();
+    access
+        .transact("optimization.capture_closure", |txn| {
+            let owner = &owner;
+            Box::pin(async move { capture_closure(txn, owner).await })
+        })
+        .await
+}
+
+/// Create the job: copy the baseline pack in, cross-check its prompt against
+/// the live configuration (ruling R5), freeze the origin, journal `Frozen`.
+async fn freeze_job(
+    access: &ConfigAccess,
+    request: &JobRequest,
+    policy: &PolicyV2,
+) -> Result<JobRecord> {
+    check_policy(request, policy)?;
+    let owner = request.owner.as_str();
+    let definition = load_definition(access, owner, &request.definition_id).await?;
+    definition
+        .validate()
+        .map_err(|error| refused(format!("eval definition: {error:#}")))?;
+
+    let source = materialize_pack(&request.baseline_pack, owner, &request.behavior_id)?;
+    let baseline_path = baseline_dir(&request.jobs_dir, &request.job_id);
+    // A directory with no job row is the leftover of a freeze that never
+    // finished; the job does not exist, so nothing refers to it.
+    remove_if_present(&baseline_path)?;
+    let baseline = materialize_candidate(&source, owner, &baseline_text(&source)?, &baseline_path)?;
+
+    let closure = read_closure(access, owner).await?;
+    let target = Target {
+        field: TargetField::AgentContextSystemPrompt,
+        owner: request.owner.clone(),
+        id: baseline.context_id.clone(),
+    };
+    let live_text = current_text(&closure, &target)?;
+    let pack_text = baseline_text(&baseline)?;
+    if live_text != pack_text {
+        return Err(refused(format!(
+            "the live AgentContext {:?} and the baseline pack disagree about the subject's system prompt; supply a pack exported from this configuration",
+            target.id
+        )));
+    }
+
+    let origin = JobOrigin {
+        target,
+        closure: closure_digests(&closure)?,
+        subject: SubjectRef {
+            pack_digest: baseline.digest.clone(),
+            behavior_id: request.behavior_id.clone(),
+        },
+        definition: definition_ref(&definition)?,
+        policy: policy.clone(),
+        trials_per_case: request.trials_per_case,
+        budgets: request.budgets.clone(),
+        baseline_text: pack_text,
+        owner: request.owner.clone(),
+        seed_base: request.seed_base,
+        inference_profile_id: request.inference_profile_id.clone(),
+        max_text_bytes: request.max_text_bytes,
+        jobs_dir: request.jobs_dir.clone(),
+    };
+    let mut job = create_job(access, &request.job_id, owner, &origin).await?;
+    append(access, &mut job, JournalEntry::Frozen).await?;
+    Ok(job)
+}
+
+/// Start or resume a job, run rounds, and finalize.
 ///
 /// Calling this again on the same `job_id` resumes: the journal is replayed,
-/// an unfinished run is resumed through the runner, and a round that was
-/// already proposed is never proposed again. A resumed job and an uninterrupted
-/// one reach the same journal.
+/// an unfinished run is resumed through the runner, and a proposed round is
+/// never proposed again. A resumed job and an uninterrupted one reach the same
+/// journal.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_job(
     access: &ConfigAccess,
@@ -3901,120 +4477,78 @@ pub async fn run_job(
     policy: &PolicyV2,
     cancel: CancellationToken,
 ) -> Result<JobOutcome> {
-    check_policy(request, policy)?;
-    let owner = request.owner.as_str();
-    let definition = load_definition(access, owner, &request.definition_id).await?;
-    definition
-        .validate()
-        .map_err(|error| refused(format!("eval definition: {error:#}")))?;
-    let definition_ref = DefinitionRef {
-        definition_id: definition.definition_id.clone(),
-        comparability_version: definition.comparability_version,
-        digest: desired_state_document_digest(&serde_json::to_value(&definition)?)?,
-    };
-
-    // The job owns its own copy of the baseline pack, so a later edit of the
-    // exported directory cannot change what an earlier round meant.
-    let source = materialize_pack(&request.baseline_pack, owner, &request.behavior_id)?;
-    let baseline_dir = request.baseline_dir();
-    let baseline = if baseline_dir.exists() {
-        materialize_pack(&baseline_dir, owner, &request.behavior_id)?
-    } else {
-        materialize_candidate(&source, owner, &baseline_text(&source)?, &baseline_dir)?
-    };
-    let target = Target {
-        field: TargetField::AgentContextSystemPrompt,
-        owner: request.owner.clone(),
-        id: baseline.context_id.clone(),
-    };
-
-    let closure = {
-        let owner = request.owner.clone();
-        access
-            .transact("optimization.capture_closure", |txn| {
-                let owner = &owner;
-                Box::pin(async move { capture_closure(txn, owner).await })
-            })
-            .await?
-    };
-    let frozen = closure_digests(&closure)?;
-    let live_text = current_text(&closure, &target)?;
-    let pack_text = baseline_text(&baseline)?;
-    if live_text != pack_text {
-        return Err(refused(format!(
-            "the live {} {:?} and the baseline pack disagree about the subject's system prompt; export the subject from this configuration before optimizing it",
-            target.field.collection().graphql_type(),
-            target.id
-        )));
-    }
-
-    let mut job = match load_job(access, owner, &request.job_id).await? {
-        Some(existing) => existing,
-        None => {
-            let origin = JobOrigin {
-                target: target.clone(),
-                closure: frozen.clone(),
-                subject: SubjectRef {
-                    pack_digest: baseline.digest.clone(),
-                    behavior_id: request.behavior_id.clone(),
-                },
-                definition: definition_ref.clone(),
-                policy: policy.clone(),
-                trials_per_case: request.trials_per_case,
-                budgets: request.budgets.clone(),
-                baseline_text: pack_text.clone(),
-                owner: request.owner.clone(),
-                seed_base: request.seed_base,
-            };
-            let mut created = create_job(access, &request.job_id, owner, &origin).await?;
-            append(access, &mut created, JournalEntry::Frozen).await?;
-            created
+    let mut job = match load_job(access, &request.owner, &request.job_id).await? {
+        Some(existing) => {
+            check_resume(request, policy, &existing.origin)?;
+            existing
         }
+        None => freeze_job(access, request, policy).await?,
     };
+    // From here on, only the origin decides (finding F2).
+    let origin = job.origin.clone();
+    let owner = origin.owner.as_str();
+    let job_id = job.job_id.clone();
 
     let state = derive_state(&job.journal);
     if state != JobState::Running {
         return Ok(outcome(&job, state));
     }
 
-    // Drift is checked on every start, before any further spend.
-    if job.origin.closure != frozen {
-        return finalize(access, &mut job, JobState::Failed {
-            reason: "baseline_drifted".into(),
-        })
-        .await;
-    }
-    if job.origin.definition != definition_ref {
+    // Finding F5: the instrument first, then the subject.
+    let definition = load_definition(access, owner, &origin.definition.definition_id).await?;
+    if definition_ref(&definition)? != origin.definition {
         return finalize(access, &mut job, JobState::Failed {
             reason: "definition_changed".into(),
         })
         .await;
     }
+    if closure_digests(&read_closure(access, owner).await?)? != origin.closure {
+        return finalize(access, &mut job, JobState::Failed {
+            reason: "baseline_drifted".into(),
+        })
+        .await;
+    }
+    let baseline_path = baseline_dir(&origin.jobs_dir, &job_id);
+    let baseline = materialize_pack(&baseline_path, owner, &origin.subject.behavior_id)?;
+    if baseline.digest != origin.subject.pack_digest {
+        return Err(refused(format!(
+            "the job's baseline copy at {} no longer digests to what it froze",
+            baseline_path.display()
+        )));
+    }
 
-    let held_out_reserve = run_cost(&definition, EvalSplit::HeldOut, request.trials_per_case, 2);
-    let train_cost = run_cost(&definition, EvalSplit::Train, request.trials_per_case, 1);
-    let validation_cost = run_cost(&definition, EvalSplit::Validation, request.trials_per_case, 2);
-    let mut exhausted = false;
+    let policy = &origin.policy;
+    let budgets = &origin.budgets;
+    let held_out_reserve = run_cost(&definition, EvalSplit::HeldOut, origin.trials_per_case, 2);
+    let train_cost = run_cost(&definition, EvalSplit::Train, origin.trials_per_case, 1);
+    let validation_cost = run_cost(&definition, EvalSplit::Validation, origin.trials_per_case, 2);
+    // Cancellation stops after the run in progress; the job stays `Running`
+    // and the next call resumes it (ruling R9).
+    let stopped = |job: &JobRecord| -> Result<JobOutcome> { Ok(outcome(job, JobState::Running)) };
 
-    for round in 1..=request.budgets.max_rounds {
+    for round in 1..=budgets.max_rounds {
+        if budget_exhausted(&job.journal) {
+            break;
+        }
         if round_is_closed(&job.journal, round) {
             continue;
         }
         let retained = checkpoint(&job.journal);
-        let checkpoint_dir = retained
+        let checkpoint_path = retained
             .as_ref()
-            .map(|held| request.candidate_dir(held.round))
-            .unwrap_or_else(|| baseline_dir.clone());
+            .map(|held| candidate_dir(&origin.jobs_dir, &job_id, held.round))
+            .unwrap_or_else(|| baseline_path.clone());
         let checkpoint_text = retained
             .as_ref()
             .map(|held| held.text.clone())
-            .unwrap_or_else(|| job.origin.baseline_text.clone());
+            .unwrap_or_else(|| origin.baseline_text.clone());
 
+        // A round starts only if it can finish beside the reserved held-out run.
         let spend = spend_so_far(access, owner, &job.journal).await?;
         if spend.case_trials + train_cost + validation_cost + held_out_reserve
-            > request.budgets.max_case_trials
-            || spend.tokens > request.budgets.max_tokens
-            || past_deadline(&job.origin.budgets)
+            > budgets.max_case_trials
+            || spend.tokens > budgets.max_tokens
+            || past_deadline(budgets)
         {
             append(
                 access,
@@ -4025,163 +4559,133 @@ pub async fn run_job(
                 },
             )
             .await?;
-            exhausted = true;
             break;
         }
 
         // 1. Train run: one cell, the checkpoint, on the train split.
-        let train = train_plan(request, round, &checkpoint_dir);
+        let train = train_plan(&job_id, &origin, round, &checkpoint_path);
         if !run_started(&job.journal, &train.run_id) {
-            append(
-                access,
-                &mut job,
-                JournalEntry::RunStarted {
-                    run_id: train.run_id.clone(),
-                    round: Some(round),
-                    split: EvalSplit::Train,
-                },
-            )
-            .await?;
+            let entry = JournalEntry::RunStarted {
+                run_id: train.run_id.clone(),
+                round: Some(round),
+                split: EvalSplit::Train,
+            };
+            append(access, &mut job, entry).await?;
         }
-        execute_run(access, request, &train, executor, registry, cancel.clone()).await?;
+        execute_run(access, request, &origin, &train, executor, registry, cancel.clone()).await?;
+        if cancel.is_cancelled() {
+            return stopped(&job);
+        }
 
         // 2. Propose. Feedback comes from this run's verdicts and nowhere else.
-        let (text, rationale, digest) = match proposed_for(&job.journal, round) {
-            Some(replayed) => replayed,
+        let (text, digest) = match proposed_for(&job.journal, round) {
+            Some((text, _, digest)) => (text, digest),
             None => {
-                let feedback =
-                    train_feedback(&load_verdicts(access, owner, &train.run_id).await?);
+                // Finding F7: a directory with no `Proposed` is a leftover.
+                remove_if_present(&candidate_staging_dir(&origin.jobs_dir, &job_id, round))?;
+                remove_if_present(&candidate_dir(&origin.jobs_dir, &job_id, round))?;
+                let feedback = train_feedback(&load_verdicts(access, owner, &train.run_id).await?);
                 let proposal = proposer
                     .propose(ProposalInput {
                         round,
                         current_text: checkpoint_text.clone(),
                         feedback,
                         rejections: rejections(&job.journal),
-                        max_text_bytes: request.max_text_bytes,
+                        max_text_bytes: origin.max_text_bytes,
                     })
                     .await?;
-                let candidate = candidate_pack(
+                let staged = materialize_candidate(
                     &baseline,
                     owner,
                     &proposal.text,
-                    &request.candidate_dir(round),
+                    &candidate_staging_dir(&origin.jobs_dir, &job_id, round),
                 )?;
                 let entry = JournalEntry::Proposed {
                     round,
                     text: proposal.text.clone(),
                     rationale: proposal.rationale.clone(),
-                    candidate_digest: candidate.digest.clone(),
+                    candidate_digest: staged.digest.clone(),
                 };
                 append(access, &mut job, entry).await?;
-                (proposal.text, proposal.rationale, candidate.digest)
+                (proposal.text, staged.digest)
             }
         };
-        let _ = rationale;
+        let candidate = proposed_candidate(&origin, &job_id, round, &digest)?;
 
         // 3. Structural gate, before any validation spend.
-        let candidate = candidate_pack(&baseline, owner, &text, &request.candidate_dir(round))?;
         if let Err(rejection) = structural_gate(
             &baseline,
             &candidate,
-            &target,
             &text,
-            request.max_text_bytes,
+            origin.max_text_bytes,
             &seen_digests(&baseline.digest, &job.journal, round),
             owner,
         ) {
             tracing::info!(round, reason = rejection.reason, "candidate rejected before any spend");
-            append(
-                access,
-                &mut job,
-                JournalEntry::StructuralReject {
-                    round,
-                    diagnostics: rejection.diagnostics(),
-                },
-            )
-            .await?;
+            let entry = JournalEntry::StructuralReject {
+                round,
+                diagnostics: rejection.diagnostics(),
+            };
+            append(access, &mut job, entry).await?;
             continue;
         }
-        debug_assert_eq!(digest, candidate.digest);
 
         // 4. Validation runs, and 5. the decision. A re-run adds pairs and
-        // never replaces them, so every attempt's rows are read together.
+        // never replaces them (finding F1).
         let mut run_ids = Vec::new();
         for attempt in 0..=policy.max_reruns {
-            let spend = spend_so_far(access, owner, &job.journal).await?;
-            if spend.case_trials + validation_cost + held_out_reserve
-                > request.budgets.max_case_trials
-            {
-                append(
-                    access,
-                    &mut job,
-                    JournalEntry::BudgetExhausted {
-                        round: Some(round),
-                        reason: "no budget for the validation run".into(),
-                    },
-                )
-                .await?;
-                exhausted = true;
-                break;
-            }
             let plan = validation_plan(
-                request,
+                &job_id,
+                &origin,
                 round,
                 attempt,
-                &checkpoint_dir,
-                &request.candidate_dir(round),
+                &checkpoint_path,
+                &candidate.dir,
             );
             if !run_started(&job.journal, &plan.run_id) {
-                append(
-                    access,
-                    &mut job,
-                    JournalEntry::RunStarted {
-                        run_id: plan.run_id.clone(),
+                let spend = spend_so_far(access, owner, &job.journal).await?;
+                if spend.case_trials + validation_cost + held_out_reserve > budgets.max_case_trials
+                {
+                    let entry = JournalEntry::BudgetExhausted {
                         round: Some(round),
-                        split: EvalSplit::Validation,
-                    },
-                )
-                .await?;
+                        reason: "no budget for another validation run".into(),
+                    };
+                    append(access, &mut job, entry).await?;
+                    break;
+                }
+                let entry = JournalEntry::RunStarted {
+                    run_id: plan.run_id.clone(),
+                    round: Some(round),
+                    split: EvalSplit::Validation,
+                };
+                append(access, &mut job, entry).await?;
             }
-            execute_run(access, request, &plan, executor, registry, cancel.clone()).await?;
+            execute_run(access, request, &origin, &plan, executor, registry, cancel.clone())
+                .await?;
+            if cancel.is_cancelled() {
+                return stopped(&job);
+            }
             run_ids.push(plan.run_id.clone());
 
-            let (trials, verdicts, cases) = read_runs(access, owner, &run_ids).await?;
-            let evidence = paired_evidence(
-                &definition,
-                &trials,
-                &verdicts,
-                BASELINE_CELL,
-                CANDIDATE_CELL,
-                &cases,
-                policy.max_missing_usage_bp,
-            );
-            let report = decide(
-                Mode::Improve,
-                policy,
-                &evidence,
-                decision_seed(&run_ids),
-            );
-            let last = attempt == policy.max_reruns;
-            if matches!(report.decision, Decision::Inconclusive(_)) && !last {
+            let mut runs = Vec::with_capacity(run_ids.len());
+            for run_id in &run_ids {
+                runs.push(load_run_rows(access, owner, run_id).await?);
+            }
+            let evidence = decision_evidence(&definition, &runs, policy.max_missing_usage_bp);
+            let report = decide(Mode::Improve, policy, &evidence, decision_seed(&run_ids));
+            if matches!(report.decision, Decision::Inconclusive(_)) && attempt < policy.max_reruns {
                 continue;
             }
-            append(
-                access,
-                &mut job,
-                JournalEntry::Decided {
-                    round: Some(round),
-                    attempt,
-                    run_ids: run_ids.clone(),
-                    mode: Mode::Improve,
-                    decision: report.decision,
-                    policy_version: report.policy_version.clone(),
-                    summary: summary_of(&report),
-                },
-            )
-            .await?;
-            break;
-        }
-        if exhausted {
+            let entry = JournalEntry::Decided {
+                round: Some(round),
+                attempt,
+                run_ids: run_ids.clone(),
+                mode: Mode::Improve,
+                decision: report.decision,
+                policy_version: report.policy_version.clone(),
+                summary: summary_of(&report),
+            };
+            append(access, &mut job, entry).await?;
             break;
         }
     }
@@ -4189,56 +4693,49 @@ pub async fn run_job(
     // 6. Finalize. The held-out split is touched once, and only when a round
     // moved the checkpoint off the baseline.
     let Some(retained) = checkpoint(&job.journal) else {
-        let state = if exhausted {
+        let state = if budget_exhausted(&job.journal) {
             JobState::Exhausted
         } else {
             JobState::NothingToPromote
         };
         return finalize(access, &mut job, state).await;
     };
-    let plan = held_out_plan(request, &baseline_dir, &request.candidate_dir(retained.round));
+    let plan = held_out_plan(
+        &job_id,
+        &origin,
+        &baseline_path,
+        &candidate_dir(&origin.jobs_dir, &job_id, retained.round),
+    );
     let decision = match decided_held_out(&job.journal) {
         Some(decision) => decision,
         None => {
             if !run_started(&job.journal, &plan.run_id) {
-                append(
-                    access,
-                    &mut job,
-                    JournalEntry::RunStarted {
-                        run_id: plan.run_id.clone(),
-                        round: None,
-                        split: EvalSplit::HeldOut,
-                    },
-                )
-                .await?;
-            }
-            execute_run(access, request, &plan, executor, registry, cancel.clone()).await?;
-            let run_ids = vec![plan.run_id.clone()];
-            let (trials, verdicts, cases) = read_runs(access, owner, &run_ids).await?;
-            let evidence = paired_evidence(
-                &definition,
-                &trials,
-                &verdicts,
-                BASELINE_CELL,
-                CANDIDATE_CELL,
-                &cases,
-                policy.max_missing_usage_bp,
-            );
-            let report = decide(Mode::Confirm, policy, &evidence, decision_seed(&run_ids));
-            append(
-                access,
-                &mut job,
-                JournalEntry::Decided {
+                let entry = JournalEntry::RunStarted {
+                    run_id: plan.run_id.clone(),
                     round: None,
-                    attempt: 0,
-                    run_ids,
-                    mode: Mode::Confirm,
-                    decision: report.decision,
-                    policy_version: report.policy_version.clone(),
-                    summary: summary_of(&report),
-                },
-            )
-            .await?;
+                    split: EvalSplit::HeldOut,
+                };
+                append(access, &mut job, entry).await?;
+            }
+            execute_run(access, request, &origin, &plan, executor, registry, cancel.clone())
+                .await?;
+            if cancel.is_cancelled() {
+                return stopped(&job);
+            }
+            let run_ids = vec![plan.run_id.clone()];
+            let runs = vec![load_run_rows(access, owner, &plan.run_id).await?];
+            let evidence = decision_evidence(&definition, &runs, policy.max_missing_usage_bp);
+            let report = decide(Mode::Confirm, policy, &evidence, decision_seed(&run_ids));
+            let entry = JournalEntry::Decided {
+                round: None,
+                attempt: 0,
+                run_ids,
+                mode: Mode::Confirm,
+                decision: report.decision,
+                policy_version: report.policy_version.clone(),
+                summary: summary_of(&report),
+            };
+            append(access, &mut job, entry).await?;
             report.decision
         }
     };
@@ -4272,37 +4769,12 @@ fn decided_held_out(journal: &[JournalEntry]) -> Option<Decision> {
     })
 }
 
-/// The trials, verdicts and expected cases of every run a decision reads.
-async fn read_runs(
-    access: &ConfigAccess,
-    owner: &str,
-    run_ids: &[String],
-) -> Result<(Vec<TrialRecord>, Vec<VerdictRecord>, Vec<String>)> {
-    let (mut trials, mut verdicts, mut cases) = (Vec::new(), Vec::new(), Vec::new());
-    for run_id in run_ids {
-        if let Some(record) = load_run(access, owner, run_id).await? {
-            cases = record.origin.case_ids.clone();
-        }
-        trials.extend(load_trials(access, owner, run_id).await?);
-        verdicts.extend(load_verdicts(access, owner, run_id).await?);
-    }
-    Ok((trials, verdicts, cases))
-}
-
-async fn finalize(
-    access: &ConfigAccess,
-    job: &mut JobRecord,
-    state: JobState,
-) -> Result<JobOutcome> {
+async fn finalize(access: &ConfigAccess, job: &mut JobRecord, state: JobState) -> Result<JobOutcome> {
     tracing::info!(job_id = %job.job_id, state = state.label(), "optimization job finalized");
-    append(
-        access,
-        job,
-        JournalEntry::Finalized {
-            state: state.clone(),
-        },
-    )
-    .await?;
+    let entry = JournalEntry::Finalized {
+        state: state.clone(),
+    };
+    append(access, job, entry).await?;
     Ok(outcome(job, state))
 }
 
@@ -4316,59 +4788,60 @@ fn outcome(job: &JobRecord, state: JobState) -> JobOutcome {
 }
 ```
 
-Extend the file's `use` block with the names this half needs, in rustfmt order:
+Extend the file's `use` block with what this half needs, in rustfmt order:
 
 ```rust
-use crate::config_client::desired_state_document_digest;
-use crate::eval::{load_verdicts, DefinitionRef, SubjectRef, TrialRecord, VerdictRecord};
-use crate::optimization::evidence::{decision_seed, paired_evidence, train_feedback};
+use crate::eval::report::load_run_rows;
+use crate::eval::{load_verdicts, SubjectRef};
+use crate::optimization::evidence::{decision_evidence, decision_seed, train_feedback};
 use crate::optimization::gate::structural_gate;
 use crate::optimization::job::{
     append, checkpoint, create_job, derive_state, load_job, rounds_used, Checkpoint,
-    DecisionSummary, JobOrigin, JobRecord, JobState,
+    DecisionSummary, JobRecord, JobState,
 };
 use crate::optimization::policy::{decide, Decision, DecisionReport, Mode, PolicyV2};
 use crate::optimization::proposer::{ProposalInput, Proposer, Rejection};
 use crate::optimization::subject::{
     baseline_text, materialize_candidate, materialize_pack, MaterializedPack,
 };
-use crate::optimization::target::{capture_closure, closure_digests, current_text, Target, TargetField};
+use crate::optimization::target::{
+    capture_closure, closure_digests, current_text, Closure, Target, TargetField,
+};
 ```
 
-- [ ] **Step 4: Restore the recompute half of `evidence.rs`**
-
-Paste `DecisionMismatch`, `recompute_decisions` and `definition_of` back into `crates/gents/src/optimization/evidence.rs`, exactly as Task 1 Step 3 wrote them, and extend that file's `use` block with `use crate::optimization::job::{JobRecord, JournalEntry};` and `use crate::optimization::policy::{decide, Decision, Mode};`.
-
-- [ ] **Step 5: Wire the module** — in `crates/gents/src/optimization/mod.rs` extend the re-exports:
+- [ ] **Step 4: Wire the module** — in `crates/gents/src/optimization/mod.rs` extend the driver re-export:
 
 ```rust
 pub use driver::{
-    job_refused, run_cost, run_job, spend_so_far, split_case_count, JobOutcome, JobRefused,
-    JobRequest, Spend,
+    baseline_dir, candidate_dir, job_dir, job_refused, run_cost, run_job, spend_so_far,
+    split_case_count, JobOutcome, JobRefused, JobRequest, Spend,
 };
-pub use evidence::{recompute_decisions, DecisionMismatch};
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization`
-Expected: PASS, including the 3 new driver tests.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::driver`
+Expected: PASS, 9 tests.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/gents/src/optimization
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
-  commit -m "feat(optimization): run_job drives rounds over native eval runs (#1455)
+  commit -m "feat(optimization): run_job drives rounds from the frozen origin (#1455)
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
-### Task 4: The scripted matrix
+### Task 5: The scripted matrix
 
 **Files:**
 - Create: `crates/gents/src/optimization/driver/matrix.rs`
-- Modify: `crates/gents/src/optimization/driver.rs` (add `#[cfg(test)] mod matrix;` at the top of the file, in rustfmt order)
+- Modify: `crates/gents/src/optimization/driver.rs` (add `#[cfg(test)] pub(crate) mod matrix;` near the top, in rustfmt order)
+
+Every end-to-end case spec section 9 lists runs here, deterministically, in `cargo test -p gents` (finding F9): accept; reject for `no_improvement`, `case_regression` and `cost_regression`; structural reject with zero validation runs; inconclusive, re-run, inconclusive; too few cases; budget exhaustion; held-out regression; held-out requested only at finalize; feedback only from the train run; baseline drift; definition drift; resume after interruption against an uninterrupted twin. The last §9 case, a decision on an invalidated run, needs `show` and is Task 6's.
+
+The matrix uses the policy's defaults with `max_rounds: 3` (finding F11): `alpha_effective` is 50000 / 3 = 16666 ppm, and six aligned validation cases give p = 1/64 = 15625 ppm, which is inside it. Every scripted proposer repeats one text for all three rounds, so rounds 2 and 3 are structural duplicates and spend only their train runs.
 
 **Interfaces:**
 - Consumes:
@@ -4379,7 +4852,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
   impl Launching {
       pub(crate) async fn new() -> Self;
       pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>);
-      pub(crate) fn runs_dir(&self) -> PathBuf;
+      pub(crate) fn runs_dir(&self) -> PathBuf;          // <scratch>/eval/runs
       pub(crate) fn evaluator_did(&self) -> String;
       pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf;
   }
@@ -4390,23 +4863,58 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
       pub fn with(self, key: ScriptKey, evidence: TrialEvidence) -> Self;
       pub fn with_default(self, evidence: TrialEvidence) -> Self;
       pub fn passed_evidence(did: &str, stage_id: &str, capture_name: &str, rows: Vec<Value>) -> TrialEvidence;
+      pub fn not_evidence(did: &str) -> TrialEvidence;
   }
+  // crates/gents/src/eval/runner/executor.rs
+  impl TrialEvidence { pub fn new(locator: TrialLocator, stages: Vec<StageEvidence>, usage: TrialUsage, anchor: Anchor) -> Self; }
   // crates/gents/src/eval/checks/mod.rs
+  pub trait Check: Send + Sync { fn name(&self) -> &'static str; fn version(&self) -> &'static str;
+      fn evaluate(&self, params: &Value, stage: &StageEvidence) -> CheckVerdict; }
   impl CheckRegistry { pub fn builtin() -> Self; #[cfg(test)] pub(crate) fn with(self, check: Box<dyn Check>) -> Self; }
+  // crates/gents/src/eval/documents.rs
+  pub async fn load_verdicts(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<Vec<VerdictRecord>>;
   ```
-  `Launching::pack` writes the fixture pack whose context sidecar is `agent_behaviors/monitor/system_prompt.md` holding `"Watch the mailbox.\n"`; read `crates/gents/src/eval/runner/freeze.rs` `fn write_fixture_pack` to confirm the bytes before asserting on the baseline text.
-- Produces: tests only.
+  Facts this matrix relies on, each read from the code: a slot's first attempt is `1` (`eval/runner/plan.rs`, `highest.map_or(1, …)`); the runner fills `ScriptKey::cell_label` from `CellRequest::label`, which `run_request` sets equal to the cell id; `ScriptKey` carries no run id, so one script answers every run of a job; a pre-cancelled token makes the runner skip every queued slot without writing a trial row (`runner/mod.rs`, the `biased` select that sets `stop`); `max_infra_retries: 0` never plans a slot twice; and `Launching::pack` writes a sidecar prompt of `"Watch the mailbox.\n"` (`freeze.rs`, `fn write_fixture_pack`).
+- Produces (`pub(crate)`, consumed by Task 6 and PR 4):
+  ```rust
+  pub(crate) const VALIDATION_CASES: [&str; 6];
+  pub(crate) const HELD_OUT_CASES: [&str; 6];
+  pub(crate) const BASELINE_PROMPT: &str;
+  pub(crate) const CANDIDATE_PROMPT: &str;
+  pub(crate) struct Harness;
+  impl Harness {
+      pub(crate) async fn new() -> Self;
+      pub(crate) fn access(&self) -> &ConfigAccess;
+      pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>);
+      pub(crate) fn request(&self, job_id: &str, definition_id: &str, budgets: Budgets) -> JobRequest;
+  }
+  pub(crate) fn pass() -> TrialEvidence;
+  pub(crate) fn fail() -> TrialEvidence;
+  pub(crate) fn script(executor: ScriptedExecutor, cell: &str, cases: &[&str],
+      evidence: impl Fn(&str) -> TrialEvidence) -> ScriptedExecutor;
+  pub(crate) fn base_executor() -> ScriptedExecutor;
+  pub(crate) fn budgets(max_case_trials: u64) -> Budgets;
+  pub(crate) fn policy() -> PolicyV2;
+  pub(crate) fn repeating_proposer(text: &str) -> ScriptedProposer;
+  pub(crate) async fn drive(harness: &Harness, request: &JobRequest, executor: &ScriptedExecutor,
+      proposer: &dyn Proposer, registry: &CheckRegistry, cancel: CancellationToken) -> Result<JobOutcome>;
+  pub(crate) async fn settle(harness: &Harness, request: &JobRequest, executor: &ScriptedExecutor,
+      proposer: &dyn Proposer) -> JobOutcome;
+  pub(crate) async fn journal(harness: &Harness, job_id: &str) -> Vec<JournalEntry>;
+  pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest);
+  pub(crate) async fn rejecting_harness(job_id: &str) -> (Harness, JobRequest);
+  ```
 
 - [ ] **Step 1: Write the matrix** — create `crates/gents/src/optimization/driver/matrix.rs`:
 
 ```rust
-//! The scripted end-to-end matrix: six jobs, no model, no network.
+//! The scripted end-to-end matrix: no model, no network.
 //!
-//! Each case assembles a run the way `tests/eval_runner_canary.rs` does — a
-//! launching home, an installed definition and inference documents, a fixture
-//! pack as the subject — and replaces only the provider, with the runner's
-//! `ScriptedExecutor`. Nothing here mocks the driver, the policy or the
-//! journal: a failure is a defect in the stack.
+//! Each case assembles a job the way `tests/eval_runner_canary.rs` assembles a
+//! run — a launching home, an installed definition and inference documents, a
+//! fixture pack as the subject — and replaces only the provider, with the
+//! runner's `ScriptedExecutor`. Nothing here mocks the driver, the policy or
+//! the journal: a failure is a defect in the stack.
 //!
 //! Scoring is binary by construction. `captured_rows_count` with `min: 1`
 //! scores 10000 on a stage whose `findings` capture holds a row and 0 on one
@@ -4415,30 +4923,46 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 use std::path::PathBuf;
 
+use anyhow::Result;
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
+use crate::config_client::ConfigAccess;
 use crate::document_config::EvalSplit;
-use crate::eval::checks::CheckRegistry;
+use crate::eval::checks::{Check, CheckRegistry, CheckVerdict};
+use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze::tests::{Launching, OWNER};
-use crate::eval::runner::{ScriptKey, ScriptedExecutor, TrialEvidence};
-use crate::optimization::driver::{run_job, JobRequest, JobOutcome};
+use crate::eval::runner::{
+    RunOptions, ScriptKey, ScriptedExecutor, StageEvidence, TrialEvidence,
+};
+use crate::eval::{load_verdicts, OutcomeKind, TrialUsage};
+use crate::optimization::driver::{run_job, spend_so_far, JobOutcome, JobRequest};
+use crate::optimization::evidence::decision_evidence;
 use crate::optimization::job::{load_job, Budgets, JobState, JournalEntry};
-use crate::optimization::policy::{Decision, PolicyV2, RejectReason};
-use crate::optimization::proposer::ScriptedProposer;
+use crate::optimization::policy::{Decision, InconclusiveReason, PolicyV2, RejectReason};
+use crate::optimization::proposer::{Proposal, ProposalInput, Proposer, ScriptedProposer};
 use crate::Collection;
 
-/// Six validation cases is the floor Bonferroni imposes: at `alpha = 0.05`
-/// and three rounds, `alpha_effective` is 16666 ppm and the smallest
-/// achievable p is `2^-n`, so five cases could never be accepted.
-const VALIDATION_CASES: [&str; 6] = ["val-a", "val-b", "val-c", "val-d", "val-e", "val-f"];
-const HELD_OUT_CASES: [&str; 6] = ["ho-a", "ho-b", "ho-c", "ho-d", "ho-e", "ho-f"];
+pub(crate) const VALIDATION_CASES: [&str; 6] = ["val-a", "val-b", "val-c", "val-d", "val-e", "val-f"];
+pub(crate) const HELD_OUT_CASES: [&str; 6] = ["ho-a", "ho-b", "ho-c", "ho-d", "ho-e", "ho-f"];
 const TRAIN_CASES: [&str; 1] = ["train-a"];
 const TRIALS_PER_CASE: u32 = 2;
-const BASELINE_PROMPT: &str = "Watch the mailbox.\n";
-const CANDIDATE_PROMPT: &str = "Watch the mailbox, and name the collection.\n";
+pub(crate) const BASELINE_PROMPT: &str = "Watch the mailbox.\n";
+pub(crate) const CANDIDATE_PROMPT: &str = "Watch the mailbox, and name the collection.\n";
 
-fn case(case_id: &str, split: &str) -> Value {
+const DEFINITION: &str = "monitor-findings";
+/// Five validation cases: `2^-5` is 31250 ppm, past 16666, so nothing can pass.
+const SMALL_DEFINITION: &str = "monitor-small";
+/// Every check is `feedback_check`, which always says something.
+const FEEDBACK_DEFINITION: &str = "monitor-feedback";
+const FEEDBACK: &str = "name the collection";
+
+fn case(case_id: &str, split: &str, check: &str) -> Value {
+    let params = if check == "captured_rows_count" {
+        json!({"name": "findings", "min": 1})
+    } else {
+        json!({})
+    };
     json!({
         "case_id": case_id,
         "split": split,
@@ -4446,74 +4970,75 @@ fn case(case_id: &str, split: &str) -> Value {
             "stage_id": "check",
             "prompt": "Run the monitor.",
             "deadline_secs": 600,
-            "checks": [{
-                "check": "captured_rows_count",
-                "params": {"name": "findings", "min": 1},
-                "tier": "acceptance",
-            }],
+            "checks": [{"check": check, "params": params, "tier": "acceptance"}],
         }],
     })
 }
 
-fn definition() -> Value {
-    let mut cases: Vec<Value> = TRAIN_CASES.iter().map(|id| case(id, "train")).collect();
-    cases.extend(VALIDATION_CASES.iter().map(|id| case(id, "validation")));
-    cases.extend(HELD_OUT_CASES.iter().map(|id| case(id, "held_out")));
+fn definition(definition_id: &str, check: &str, validation: &[&str], version: i64) -> Value {
+    let mut cases: Vec<Value> = TRAIN_CASES.iter().map(|id| case(id, "train", check)).collect();
+    cases.extend(validation.iter().map(|id| case(id, "validation", check)));
+    cases.extend(HELD_OUT_CASES.iter().map(|id| case(id, "held_out", check)));
     json!({
-        "definition_id": "monitor-findings",
+        "definition_id": definition_id,
         "agent_did": OWNER,
-        "comparability_version": 1,
+        "comparability_version": version,
         "subject": {"kind": "behavior", "inference_slots": ["primary"]},
         "cases": cases,
     })
 }
 
 /// The live configuration the job freezes and, in PR 4, promotes into.
-fn live_configuration() -> Vec<(Collection, Value)> {
-    vec![
-        (
-            Collection::AgentContext,
-            json!({
-                "context_id": "monitor-context",
-                "agent_did": OWNER,
-                "display_name": "Monitor",
-                "system_prompt": BASELINE_PROMPT,
-            }),
-        ),
-        (
-            Collection::AgentBehavior,
-            json!({
-                "behavior_id": "monitor",
-                "agent_did": OWNER,
-                "display_name": "Monitor",
-                "context_id": "monitor-context",
-                "inference_profile_id": "local",
-            }),
-        ),
-    ]
+fn behavior(display_name: &str) -> (Collection, Value) {
+    (
+        Collection::AgentBehavior,
+        json!({
+            "behavior_id": "monitor",
+            "agent_did": OWNER,
+            "display_name": display_name,
+            "context_id": "monitor-context",
+            "inference_profile_id": "local",
+        }),
+    )
+}
+
+fn context(prompt: &str) -> (Collection, Value) {
+    (
+        Collection::AgentContext,
+        json!({
+            "context_id": "monitor-context",
+            "agent_did": OWNER,
+            "display_name": "Monitor",
+            "system_prompt": prompt,
+        }),
+    )
 }
 
 /// A stage whose `findings` capture holds one row: the check passes at 10000.
-fn pass() -> TrialEvidence {
+pub(crate) fn pass() -> TrialEvidence {
     ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", vec![json!({})])
 }
 
 /// A stage whose `findings` capture holds nothing: `below_min`, scored 0.
-fn fail() -> TrialEvidence {
+pub(crate) fn fail() -> TrialEvidence {
     ScriptedExecutor::passed_evidence("did:key:trial", "check", "findings", Vec::new())
 }
 
-fn key(cell: &str, case_id: &str, trial_index: u32) -> ScriptKey {
-    ScriptKey {
-        cell_label: cell.into(),
-        case_id: case_id.into(),
-        trial_index,
-        attempt: 1,
-    }
+/// The same evidence, reporting `tokens` of usage.
+fn with_usage(evidence: TrialEvidence, tokens: u64) -> TrialEvidence {
+    TrialEvidence::new(
+        evidence.locator,
+        evidence.stages,
+        TrialUsage {
+            input_tokens: Some(tokens),
+            output_tokens: Some(0),
+        },
+        evidence.anchor,
+    )
 }
 
-/// Script one cell's answer for every trial of `cases`.
-fn script(
+/// Script one cell's answer for every trial of `cases`, first attempt.
+pub(crate) fn script(
     mut executor: ScriptedExecutor,
     cell: &str,
     cases: &[&str],
@@ -4521,31 +5046,113 @@ fn script(
 ) -> ScriptedExecutor {
     for case_id in cases {
         for trial_index in 0..TRIALS_PER_CASE {
-            executor = executor.with(key(cell, case_id, trial_index), evidence(case_id));
+            let key = ScriptKey {
+                cell_label: cell.into(),
+                case_id: (*case_id).into(),
+                trial_index,
+                attempt: 1,
+            };
+            executor = executor.with(key, evidence(case_id));
         }
     }
     executor
 }
 
-struct Harness {
+/// Every cell passes everywhere except where a test overrides it.
+pub(crate) fn base_executor() -> ScriptedExecutor {
+    ScriptedExecutor::new().with_default(pass())
+}
+
+pub(crate) fn budgets(max_case_trials: u64) -> Budgets {
+    Budgets {
+        max_rounds: 3,
+        max_case_trials,
+        max_tokens: u64::MAX,
+        deadline_unix_secs: None,
+    }
+}
+
+/// The uncalibrated defaults: `max_rounds: 3`, `max_reruns: 1`,
+/// `alpha_ppm: 50000`, so `alpha_effective` is 16666 ppm.
+pub(crate) fn policy() -> PolicyV2 {
+    PolicyV2::uncalibrated()
+}
+
+/// The same text for all three rounds: rounds 2 and 3 are structural
+/// duplicates of round 1.
+pub(crate) fn repeating_proposer(text: &str) -> ScriptedProposer {
+    ScriptedProposer::new(vec![
+        (text.to_owned(), "name the collection the monitor should read".to_owned());
+        3
+    ])
+}
+
+/// Stands in for a proposer whose model is down.
+struct ErroringProposer;
+
+#[async_trait::async_trait]
+impl Proposer for ErroringProposer {
+    async fn propose(&self, _input: ProposalInput) -> Result<Proposal> {
+        Err(anyhow::anyhow!("proposer unavailable"))
+    }
+}
+
+/// Always passes, always has advice.
+struct FeedbackCheck;
+
+impl Check for FeedbackCheck {
+    fn name(&self) -> &'static str {
+        "feedback_check"
+    }
+
+    fn version(&self) -> &'static str {
+        "1"
+    }
+
+    fn evaluate(&self, _params: &Value, _stage: &StageEvidence) -> CheckVerdict {
+        CheckVerdict {
+            kind: OutcomeKind::Passed,
+            score_bp: Some(10_000),
+            raw: json!({"reason_code": "ok"}),
+            feedback: Some(FEEDBACK.into()),
+        }
+    }
+}
+
+pub(crate) struct Harness {
     launching: Launching,
     jobs_dir: PathBuf,
     pack: PathBuf,
 }
 
 impl Harness {
-    async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let launching = Launching::new().await;
         launching
-            .install(
-                [(Collection::EvalDefinition, definition())]
-                    .into_iter()
-                    .chain(live_configuration())
-                    .collect(),
-            )
+            .install(vec![
+                (
+                    Collection::EvalDefinition,
+                    definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 1),
+                ),
+                (
+                    Collection::EvalDefinition,
+                    definition(SMALL_DEFINITION, "captured_rows_count", &VALIDATION_CASES[..5], 1),
+                ),
+                (
+                    Collection::EvalDefinition,
+                    definition(FEEDBACK_DEFINITION, "feedback_check", &VALIDATION_CASES, 1),
+                ),
+                context(BASELINE_PROMPT),
+                behavior("Monitor"),
+            ])
             .await;
         let pack = launching.pack("subject", "Off");
-        let jobs_dir = launching.runs_dir().parent().unwrap().join("jobs");
+        // `<launching home>/eval/jobs`, beside `eval/runs` (ruling R8).
+        let jobs_dir = launching
+            .runs_dir()
+            .parent()
+            .expect("runs_dir is <scratch>/eval/runs")
+            .join("jobs");
         Self {
             launching,
             jobs_dir,
@@ -4553,13 +5160,21 @@ impl Harness {
         }
     }
 
-    fn request(&self, job_id: &str, budgets: Budgets) -> JobRequest {
+    pub(crate) fn access(&self) -> &ConfigAccess {
+        &self.launching.access
+    }
+
+    pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {
+        self.launching.install(documents).await;
+    }
+
+    pub(crate) fn request(&self, job_id: &str, definition_id: &str, budgets: Budgets) -> JobRequest {
         JobRequest {
             job_id: job_id.into(),
             owner: OWNER.into(),
             evaluator_did: self.launching.evaluator_did(),
             behavior_id: "monitor".into(),
-            definition_id: "monitor-findings".into(),
+            definition_id: definition_id.into(),
             inference_profile_id: "local".into(),
             baseline_pack: self.pack.clone(),
             trials_per_case: TRIALS_PER_CASE,
@@ -4574,118 +5189,132 @@ impl Harness {
             max_infra_retries: 0,
             breaker_threshold: 100,
             deadline_secs: Some(600),
+            run_options: RunOptions {
+                poll_backoff_base: std::time::Duration::from_millis(1),
+                poll_backoff_cap: std::time::Duration::from_millis(2),
+            },
         }
     }
 }
 
-fn budgets(max_case_trials: u64) -> Budgets {
-    Budgets {
-        max_rounds: 1,
-        max_case_trials,
-        max_tokens: u64::MAX,
-        deadline_unix_secs: None,
-    }
-}
-
-fn policy() -> PolicyV2 {
-    PolicyV2 {
-        max_rounds: 1,
-        max_reruns: 0,
-        ..PolicyV2::uncalibrated()
-    }
-}
-
-fn one_round_proposer() -> ScriptedProposer {
-    ScriptedProposer::new(vec![(
-        CANDIDATE_PROMPT.to_owned(),
-        "name the collection the monitor should read".to_owned(),
-    )])
-}
-
-/// Every cell passes everywhere except where the caller overrides it.
-fn base_executor() -> ScriptedExecutor {
-    ScriptedExecutor::new().with_default(pass())
-}
-
-async fn drive(
+pub(crate) async fn drive(
     harness: &Harness,
     request: &JobRequest,
     executor: &ScriptedExecutor,
-    proposer: &ScriptedProposer,
+    proposer: &dyn Proposer,
+    registry: &CheckRegistry,
+    cancel: CancellationToken,
+) -> Result<JobOutcome> {
+    run_job(harness.access(), request, executor, proposer, registry, &policy(), cancel).await
+}
+
+/// Drive a job to its end with the builtin checks.
+pub(crate) async fn settle(
+    harness: &Harness,
+    request: &JobRequest,
+    executor: &ScriptedExecutor,
+    proposer: &dyn Proposer,
 ) -> JobOutcome {
-    run_job(
-        &harness.launching.access,
+    drive(
+        harness,
         request,
         executor,
         proposer,
         &CheckRegistry::builtin(),
-        &policy(),
         CancellationToken::new(),
     )
     .await
     .unwrap()
 }
 
-#[tokio::test]
-async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promote() {
-    let harness = Harness::new().await;
-    // The baseline fails every validation case; the candidate passes them.
-    // Six differences of +10000 give p = 1/64 = 15625 ppm, inside the 16666
-    // ppm Bonferroni-corrected alpha of a one-round job.
-    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    let request = harness.request("accept", budgets(1_000));
-    let outcome = drive(&harness, &request, &executor, &one_round_proposer()).await;
-
-    assert_eq!(outcome.state, JobState::ReadyToPromote, "{outcome:#?}");
-    let retained = outcome.checkpoint.expect("round 1 was accepted");
-    assert_eq!(retained.round, 1);
-    assert_eq!(retained.text, CANDIDATE_PROMPT);
-
-    let job = load_job(&harness.launching.access, OWNER, "accept")
+pub(crate) async fn journal(harness: &Harness, job_id: &str) -> Vec<JournalEntry> {
+    load_job(harness.access(), OWNER, job_id)
         .await
         .unwrap()
-        .unwrap();
-    let decisions: Vec<&JournalEntry> = job
+        .unwrap_or_else(|| panic!("no job {job_id}"))
         .journal
+}
+
+fn runs_started(journal: &[JournalEntry], split: EvalSplit) -> Vec<String> {
+    journal
         .iter()
-        .filter(|entry| matches!(entry, JournalEntry::Decided { .. }))
-        .collect();
-    assert_eq!(decisions.len(), 2, "one validation decision and one held-out: {decisions:#?}");
-    // The summary is a convenience; the verdict rows are the authority.
-    let mismatches = crate::optimization::recompute_decisions(&harness.launching.access, &job)
-        .await
-        .unwrap();
-    assert!(mismatches.is_empty(), "{mismatches:#?}");
+        .filter_map(|entry| match entry {
+            JournalEntry::RunStarted { run_id, split: started, .. } if *started == split => {
+                Some(run_id.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn decisions(journal: &[JournalEntry]) -> Vec<(Option<u32>, Decision)> {
+    journal
+        .iter()
+        .filter_map(|entry| match entry {
+            JournalEntry::Decided { round, decision, .. } => Some((*round, *decision)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn structural_rejects(journal: &[JournalEntry]) -> usize {
+    journal
+        .iter()
+        .filter(|entry| matches!(entry, JournalEntry::StructuralReject { .. }))
+        .count()
+}
+
+/// A harness whose job accepted a candidate and reached `ReadyToPromote`:
+/// the baseline fails every validation case and the candidate passes them.
+pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest) {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    let request = harness.request(job_id, DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(outcome.state, JobState::ReadyToPromote, "{outcome:#?}");
+    (harness, request)
+}
+
+/// A harness whose job finished without accepting anything: three cases
+/// improve and three tie, so p = 8/64 = 125000 ppm.
+pub(crate) async fn rejecting_harness(job_id: &str) -> (Harness, JobRequest) {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES[..3], |_| fail());
+    let request = harness.request(job_id, DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(outcome.state, JobState::NothingToPromote, "{outcome:#?}");
+    (harness, request)
+}
+
+#[tokio::test]
+async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promote() {
+    let (harness, request) = accepting_harness("accept").await;
+    let journal = journal(&harness, &request.job_id).await;
+    assert_eq!(
+        decisions(&journal),
+        vec![(Some(1), Decision::Accept), (None, Decision::Accept)],
+        "one validation decision, one held-out confirmation: {journal:#?}"
+    );
+    assert_eq!(structural_rejects(&journal), 2, "rounds 2 and 3 repeat round 1's text");
+    assert_eq!(
+        runs_started(&journal, EvalSplit::HeldOut),
+        vec!["accept-held-out".to_owned()],
+        "the held-out split is run exactly once, at finalize"
+    );
+    let retained = crate::optimization::checkpoint(&journal).expect("round 1 was accepted");
+    assert_eq!((retained.round, retained.text.as_str()), (1, CANDIDATE_PROMPT));
 }
 
 #[tokio::test]
 async fn a_candidate_that_wins_only_half_the_cases_is_rejected_for_no_improvement() {
-    let harness = Harness::new().await;
-    // Three cases improve by +10000 and three tie, so the observed sum is
-    // reached by 8 of 64 sign vectors: p = 125000 ppm, well past alpha.
-    let executor = script(base_executor(), "baseline", &VALIDATION_CASES[..3], |_| fail());
-    let request = harness.request("no-improvement", budgets(1_000));
-    let outcome = drive(&harness, &request, &executor, &one_round_proposer()).await;
-
-    assert_eq!(outcome.state, JobState::NothingToPromote);
-    assert!(outcome.checkpoint.is_none());
-    let job = load_job(&harness.launching.access, OWNER, "no-improvement")
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        job.journal.iter().any(|entry| matches!(
-            entry,
-            JournalEntry::Decided { decision: Decision::Reject(RejectReason::NoImprovement), .. }
-        )),
-        "{:#?}",
-        job.journal
+    let (harness, request) = rejecting_harness("no-improvement").await;
+    let journal = journal(&harness, &request.job_id).await;
+    assert_eq!(
+        decisions(&journal),
+        vec![(Some(1), Decision::Reject(RejectReason::NoImprovement))]
     );
     assert!(
-        !job.journal.iter().any(|entry| matches!(
-            entry,
-            JournalEntry::RunStarted { split: EvalSplit::HeldOut, .. }
-        )),
+        runs_started(&journal, EvalSplit::HeldOut).is_empty(),
         "the held-out split is never touched when no round accepted"
     );
 }
@@ -4693,98 +5322,200 @@ async fn a_candidate_that_wins_only_half_the_cases_is_rejected_for_no_improvemen
 #[tokio::test]
 async fn one_broken_case_rejects_the_candidate_even_though_the_mean_improves() {
     let harness = Harness::new().await;
-    let broken = VALIDATION_CASES[0];
-    // The baseline fails five cases and passes the sixth; the candidate is the
-    // mirror image, so five cases improve by +10000 and one regresses by
-    // -10000, past the 5000 bp per-case tolerance.
+    // Five cases improve by +10000; `val-a` regresses by -10000, past the
+    // 5000 bp per-case tolerance.
     let mut executor = script(base_executor(), "baseline", &VALIDATION_CASES[1..], |_| fail());
-    executor = script(executor, "candidate", &[broken], |_| fail());
-    let request = harness.request("case-regression", budgets(1_000));
-    let outcome = drive(&harness, &request, &executor, &one_round_proposer()).await;
-
+    executor = script(executor, "candidate", &VALIDATION_CASES[..1], |_| fail());
+    let request = harness.request("case-regression", DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
     assert_eq!(outcome.state, JobState::NothingToPromote);
-    let job = load_job(&harness.launching.access, OWNER, "case-regression")
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        job.journal.iter().any(|entry| matches!(
-            entry,
-            JournalEntry::Decided { decision: Decision::Reject(RejectReason::CaseRegression), .. }
-        )),
-        "{:#?}",
-        job.journal
+    assert_eq!(
+        decisions(&journal(&harness, "case-regression").await),
+        vec![(Some(1), Decision::Reject(RejectReason::CaseRegression))]
     );
+}
+
+#[tokio::test]
+async fn a_candidate_that_costs_ten_times_the_tokens_is_rejected_for_cost() {
+    let harness = Harness::new().await;
+    // The candidate wins every case but spends 1000 tokens a trial against the
+    // baseline's 100, past the 25% ceiling.
+    let mut executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| {
+        with_usage(fail(), 100)
+    });
+    executor = script(executor, "candidate", &VALIDATION_CASES, |_| {
+        with_usage(pass(), 1_000)
+    });
+    let request = harness.request("cost-regression", DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(outcome.state, JobState::NothingToPromote);
+    let journal = journal(&harness, "cost-regression").await;
+    assert_eq!(
+        decisions(&journal),
+        vec![(Some(1), Decision::Reject(RejectReason::CostRegression))]
+    );
+    assert!(journal.iter().any(|entry| matches!(
+        entry,
+        JournalEntry::Decided { summary, .. } if !summary.cost_skipped
+    )));
 }
 
 #[tokio::test]
 async fn a_repeated_candidate_is_structurally_rejected_and_costs_no_validation_run() {
     let harness = Harness::new().await;
     let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    let request = harness.request("structural", budgets(1_000));
-    // The echoing proposer returns the checkpoint's own text, which
-    // materializes to the checkpoint's own pack digest.
-    let outcome = drive(&harness, &request, &executor, &ScriptedProposer::echoing()).await;
-
+    let request = harness.request("structural", DEFINITION, budgets(1_000));
+    // The checkpoint's own text materializes to the checkpoint's own digest.
+    let outcome = settle(&harness, &request, &executor, &ScriptedProposer::echoing()).await;
     assert_eq!(outcome.state, JobState::NothingToPromote);
-    let job = load_job(&harness.launching.access, OWNER, "structural")
-        .await
-        .unwrap()
-        .unwrap();
-    let rejection = job
-        .journal
+    let journal = journal(&harness, "structural").await;
+    assert_eq!(structural_rejects(&journal), 3);
+    assert!(journal.iter().any(|entry| matches!(
+        entry,
+        JournalEntry::StructuralReject { round: 1, diagnostics } if diagnostics.starts_with("duplicate_candidate")
+    )));
+    assert!(
+        runs_started(&journal, EvalSplit::Validation).is_empty(),
+        "a structural rejection spends no validation run"
+    );
+    assert!(decisions(&journal).is_empty(), "and reaches no decision");
+}
+
+#[tokio::test]
+async fn a_round_that_cannot_be_afforded_is_budget_exhausted_and_spends_nothing() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    // A round costs its train run (1 case x 2 trials x 1 cell = 2) and its
+    // validation run (6 x 2 x 2 = 24), and 24 more are reserved for the
+    // held-out run: 50 > 25, so round 1 is exhausted before it spends anything.
+    let request = harness.request("exhausted", DEFINITION, budgets(25));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(outcome.state, JobState::Exhausted);
+    let journal = journal(&harness, "exhausted").await;
+    assert!(journal
+        .iter()
+        .any(|entry| matches!(entry, JournalEntry::BudgetExhausted { round: Some(1), .. })));
+    assert!(decisions(&journal).is_empty(), "exhaustion is not a rejection");
+    assert!(!journal
+        .iter()
+        .any(|entry| matches!(entry, JournalEntry::RunStarted { .. })));
+}
+
+#[tokio::test]
+async fn an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive() {
+    let harness = Harness::new().await;
+    // The candidate produces no evidence on two cases: 4 of 12 keys dropped on
+    // one side is past both the 20% not-evidence and the 10% asymmetry limits.
+    let executor = script(base_executor(), "candidate", &VALIDATION_CASES[..2], |_| {
+        ScriptedExecutor::not_evidence("did:key:trial")
+    });
+    let request = harness.request("inconclusive", DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(outcome.state, JobState::NothingToPromote);
+
+    let journal = journal(&harness, "inconclusive").await;
+    let decided = journal
         .iter()
         .find_map(|entry| match entry {
-            JournalEntry::StructuralReject { round, diagnostics } => Some((*round, diagnostics.clone())),
+            JournalEntry::Decided { round: Some(1), attempt, run_ids, decision, .. } => {
+                Some((*attempt, run_ids.clone(), *decision))
+            }
             _ => None,
         })
-        .unwrap_or_else(|| panic!("{:#?}", job.journal));
-    assert_eq!(rejection.0, 1);
-    assert!(rejection.1.starts_with("duplicate_candidate"), "{}", rejection.1);
-    assert!(
-        !job.journal.iter().any(|entry| matches!(
-            entry,
-            JournalEntry::RunStarted { split: EvalSplit::Validation, .. }
-        )),
-        "a structural rejection spends no validation run: {:#?}",
-        job.journal
+        .unwrap_or_else(|| panic!("{journal:#?}"));
+    assert_eq!(decided.0, 1, "one re-run");
+    assert_eq!(
+        decided.1,
+        vec!["inconclusive-r1-v0".to_owned(), "inconclusive-r1-v1".to_owned()]
     );
-    assert!(
-        !job.journal
-            .iter()
-            .any(|entry| matches!(entry, JournalEntry::Decided { .. })),
-        "and reaches no decision"
+    assert_eq!(decided.2, Decision::Inconclusive(InconclusiveReason::Insufficient));
+
+    // Finding F1: the decision read both runs' pairs, added.
+    let definition = crate::optimization::driver::load_definition(harness.access(), OWNER, DEFINITION)
+        .await
+        .unwrap();
+    let mut runs = Vec::new();
+    for run_id in &decided.1 {
+        runs.push(load_run_rows(harness.access(), OWNER, run_id).await.unwrap());
+    }
+    let evidence = decision_evidence(&definition, &runs, policy().max_missing_usage_bp);
+    let val_c = evidence
+        .cases
+        .iter()
+        .find(|case| case.case_id == "val-c")
+        .unwrap();
+    assert_eq!(val_c.pairs, 4, "two trials in each of two runs");
+}
+
+#[tokio::test]
+async fn five_validation_cases_can_never_be_accepted() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES[..5], |_| fail());
+    let request = harness.request("too-few", SMALL_DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(outcome.state, JobState::NothingToPromote);
+    assert_eq!(
+        decisions(&journal(&harness, "too-few").await),
+        vec![(Some(1), Decision::Inconclusive(InconclusiveReason::TooFewCases))]
     );
 }
 
 #[tokio::test]
-async fn a_candidate_that_cannot_be_afforded_is_budget_exhausted_and_never_rejected() {
+async fn a_checkpoint_that_regresses_on_held_out_fails_the_job() {
     let harness = Harness::new().await;
-    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    // Train is 1 x 6? No: train has one case, two trials, one cell = 2.
-    // Validation is 6 cases x 2 trials x 2 cells = 24 and the reserved
-    // held-out run is another 24, so 25 buys the train run and nothing else.
-    let request = harness.request("exhausted", budgets(25));
-    let outcome = drive(&harness, &request, &executor, &one_round_proposer()).await;
-
-    assert_eq!(outcome.state, JobState::Exhausted);
-    assert!(outcome.checkpoint.is_none());
-    let job = load_job(&harness.launching.access, OWNER, "exhausted")
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        job.journal
-            .iter()
-            .any(|entry| matches!(entry, JournalEntry::BudgetExhausted { round: Some(1), .. })),
-        "{:#?}",
-        job.journal
+    let mut executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    executor = script(executor, "candidate", &HELD_OUT_CASES, |_| fail());
+    let request = harness.request("held-out-regression", DEFINITION, budgets(1_000));
+    let outcome = settle(&harness, &request, &executor, &repeating_proposer(CANDIDATE_PROMPT)).await;
+    assert_eq!(
+        outcome.state,
+        JobState::Failed { reason: "held_out_regression".into() }
     );
-    assert!(
-        !job.journal
+    let journal = journal(&harness, "held-out-regression").await;
+    assert_eq!(
+        decisions(&journal),
+        vec![
+            (Some(1), Decision::Accept),
+            (None, Decision::Reject(RejectReason::CaseRegression))
+        ]
+    );
+    assert_eq!(runs_started(&journal, EvalSplit::HeldOut).len(), 1);
+}
+
+#[tokio::test]
+async fn feedback_reaches_the_proposer_only_from_the_train_run() {
+    let harness = Harness::new().await;
+    let registry = CheckRegistry::builtin().with(Box::new(FeedbackCheck));
+    let proposer = repeating_proposer(CANDIDATE_PROMPT);
+    let request = harness.request("feedback", FEEDBACK_DEFINITION, budgets(1_000));
+    drive(
+        &harness,
+        &request,
+        &base_executor(),
+        &proposer,
+        &registry,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+
+    let calls = proposer.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 3, "one proposal per round");
+    for call in &calls {
+        // One train case, two trials: two rows. A validation run has 24.
+        assert_eq!(call.feedback.len(), TRAIN_CASES.len() * TRIALS_PER_CASE as usize);
+        assert!(call
+            .feedback
             .iter()
-            .any(|entry| matches!(entry, JournalEntry::Decided { .. })),
-        "a candidate that was never evaluated is not a rejection"
+            .all(|entry| entry.feedback.as_deref() == Some(FEEDBACK)));
+    }
+    let validation = load_verdicts(harness.access(), OWNER, "feedback-r1-v0")
+        .await
+        .unwrap();
+    assert!(!validation.is_empty());
+    assert!(
+        validation.iter().all(|verdict| verdict.feedback.is_none()),
+        "the runner never records feedback off the train split"
     );
 }
 
@@ -4792,32 +5523,105 @@ async fn a_candidate_that_cannot_be_afforded_is_budget_exhausted_and_never_rejec
 async fn a_baseline_edited_after_the_freeze_fails_the_job_before_any_further_spend() {
     let harness = Harness::new().await;
     let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    // A budget that buys the train run and nothing else, so the first pass
-    // stops on budget with the job still Running.
-    let request = harness.request("drifted", budgets(25));
-    let first = drive(&harness, &request, &executor, &one_round_proposer()).await;
-    assert_eq!(first.state, JobState::Exhausted);
+    let proposer = repeating_proposer(CANDIDATE_PROMPT);
+    let request = harness.request("drifted", DEFINITION, budgets(1_000));
 
-    // An operator edits a document of the frozen closure, then the job is
-    // driven again with room to spend.
-    harness
-        .launching
-        .install(vec![(
-            Collection::AgentContext,
-            json!({
-                "context_id": "monitor-context",
-                "agent_did": OWNER,
-                "display_name": "Monitor, renamed",
-                "system_prompt": BASELINE_PROMPT,
-            }),
-        )])
-        .await;
-    let generous = harness.request("drifted", budgets(1_000));
-    let outcome = drive(&harness, &generous, &executor, &one_round_proposer()).await;
+    // Interrupted before finalization: the pre-cancelled token freezes the
+    // job and its first train run, launches no trial, and leaves it Running.
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let first = drive(&harness, &request, &executor, &proposer, &CheckRegistry::builtin(), cancelled)
+        .await
+        .unwrap();
+    assert_eq!(first.state, JobState::Running);
+
+    // An operator edits a closure document the job does not target.
+    harness.install(vec![behavior("Monitor, renamed")]).await;
+    let outcome = settle(&harness, &request, &executor, &proposer).await;
     assert_eq!(
         outcome.state,
         JobState::Failed { reason: "baseline_drifted".into() },
         "{outcome:#?}"
+    );
+    let journal = journal(&harness, "drifted").await;
+    assert!(!journal.iter().any(|entry| matches!(entry, JournalEntry::Proposed { .. })));
+    assert_eq!(
+        spend_so_far(harness.access(), OWNER, &journal).await.unwrap().case_trials,
+        0,
+        "no trial ran after the drift"
+    );
+}
+
+#[tokio::test]
+async fn a_definition_edited_after_the_freeze_fails_the_job_as_definition_changed() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    let proposer = repeating_proposer(CANDIDATE_PROMPT);
+    let request = harness.request("definition-drift", DEFINITION, budgets(1_000));
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    drive(&harness, &request, &executor, &proposer, &CheckRegistry::builtin(), cancelled)
+        .await
+        .unwrap();
+
+    // Finding F5: the definition is not in the closure, so this is not drift.
+    harness
+        .install(vec![(
+            Collection::EvalDefinition,
+            definition(DEFINITION, "captured_rows_count", &VALIDATION_CASES, 2),
+        )])
+        .await;
+    let outcome = settle(&harness, &request, &executor, &proposer).await;
+    assert_eq!(
+        outcome.state,
+        JobState::Failed { reason: "definition_changed".into() }
+    );
+}
+
+/// Ruling R9: interrupt a job twice — a cancelled token, then a proposer
+/// error — and it reaches the same journal as its uninterrupted twin.
+#[tokio::test]
+async fn a_resumed_job_reaches_the_journal_of_its_uninterrupted_twin() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    let proposer = repeating_proposer(CANDIDATE_PROMPT);
+    let registry = CheckRegistry::builtin();
+
+    let twin = harness.request("twin-a", DEFINITION, budgets(1_000));
+    let uninterrupted = settle(&harness, &twin, &executor, &proposer).await;
+    assert_eq!(uninterrupted.state, JobState::ReadyToPromote);
+
+    let resumed = harness.request("twin-b", DEFINITION, budgets(1_000));
+    let cancelled = CancellationToken::new();
+    cancelled.cancel();
+    let stopped = drive(&harness, &resumed, &executor, &proposer, &registry, cancelled)
+        .await
+        .unwrap();
+    assert_eq!(stopped.state, JobState::Running);
+    let error = drive(
+        &harness,
+        &resumed,
+        &executor,
+        &ErroringProposer,
+        &registry,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert!(format!("{error:#}").contains("proposer unavailable"), "{error:#}");
+    let finished = settle(&harness, &resumed, &executor, &proposer).await;
+    assert_eq!(finished.state, JobState::ReadyToPromote);
+    assert_eq!(finished.checkpoint.map(|held| held.text), uninterrupted.checkpoint.map(|held| held.text));
+
+    let normalized = |journal: Vec<JournalEntry>, job_id: &str| -> Vec<String> {
+        journal
+            .iter()
+            .map(|entry| serde_json::to_string(entry).unwrap().replace(job_id, "JOB"))
+            .collect()
+    };
+    assert_eq!(
+        normalized(journal(&harness, "twin-b").await, "twin-b"),
+        normalized(journal(&harness, "twin-a").await, "twin-a"),
     );
 }
 ```
@@ -4828,21 +5632,19 @@ In `crates/gents/src/optimization/driver.rs`, add near the top, in rustfmt order
 
 ```rust
 #[cfg(test)]
-mod matrix;
+pub(crate) mod matrix;
 ```
 
-For `mod matrix;` to resolve beside a `driver.rs`, the file must be at `crates/gents/src/optimization/driver/matrix.rs`. That is the 2018-edition layout the repository already uses (`crates/gents/src/eval/runner/mod.rs` with `runner/embedded/`), so no rename of `driver.rs` is needed.
+`mod matrix;` beside `driver.rs` resolves to `crates/gents/src/optimization/driver/matrix.rs`, the 2018-edition layout the repository already uses (`eval/runner/mod.rs` with `runner/embedded/`).
 
-- [ ] **Step 3: Run the matrix, expecting failures to be real**
+- [ ] **Step 3: Run the matrix**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::driver::matrix 2>&1 | tee /tmp/matrix.log; tail -40 /tmp/matrix.log`
-Expected: 6 tests PASS. If the accept case reports `Inconclusive(TooFewCases)`, the definition lost a validation case; if it reports `Reject(NoImprovement)`, check `policy().max_rounds` is 1, because `alpha_effective` is `alpha_ppm / max_rounds` and a three-round policy needs p ≤ 16666 where six aligned cases give exactly 15625.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::driver::matrix 2>&1 | tee /tmp/matrix.log; grep -E "^test |test result" /tmp/matrix.log`
+Expected: 13 tests PASS.
 
-- [ ] **Step 4: Prove the scripted keys are the ones the runner asked for**
+If a scenario reaches an unexpected decision, check first that the script's keys were the ones the runner asked for: `ScriptedExecutor::calls` records every key. Log it with `tracing::info!(calls = ?executor.calls.lock().unwrap())` and `--nocapture`, and compare `cell_label` (`baseline`/`candidate`) and `attempt` (`1`) against `script`. Remove the line before committing.
 
-The `ScriptedExecutor` records every key it was called with. If a scenario's expected decision does not appear, the first thing to check is whether the script's keys matched: add, temporarily, `tracing::info!(?executor.calls)` after `drive`, run with `--nocapture`, and compare `attempt` (the runner's first attempt is `1`) and `cell_label` (`baseline` and `candidate`, the `CellRequest::label` values `run_request` sets) against `key`. Remove the line before committing; `println!` is never used.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/gents/src/optimization
@@ -4852,9 +5654,216 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
 
+### Task 6: `show`
+
+**Files:**
+- Create: `crates/gents/src/optimization/show.rs`
+- Modify: `crates/gents/src/optimization/mod.rs`
+
+Ruling R1: `gents optimization show` is M4's CLI; M6b delivers the library function it wraps. Spec section 5 makes the journal's `summary` a convenience and the referenced runs' `EvalVerdict` rows the authority: `show` recomputes every decision from those rows, flags a mismatch, and flags any decision whose run has since been invalidated. This closes the last spec section 9 end-to-end case.
+
+**Interfaces:**
+- Consumes:
+  ```rust
+  // crates/gents/src/eval/report/evidence.rs
+  pub async fn load_run_rows(access: &ConfigAccess, owner: &str, run_id: &str) -> Result<RunRows>; // RunRows::invalidated
+  // crates/gents/src/optimization/evidence.rs
+  pub fn decision_evidence(definition: &EvalDefinition, runs: &[RunRows], max_missing_usage_bp: u64) -> Evidence;
+  pub fn decision_seed(run_ids: &[String]) -> u64;
+  // crates/gents/src/optimization/driver.rs
+  pub(crate) async fn load_definition(access: &ConfigAccess, owner: &str, definition_id: &str) -> Result<EvalDefinition>;
+  pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef>;
+  // crates/gents/src/eval/documents.rs
+  pub async fn invalidate_run(access: &ConfigAccess, owner: &str, run_id: &str, by: &str, reason: &str) -> Result<()>;
+  // crates/gents/src/optimization/driver/matrix.rs (tests)
+  pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest);
+  ```
+- Produces:
+  ```rust
+  pub struct DecisionView { pub round: Option<u32>, pub attempt: u32, pub mode: Mode,
+      pub run_ids: Vec<String>, pub journaled: Decision, pub recomputed: Decision,
+      pub mismatch: bool, pub invalidated: bool }
+  pub struct JobView { pub job: JobRecord, pub state: JobState, pub checkpoint: Option<Checkpoint>,
+      pub rounds_used: u32, pub definition_changed: bool, pub decisions: Vec<DecisionView> }
+  pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<JobView>;
+  ```
+
+- [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/show.rs` holding only this test module:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eval::invalidate_run;
+    use crate::eval::runner::freeze::tests::OWNER;
+    use crate::optimization::driver::matrix::accepting_harness;
+
+    #[tokio::test]
+    async fn every_journaled_decision_recomputes_from_its_verdicts() {
+        let (harness, request) = accepting_harness("show-clean").await;
+        let view = show(harness.access(), OWNER, &request.job_id).await.unwrap();
+        assert_eq!(view.state, JobState::ReadyToPromote);
+        assert!(!view.definition_changed);
+        assert_eq!(view.decisions.len(), 2, "{:#?}", view.decisions);
+        for decision in &view.decisions {
+            assert_eq!(decision.journaled, decision.recomputed, "{decision:#?}");
+            assert!(!decision.mismatch && !decision.invalidated, "{decision:#?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_decision_on_an_invalidated_run_is_flagged() {
+        let (harness, request) = accepting_harness("show-invalidated").await;
+        invalidate_run(
+            harness.access(),
+            OWNER,
+            "show-invalidated-r1-v0",
+            OWNER,
+            "a fixture in this run was broken",
+        )
+        .await
+        .unwrap();
+        let view = show(harness.access(), OWNER, &request.job_id).await.unwrap();
+        let round_one = view
+            .decisions
+            .iter()
+            .find(|decision| decision.round == Some(1))
+            .unwrap();
+        assert!(round_one.invalidated, "{round_one:#?}");
+        let held_out = view
+            .decisions
+            .iter()
+            .find(|decision| decision.round.is_none())
+            .unwrap();
+        assert!(!held_out.invalidated, "only the invalidated run's decision is flagged");
+    }
+}
+```
+
+- [ ] **Step 2: Run it to see it fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::show`
+Expected: FAIL to compile, `cannot find function show in this scope`.
+
+- [ ] **Step 3: Write the implementation** — above the test module:
+
+```rust
+//! `show`: a job as its journal states it, with every decision recomputed
+//! from the `EvalVerdict` rows of the runs it names. The journal's summary is
+//! a convenience; these rows are the authority.
+
+use anyhow::Result;
+
+use crate::config_client::ConfigAccess;
+use crate::eval::report::load_run_rows;
+use crate::optimization::driver::{definition_ref, load_definition};
+use crate::optimization::evidence::{decision_evidence, decision_seed};
+use crate::optimization::job::{
+    checkpoint, derive_state, load_job, rounds_used, Checkpoint, JobRecord, JobState,
+    JournalEntry,
+};
+use crate::optimization::policy::{decide, Decision, Mode};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DecisionView {
+    pub round: Option<u32>,
+    pub attempt: u32,
+    pub mode: Mode,
+    pub run_ids: Vec<String>,
+    pub journaled: Decision,
+    pub recomputed: Decision,
+    /// The rows no longer support what the journal says.
+    pub mismatch: bool,
+    /// A run this decision read has since been invalidated.
+    pub invalidated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct JobView {
+    pub job: JobRecord,
+    pub state: JobState,
+    pub checkpoint: Option<Checkpoint>,
+    pub rounds_used: u32,
+    /// The installed definition no longer matches the one the job froze, so
+    /// the recomputations below read a different instrument.
+    pub definition_changed: bool,
+    pub decisions: Vec<DecisionView>,
+}
+
+pub async fn show(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<JobView> {
+    let job = load_job(access, owner, job_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no optimization job {job_id:?} for {owner}"))?;
+    let origin = &job.origin;
+    let definition = load_definition(access, owner, &origin.definition.definition_id).await?;
+    let definition_changed = definition_ref(&definition)? != origin.definition;
+
+    let mut decisions = Vec::new();
+    for entry in &job.journal {
+        let JournalEntry::Decided {
+            round,
+            attempt,
+            run_ids,
+            mode,
+            decision,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        let mut runs = Vec::with_capacity(run_ids.len());
+        for run_id in run_ids {
+            runs.push(load_run_rows(access, owner, run_id).await?);
+        }
+        let evidence =
+            decision_evidence(&definition, &runs, origin.policy.max_missing_usage_bp);
+        let recomputed = decide(*mode, &origin.policy, &evidence, decision_seed(run_ids)).decision;
+        decisions.push(DecisionView {
+            round: *round,
+            attempt: *attempt,
+            mode: *mode,
+            run_ids: run_ids.clone(),
+            journaled: *decision,
+            recomputed,
+            mismatch: recomputed != *decision,
+            invalidated: runs.iter().any(|rows| rows.invalidated),
+        });
+    }
+    Ok(JobView {
+        state: derive_state(&job.journal),
+        checkpoint: checkpoint(&job.journal),
+        rounds_used: rounds_used(&job.journal),
+        definition_changed,
+        decisions,
+        job,
+    })
+}
+```
+
+- [ ] **Step 4: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod show;` in rustfmt order and:
+
+```rust
+pub use show::{show, DecisionView, JobView};
+```
+
+- [ ] **Step 5: Run the tests**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::show`
+Expected: PASS, 2 tests.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add crates/gents/src/optimization
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
+  commit -m "feat(optimization): show recomputes every decision from its verdicts (#1455)
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+```
+
 ### PR 3 gate
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization 2>&1 | tee /tmp/pr3-lib.log; tail -20 /tmp/pr3-lib.log`
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization 2>&1 | tee /tmp/pr3-lib.log; grep "test result" /tmp/pr3-lib.log`
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval`
 Run: `CARGO_BUILD_JOBS=4 cargo check --workspace --all-targets 2>&1 | tee /tmp/pr3-check.log; grep -c "^error" /tmp/pr3-check.log`
 Expected: all PASS; the grep reports 0.
@@ -4864,7 +5873,7 @@ Run: `cargo fmt --all --check`
 
 ## PR 4: Promotion, revert and the live scenarios
 
-Branch: `optimization/23-promote`, base `optimization/22-driver`. Deliverable: the operator's two verbs, the whole refusal matrix, and the two live scenarios the milestone is judged by.
+Branch: `optimization/23-promote`, base `optimization/22-driver`. Deliverable: the operator's two verbs as library functions (ruling R1), the whole refusal matrix, and the two live scenarios M5 will run (ruling R7).
 
 ### Task 1: `promote` and `revert`
 
@@ -4872,10 +5881,12 @@ Branch: `optimization/23-promote`, base `optimization/22-driver`. Deliverable: t
 - Create: `crates/gents/src/optimization/promote.rs`
 - Modify: `crates/gents/src/optimization/mod.rs`
 
+Ruling R6: both verbs take the job's identity `(access, owner, job_id)`, plus the spec section 7 `digest` the operator confirms and `by`, the acting DID. `jobs_dir` and `behavior_id` come from `JobOrigin`, so the operator needs nothing but the job id. `by` is the launching home's identity supplied by the caller — the same pattern as the runner's `evaluator_did` — and is compared against `origin.owner`; an authenticated, enforced identity boundary is spec 2b's. Ruling R4: `Reverted` is terminal, so a reverted job can never be promoted again.
+
 **Interfaces:**
 - Consumes:
   ```rust
-  // crates/gents/src/config_client/desired_state.rs
+  // crates/gents/src/config_client/desired_state.rs (optimization/03-cas)
   pub async fn apply_desired_state_plan(txn: &ConfigApplyTxn<'_>, plan: &DesiredStateApplyPlan) -> Result<DesiredStateApplyCounts>;
   pub struct DriftedDocument { pub collection: Collection, pub owner: String, pub id: String,
       pub expected: Option<String>, pub found: Option<String> }
@@ -4891,60 +5902,28 @@ Branch: `optimization/23-promote`, base `optimization/22-driver`. Deliverable: t
   // crates/gents/src/optimization/job.rs
   pub(crate) async fn load_job_in_txn(txn: &ConfigApplyTxn<'_>, owner: &str, job_id: &str) -> Result<Option<JobRecord>>;
   pub(crate) async fn append_in_txn(txn: &ConfigApplyTxn<'_>, job: &JobRecord, entry: &JournalEntry) -> Result<()>;
+  // crates/gents/src/optimization/driver.rs
+  pub fn baseline_dir(jobs_dir: &Path, job_id: &str) -> PathBuf;
+  pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf;
+  // crates/gents/src/optimization/driver/matrix.rs (tests)
+  pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest);
+  pub(crate) async fn rejecting_harness(job_id: &str) -> (Harness, JobRequest);
+  pub(crate) const BASELINE_PROMPT: &str;
+  pub(crate) const CANDIDATE_PROMPT: &str;
+  // crates/gents/src/self_config/mod.rs
+  pub const SELF_CONFIG_TOOL_NAMES: [&str; 6];
   ```
 - Produces:
   ```rust
   pub struct Promotion { pub target_digest: String, pub previous_text: String, pub previous_digest: String }
   pub struct PromoteRefused { pub reason: &'static str, pub detail: String }
   pub fn promote_refused(error: &anyhow::Error) -> Option<&PromoteRefused>;
-  pub async fn promote(access: &ConfigAccess, request: &JobRequest, digest: &str, by: &str) -> Result<Promotion>;
-  pub async fn revert(access: &ConfigAccess, request: &JobRequest, digest: &str, by: &str) -> Result<()>;
+  pub async fn promote(access: &ConfigAccess, owner: &str, job_id: &str, digest: &str, by: &str) -> Result<Promotion>;
+  pub async fn revert(access: &ConfigAccess, owner: &str, job_id: &str, digest: &str, by: &str) -> Result<()>;
   ```
+  `reason` is one of `unknown_job`, `foreign_did`, `not_ready`, `not_promoted`, `no_checkpoint`, `wrong_digest`, `rebuild_mismatch`, `stale_closure`, `target_moved`.
 
-- [ ] **Step 1: Expose the matrix harness**
-
-In `crates/gents/src/optimization/driver.rs`, change `mod matrix;` to `pub(crate) mod matrix;`. In `crates/gents/src/optimization/driver/matrix.rs`, mark `Harness`, `BASELINE_PROMPT`, `CANDIDATE_PROMPT`, `VALIDATION_CASES`, `budgets`, `policy`, `one_round_proposer`, `base_executor`, `script`, `fail` and `drive` as `pub(crate)`, add two accessors to `impl Harness`:
-
-```rust
-    pub(crate) fn access(&self) -> &ConfigAccess {
-        &self.launching.access
-    }
-
-    pub(crate) async fn install(&self, documents: Vec<(Collection, Value)>) {
-        self.launching.install(documents).await;
-    }
-```
-
-and add the two job drivers the promotion tests need:
-
-```rust
-/// A harness whose job accepted a candidate and reached `ReadyToPromote`.
-pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest) {
-    let harness = Harness::new().await;
-    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
-    let request = harness.request(job_id, budgets(1_000));
-    let outcome = drive(&harness, &request, &executor, &one_round_proposer()).await;
-    assert_eq!(outcome.state, JobState::ReadyToPromote, "{outcome:#?}");
-    (harness, request)
-}
-
-/// A harness whose job finished without accepting anything.
-pub(crate) async fn rejecting_harness(job_id: &str) -> (Harness, JobRequest) {
-    let harness = Harness::new().await;
-    let executor = script(base_executor(), "baseline", &VALIDATION_CASES[..3], |_| fail());
-    let request = harness.request(job_id, budgets(1_000));
-    let outcome = drive(&harness, &request, &executor, &one_round_proposer()).await;
-    assert_eq!(outcome.state, JobState::NothingToPromote, "{outcome:#?}");
-    (harness, request)
-}
-```
-
-Rewrite the bodies of `a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promote` and `a_candidate_that_wins_only_half_the_cases_is_rejected_for_no_improvement` to obtain their harness from these helpers rather than repeating the setup, keeping every assertion they already make.
-
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::driver::matrix`
-Expected: PASS, still 6 tests.
-
-- [ ] **Step 2: Write the failing test** — create `crates/gents/src/optimization/promote.rs` holding only this test module:
+- [ ] **Step 1: Write the failing test** — create `crates/gents/src/optimization/promote.rs` holding only this test module:
 
 ```rust
 #[cfg(test)]
@@ -4954,7 +5933,7 @@ mod tests {
     use crate::optimization::driver::matrix::{
         accepting_harness, rejecting_harness, Harness, BASELINE_PROMPT, CANDIDATE_PROMPT,
     };
-    use crate::optimization::job::{load_job, JobState};
+    use crate::optimization::job::load_job;
     use crate::Collection;
     use serde_json::json;
 
@@ -4972,79 +5951,79 @@ mod tests {
         })
     }
 
-    async fn checkpoint_digest(harness: &Harness, request: &JobRequest) -> String {
-        let job = load_job(harness.access(), OWNER, &request.job_id)
-            .await
-            .unwrap()
-            .unwrap();
+    async fn state(harness: &Harness, job_id: &str) -> JobState {
+        let job = load_job(harness.access(), OWNER, job_id).await.unwrap().unwrap();
+        derive_state(&job.journal)
+    }
+
+    async fn checkpoint_digest(harness: &Harness, job_id: &str) -> String {
+        let job = load_job(harness.access(), OWNER, job_id).await.unwrap().unwrap();
         checkpoint(&job.journal)
             .expect("the harness drove an accepting job")
             .pack_digest
     }
 
-    #[tokio::test]
-    async fn a_promotion_writes_only_the_target_and_records_what_it_replaced() {
-        let (harness, request) = accepting_harness("promote-once").await;
-        let digest = checkpoint_digest(&harness, &request).await;
-        let promotion = promote(harness.access(), &request, &digest, OWNER)
-            .await
-            .unwrap();
-
-        assert_eq!(promotion.previous_text, BASELINE_PROMPT);
-        assert_ne!(promotion.target_digest, promotion.previous_digest);
-        assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
-            Some(CANDIDATE_PROMPT)
-        );
-        let job = load_job(harness.access(), OWNER, &request.job_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(derive_state(&job.journal), JobState::Promoted);
+    fn operator_edit() -> (Collection, serde_json::Value) {
+        (
+            Collection::AgentContext,
+            json!({
+                "context_id": "monitor-context",
+                "agent_did": OWNER,
+                "display_name": "Monitor",
+                "system_prompt": "An operator wrote this by hand.\n",
+            }),
+        )
     }
 
     #[tokio::test]
-    async fn a_revert_restores_the_previous_text_and_is_refused_once_the_target_moved() {
+    async fn a_promotion_writes_only_the_target_and_records_what_it_replaced() {
+        let (harness, request) = accepting_harness("promote-once").await;
+        let digest = checkpoint_digest(&harness, &request.job_id).await;
+        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+            .await
+            .unwrap();
+        assert_eq!(promotion.previous_text, BASELINE_PROMPT);
+        assert_ne!(promotion.target_digest, promotion.previous_digest);
+        assert_eq!(live_prompt(harness.access()).await.as_deref(), Some(CANDIDATE_PROMPT));
+        assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
+    }
+
+    /// Ruling R4: a revert restores the previous text and ends the job.
+    #[tokio::test]
+    async fn a_revert_restores_the_previous_text_and_is_terminal() {
         let (harness, request) = accepting_harness("revert-once").await;
-        let digest = checkpoint_digest(&harness, &request).await;
-        let promotion = promote(harness.access(), &request, &digest, OWNER)
+        let digest = checkpoint_digest(&harness, &request.job_id).await;
+        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap();
 
-        revert(harness.access(), &request, &promotion.target_digest, OWNER)
+        revert(harness.access(), OWNER, &request.job_id, &promotion.target_digest, OWNER)
             .await
             .unwrap();
-        assert_eq!(
-            live_prompt(harness.access()).await.as_deref(),
-            Some(BASELINE_PROMPT)
-        );
-        let job = load_job(harness.access(), OWNER, &request.job_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            derive_state(&job.journal),
-            JobState::ReadyToPromote,
-            "a reverted job may be promoted again"
-        );
+        assert_eq!(live_prompt(harness.access()).await.as_deref(), Some(BASELINE_PROMPT));
+        assert_eq!(state(&harness, &request.job_id).await, JobState::Reverted);
 
-        // Promote again, then edit the target by hand: the revert is refused
-        // and the operator's edit survives.
-        let second = promote(harness.access(), &request, &digest, OWNER)
+        let again = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            promote_refused(&again).unwrap().reason,
+            "not_ready",
+            "a further promotion is a new job"
+        );
+        assert_eq!(live_prompt(harness.access()).await.as_deref(), Some(BASELINE_PROMPT));
+    }
+
+    #[tokio::test]
+    async fn a_revert_is_refused_once_the_target_moved_and_the_edit_survives() {
+        let (harness, request) = accepting_harness("revert-moved").await;
+        let digest = checkpoint_digest(&harness, &request.job_id).await;
+        let promotion = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap();
-        harness
-            .install(vec![(
-                Collection::AgentContext,
-                json!({
-                    "context_id": "monitor-context",
-                    "agent_did": OWNER,
-                    "display_name": "Monitor",
-                    "system_prompt": "An operator wrote this by hand.\n",
-                }),
-            )])
-            .await;
-        let error = revert(harness.access(), &request, &second.target_digest, OWNER)
+        harness.install(vec![operator_edit()]).await;
+
+        let error = revert(harness.access(), OWNER, &request.job_id, &promotion.target_digest, OWNER)
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&error).unwrap().reason, "target_moved");
@@ -5053,12 +6032,13 @@ mod tests {
             Some("An operator wrote this by hand.\n"),
             "the user's edit is preserved"
         );
+        assert_eq!(state(&harness, &request.job_id).await, JobState::Promoted);
     }
 
     #[tokio::test]
     async fn a_closure_edited_after_the_freeze_refuses_the_promotion_and_marks_the_job_stale() {
         let (harness, request) = accepting_harness("promote-stale").await;
-        let digest = checkpoint_digest(&harness, &request).await;
+        let digest = checkpoint_digest(&harness, &request.job_id).await;
         // A document of the frozen closure that the promotion does not write.
         harness
             .install(vec![(
@@ -5073,7 +6053,7 @@ mod tests {
             )])
             .await;
 
-        let error = promote(harness.access(), &request, &digest, OWNER)
+        let error = promote(harness.access(), OWNER, &request.job_id, &digest, OWNER)
             .await
             .unwrap_err();
         let refusal = promote_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
@@ -5084,79 +6064,85 @@ mod tests {
             Some(BASELINE_PROMPT),
             "the live node is unchanged"
         );
-        let job = load_job(harness.access(), OWNER, &request.job_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(derive_state(&job.journal), JobState::Stale);
+        assert_eq!(state(&harness, &request.job_id).await, JobState::Stale);
     }
 
     #[tokio::test]
     async fn a_foreign_did_a_wrong_digest_and_an_unready_job_are_each_refused() {
         let (harness, request) = accepting_harness("promote-refusals").await;
-        let digest = checkpoint_digest(&harness, &request).await;
+        let digest = checkpoint_digest(&harness, &request.job_id).await;
 
-        let foreign = promote(harness.access(), &request, &digest, "did:key:someone-else")
+        let foreign = promote(harness.access(), OWNER, &request.job_id, &digest, "did:key:someone-else")
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&foreign).unwrap().reason, "foreign_did");
 
-        let wrong = promote(harness.access(), &request, "sha256:not-the-checkpoint", OWNER)
+        let wrong = promote(harness.access(), OWNER, &request.job_id, "sha256:not-it", OWNER)
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&wrong).unwrap().reason, "wrong_digest");
-
         assert_eq!(
             live_prompt(harness.access()).await.as_deref(),
             Some(BASELINE_PROMPT),
             "a refused promotion writes nothing"
         );
+        assert_eq!(state(&harness, &request.job_id).await, JobState::ReadyToPromote);
 
         let (rejecting, unready) = rejecting_harness("unready").await;
-        let error = promote(rejecting.access(), &unready, "sha256:anything", OWNER)
+        let error = promote(rejecting.access(), OWNER, &unready.job_id, "sha256:anything", OWNER)
             .await
             .unwrap_err();
         assert_eq!(promote_refused(&error).unwrap().reason, "not_ready");
     }
 
     /// Spec section 9: optimization is an operator's verb, never a model's.
+    /// `self_config` is a directory module, so every file in it is scanned.
     #[test]
     fn the_model_facing_config_tool_has_no_optimization_surface() {
         for name in crate::self_config::SELF_CONFIG_TOOL_NAMES {
             assert!(!name.contains("optim"), "the self-config tool set names {name}");
         }
-        let source = include_str!("../self_config.rs");
-        for word in ["optimization", "OptimizationJob"] {
-            assert!(
-                !source.contains(word),
-                "self_config.rs mentions {word}; the optimization surface is the operator CLI's"
-            );
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/self_config");
+        let mut scanned = 0;
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).unwrap();
+            for word in ["optimization", "OptimizationJob", "promote", "revert"] {
+                assert!(
+                    !source.contains(word),
+                    "{} mentions {word}; the optimization surface is the operator's",
+                    path.display()
+                );
+            }
+            scanned += 1;
         }
+        assert!(scanned >= 2, "expected mod.rs and its siblings in {}", dir.display());
     }
 }
 ```
 
-If `self_config` is a directory module, change the `include_str!` path to `"../self_config/mod.rs"`; confirm by looking for `crates/gents/src/self_config.rs` versus `crates/gents/src/self_config/mod.rs`, and read that file for the exact spelling of `SELF_CONFIG_TOOL_NAMES` (it is referenced from `document_config/write_tool.rs:is_reserved_builtin_tool_name` as `crate::self_config::SELF_CONFIG_TOOL_NAMES`).
-
-- [ ] **Step 3: Run it to see it fail**
+- [ ] **Step 2: Run it to see it fail**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::promote`
 Expected: FAIL to compile, `cannot find function promote in this scope`.
 
-- [ ] **Step 4: Write the implementation** — above the test module in `promote.rs`:
+- [ ] **Step 3: Write the implementation** — above the test module:
 
 ```rust
 //! Promotion and revert: the operator's two verbs.
 //!
-//! Both run in one transaction that expects the entire frozen closure and
-//! writes only the target document. There is no force flag: on drift the
-//! transaction rolls back with the live node untouched, a second transaction
-//! journals the refusal, and the job is `Stale`. Nothing reverts on its own.
+//! Both run in one transaction that writes only the target document. There
+//! is no force flag: on drift the transaction rolls back with the live node
+//! untouched, a second transaction journals the refusal, and the job is
+//! `Stale`. Nothing reverts on its own, and a revert ends the job.
 
 use anyhow::{Context, Result};
 
 use crate::config_client::{apply_desired_state_plan, stale_expectation, ConfigAccess};
-use crate::optimization::driver::JobRequest;
+use crate::optimization::driver::{baseline_dir, job_dir};
 use crate::optimization::job::{
     append, append_in_txn, checkpoint, derive_state, load_job, load_job_in_txn, DriftedRef,
     JobRecord, JobState, JournalEntry,
@@ -5234,49 +6220,50 @@ fn drift_of(error: &anyhow::Error) -> Option<Vec<DriftedRef>> {
 }
 
 fn between(frozen: &[FrozenDocument], live: &[FrozenDocument]) -> Vec<DriftedRef> {
-    let mut drifted = Vec::new();
-    for document in frozen {
-        let unchanged = live.iter().any(|candidate| {
-            candidate.collection == document.collection
-                && candidate.id == document.id
-                && candidate.digest == document.digest
-        });
-        if !unchanged {
-            drifted.push(DriftedRef {
-                collection: document.collection.graphql_type().to_owned(),
-                id: document.id.clone(),
-            });
-        }
-    }
-    for document in live {
-        let known = frozen.iter().any(|candidate| {
-            candidate.collection == document.collection && candidate.id == document.id
-        });
-        if !known {
-            drifted.push(DriftedRef {
-                collection: document.collection.graphql_type().to_owned(),
-                id: document.id.clone(),
-            });
-        }
-    }
+    let reference = |document: &FrozenDocument| DriftedRef {
+        collection: document.collection.graphql_type().to_owned(),
+        id: document.id.clone(),
+    };
+    let mut drifted: Vec<DriftedRef> = frozen
+        .iter()
+        .filter(|document| {
+            !live.iter().any(|candidate| {
+                candidate.collection == document.collection
+                    && candidate.id == document.id
+                    && candidate.digest == document.digest
+            })
+        })
+        .map(reference)
+        .collect();
+    drifted.extend(
+        live.iter()
+            .filter(|document| {
+                !frozen.iter().any(|candidate| {
+                    candidate.collection == document.collection && candidate.id == document.id
+                })
+            })
+            .map(reference),
+    );
     drifted
 }
 
-/// Load the job and check the two things both verbs require: who is asking,
-/// and what state the job is in.
+/// Load the job and check what both verbs require: who is asking, and what
+/// state the job is in. `by` is the launching home's DID as its caller states
+/// it; an enforced, authenticated boundary is spec 2b's.
 async fn job_in_state(
     access: &ConfigAccess,
-    request: &JobRequest,
+    owner: &str,
+    job_id: &str,
     by: &str,
     expected: JobState,
 ) -> Result<JobRecord> {
-    let job = load_job(access, &request.owner, &request.job_id)
+    let job = load_job(access, owner, job_id)
         .await?
-        .ok_or_else(|| refused("unknown_job", format!("no job {:?}", request.job_id)))?;
+        .ok_or_else(|| refused("unknown_job", format!("no job {job_id:?} for {owner}")))?;
     if by != job.origin.owner {
         return Err(refused(
             "foreign_did",
-            format!("{by:?} does not own job {:?}", request.job_id),
+            format!("{by:?} does not own job {job_id:?}"),
         ));
     }
     let state = derive_state(&job.journal);
@@ -5286,10 +6273,7 @@ async fn job_in_state(
         } else {
             "not_ready"
         };
-        return Err(refused(
-            reason,
-            format!("job {:?} is {}", request.job_id, state.label()),
-        ));
+        return Err(refused(reason, format!("job {job_id:?} is {}", state.label())));
     }
     Ok(job)
 }
@@ -5298,36 +6282,39 @@ async fn job_in_state(
 /// whole frozen closure.
 pub async fn promote(
     access: &ConfigAccess,
-    request: &JobRequest,
+    owner: &str,
+    job_id: &str,
     digest: &str,
     by: &str,
 ) -> Result<Promotion> {
-    let mut job = job_in_state(access, request, by, JobState::ReadyToPromote).await?;
+    let mut job = job_in_state(access, owner, job_id, by, JobState::ReadyToPromote).await?;
     let retained = checkpoint(&job.journal).ok_or_else(|| {
         refused(
             "no_checkpoint",
-            format!("job {:?} is ready but retained nothing", request.job_id),
+            format!("job {job_id:?} is ready but retained nothing"),
         )
     })?;
     if retained.pack_digest != digest {
         return Err(refused(
             "wrong_digest",
-            format!(
-                "job {:?} retains {}, not {digest}",
-                request.job_id, retained.pack_digest
-            ),
+            format!("job {job_id:?} retains {}, not {digest}", retained.pack_digest),
         ));
     }
 
-    // Rebuild the candidate from the job's own baseline pack and check it
-    // still digests to what the journal recorded.
-    let baseline = materialize_pack(&request.baseline_dir(), &request.owner, &request.behavior_id)?;
-    let rebuild_dir = request.job_dir().join("promote-rebuild");
+    // Rebuild the candidate from the job's own baseline copy, located through
+    // the origin (ruling R6), and check it still digests to the journal's.
+    let origin = &job.origin;
+    let baseline = materialize_pack(
+        &baseline_dir(&origin.jobs_dir, job_id),
+        owner,
+        &origin.subject.behavior_id,
+    )?;
+    let rebuild_dir = job_dir(&origin.jobs_dir, job_id).join("promote-rebuild");
     if rebuild_dir.exists() {
         std::fs::remove_dir_all(&rebuild_dir)
             .with_context(|| format!("clearing {}", rebuild_dir.display()))?;
     }
-    let rebuilt = materialize_candidate(&baseline, &request.owner, &retained.text, &rebuild_dir)?;
+    let rebuilt = materialize_candidate(&baseline, owner, &retained.text, &rebuild_dir)?;
     if rebuilt.digest != retained.pack_digest {
         return Err(refused(
             "rebuild_mismatch",
@@ -5338,21 +6325,16 @@ pub async fn promote(
         ));
     }
 
-    let (owner, job_id, text) = (
-        request.owner.clone(),
-        request.job_id.clone(),
-        retained.text.clone(),
-    );
+    let (owner_owned, job_id_owned, text) = (owner.to_owned(), job_id.to_owned(), retained.text);
     let applied = access
         .transact("optimization.promote", |txn| {
-            let (owner, job_id, text) = (&owner, &job_id, &text);
+            let (owner, job_id, text) = (&owner_owned, &job_id_owned, &text);
             Box::pin(async move {
                 let job = load_job_in_txn(txn, owner, job_id)
                     .await?
                     .context("the job disappeared mid-promotion")?;
                 let closure = capture_closure(txn, owner).await?;
-                let live = closure_digests(&closure)?;
-                let drifted = between(&job.origin.closure, &live);
+                let drifted = between(&job.origin.closure, &closure_digests(&closure)?);
                 if !drifted.is_empty() {
                     return Err(anyhow::Error::new(ClosureDrift(drifted)));
                 }
@@ -5360,6 +6342,7 @@ pub async fn promote(
                 let previous_text = current_text(&closure, target)?;
                 let previous_digest = target_digest(&closure, target)?;
                 let patched = apply_text(&closure, target, text)?;
+                // Writes only the target; expects the entire frozen closure.
                 let plan = target_plan(&patched, target, &job.origin.closure)?;
                 apply_desired_state_plan(txn, &plan).await?;
                 let promotion = Promotion {
@@ -5367,17 +6350,13 @@ pub async fn promote(
                     previous_text,
                     previous_digest,
                 };
-                append_in_txn(
-                    txn,
-                    &job,
-                    &JournalEntry::Promoted {
-                        by: job.origin.owner.clone(),
-                        target_digest: promotion.target_digest.clone(),
-                        previous_text: promotion.previous_text.clone(),
-                        previous_digest: promotion.previous_digest.clone(),
-                    },
-                )
-                .await?;
+                let entry = JournalEntry::Promoted {
+                    by: job.origin.owner.clone(),
+                    target_digest: promotion.target_digest.clone(),
+                    previous_text: promotion.previous_text.clone(),
+                    previous_digest: promotion.previous_digest.clone(),
+                };
+                append_in_txn(txn, &job, &entry).await?;
                 Ok(promotion)
             })
         })
@@ -5385,7 +6364,7 @@ pub async fn promote(
 
     match applied {
         Ok(promotion) => {
-            tracing::info!(job_id = %request.job_id, by, "optimization checkpoint promoted");
+            tracing::info!(job_id, by, "optimization checkpoint promoted");
             Ok(promotion)
         }
         Err(error) => {
@@ -5393,29 +6372,26 @@ pub async fn promote(
                 return Err(error);
             };
             // The write rolled back; a second transaction records why.
-            append(
-                access,
-                &mut job,
-                JournalEntry::PromotionRefused {
-                    drifted: drifted.clone(),
-                },
-            )
-            .await?;
-            tracing::warn!(job_id = %request.job_id, ?drifted, "promotion refused; the job is stale");
+            let entry = JournalEntry::PromotionRefused {
+                drifted: drifted.clone(),
+            };
+            append(access, &mut job, entry).await?;
+            tracing::warn!(job_id, ?drifted, "promotion refused; the job is stale");
             Err(refused("stale_closure", format!("{drifted:?}")))
         }
     }
 }
 
 /// Write `previous_text` back, expecting the target to still hold exactly what
-/// the promotion wrote.
+/// the promotion wrote. Terminal (ruling R4).
 pub async fn revert(
     access: &ConfigAccess,
-    request: &JobRequest,
+    owner: &str,
+    job_id: &str,
     digest: &str,
     by: &str,
 ) -> Result<()> {
-    let job = job_in_state(access, request, by, JobState::Promoted).await?;
+    let job = job_in_state(access, owner, job_id, by, JobState::Promoted).await?;
     let promoted = job
         .journal
         .iter()
@@ -5432,17 +6408,14 @@ pub async fn revert(
     if promoted.0 != digest {
         return Err(refused(
             "wrong_digest",
-            format!(
-                "job {:?} promoted {}, not {digest}",
-                request.job_id, promoted.0
-            ),
+            format!("job {job_id:?} promoted {}, not {digest}", promoted.0),
         ));
     }
 
-    let (owner, job_id) = (request.owner.clone(), request.job_id.clone());
+    let (owner_owned, job_id_owned) = (owner.to_owned(), job_id.to_owned());
     let result = access
         .transact("optimization.revert", |txn| {
-            let (owner, job_id, promoted) = (&owner, &job_id, &promoted);
+            let (owner, job_id, promoted) = (&owner_owned, &job_id_owned, &promoted);
             Box::pin(async move {
                 let job = load_job_in_txn(txn, owner, job_id)
                     .await?
@@ -5453,10 +6426,7 @@ pub async fn revert(
                 if live != promoted.0 {
                     return Err(refused(
                         "target_moved",
-                        format!(
-                            "the target now digests to {live}, not the promoted {}",
-                            promoted.0
-                        ),
+                        format!("the target now digests to {live}, not the promoted {}", promoted.0),
                     ));
                 }
                 let restored = apply_text(&closure, target, &promoted.1)?;
@@ -5468,14 +6438,10 @@ pub async fn revert(
                 }];
                 let plan = target_plan(&restored, target, &expectation)?;
                 apply_desired_state_plan(txn, &plan).await?;
-                append_in_txn(
-                    txn,
-                    &job,
-                    &JournalEntry::Reverted {
-                        by: job.origin.owner.clone(),
-                    },
-                )
-                .await?;
+                let entry = JournalEntry::Reverted {
+                    by: job.origin.owner.clone(),
+                };
+                append_in_txn(txn, &job, &entry).await?;
                 Ok(())
             })
         })
@@ -5483,7 +6449,7 @@ pub async fn revert(
 
     match result {
         Ok(()) => {
-            tracing::warn!(job_id = %request.job_id, by, "promoted prompt reverted");
+            tracing::warn!(job_id, by, "promoted prompt reverted; the job is closed");
             Ok(())
         }
         Err(error) if stale_expectation(&error).is_some() => {
@@ -5494,23 +6460,23 @@ pub async fn revert(
 }
 ```
 
-- [ ] **Step 5: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod promote;` in rustfmt order and:
+- [ ] **Step 4: Wire the module** — in `crates/gents/src/optimization/mod.rs` add `pub mod promote;` in rustfmt order and:
 
 ```rust
 pub use promote::{promote, promote_refused, revert, PromoteRefused, Promotion};
 ```
 
-- [ ] **Step 6: Run the tests**
+- [ ] **Step 5: Run the tests**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::promote 2>&1 | tee /tmp/promote.log; tail -40 /tmp/promote.log`
-Expected: 5 tests PASS.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::promote 2>&1 | tee /tmp/promote.log; grep -E "^test |test result" /tmp/promote.log`
+Expected: 6 tests PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/gents/src/optimization
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
-  commit -m "feat(optimization): operator-only promote and revert (#1455)
+  commit -m "feat(optimization): operator-only promote and a terminal revert (#1455)
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -5521,7 +6487,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 - Create: `crates/gents/tests/optimization_live.rs`
 - Modify: `crates/gents/tests/support/live_inference.rs`, `crates/gents/tests/eval_runner_canary.rs`
 
-Both tests are `#[ignore]` and never run in CI. They use the real embedded runner and a real provider; only the proposer is scripted, because M6b ships no LLM proposer. An accept and a reject are produced by choosing which text the proposer offers, not by scripting the model.
+Ruling R7: both scenarios take the M3 definition pack directory and the definition id from environment variables and stay `#[ignore]`; they run in M5, once M3's pack and M5's calibration exist. They use the real embedded runner and a real provider. Only the proposer is scripted, because M6b ships no LLM proposer: an accept and a reject are produced by choosing which text the proposer offers, not by scripting the model.
 
 **Interfaces:**
 - Consumes:
@@ -5530,9 +6496,12 @@ Both tests are `#[ignore]` and never run in CI. They use the real embedded runne
   impl EmbeddedExecutor { pub fn new(options: DocumentRuntimeOptions, runs_dir: PathBuf) -> Self; }
   impl EmbeddedHome { pub async fn create_temp(prefix: &str) -> Result<Self>; pub fn did(&self) -> &str; }
   // gents::optimization
+  pub fn materialize_pack(dir: &Path, owner: &str, behavior_id: &str) -> Result<MaterializedPack>;
   pub async fn run_job(access: &ConfigAccess, request: &JobRequest, executor: &dyn TrialExecutor,
       proposer: &dyn Proposer, registry: &CheckRegistry, policy: &PolicyV2,
       cancel: CancellationToken) -> Result<JobOutcome>;
+  // gents::document_config::PackConfig
+  pub eval_definitions: Vec<EvalDefinition>,   // pack_config.rs:197
   ```
 - Produces:
   ```rust
@@ -5551,12 +6520,10 @@ Expected: unchanged — 3 passed, 1 ignored.
 
 ```rust
 //! The two live scenarios M6 is judged by: one accept and one reject on a real
-//! provider. Never in CI.
+//! provider. Never in CI; run in M5 (ruling R7).
 //!
-//! The subject is M3's `monitor-findings` pack and definition, which land on
-//! `eval/30-monitor-prework`. Both are supplied by environment variable, so
-//! this file compiles without that branch and runs only where it is present.
-//! The provider is real and the runner is the embedded one.
+//! The subject and its definition come from M3's pack, named by environment
+//! variable, so this file compiles and stays ignored without that branch.
 
 mod support;
 
@@ -5567,35 +6534,35 @@ use gents::config_client::{
 };
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
+use gents::eval::runner::RunOptions;
 use gents::optimization::{
-    run_job, Budgets, JobOutcome, JobRequest, JobState, PolicyV2, ScriptedProposer,
+    materialize_pack, run_job, Budgets, JobOutcome, JobRequest, JobState, PolicyV2,
+    ScriptedProposer,
 };
 use gents::{Collection, ConfigAccess, DocumentRuntimeOptions};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-/// The M3 subject pack directory: `eval/30-monitor-prework` builds one under
-/// `packs/`. Point this at it.
+/// The M3 pack directory: the monitor subject and its eval definition.
 const PACK_VAR: &str = "GENTS_OPTIMIZATION_LIVE_PACK";
-/// A JSON file holding the `monitor-findings` `EvalDefinition` document.
-const DEFINITION_VAR: &str = "GENTS_OPTIMIZATION_LIVE_DEFINITION";
-/// The behavior inside that pack whose context is optimized.
-const BEHAVIOR: &str = "monitor";
-/// The deliberately thin baseline the job starts from, so there is room to
-/// improve on a real provider.
+/// The id of the definition inside that pack (M3 names it `monitor-findings`).
+const DEFINITION_VAR: &str = "GENTS_OPTIMIZATION_LIVE_DEFINITION_ID";
+/// The behavior whose context is optimized; `monitor` unless overridden.
+const BEHAVIOR_VAR: &str = "GENTS_OPTIMIZATION_LIVE_BEHAVIOR";
+/// A deliberately thin baseline, so a real provider has room to improve.
 const THIN_PROMPT: &str = "Look at the mailbox and say something.\n";
 
 #[tokio::test]
-#[ignore = "needs GENTS_LIVE_CONFIG_PROVIDER, GENTS_OPTIMIZATION_LIVE_PACK and a real backend"]
+#[ignore = "M5: needs GENTS_LIVE_CONFIG_PROVIDER, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
 async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-accept").await;
     // The candidate is the pack's own golden prompt, which M3 wrote to pass
     // these cases; the baseline is the thin one.
-    let proposer = ScriptedProposer::new(vec![(
-        fixture.golden_prompt.clone(),
-        "restore the full monitor instructions".into(),
-    )]);
+    let proposer = ScriptedProposer::new(vec![
+        (fixture.golden_prompt.clone(), "restore the full monitor instructions".into());
+        3
+    ]);
     let outcome = fixture.drive(&proposer).await;
     tracing::info!(state = outcome.state.label(), "live accept scenario");
     assert_eq!(
@@ -5610,14 +6577,14 @@ async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_pro
 }
 
 #[tokio::test]
-#[ignore = "needs GENTS_LIVE_CONFIG_PROVIDER, GENTS_OPTIMIZATION_LIVE_PACK and a real backend"]
+#[ignore = "M5: needs GENTS_LIVE_CONFIG_PROVIDER, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
 async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-reject").await;
     // A prompt that removes the output contract the checks grade.
-    let proposer = ScriptedProposer::new(vec![(
-        "Answer in one word. Do not use any tools.\n".into(),
-        "shorter is better".into(),
-    )]);
+    let proposer = ScriptedProposer::new(vec![
+        ("Answer in one word. Do not use any tools.\n".into(), "shorter is better".into());
+        3
+    ]);
     let outcome = fixture.drive(&proposer).await;
     tracing::info!(state = outcome.state.label(), "live reject scenario");
     assert_ne!(
@@ -5651,17 +6618,11 @@ impl Fixture {
             .try_init();
 
         let pack = PathBuf::from(
-            std::env::var(PACK_VAR)
-                .unwrap_or_else(|_| panic!("{PACK_VAR} must name the M3 monitor subject pack")),
+            std::env::var(PACK_VAR).unwrap_or_else(|_| panic!("{PACK_VAR} must name the M3 pack")),
         );
-        let definition: Value = serde_json::from_slice(
-            &std::fs::read(
-                std::env::var(DEFINITION_VAR)
-                    .unwrap_or_else(|_| panic!("{DEFINITION_VAR} must name the definition JSON")),
-            )
-            .expect("reading the definition"),
-        )
-        .expect("parsing the definition");
+        let definition_id = std::env::var(DEFINITION_VAR)
+            .unwrap_or_else(|_| panic!("{DEFINITION_VAR} must name the definition in that pack"));
+        let behavior = std::env::var(BEHAVIOR_VAR).unwrap_or_else(|_| "monitor".into());
 
         let home = EmbeddedHome::create_temp("optimization-live").await.unwrap();
         let access = ConfigAccess::Local(home.node.clone());
@@ -5671,9 +6632,19 @@ impl Fixture {
             .unwrap();
         let dirs = tempfile::tempdir().unwrap();
 
-        let sidecar = Path::new("agent_behaviors").join(BEHAVIOR).join("system_prompt.md");
-        let golden_prompt =
-            std::fs::read_to_string(pack.join(&sidecar)).expect("the pack's behavior sidecar");
+        // The pack carries both the subject and the definition.
+        let golden = materialize_pack(&pack, &owner, &behavior).expect("the M3 pack loads");
+        let golden_prompt = gents::optimization::baseline_text(&golden).unwrap();
+        let definition = golden
+            .config
+            .eval_definitions
+            .iter()
+            .find(|definition| definition.definition_id == definition_id)
+            .unwrap_or_else(|| panic!("the pack declares no definition {definition_id:?}"));
+        let sidecar = golden
+            .prompt_asset
+            .clone()
+            .expect("the M3 pack keeps its prompt in a sidecar");
         let thin_pack = dirs.path().join("thin-pack");
         copy_tree(&pack, &thin_pack);
         std::fs::write(thin_pack.join(&sidecar), THIN_PROMPT).unwrap();
@@ -5682,7 +6653,7 @@ impl Fixture {
         install(
             &access,
             vec![
-                (Collection::EvalDefinition, with_owner(definition, &owner)),
+                (Collection::EvalDefinition, serde_json::to_value(definition).unwrap()),
                 (
                     Collection::InferenceBackend,
                     json!({
@@ -5711,10 +6682,11 @@ impl Fixture {
                         "sampling_id": "live",
                     }),
                 ),
+                // Ruling R5: the live context must hold the pack's prompt.
                 (
                     Collection::AgentContext,
                     json!({
-                        "context_id": "monitor-context",
+                        "context_id": golden.context_id,
                         "agent_did": owner,
                         "display_name": "Monitor",
                         "system_prompt": THIN_PROMPT,
@@ -5723,10 +6695,10 @@ impl Fixture {
                 (
                     Collection::AgentBehavior,
                     json!({
-                        "behavior_id": BEHAVIOR,
+                        "behavior_id": behavior,
                         "agent_did": owner,
                         "display_name": "Monitor",
-                        "context_id": "monitor-context",
+                        "context_id": golden.context_id,
                         "inference_profile_id": "live",
                     }),
                 ),
@@ -5738,20 +6710,20 @@ impl Fixture {
             job_id: job_id.into(),
             owner: owner.clone(),
             evaluator_did: owner,
-            behavior_id: BEHAVIOR.into(),
-            definition_id: "monitor-findings".into(),
+            behavior_id: behavior,
+            definition_id,
             inference_profile_id: "live".into(),
             baseline_pack: thin_pack,
             trials_per_case: 2,
             budgets: Budgets {
-                max_rounds: 1,
+                max_rounds: 3,
                 max_case_trials: 1_000,
                 max_tokens: u64::MAX,
                 deadline_unix_secs: None,
             },
             max_text_bytes: 32 * 1024,
             seed_base: 7_000,
-            jobs_dir: dirs.path().join("optimization/jobs"),
+            jobs_dir: dirs.path().join("eval/jobs"),
             runs_dir: dirs.path().join("eval/runs"),
             source_commit: "live".into(),
             source_dirty: false,
@@ -5759,6 +6731,7 @@ impl Fixture {
             max_infra_retries: 1,
             breaker_threshold: 8,
             deadline_secs: Some(900),
+            run_options: RunOptions::default(),
         };
 
         Self {
@@ -5775,28 +6748,18 @@ impl Fixture {
             DocumentRuntimeOptions::default(),
             self.request.runs_dir.clone(),
         );
-        let policy = PolicyV2 {
-            max_rounds: 1,
-            max_reruns: 1,
-            ..PolicyV2::uncalibrated()
-        };
         run_job(
             &self.access,
             &self.request,
             &executor,
             proposer,
             &CheckRegistry::builtin(),
-            &policy,
+            &PolicyV2::uncalibrated(),
             CancellationToken::new(),
         )
         .await
         .unwrap()
     }
-}
-
-fn with_owner(mut definition: Value, owner: &str) -> Value {
-    definition["agent_did"] = Value::String(owner.to_owned());
-    definition
 }
 
 async fn install(access: &ConfigAccess, documents: Vec<(Collection, Value)>) {
@@ -5834,6 +6797,8 @@ fn copy_tree(source: &Path, destination: &Path) {
 }
 ```
 
+`PolicyV2::uncalibrated()` has `max_rounds: 3`, matching the budget, so `check_policy` passes. Its parameters are placeholders until M5's A/A calibration sets them, which is exactly when these scenarios run.
+
 - [ ] **Step 3: Prove it compiles and stays out of CI**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --test optimization_live --no-run`
@@ -5847,7 +6812,7 @@ Expected: `2 ignored`, 0 run.
 ```bash
 git add crates/gents/tests
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" \
-  commit -m "test(optimization): live accept and reject scenarios, ignored by default
+  commit -m "test(optimization): live accept and reject scenarios for M5, ignored by default
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 ```
@@ -5860,7 +6825,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 The coordinator never pushes and never opens a PR; it writes the descriptions the orchestrator uses. One section per PR, each carrying baseline, owners, deletions and validation, per CLAUDE.md's stacked-PR rule.
 
 **Interfaces:**
-- Consumes: the four branch heads produced by PRs 1 to 4, and the M6b base commit recorded in the ledger at first use.
+- Consumes: the four branch heads produced by PRs 1 to 4, and the M6b base commit the orchestrator supplied at spin-up.
 - Produces: the file itself.
 
 - [ ] **Step 1: Write the file**
@@ -5870,21 +6835,21 @@ The coordinator never pushes and never opens a PR; it writes the descriptions th
 
 ## PR 1 — `optimization/20-job` → the M6b base
 
-**Baseline.** The M6b base: `eval/13-runner-embedded` (`028aa4188`) with
-`eval/06-protected` (`9c8a590e0`), `optimization/01..03` (`f3ebf6b9f`) and
-`optimization/10..12` (`d0ab985ab`) rebased on top, in that order. Record the
-resulting commit here.
+**Baseline.** The M6b base: `eval/13-runner-embedded` rebased onto the amended
+`eval/05-contract`, carrying `eval/06-protected`, `optimization/01..03` and
+`optimization/10..12`. Commit supplied by the orchestrator at spin-up: record it here.
 
 **What it adds.** The `OptimizationJob` collection — SDL, both catalogs, the
 protocol mirror, the migration baseline pin, local-audit classification — the
-closure target, and the typed journal whose `journal_len` guard refines
-`Optimization.appendIf`.
+one-field closure target, and the typed journal whose `journal_len` guard
+refines `Optimization.appendIf`.
 
 **Owners.** The journal is owned by `gents::optimization::job` and written only
 by the driver, as the owner DID. `state` is derived; it is not a second request
-lifecycle and no runtime reconciles it. The collection stays out of the
-`Collection` enum, out of `BRANCHABLE_COLLECTION_NAMES`, and out of all three
-P2P arrays in `agent/p2p_reconcile/templates.rs`.
+lifecycle and no runtime reconciles it. `Reverted` is terminal. The collection
+stays out of the `Collection` enum, out of `BRANCHABLE_COLLECTION_NAMES`, and
+out of all three P2P arrays in `agent/p2p_reconcile/templates.rs`. The frozen
+closure excludes `EvalDefinition`, which the job freezes separately.
 
 **Deletions.** The string literal `"OptimizationJob"` in
 `PROTECTED_DATASTORE_COLLECTIONS`, replaced by
@@ -5902,15 +6867,16 @@ asked for the replacement removed.
 
 **Baseline.** PR 1's head.
 
-**What it adds.** `MaterializedPack` and the candidate materializer, the
-`Proposer` trait with `ScriptedProposer`, and the pure structural gate.
+**What it adds.** `MaterializedPack` and the candidate materializer (sidecar
+and inline prompts), the `Proposer` trait with `ScriptedProposer`, and the pure
+structural gate.
 
 **Owners.** The proposer holds no `ConfigAccess`; `target.rs` and `subject.rs`
 are the only builders of a patch. `ProposalInput`'s field list is pinned by a
 test, because it is the statement of what an optimizer may learn. The gate
-validates the candidate pack's own reference closure with the rule
-`validate_desired_state_plan` applies to a live one; the live form runs inside
-`promote`'s transaction in PR 4.
+proves the candidate differs from the baseline only at the subject context's
+`system_prompt` and holds exactly the proposed text, and validates the pack's
+own reference closure; the live form of that check runs inside `promote`.
 
 **Deletions.** None.
 
@@ -5923,16 +6889,19 @@ validates the candidate pack's own reference closure with the rule
 
 **Baseline.** PR 2's head.
 
-**What it adds.** The verdict-to-evidence projection, the eval-run plans and
-the budget, `run_job`, and the scripted matrix: accept, reject for no
-improvement, reject for a case regression, structural reject with zero
-validation runs, budget exhaustion, and baseline drift.
+**What it adds.** A new, unfrozen `gents::eval::report` module with the
+verdict-to-evidence projection (latest attempt per `(run, case, trial_index)`
+slot; runs paired separately and their pairs concatenated), the optimization
+decision evidence, the eval-run plans and budget, `run_job`, `show`, and the
+scripted matrix covering every end-to-end case spec section 9 lists.
 
-**Owners.** The driver is the sole writer of the job. Runs are ordinary
-`EvalRun`s with `purpose: "optimization:<job_id>"`; grading, seeding, resume
-and the NotEvidence breaker stay the runner's. The latest-attempt-per-slot
-projection in `optimization::evidence` is the one M4's report should reuse
-rather than re-derive.
+**Owners.** `eval::report` is the projection's owner; M4's report consumes it
+rather than re-deriving it, and nothing new enters the frozen `eval::scoring`.
+The driver is the sole writer of the job and decides only from its frozen
+origin. Runs are ordinary `EvalRun`s with `purpose: "optimization:<job_id>"`;
+grading, seeding, resume and the NotEvidence breaker stay the runner's. Job
+directories live under `<launching home>/eval/jobs/<job_id>/`; M4's
+`gents optimization rm` owns their removal.
 
 **Deletions.** None.
 
@@ -5946,15 +6915,20 @@ rather than re-derive.
 
 **Baseline.** PR 3's head.
 
-**What it adds.** `promote` and `revert` over the Track 0 compare-and-set, the
-refusal matrix (stale closure, moved target, foreign DID, wrong digest, unready
-job), the test that the model-facing `config` tool has no optimization surface,
-and the two live scenarios, both `#[ignore]`.
+**What it adds.** `promote(access, owner, job_id, digest, by)` and
+`revert(access, owner, job_id, digest, by)` over the Track 0 compare-and-set,
+the refusal matrix (stale closure, moved target, foreign DID, wrong digest,
+unready job, a second promotion after a revert), the test that the
+model-facing `config` tool has no optimization surface, and the two live
+scenarios, both `#[ignore]` until M5.
 
 **Owners.** Promotion expects the entire frozen closure and writes only the
 target document, through `DesiredStateApplyPlan::with_expected`. There is no
-force flag and nothing reverts on its own. This is the first non-test caller of
-`with_expected`.
+force flag, nothing reverts on its own, and a revert ends the job. `by` is the
+caller-stated launching-home DID compared against the job's owner; the enforced
+identity boundary is spec 2b's. This is the first non-test caller of
+`with_expected`. The `gents optimization show | promote | revert` CLI wrappers
+are M4's.
 
 **Deletions.** `live_provider_from_env` moves out of
 `crates/gents/tests/eval_runner_canary.rs` into
@@ -5993,101 +6967,80 @@ Expected: 0.
 Run: `cargo fmt --all --check`
 Expected: exits 0.
 
-No `lake build` is required: this plan adds and edits no Lean. The whole stack is validated on PR 4's head, and the stack merges in order, PR 1 first.
+No `lake build` is required: this plan adds and edits no Lean. The whole stack is validated on PR 4's head, and the stack merges in order, PR 1 first; the non-buildable base must not merge alone.
 
 ---
 
 ## Self-review
 
+Re-run after applying rulings R1–R9 and fixes F1–F12.
+
 ### 1. Spec coverage
 
 | Spec section | Requirement | Where |
 |---|---|---|
-| 1 | Baseline subject is a pack snapshot naming `behavior_id`; no credentials | PR 2 Task 1, `materialize_pack`; inference rides on the profile the `CellRequest` names, never in the pack |
-| 1 | Target is `AgentContext.system_prompt` or a Task's `prompt_template`; `TargetField` allows nothing else | PR 1 Task 3, `TargetField`. The Task variant is declared and refused — defect 2 |
+| 1 | Baseline subject is a pack snapshot naming `behavior_id`; no credentials | PR 2 Task 1 `materialize_pack`; operator-supplied and cross-checked against the live closure at freeze (R5, PR 3 Task 4 `freeze_job`); inference rides on the profile the `CellRequest` names |
+| 1 | Target is `AgentContext.system_prompt`; `TargetField` allows nothing else | PR 1 Task 3, one variant (R2; spec amended) |
 | 1 | Candidate is the same snapshot with one field patched, giving a new pack digest; the digest is the dedup key | PR 2 Task 1 `materialize_candidate`; PR 2 Task 3 `duplicate_candidate` |
-| 1 | Frozen closure is `(collection, owner, id, digest)` read through `ConfigReferences::load_in_txn` | PR 1 Task 3 `capture_closure`, `closure_digests`, `FrozenDocument` |
-| 2 | `Proposer` trait, `ProposalInput`, `Proposal`; proposer never holds `ConfigAccess`; `target.rs` builds the patch | PR 2 Task 2; Global Constraint 11 |
-| 2 | The first implementation is a scripted proposer | PR 2 Task 2 `ScriptedProposer` |
-| 3.1 | Train run: one `EvalRun`, one cell, the checkpoint, `purpose: "optimization:<job_id>"` | PR 3 Task 2 `train_plan`, `run_request` |
-| 3.2 | Propose returns a text and a rationale | PR 3 Task 3, `JournalEntry::Proposed` |
-| 3.3 | Structural gate before any validation spend; failure journaled with diagnostics | PR 2 Task 3; PR 3 Task 3; matrix `a_repeated_candidate_is_structurally_rejected_and_costs_no_validation_run` |
-| 3.4 | Validation run: two cells, shared seeds | PR 3 Task 2 `validation_plan`; one `seed_base` per run is how the runner shares a seed |
-| 3.5 | Decide from `EvalVerdict` rows; on `Inconclusive` re-run with a new `seed_base`; re-runs add pairs | PR 3 Task 1 `paired_evidence`; PR 3 Task 3's attempt loop reads every attempt's rows together |
-| 3.6 | Accept makes the candidate the checkpoint; the job returns the retained checkpoint | PR 1 Task 4 `checkpoint`; its test asserts "never the best seen" |
-| 3 | Rejection memory is the journal; `Inconclusive` and budget-exhausted rounds are never negatives | PR 3 Task 3 `rejections` |
-| 4 | `decide` is pure, `PolicyV2` frozen into the job | M6a; PR 1 Task 4 `JobOrigin::policy` |
-| 4 | `alpha_effective = alpha / max_rounds` | M6a `alpha_effective_ppm`; PR 3 Task 3 `check_policy` binds the divisor to the budget |
-| 4 | Cost sub-gate skipped and journaled when usage is missing | PR 3 Task 1 `token_totals` (`tracing::info!`); `DecisionSummary::cost_skipped` |
-| 4 | Two modes: `Improve` on validation, `Confirm` on held-out | PR 3 Task 3 |
-| 5 | One local-only `OptimizationJob`: frozen `origin`, append-only `journal` guarded by length, derived `state` not named `lifecycle_state` | PR 1 Tasks 1 and 4 |
+| 1 | Frozen closure is `(collection, owner, id, digest)` read through `ConfigReferences::load_in_txn` | PR 1 Task 3 `capture_closure`, `closure_digests`, `FrozenDocument`; excludes `EvalDefinition` (F5) |
+| 2 | `Proposer` trait, `ProposalInput`, `Proposal`; the proposer never holds `ConfigAccess`; `target.rs` builds the patch | PR 2 Task 2; Global Constraint 11 |
+| 2 | The first implementation is scripted | PR 2 Task 2 `ScriptedProposer` |
+| 3.1 | Train run: one cell, the checkpoint, `purpose: "optimization:<job_id>"` | PR 3 Task 3 `train_plan`, `run_request` |
+| 3.2 | Propose returns a text and a rationale | PR 3 Task 4, `JournalEntry::Proposed` |
+| 3.3 | Structural gate before any validation spend: only the target field moved; closure validates; length cap; digest novelty; failures journaled with diagnostics | PR 2 Task 3 (F6: exact in sidecar and inline packs); PR 3 Task 4; matrix `a_repeated_candidate_is_structurally_rejected_and_costs_no_validation_run`. The Task placeholder-set check is removed with the Task target (R2) |
+| 3.4 | Validation run: two cells, shared seeds | PR 3 Task 3 `validation_plan`; one `seed_base` per run |
+| 3.5 | Decide from `EvalVerdict` rows; on `Inconclusive` re-run with a new `seed_base`; re-runs add pairs | PR 3 Tasks 1 and 2 (`concat_paired`, `decision_evidence`, F1); matrix `an_inconclusive_round_is_rerun_on_a_new_seed_and_ends_inconclusive` asserts 4 pairs per case over two runs |
+| 3.6 | Accept makes the candidate the checkpoint; the job returns the retained checkpoint | PR 1 Task 4 `checkpoint`, tested "never the best seen" |
+| 3 | Rejection memory is the journal; `Inconclusive` and budget-exhausted rounds are never negatives | PR 3 Task 4 `rejections` |
+| 4 | `decide` pure; `PolicyV2` frozen into the job | M6a; PR 1 Task 4 `JobOrigin::policy`; F2 `check_resume` |
+| 4 | `alpha_effective = alpha / max_rounds` | M6a `alpha_effective_ppm`; `check_policy` binds the divisor to the budget; matrix runs at `max_rounds: 3` (F11) |
+| 4 | Cost sub-gate, skipped and journaled when usage is missing | PR 3 Task 2 `token_totals`; `DecisionSummary::cost_skipped`; matrix `a_candidate_that_costs_ten_times_the_tokens_is_rejected_for_cost` |
+| 4 | `Improve` on validation, `Confirm` on held-out | PR 3 Task 4 |
+| 5 | Local-only `OptimizationJob`: frozen `origin`, length-guarded `journal`, derived `state` not named `lifecycle_state` | PR 1 Tasks 1 and 4 |
 | 5 | In `LOCAL_AUDIT_COLLECTION_NAMES`; out of `Collection` and every P2P list; no `DatastoreToolSurface` may name it | PR 1 Task 1 Steps 4 and 9; PR 1 Task 2 |
-| 5 | `origin` freezes target, closure digests, subject pack digest and `behavior_id`, definition ref, policy, `trials_per_case`, budgets, owner DID | PR 1 Task 4 `JobOrigin` |
+| 5 | `origin` freezes target, closure digests, subject digest and `behavior_id`, definition ref, policy, `trials_per_case`, budgets, owner DID | PR 1 Task 4 `JobOrigin` (plus `seed_base`, `inference_profile_id`, `max_text_bytes`, `jobs_dir` per F2 and R6) |
 | 5 | The ten journal entries | PR 1 Task 4 `JournalEntry` |
-| 5 | `summary` is a convenience; decisions recompute from verdicts and a mismatch is flagged | PR 3 Tasks 1 and 3 `recompute_decisions`; matrix asserts no mismatch on the accepting job |
-| 6 | The state diagram | PR 1 Task 4 `JobState`, `derive_state`; PR 3 Task 3 |
-| 6 | Interruption: replay the journal; a `RunStarted` without a `Decided` resumes that run | PR 3 Task 2 `execute_run` resumes an existing run; PR 3 Task 3 `round_is_closed`, `proposed_for`, `run_started` |
-| 6 | Baseline drift → `Failed(baseline_drifted)` before further spend | PR 3 Task 3; matrix `a_baseline_edited_after_the_freeze_fails_the_job_before_any_further_spend` |
-| 6 | Definition drift → `Failed(definition_changed)` | PR 3 Task 3 |
-| 6 | Budgets checked before every run; held-out cost reserved at freeze; an unevaluated candidate is `BudgetExhausted` | PR 3 Tasks 2 and 3; matrix `a_candidate_that_cannot_be_afforded_is_budget_exhausted_and_never_rejected` |
-| 6 | Finalization: one held-out run in `Confirm` mode; `ReadyToPromote`/`Failed(held_out_*)`; never touched when no round accepted; `NothingToPromote` or `Exhausted` otherwise | PR 3 Task 3; matrix asserts the held-out split is untouched when nothing accepted |
-| 6 | The driver is the only writer of the job, as the owner DID | PR 3 Task 3; every append goes through `job::append` |
-| 7 | `promote`: require `ReadyToPromote`, the digest, a re-read closure, a rebuilt patch, a plan that writes only the target and expects the whole closure, then `Promoted` | PR 4 Task 1 |
-| 7 | On drift the transaction rolls back, a second transaction journals `PromotionRefused`, the job is `Stale`; no force flag; owner DID only | PR 4 Task 1 and its tests |
-| 7 | `revert` writes `previous_text` back through the same compare-and-set, expecting what was promoted | PR 4 Task 1 `revert` |
-| 8 | Lean keeps its model; no Lean change in M6b | Global Constraint 9; `Proofs/Conformance/Optimization.lean` emits no journal cases, so no consumer is written |
-| 9 | Unit: permutation test, too-few-cases, Bonferroni, cost gate with the missing-usage skip, totality | M6a's 11 policy tests, unchanged |
-| 9 | End to end, deterministic, in `cargo test -p gents`: accept; `no_improvement`; `case_regression`; structural reject with zero validation runs; budget exhaustion; baseline drift; feedback only from the train run; held-out only at finalize | PR 3 Task 4 matrix (6 tests); PR 3 Task 1 `feedback_reaches_the_proposer_as_check_name_score_and_text_only` |
-| 9 | `cost_regression`; inconclusive-then-rerun-then-inconclusive; too few cases; held-out regression; definition drift; resume at every boundary; a decision on an invalidated run flagged | Partly. Defects 5, 6 and 7 |
-| 9 | Promotion: promote once; stale closure refused with the live node unchanged; an edited target refused with the user's edit preserved; a foreign DID, a wrong digest, an unready job refused; revert restores and is refused if the target moved | PR 4 Task 1's four tests |
-| 9 | The model-facing `config` tool exposes no optimization resource or verb | PR 4 Task 1 `the_model_facing_config_tool_has_no_optimization_surface`; PR 1 Task 2 for the datastore surface |
-| 9 | Live, never in CI: one accept and one reject on `monitor-findings` | PR 4 Task 2, both `#[ignore]`. Defect 3 |
+| 5 | `summary` is a convenience; `show` recomputes every decision and flags mismatches and invalidated runs | PR 3 Task 6 `show` (R1) and its two tests |
+| 6 | The state diagram, with `Reverted` terminal | PR 1 Task 4 `JobState`, `derive_state` (R4); PR 3 Task 4 |
+| 6 | Interruption: replay the journal; a `RunStarted` without a `Decided` resumes that run; resumed and uninterrupted jobs reach the same state | PR 3 Tasks 3 and 4 (`execute_run`, `round_is_closed`, `proposed_for`, F7 staging); matrix `a_resumed_job_reaches_the_journal_of_its_uninterrupted_twin` (R9) |
+| 6 | Baseline drift → `Failed(baseline_drifted)` before further spend | PR 3 Task 4; matrix `a_baseline_edited_after_the_freeze_fails_the_job_before_any_further_spend` (F3) |
+| 6 | Definition drift → `Failed(definition_changed)` | PR 3 Task 4, checked first (F5); matrix `a_definition_edited_after_the_freeze_fails_the_job_as_definition_changed` |
+| 6 | Budgets checked before every run; held-out reserved at freeze; an unevaluated candidate is `BudgetExhausted` | PR 3 Tasks 3 and 4; matrix `a_round_that_cannot_be_afforded_is_budget_exhausted_and_spends_nothing` |
+| 6 | Finalization: one held-out `Confirm` run; `ReadyToPromote` / `Failed(held_out_*)`; held-out never touched when nothing accepted | PR 3 Task 4; matrix accept (exactly one held-out run), `no_improvement` (none), `a_checkpoint_that_regresses_on_held_out_fails_the_job` |
+| 6 | The driver is the only writer, as the owner DID | PR 3 Task 4; every append goes through `job::append` |
+| 7 | `promote`: `ReadyToPromote`, the digest, a re-read closure, a rebuilt patch, write only the target expecting the whole closure, journal `Promoted` | PR 4 Task 1 (R6 signature) |
+| 7 | On drift: rollback, a second transaction journals `PromotionRefused`, the job is `Stale`; no force flag; owner DID only | PR 4 Task 1 and its tests |
+| 7 | `revert` writes `previous_text` back through the same compare-and-set, expecting what was promoted | PR 4 Task 1 `revert`, terminal (R4) |
+| 8 | Lean unchanged in M6b | Global Constraint 9 |
+| 9 | Unit: permutation test, too-few-cases, Bonferroni, cost gate with the missing-usage skip, totality | M6a's 11 policy tests |
+| 9 | End to end, deterministic, in `cargo test -p gents`: accept; `no_improvement`; `case_regression`; `cost_regression`; structural reject with zero validation runs; inconclusive → re-run → inconclusive; too few cases; budget exhaustion; held-out regression; held-out only at finalize; feedback only from train; baseline drift; definition drift; resume at interruption; decision on an invalidated run | PR 3 Task 5 (13 tests) and Task 6 (`a_decision_on_an_invalidated_run_is_flagged`) — every case (F9) |
+| 9 | Promotion: once; stale closure refused with the live node unchanged; edited target refused with the user's edit preserved; foreign DID, wrong digest, unready job refused; revert restores and is refused if the target moved | PR 4 Task 1's five async tests |
+| 9 | The model-facing `config` tool exposes no optimization resource or verb | PR 4 Task 1 (scans every file of the `self_config` directory module, F11); PR 1 Task 2 for the datastore surface |
+| 9 | Live, never in CI: one accept and one reject on `monitor-findings` | PR 4 Task 2, `#[ignore]`, run in M5 (R7) |
 
 ### 2. Placeholder scan
 
-Searched the plan for "TBD", "TODO", "implement later", "fill in details", "add appropriate error handling", "handle edge cases", "write tests for the above" and "similar to Task": no occurrences. Every code step carries a code block. Three places ask the implementer to read a value out of the repo rather than stating it, each naming the file and what to look for:
+Searched for "TBD", "TODO", "implement later", "fill in details", "add appropriate error handling", "handle edge cases", "write tests for the above" and "similar to Task": none. Every code step carries a code block. Two values are read at execution time, each with the command that produces it: the `OptimizationJob` migration pin (PR 1 Task 1 Step 7, from `canonical_catalog_pins_for_authoring`), and the M6b base commit (supplied by the orchestrator; PR 1 Task 1 Step 0 verifies its contents). The M3 pack path and definition id in PR 4 Task 2 are runtime inputs to an ignored test, not plan gaps.
 
-- The `OptimizationJob` migration pin (PR 1 Task 1 Step 7): the `bafyrei…` VersionID exists only as the output of `canonical_catalog_pins_for_authoring`, and the plan gives the command and the exact assertion text to read it from.
-- `load_pack_config`'s parameter list (PR 2 Task 1): the plan names `crates/gents/src/eval/runner/freeze.rs`, `fn load_pack`, `CellSource::Directory` arm, and says to copy the call verbatim.
-- `SELF_CONFIG_TOOL_NAMES` and whether `self_config` is a file or a directory module (PR 4 Task 1 Step 2): the plan names both candidate paths and the existing reference in `write_tool.rs`.
-
-Two forward references were found and fixed rather than left: `target.rs` moved from PR 2 into PR 1 Task 3, because `JobOrigin` is declared against `Target` and `FrozenDocument`; and `recompute_decisions` is written in PR 3 Task 3 rather than Task 1, because it calls `driver::load_definition`, with Task 1 Step 4 saying explicitly what to remove and Task 3 Step 4 saying what to restore.
+Consumed signatures re-verified against the code for this revision: `crate::pack::load_pack_config(manifest, options, read_asset, environment)` is `pub` in `pack/loader.rs` and re-exported from `pack.rs:15` (the earlier plan said `pub(crate)` with other parameter names); the loader resolves a `./` `system_prompt` sidecar (`pack/loader.rs:105-107`); a slot's first attempt is `1` (`eval/runner/plan.rs`); a pre-cancelled token skips every queued slot (`eval/runner/mod.rs`, the biased select setting `stop`); `completion` copies `evidence.usage` into `TrialCompletion::usage` (`eval/runner/mod.rs`, `fn completion`), so scripted usage reaches the cost gate; `RunOptions::default()` backs off 5 s, which is why the matrix passes 1 ms; `self_config` is a directory module whose `mod.rs` declares `SELF_CONFIG_TOOL_NAMES: [&str; 6]`, and no file in it mentions `optimization`, `promote` or `revert`; `PackConfig::eval_definitions` exists (`pack_config.rs:197`); `invalidate_run(access, owner, run_id, by, reason)`.
 
 ### 3. Type consistency
 
-- `evidence_from_pairs`, not `evidence_from_paired`: used consistently in PR 3 Task 1 and recorded under Deviations.
-- `Checkpoint` is defined once (PR 1 Task 4) and consumed by `JobOutcome` (PR 3 Task 3) and `promote` (PR 4 Task 1); it carries `round`, `text` and `pack_digest` in all three.
-- `BASELINE_CELL` and `CANDIDATE_CELL` are defined in `evidence.rs` (PR 3 Task 1) and used by `driver.rs`'s plans (Task 2), `paired_evidence` (Task 1) and `recompute_decisions` (Task 3). The matrix scripts the same two labels, because `run_request` sets `CellRequest::label` equal to `cell_id`.
-- `DecisionSummary` (PR 1 Task 4) is built by `summary_of` from `DecisionReport` (M6a) in PR 3 Task 3; every field of the former has a same-named source on the latter.
-- `DriftedRef` is defined in `job.rs` (PR 1 Task 4) and produced in `promote.rs` (PR 4 Task 1) from both `ClosureDrift` and `StaleExpectation::drifted`.
-- `JobRequest::baseline_dir`, `candidate_dir` and `job_dir` are defined in PR 3 Task 2 and used by PR 3 Task 3 and PR 4 Task 1; `promote` reads the baseline through `baseline_dir()`, the same directory `run_job` wrote.
-- `MaterializedPack::prompt_asset` is `Option<String>` everywhere; `structural_gate`'s `allowed` defaults to `"pack_config.json"` when it is `None`, matching `materialize_candidate`'s inline branch.
-- `Target::field.collection()` is used for both the promotion plan's collection and the revert expectation's, so the two cannot disagree.
-- `run_job`'s parameter order — `access, request, executor, proposer, registry, policy, cancel` — is identical in PR 3 Task 3, the matrix's `drive`, and the live fixture's `drive`.
+- `TargetField` has one variant everywhere: `target.rs`, `JobOrigin::target`, `freeze_job`, the gate no longer takes a `Target`.
+- `JobOrigin` gains `inference_profile_id`, `max_text_bytes` and `jobs_dir`; they are set in `freeze_job`, compared in `check_resume`, read by `run_request`, `run_job` and `promote`, and present in every test fixture (`job.rs` and `driver.rs` tests).
+- `JobState::Reverted` is produced by `derive_state` and asserted in `job.rs`'s test and in `a_revert_restores_the_previous_text_and_is_terminal`; `label()` covers it.
+- `RunRows` (Task 1) is the only run-rows type; `decision_evidence`, `run_job` and `show` all take `&[RunRows]` loaded by `load_run_rows`.
+- `BASELINE_CELL`/`CANDIDATE_CELL` are defined once in `optimization/evidence.rs` and used by the plans, `decision_evidence`, and the matrix scripts (`"baseline"`/`"candidate"`, because `run_request` sets the label to the cell id).
+- `structural_gate(baseline, candidate, text, max_text_bytes, seen_digests, owner)` has the same six parameters in PR 2 Task 3 and in `run_job`.
+- `promote`/`revert` take `(access, owner, job_id, digest, by)` in PR 4 Task 1, its tests, and the PR description.
+- `run_job(access, request, executor, proposer, registry, policy, cancel)` has the same order in PR 3 Task 4, the matrix's `drive`, and the live fixture.
+- `JobRequest::run_options` is set by the matrix (1 ms), the live fixture (`RunOptions::default()`) and the driver-test fixture.
+- Task counts in the "Expected" lines were recomputed: target 5, job 5, subject 4, proposer 3, gate 9, report 6, optimization evidence 4, driver 9, matrix 13, show 2, promote 6.
 
 ---
 
 ## Plan defects I could not resolve
 
-For the orchestrator. Each is a spec requirement with no clean home in M6b, or a decision above the coordinator's authority.
+After rulings R1–R9 one item remains, and it is a dependency rather than a gap in the plan:
 
-1. **The `gents optimization show | promote | revert` CLI has no owner here.** Spec section 7 states both verbs as CLI commands and section 5 gives `optimization show` the job of recomputing decisions and flagging mismatches. The brief scopes M6b to the library, and the umbrella puts every CLI in spec 4a (M4). This plan ships `promote`, `revert` and `recompute_decisions` as library functions with their whole refusal matrix, and no `gents` subcommand. Someone must decide whether the wrappers land in M4's CLI PR or in a fifth M6b PR. Until then no operator can promote anything without writing Rust.
-
-2. **`TargetField::TaskPromptTemplate` is declared and refused.** Spec section 1 allows a Task's `prompt_template` as a target and section 3 requires the gate to check that a Task template keeps its placeholder set. The brief fixes every M6b candidate as one changed `AgentContext.system_prompt`, and a Task target is not a pack field at all — a Task lives in the owner's closure, not in the subject pack — so the candidate-pack construction this plan is built on does not extend to it. `structural_gate` returns `unsupported_target`. The placeholder-set check is unwritten and unowned.
-
-3. **The live scenarios depend on M3, which is not in the M6b base.** Spec section 9 names `monitor-findings`; that pack and definition are on `eval/30-monitor-prework` (`0425499b1`), a branch off `eval/03-definition`, not in this stack. PR 4 Task 2 takes both by environment variable so the file compiles and stays ignored without them, but nobody can actually run the accept or the reject until M3 and M6b meet. The orchestrator should decide whether M6b rebases M3 in, whether M3 merges first, or whether the live scenarios move to a follow-up that sits above both.
-
-4. **Policy defaults are uncalibrated and the matrix pins `max_rounds: 1` to work around it.** Spec section 4 says the defaults are placeholders until M5's A/A calibration sets them, and states plainly that at `alpha = 0.05` with three rounds a job needs at least six validation cases. The matrix therefore uses a one-round policy, where six cases give p = 15625 ppm against an `alpha_effective` of 50000 ppm. A three-round job needs eight validation cases to accept anything at that scoring, and the fixture has six. The matrix proves the mechanism, not the calibration. M5 has not run.
-
-5. **Three of spec section 9's end-to-end cases are not in the matrix.** `cost_regression` needs the scripted executor to report differing `TrialUsage`, which `ScriptedExecutor::passed_evidence` does not set (it builds `TrialUsage::default()`), so scripting a cost regression needs either a new constructor on the scripted executor — a change to `gents::eval::runner`, which standing rule 1 freezes for `documents` but not for `scripted`, so it is a coordinator ruling — or a hand-built `TrialEvidence`. `inconclusive → re-run → inconclusive` needs a slot that produces no evidence, which also trips the runner's retry ladder and its NotEvidence breaker; the interaction between `max_infra_retries`, `breaker_threshold` and `max_reruns` was not designed here. `too_few_cases` needs a definition with fewer than six validation cases, which is a second fixture. All three are unit-tested in M6a's policy suite; what is missing is the end-to-end form.
-
-6. **"Resume at every run boundary yields the same journal" is only partly covered.** Spec section 9 asks for a resume test at every boundary. The matrix's drift scenario drives the same job twice and proves replay does not re-propose, and `execute_run` resumes a run whose row exists, but there is no fault-injection seam on the driver comparable to the runner's `Recorder`/`FaultingRecorder`. Adding one means a trait around `job::append` and `execute_run`, which is a design decision this plan did not want to make speculatively.
-
-7. **"A decision on an invalidated run is flagged" has the mechanism but no test.** `recompute_decisions` returns `DecisionMismatch::invalidated`, and the matrix asserts the accepting job reports no mismatches. Nothing calls `gents::eval::invalidate_run` on one of a job's runs and asserts the flag comes back true. That test belongs beside `optimization show`, which does not exist here (defect 1).
-
-8. **`optimization::evidence` duplicates a projection M4 will need.** The latest-attempt-per-slot rule and the `VerdictRecord → VerdictView` mapping are exactly what the umbrella's M4 note (section 7) specifies for the report, and `gents::eval::report` is spec 4a's module. M6b needs them now and cannot wait. Either M4 reuses `gents::optimization::evidence` — which inverts the layering, since optimization is meant to be a consumer of eval, not a supplier to it — or the functions move into `gents::eval::scoring` later, which is a frozen module. The orchestrator should pick the destination before M4 writes its own copy.
-
-9. **The M6b base is four unmerged branches deep and will move.** Track 0 (`optimization/01..03`) targets `main` and may merge independently; `eval/06-protected` is M1's and may merge with the rest of M1. Every such merge invalidates the rebase recipe at the top of this plan. Nothing in the plan detects that, and the ledger's recorded base commit is the only record. Whoever rebases must re-run PR 1's catalog and migration tests, because a moved catalog changes the pin ordering that `default_baseline_matches_ordered_protocol_catalog` enforces.
-
-10. **The job's directory has no retention owner.** Every round writes a candidate pack under `<jobs_dir>/<job_id>/rounds/<round>/candidate`, and `promote` writes another under `promote-rebuild`. The runner's own run directories have the same property and the umbrella defers retention TTLs to spec 4b. Nothing in M6b deletes any of it, and a job's directory holds candidate prompts, which is why the collection is local-audit. The filesystem side of that classification is unowned.
-
+1. **The live scenarios need M3's pack.** PR 4 Task 2 reads the `monitor-findings` definition and the golden monitor subject from the pack named by `GENTS_OPTIMIZATION_LIVE_PACK` (M3's `eval/30-monitor-prework`). Per ruling R7 the tests are `#[ignore]` and run in M5, so M6b compiles and passes without that branch; nobody can run the accept or the reject until M3's pack exists alongside M6b. The test also expects that pack to keep its prompt in a sidecar asset and to declare the definition in `eval_definitions`; if M3 lands a different shape, the fixture's two `expect` lines say which assumption failed.
