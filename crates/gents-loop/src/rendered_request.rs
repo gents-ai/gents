@@ -28,11 +28,11 @@ pub mod scope;
 pub mod transport;
 
 pub use gents_protocol::rendered_request::{
-    AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssistantMessageId, CaptureOrderKey,
-    CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting, ContextCompactionReason,
-    ContextInputComponents, ParsedProvenance, ProvenanceManifest, ProvenanceStatus,
-    RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION, CAPTURE_VERSION,
-    CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
+    AdmissionJoin, AssemblyBuildPath, AssemblyTrace, AssemblyTraceMetadata, AssistantMessageId,
+    CaptureOrderKey, CaptureScope, CaptureScopeKind, CaptureSeam, ContextAccounting,
+    ContextCompactionReason, ContextInputComponents, ParsedProvenance, ProvenanceManifest,
+    ProvenanceStatus, RenderedRequestSource, ThreadedToolResult, ASSEMBLY_TRACE_VERSION,
+    CAPTURE_VERSION, CONTEXT_ACCOUNTING_VERSION, PROVENANCE_MANIFEST_VERSION,
 };
 pub use transport::RenderedRequestCapturingHttpClient;
 

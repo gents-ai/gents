@@ -360,7 +360,12 @@ fn provenance_json_round_trips_to_a_captured_only_manifest() {
     assert!(!manifest.status_reason.is_empty());
     assert_eq!(manifest.capture_seam, CaptureSeam::TransportBody);
     assert_eq!(manifest.capture_scope, "inference.1");
-    assert_eq!(manifest.assembly_trace, trace);
+    assert_eq!(manifest.assembly_trace, AssemblyTraceMetadata::from(&trace));
+    assert_eq!(
+        serde_json::from_value::<AssemblyTrace>(rendered.provenance_payload_json.clone())
+            .expect("payload round-trip"),
+        trace
+    );
     assert_eq!(rendered.assembly_trace, trace);
 }
 
