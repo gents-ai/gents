@@ -149,8 +149,11 @@ the LLM proposer and its evidence projection.
     the datastore-tool surface; whether that path is trusted is a spec 3 decision.
   - `RunOrigin.denominator_policy` and `purpose` are unvalidated strings in M1; M2's `freeze`
     validates them (`DENOMINATOR_POLICY_V1`; `eval` or `optimization:<job_id>`).
-  - `RunOrigin` has no slot for `breaker_threshold`; M2 carries it in the run directory's
-    `run.json` until a one-field M1 amendment lands.
+  - M1 amendment request, two fields: `RunOrigin.breaker_threshold` (M2 carries it in the run
+    directory's `run.json`) and `TrialCompletion.evidence_digest` (M2 writes an `evidence.json`
+    sidecar per trial). Both are additive JSON keys on frozen typed structs.
+  - `grade` on empty evidence yields `infrastructure` rows with a null score (M2 final review C1);
+    the plan's "absent stage → skipped_prerequisite" rule applies only when at least one stage ran.
   - Lean proves `caseClass`/`rank` monotone but emits no witnesses; emit case-class cases when the
     reducers gain a conformance consumer.
   - From the M3 pre-work (spec 3a inputs): the case container layout; the MailboxItem capture
