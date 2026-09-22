@@ -92,3 +92,11 @@ Filled in by the orchestrator at spin-up.
   PR A). The pin `595fd8bc2` stays valid as a commit, but `eval/05-contract`'s tip moves. `m2` and
   `m6a` keep working on the old base; each rebases its stack onto the new `eval/05-contract` tip
   once, at the end of its plan, before anything is pushed.
+- `m6a` complete 2026-09-22: stack rebased onto `eval/05-contract` @ `851db85d6`. Heads:
+  `optimization/10-lean` `1a7803340` (2 commits: model; `accept_monotone` rename),
+  `optimization/11-conformance` `1b4b109aa` (1 commit), `optimization/12-policy` `d0ab985ab`
+  (2 commits: `PolicyV2`; fix wave). Validation on the tip: `lake build`, structure/coverage/feature
+  conformance tests, `cargo check --workspace --all-targets`, policy 11/11, fmt. Earlier full runs:
+  lib 2482/2482; `cargo test -p gents` fails only the two libp2p dial timeouts. Nine rulings in its
+  ledger (`.superpowers/sdd/2026-09-21-optimization-policy-and-lean/progress.md`); R7 added
+  `max_missing_usage_bp` to `PolicyV2` per spec §4. Deferred items are recorded per PR in the ledger.
