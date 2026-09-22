@@ -14,6 +14,44 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Search lists an AppImage launcher rewrites so the application finds its own
+/// copies first. A host program must not search them at all: it would load
+/// this package's libraries, plugins and data in place of its own.
+const PACKAGE_SEARCH_LISTS: &[&str] = &[
+    "PATH",
+    "LD_LIBRARY_PATH",
+    "XDG_DATA_DIRS",
+    "XDG_CONFIG_DIRS",
+    "PYTHONPATH",
+    "PERLLIB",
+    "PERL5LIB",
+    "QT_PLUGIN_PATH",
+    "GST_PLUGIN_SYSTEM_PATH",
+    "GST_PLUGIN_SYSTEM_PATH_1_0",
+    "GTK_PATH",
+    "GSETTINGS_SCHEMA_DIR",
+    "GIO_EXTRA_MODULES",
+];
+
+/// Single values that name a location inside the package.
+const PACKAGE_LOCATIONS: &[&str] = &[
+    "GTK_EXE_PREFIX",
+    "GTK_DATA_PREFIX",
+    "GTK_IM_MODULE_FILE",
+    "GDK_PIXBUF_MODULE_FILE",
+    "LD_PRELOAD",
+    "APPDIR",
+    "APPIMAGE",
+    "ARGV0",
+    "OWD",
+];
+
+/// Values the launcher forces for the application's own sake. The original is
+/// not recoverable, so a host program is better off with none: it then picks
+/// the session's own display backend and theme rather than this package's.
+const LAUNCHER_OVERRIDES: &[&str] = &["GDK_BACKEND", "GTK_THEME", "APPIMAGE_GTK_THEME"];
 
 /// Put the host's tools ahead of a temporary package mount's copies. Called
 /// once during startup, before anything spawns, so every child process the
@@ -28,6 +66,74 @@ pub fn prefer_host_tools() {
     };
     tracing::info!("host tools now resolve ahead of the ones inside the application package");
     std::env::set_var("PATH", reordered);
+}
+
+/// Give `command` the environment a program would have had if it were not
+/// launched from inside this package: no package library paths, no package
+/// data directories, no forced display backend.
+///
+/// Only for programs that are not ours. This package's own helpers are built
+/// against the libraries it carries and must keep the launcher's environment.
+pub fn prepare_host_command(command: &mut Command) {
+    for (name, value) in host_environment_changes(
+        |name| std::env::var_os(name),
+        std::env::var_os("APPDIR").as_deref().map(Path::new),
+        std::env::var_os("APPIMAGE").as_deref().map(Path::new),
+    ) {
+        match value {
+            Some(value) => command.env(name, value),
+            None => command.env_remove(name),
+        };
+    }
+}
+
+/// What a host program's environment needs changed. `Some` replaces the value,
+/// `None` removes it. Empty when this is not a packaged launch, so an ordinary
+/// install spawns with the environment it already has.
+fn host_environment_changes(
+    read: impl Fn(&str) -> Option<OsString>,
+    app_dir: Option<&Path>,
+    app_image: Option<&Path>,
+) -> Vec<(&'static str, Option<OsString>)> {
+    if app_image.is_none() {
+        return Vec::new();
+    }
+    let packaged = |path: &Path| {
+        gents_server::native_service::inside_temporary_package(path, app_dir, app_image)
+    };
+    let mut changes = Vec::new();
+    for name in PACKAGE_SEARCH_LISTS {
+        let Some(value) = read(name) else {
+            continue;
+        };
+        let kept: Vec<PathBuf> = std::env::split_paths(&value)
+            .filter(|entry| !packaged(entry))
+            .collect();
+        if kept.len() == std::env::split_paths(&value).count() {
+            continue;
+        }
+        // A list emptied of the package's entries is removed, never set to
+        // "": an empty entry reads as the working directory to most loaders.
+        changes.push((
+            *name,
+            std::env::join_paths(kept).ok().filter(|v| !v.is_empty()),
+        ));
+    }
+    for name in PACKAGE_LOCATIONS {
+        if matches!(*name, "APPDIR" | "APPIMAGE" | "ARGV0" | "OWD") {
+            if read(name).is_some() {
+                changes.push((*name, None));
+            }
+        } else if read(name).is_some_and(|value| packaged(Path::new(&value))) {
+            changes.push((*name, None));
+        }
+    }
+    for name in LAUNCHER_OVERRIDES {
+        if read(name).is_some() {
+            changes.push((*name, None));
+        }
+    }
+    changes
 }
 
 /// `search` with every entry inside the package mount moved after the host's,
@@ -63,6 +169,109 @@ mod tests {
 
     fn mount() -> Option<&'static Path> {
         Some(Path::new("/tmp/.mount_gents123"))
+    }
+
+    /// The environment a released AppImage hands its process, read from a
+    /// running 0.18.5 build on a Plasma 6 Wayland session.
+    fn measured_launch_environment() -> Vec<(&'static str, &'static str)> {
+        vec![
+            (
+                "PATH",
+                "/tmp/.mount_gents123/usr/bin/:/usr/local/bin:/usr/bin",
+            ),
+            (
+                "LD_LIBRARY_PATH",
+                "/tmp/.mount_gents123/usr/lib/:/tmp/.mount_gents123/usr/lib/x86_64-linux-gnu/",
+            ),
+            (
+                "XDG_DATA_DIRS",
+                "/tmp/.mount_gents123/usr/share/:/usr/share:/usr/local/share",
+            ),
+            ("GDK_BACKEND", "x11"),
+            ("GTK_THEME", "Adwaita:light"),
+            ("GTK_EXE_PREFIX", "/tmp/.mount_gents123//usr"),
+            (
+                "GDK_PIXBUF_MODULE_FILE",
+                "/tmp/.mount_gents123//usr/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache",
+            ),
+            (
+                "QT_PLUGIN_PATH",
+                "/tmp/.mount_gents123/usr/lib/qt4/plugins/",
+            ),
+            ("APPDIR", "/tmp/.mount_gents123"),
+            ("APPIMAGE", "/home/user/.local/bin/Gents.AppImage"),
+            ("HOME", "/home/user"),
+            ("WAYLAND_DISPLAY", "wayland-0"),
+        ]
+    }
+
+    fn changes_for(
+        environment: &[(&'static str, &'static str)],
+    ) -> std::collections::BTreeMap<&'static str, Option<String>> {
+        host_environment_changes(
+            |name| {
+                environment
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(*value))
+            },
+            mount(),
+            app_image(),
+        )
+        .into_iter()
+        .map(|(name, value)| (name, value.map(|v| v.to_string_lossy().into_owned())))
+        .collect()
+    }
+
+    #[test]
+    fn a_host_program_loses_every_one_of_the_packages_contributions() {
+        let changes = changes_for(&measured_launch_environment());
+
+        // Libraries and plugins: the host program must load its own.
+        assert_eq!(
+            changes["LD_LIBRARY_PATH"], None,
+            "wholly inside the package"
+        );
+        assert_eq!(changes["QT_PLUGIN_PATH"], None);
+        assert_eq!(changes["GTK_EXE_PREFIX"], None);
+        assert_eq!(changes["GDK_PIXBUF_MODULE_FILE"], None);
+        // Mixed lists keep the host's entries, in order.
+        assert_eq!(changes["PATH"].as_deref(), Some("/usr/local/bin:/usr/bin"));
+        assert_eq!(
+            changes["XDG_DATA_DIRS"].as_deref(),
+            Some("/usr/share:/usr/local/share"),
+            "handler lookup must not search the package's applications first"
+        );
+        // Forced for the application: a browser picks the session's own.
+        assert_eq!(
+            changes["GDK_BACKEND"], None,
+            "Wayland sessions keep Wayland"
+        );
+        assert_eq!(changes["GTK_THEME"], None);
+        // The program is not running inside a package.
+        assert_eq!(changes["APPDIR"], None);
+        assert_eq!(changes["APPIMAGE"], None);
+        // Untouched: nothing the package did not contribute.
+        assert!(!changes.contains_key("HOME"));
+        assert!(!changes.contains_key("WAYLAND_DISPLAY"));
+    }
+
+    #[test]
+    fn an_ordinary_install_spawns_with_the_environment_it_has() {
+        let changes = host_environment_changes(
+            |name| {
+                measured_launch_environment()
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| OsString::from(*value))
+            },
+            None,
+            None,
+        );
+        assert!(
+            changes.is_empty(),
+            "no launcher means nothing to undo: {changes:?}"
+        );
     }
 
     #[test]

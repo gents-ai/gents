@@ -15,6 +15,7 @@ pub mod commands;
 pub mod config;
 pub mod contract;
 pub mod error;
+pub mod host_browser;
 pub mod logging;
 pub mod package_tools;
 pub mod plugin;
@@ -30,7 +31,7 @@ pub use config::{
 };
 pub use contract::{current_contract, BridgeContract, CONTRACT_VERSION, PACKAGE_VERSION};
 pub use error::{BridgeError, BridgeErrorCode};
-pub use package_tools::prefer_host_tools;
+pub use package_tools::{prefer_host_tools, prepare_host_command};
 pub use plugin::init;
 pub use runtime_setup::{init_tracing, install_runtime};
 pub use snapshot::projection::SnapshotGrants;

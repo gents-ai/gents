@@ -12,6 +12,17 @@ export function isExternalUrl(href: string): boolean {
 
 export async function openExternalUrl(url: string): Promise<void> {
   if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    // Through the bridge: a packaged build must strip its own libraries and
+    // display backend out of the environment before a host browser inherits
+    // them. The generic opener cannot, so it stays the fallback.
+    const { invoke } = await import("@tauri-apps/api/core");
+    const { bridgeCommand } = await import("@source-inc/gents-desktop-client");
+    try {
+      await invoke(bridgeCommand("desktop_open_external_url"), { url });
+      return;
+    } catch (error) {
+      console.warn("bridge could not open the link", error);
+    }
     const { openUrl } = await import("@tauri-apps/plugin-opener");
     await openUrl(url);
     return;
