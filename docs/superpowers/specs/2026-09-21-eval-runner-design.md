@@ -103,6 +103,14 @@ Everything it knows is in the launching home's documents.
 **Resume is `plan()` run again.** There is no separate resume logic. A trial row with a null
 completion is abandoned, and the plan emits the same slot with `attempt + 1`.
 
+*[execution amendment, M2 ruling]* Every executed attempt is completed, NotEvidence included: a
+null completion means only "the runner did not finish", so a crash and a provider outage stay
+distinguishable in the row. `plan(origin, run_id, existing, max_infra_retries)` re-plans a slot
+whose latest completed attempt classifies NotEvidence (no stages, or every stage that ran
+classifies NotEvidence through `classify`) while `attempt <= max_infra_retries + 1`; a slot whose
+latest completed attempt is Pass, Fail or Unknown is done. When the cap is hit, "latest completed
+attempt wins" yields a NotEvidence trial and the denominator policy drops the pair.
+
 **The seam.**
 
 ```rust
@@ -111,8 +119,12 @@ trait TrialExecutor {
     /// ceiling against it: `Embedded` refuses `Unrestricted` bash.
     fn isolation(&self) -> Isolation; // Embedded | Process
     /// Never returns Err. A home that fails to boot is evidence with
-    /// `failure_kind: infrastructure`.
-    async fn execute(&self, spec: &TrialSpec) -> TrialEvidence;
+    /// `failure_kind: infrastructure`. Observes `cancel`.
+    async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence;
+    // [execution amendment] `provision(spec) -> TrialLocator` precedes `execute`, so the `EvalTrial`
+    // row is written from a real identity before execution, as the contract requires; the scripted
+    // executor answers from its table, the embedded one creates the home. `wants_script_key()`
+    // (default false) lets only the scripted executor receive a `case_id`-bearing key.
     /// Re-reads evidence from a retained trial home, for regrades. Takes
     /// the capture list because a locator alone does not say what to read.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence>;
@@ -238,6 +250,14 @@ same PR.
 `run(access, request, executor, cancel) -> RunOutcome` and `resume(access, run_id, executor,
 cancel) -> RunOutcome`. Both are one async call in the caller's process. `RunOutcome` is the `run_id` and counts
 only: trials completed, abandoned, NotEvidence, and whether the breaker tripped. Reports are M4.
+
+*[execution amendment, M2 rulings]* `RunRequest` carries `evaluator_did` (the launching home's
+identity, supplied by the caller and never derived from `owner`), request-level `captures`
+(persisted in `<run dir>/run.json` beside `breaker_threshold` until `EvalDefinition` gains a
+case-level `capture` field, and part of the idempotence comparison), and `freeze` validates
+`denominator_policy == DENOMINATOR_POLICY_V1` and `purpose ∈ {"eval", "optimization:<job_id>"}`.
+Pack materialization stages into `pack.tmp` and renames after the last byte. `ProviderDown` carries
+the partial `RunOutcome` with `breaker_tripped: true`.
 
 **Freeze.** `run` validates the `RunRequest` before it writes anything: the definition exists and
 its digest matches; every selected case is on the requested split; each cell resolves to a pack
