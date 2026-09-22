@@ -11,7 +11,7 @@ PR, and never touch another workspace's worktree.
 |---|---|---|---|---|---|
 | `m3` | Claude, `claude-fable-5-1` | `orchestration/m3-prework-brief.md` (authoring, no cargo) | `eval/03-definition` | Grok 4.7 or Opus 5 for volume | Opus 5 |
 | `m6a` | Claude, `claude-fable-5-1` | `plans/2026-09-21-optimization-policy-and-lean.md` | `eval/05-contract` at the pinned commit | Opus 5 | Opus 5 |
-| `m2` | Claude, `claude-fable-5-1` | `plans/2026-09-21-eval-runner.md` (to be written) | PR 1 on `main`; PR 2 to 4 on the pinned `eval/05-contract` | Grok 4.7 for PR 1; Opus 5 for PR 2 to 4 | Opus 5 |
+| `m2` | Claude, `claude-fable-5-1` | `plans/2026-09-21-eval-runner.md` | all four PRs stacked on the pinned `eval/05-contract` | Grok 4.7 for PR 1; Opus 5 for PR 2 to 4 | Opus 5 |
 
 Grok is used only where the brief contains the complete content: a file move, a transcription, case
 drafting. Lean, scoring, runner logic, fix rounds that follow a ruling, and every review stay on Opus.
