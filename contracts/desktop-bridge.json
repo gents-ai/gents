@@ -61,6 +61,10 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_open_external_url",
+      "permissionSet": "external-links"
+    },
+    {
       "name": "desktop_session_snapshot",
       "permissionSet": "session-read"
     },
@@ -333,7 +337,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "8.0",
+  "contractVersion": "8.1",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -421,6 +425,10 @@
     {
       "kind": "read",
       "name": "workspace-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "external-links"
     },
     {
       "kind": "mutate",

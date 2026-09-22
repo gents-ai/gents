@@ -89,6 +89,11 @@ description = "Workspace browser"
 permissions = ["allow-desktop-workspace-list"]
 
 [[set]]
+identifier = "external-links"
+description = "Open a web link in the person's own browser"
+permissions = ["allow-desktop-open-external-url"]
+
+[[set]]
 identifier = "fleet-admin"
 description = "Authenticated peer enrollment, removal/rename, and P2P repair"
 permissions = [
@@ -219,4 +224,5 @@ permissions = [
   "config-write",
   "provider-accounts-read",
   "tasks",
+  "external-links",
 ]

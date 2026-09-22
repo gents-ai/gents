@@ -9,8 +9,9 @@ use gents_desktop_bridge::contract::{
     MANAGED_SERVER_TRAY_STOP_EVENT, MANAGED_SERVER_UPDATED_EVENT,
 };
 use gents_desktop_bridge::{
-    init, init_tracing as install_tracing, install_runtime, AgentHomePolicy, AppMeta,
-    BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants, TracingConfig,
+    init, init_tracing as install_tracing, install_runtime, prefer_host_tools, AgentHomePolicy,
+    AppMeta, BootstrapPolicy, BridgeConfig, HomePolicy, ManagedServerPolicy, SnapshotGrants,
+    TracingConfig,
 };
 #[cfg(desktop)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,6 +36,10 @@ pub fn run() {
                 )
             }),
     });
+    // Before anything spawns a helper: a packaged launch puts its own copies
+    // of the host's tools first on PATH, and an older bundled `xdg-open` can
+    // open no browser at all while still reporting success.
+    prefer_host_tools();
     install_runtime();
 
     let builder = tauri::Builder::default()

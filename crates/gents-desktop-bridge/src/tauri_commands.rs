@@ -2,6 +2,7 @@ pub mod chat;
 pub mod config;
 pub mod db_explorer;
 pub mod e2e;
+pub mod external_url;
 pub mod inference_setup;
 pub mod lifecycle;
 pub mod mailbox;

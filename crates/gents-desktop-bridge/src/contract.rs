@@ -7,7 +7,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-pub const CONTRACT_VERSION: &str = "8.0";
+pub const CONTRACT_VERSION: &str = "8.1";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
@@ -87,6 +87,8 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_restart", "runtime-admin"),
         ("desktop_managed_server_validate_root", "runtime-admin"),
         ("desktop_open_db_explorer", "runtime-admin"),
+        // external-links
+        ("desktop_open_external_url", "external-links"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -201,6 +203,7 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("resend-control", "mutate"),
         ("fleet-read", "read"),
         ("workspace-read", "read"),
+        ("external-links", "mutate"),
         ("fleet-admin", "mutate"),
         ("operations-read", "read"),
         ("interrupt-read", "read"),
@@ -564,6 +567,7 @@ mod tests {
             ("desktop_managed_server_restart", "mutate"),
             ("desktop_managed_server_validate_root", "mutate"),
             ("desktop_open_db_explorer", "mutate"),
+            ("desktop_open_external_url", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),

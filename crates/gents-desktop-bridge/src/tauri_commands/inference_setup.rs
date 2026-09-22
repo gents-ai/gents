@@ -633,8 +633,8 @@ pub(crate) async fn desktop_grok_login<R: Runtime>(
                     url: url.to_string(),
                 },
             );
-            if let Err(error) = webbrowser::open(url) {
-                tracing::warn!(%error, "could not open the Grok login URL in a browser");
+            if let Err(error) = crate::host_browser::open_url(url) {
+                tracing::warn!(%error, "could not open the Grok sign-in page; the page link stands in");
             }
         }),
     )
@@ -817,14 +817,22 @@ pub(crate) async fn desktop_claude_login<R: Runtime>(
     }
     let provider = normalize_provider(request.provider.as_deref().unwrap_or_default());
 
-    let server = run_loopback_login(LoginOptions::default())
-        .map_err(|error| BridgeError::untyped(format!("starting Claude login server: {error}")))?;
+    let server = run_loopback_login(LoginOptions {
+        // Opened here instead: a packaged build has to strip its own
+        // environment before handing a URL to a host program.
+        open_browser: false,
+        ..LoginOptions::default()
+    })
+    .map_err(|error| BridgeError::untyped(format!("starting Claude login server: {error}")))?;
     let _ = app.emit(
         crate::contract::CLAUDE_LOGIN_URL_EVENT,
         ClaudeLoginUrl {
             url: server.auth_url.clone(),
         },
     );
+    if let Err(error) = crate::host_browser::open_url(&server.auth_url) {
+        tracing::warn!(%error, "could not open the Claude sign-in page; the page link stands in");
+    }
 
     let cancel = server.cancel_handle();
     {

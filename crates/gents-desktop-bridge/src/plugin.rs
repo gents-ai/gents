@@ -36,6 +36,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
         })
         .invoke_handler(tauri::generate_handler![
             tauri_commands::lifecycle::desktop_bridge_contract,
+            tauri_commands::external_url::desktop_open_external_url,
             tauri_commands::lifecycle::desktop_bootstrap_summary,
             tauri_commands::e2e::desktop_native_e2e_config,
             tauri_commands::e2e::desktop_native_e2e_status,

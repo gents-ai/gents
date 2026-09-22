@@ -859,6 +859,18 @@
           "markdownDescription": "Denies the desktop_open_db_explorer command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-open-external-url",
+          "markdownDescription": "Enables the desktop_open_external_url command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_open_external_url command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-open-external-url",
+          "markdownDescription": "Denies the desktop_open_external_url command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_operations_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-operations-snapshot",
@@ -1369,6 +1381,12 @@
           "markdownDescription": "Workspace browser\n#### This permission set includes:\n\n- `allow-desktop-workspace-list`"
         },
         {
+          "description": "Open a web link in the person's own browser\n#### This permission set includes:\n\n- `allow-desktop-open-external-url`",
+          "type": "string",
+          "const": "external-links",
+          "markdownDescription": "Open a web link in the person's own browser\n#### This permission set includes:\n\n- `allow-desktop-open-external-url`"
+        },
+        {
           "description": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`",
           "type": "string",
           "const": "fleet-admin",
@@ -1423,10 +1441,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`"
         }
       ]
     }
