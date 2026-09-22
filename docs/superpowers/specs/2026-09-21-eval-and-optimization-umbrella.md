@@ -139,6 +139,27 @@ the LLM proposer and its evidence projection.
 - CLAUDE.md's "Configuration refactor stack" section describes #1430 as in flight. It merged on
   2026-09-11, so adding a `PackConfig` root is not blocked by it.
 
+- Added after the M1 final review (2026-09-22):
+  - The protected-collection rule refuses eval names on every agent-reachable datastore path and
+    also on the operator paths `gents query` and the MCP default scope. M4's report and CLI read
+    eval rows through `gents::eval::documents` over `ConfigAccess`, never through `run_defra_query`.
+  - The runner writes eval documents through `gents::eval::documents` directly against the node,
+    never through a scoped tool. By design: the runner writes what agents may not.
+  - `graph_pipeline` capability ports validate collections as identifiers only. They are outside
+    the datastore-tool surface; whether that path is trusted is a spec 3 decision.
+  - `RunOrigin.denominator_policy` and `purpose` are unvalidated strings in M1; M2's `freeze`
+    validates them (`DENOMINATOR_POLICY_V1`; `eval` or `optimization:<job_id>`).
+  - `RunOrigin` has no slot for `breaker_threshold`; M2 carries it in the run directory's
+    `run.json` until a one-field M1 amendment lands.
+  - Lean proves `caseClass`/`rank` monotone but emits no witnesses; emit case-class cases when the
+    reducers gain a conformance consumer.
+  - From the M3 pre-work (spec 3a inputs): the case container layout; the MailboxItem capture
+    `fields` union (`_docID`, `title`, `summary`, `payload`); a `StageInput::Document` stage kind and
+    the trigger-engine overlap behavior that keeps it out of 2a; the keyword-matcher brittleness class.
+  - A second libp2p dial-timeout failure on this machine:
+    `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
+    as the r5 case. Filing is the user's call.
+
 ## 8. Implementation plans
 
 | Milestone | Plan |

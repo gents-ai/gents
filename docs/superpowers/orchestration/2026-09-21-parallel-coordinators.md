@@ -87,3 +87,8 @@ Filled in by the orchestrator at spin-up.
   ConfigReferences resolution, EventSource::validate, tool-snapshot build, MiniJinja strict render.
   Open items for spec 3a: case container layout; capture `fields` union (`_docID`, `title`, `summary`,
   `payload`); `StageInput::Document`; keyword-matcher brittleness class.
+- `m3` trailers rewritten 2026-09-22 (`git rebase -x`, tree identical): head `c44cab2c5` → `0425499b1`.
+- M1 final-review fix round rewrites the six eval branches (a structure.rs hunk moves from PR B into
+  PR A). The pin `595fd8bc2` stays valid as a commit, but `eval/05-contract`'s tip moves. `m2` and
+  `m6a` keep working on the old base; each rebases its stack onto the new `eval/05-contract` tip
+  once, at the end of its plan, before anything is pushed.
