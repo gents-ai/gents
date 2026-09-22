@@ -69,3 +69,8 @@ Filled in by the orchestrator at spin-up.
   naming the lib unit-test consumer, because `structure.rs` has no form for that consumer kind.
   Accepted as the coordinator ruled. The Lean review minors (`import Proofs.Eval` nominal;
   `accept_antitone` naming) go in the PR 1 description, not a fix round.
+- 2026-09-21, outage rule (from the user): Anthropic is having an outage (status.claude.com; 529/500).
+  If two consecutive Opus dispatches fail with a 5xx, the coordinator falls back to Grok 4.7 for that
+  implementation task, brief file as the whole interface, and records the fallback in its ledger.
+  Reviews stay on Opus when it answers; a task that landed under a Grok-only review gets an Opus
+  re-review before the final whole-branch review. The final whole-branch review waits for Opus.
