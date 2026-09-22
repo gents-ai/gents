@@ -156,6 +156,11 @@ the LLM proposer and its evidence projection.
   - From the M3 pre-work (spec 3a inputs): the case container layout; the MailboxItem capture
     `fields` union (`_docID`, `title`, `summary`, `payload`); a `StageInput::Document` stage kind and
     the trigger-engine overlap behavior that keeps it out of 2a; the keyword-matcher brittleness class.
+  - `EvalDefinition::validate` does not reject two refs to the same check on one stage;
+    `latest_verdicts` keys on `(stage_index, check)`, so such refs collapse. Spec 3a decides whether
+    to forbid duplicates in validation or key verdicts by ref index (M1 is frozen; M2 plan minor).
+  - Captures are request-level in M2 (`RunRequest.captures`, persisted in `run.json`) because
+    `EvalDefinition` has no case-level `capture` field yet; M3's field supersedes them (M2 ruling R18).
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.
