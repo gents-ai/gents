@@ -162,6 +162,7 @@ fn rendered_in_scope(
             assembly_trace.clone(),
         ))
         .expect("provenance manifest"),
+        provenance_payload_json: serde_json::to_value(&assembly_trace).expect("provenance payload"),
         assembly_trace,
     }
 }

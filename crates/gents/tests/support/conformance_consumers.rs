@@ -56,6 +56,27 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/persona_request.rs",
+            module_path: "conformance::persona_request",
+            function: "generated_root_admission_cases_drive_production_root_policy",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::runtime::tests::invocation_correlation_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/tool_call_lifecycle/runtime.rs",
+            module_path: "tool_call_lifecycle::runtime::tests",
+            function: "invocation_correlation_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
+            id: "defra_write::tests::native_input_admission_matches_lean",
+            package: "gents",
+            source_path: "crates/gents/src/defra_write/tests.rs",
+            module_path: "defra_write::tests",
+            function: "native_input_admission_matches_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases",
             package: "gents",
             source_path: "crates/gents/src/agent/runtime/tests/behavior_resolution.rs",
@@ -187,6 +208,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/workspace/tests.rs",
             module_path: "workspace::tests",
             function: "generated_workspace_path_capability_cases_drive_real_git_executor",
+        },
+        ConformanceConsumer::RustTest {
+            id: "mailbox::notification_tests::generated_notification_cases_drive_durable_writes",
+            package: "gents",
+            source_path: "crates/gents/src/mailbox/notification_tests.rs",
+            module_path: "mailbox::notification_tests",
+            function: "generated_notification_cases_drive_durable_writes",
+        },
+        ConformanceConsumer::RustTest {
+            id: "mailbox::reply_tests::generated_reply_cases_drive_claim_validation",
+            package: "gents",
+            source_path: "crates/gents/src/mailbox/reply_tests.rs",
+            module_path: "mailbox::reply_tests",
+            function: "generated_reply_cases_drive_claim_validation",
         },
         ConformanceConsumer::RustTest {
             id: "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes",

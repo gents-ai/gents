@@ -1,0 +1,1 @@
+I approve editing only the Context system prompt for behavior {{BEHAVIOR_ID}} in place: replace MONITOR_CHECKS_V1 with MONITOR_CHECKS_V2. Preserve all other text and whitespace, instructions, IDs, settings, tools, inference and bindings. Preview then apply and read back. Do not clone, create, delete, disable, or rebind any configuration documents.

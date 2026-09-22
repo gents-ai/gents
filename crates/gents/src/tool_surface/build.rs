@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::tool_service_health::{ToolServiceHealthProjection, ToolServiceHealthState};
 
@@ -58,13 +58,16 @@ pub(super) fn build_host_tools(
     effective_bash: &ToolPolicyBash,
     file_tool_root: Option<&Path>,
     cli_tool_names: &[String],
+    enable_lsp: bool,
     ceiling: &ToolCeiling,
 ) -> Result<ToolSet> {
     // Per-request IsolatedWorkspace roots overlay into TOOL_RUNTIME_SCOPE
     // at claim time. Do not bake workspace_id paths into this ToolSet.
     let mut builder = ToolSetBuilder::default();
-    let needs_file_tool_root =
-        !matches!(file_tools, FileToolMode::Off) || !matches!(bash, BashMode::Off);
+    let needs_file_tool_root = !matches!(file_tools, FileToolMode::Off)
+        || !matches!(bash, BashMode::Off)
+        || !cli_tool_names.is_empty()
+        || enable_lsp;
     let effective_root = if needs_file_tool_root {
         resolve_effective_tool_root(behavior_name, file_tool_root, ceiling.root())?
     } else {
@@ -249,69 +252,41 @@ pub(crate) fn resolve_effective_tool_root(
     selection_root: Option<&Path>,
     ceiling_root: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
-    let selection_root = selection_root
-        .map(resolve_configured_tool_root)
-        .transpose()?;
-    let ceiling_root = ceiling_root.map(resolve_configured_tool_root).transpose()?;
-
     match (selection_root, ceiling_root) {
         (Some(selection_root), Some(ceiling_root)) => {
-            if selection_root.starts_with(&ceiling_root) {
-                Ok(Some(selection_root))
-            } else {
-                bail!(
-                    "behavior {behavior_name} file tool root {} escapes operator tool root {}",
+            let decision =
+                super::root_admission::resolve_admitted_tool_root(selection_root, [ceiling_root])
+                    .with_context(|| {
+                    format!(
+                        "resolving behavior {behavior_name} file tool root {}",
+                        selection_root.display()
+                    )
+                })?;
+            match decision {
+                super::root_admission::RootAdmission::Admitted(root) => Ok(Some(root)),
+                denied @ super::root_admission::RootAdmission::Denied { .. } => Err(anyhow!(
+                    "behavior {behavior_name} file tool root {} escapes operator tool root {}: {}",
                     selection_root.display(),
-                    ceiling_root.display()
-                );
+                    ceiling_root.display(),
+                    denied.denial_reason().expect("denied outcome has a reason")
+                )),
             }
         }
-        (Some(selection_root), None) => Ok(Some(selection_root)),
-        (None, Some(ceiling_root)) => Ok(Some(ceiling_root)),
+        (Some(selection_root), None) => {
+            super::root_admission::resolve_configured_tool_root(selection_root)
+                .with_context(|| {
+                    format!(
+                        "resolving behavior {behavior_name} file tool root {}",
+                        selection_root.display()
+                    )
+                })
+                .map(Some)
+        }
+        (None, Some(ceiling_root)) => {
+            super::root_admission::resolve_configured_tool_root(ceiling_root).map(Some)
+        }
         (None, None) => Ok(None),
     }
-}
-
-pub(crate) fn resolve_configured_tool_root(path: &Path) -> Result<PathBuf> {
-    let absolute = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        std::env::current_dir()
-            .with_context(|| format!("resolving relative tool root {}", path.display()))?
-            .join(path)
-    };
-
-    resolve_path_with_canonical_prefix(&absolute)
-}
-
-pub(super) fn resolve_path_with_canonical_prefix(path: &Path) -> Result<PathBuf> {
-    let mut resolved = PathBuf::new();
-    let mut missing_tail = false;
-
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(_) | std::path::Component::RootDir => {
-                resolved.push(component.as_os_str());
-            }
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                resolved.pop();
-            }
-            std::path::Component::Normal(name) => {
-                let candidate = resolved.join(name);
-                if !missing_tail && candidate.exists() {
-                    resolved = std::fs::canonicalize(&candidate).with_context(|| {
-                        format!("canonicalizing tool root {}", candidate.display())
-                    })?;
-                } else {
-                    missing_tail = true;
-                    resolved.push(name);
-                }
-            }
-        }
-    }
-
-    Ok(resolved)
 }
 
 pub(super) fn dedupe_subagent_targets(

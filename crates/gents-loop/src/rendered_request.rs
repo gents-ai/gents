@@ -163,6 +163,9 @@ pub struct RenderedCompletionRequest {
     /// Derived by the builder so the column and the typed value cannot
     /// disagree; a reader may deserialize it back into `ProvenanceManifest`.
     pub provenance_json: Value,
+    /// Lossless heavy provenance payload, encoded independently from the
+    /// compact searchable manifest.
+    pub provenance_payload_json: Value,
 }
 
 /// Build the durable capture record from a captured body's components.
@@ -208,6 +211,10 @@ pub fn build_rendered_completion_request(
     let provenance_json = canonical_json(
         &serde_json::to_value(&manifest).context("encoding rendered-request provenance")?,
     );
+    let provenance_payload_json = canonical_json(
+        &serde_json::to_value(&assembly_trace)
+            .context("encoding rendered-request provenance payload")?,
+    );
     let model_name = request_json
         .get("model")
         .and_then(Value::as_str)
@@ -236,6 +243,7 @@ pub fn build_rendered_completion_request(
         sampling_json,
         assembly_trace,
         provenance_json,
+        provenance_payload_json,
     })
 }
 

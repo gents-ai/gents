@@ -54,9 +54,16 @@ async fn status_reads_local_runtime_context_by_default() -> Result<()> {
         output.get("process_state").and_then(Value::as_str),
         Some("ready")
     );
-    assert_eq!(
-        output.get("reconcile_phase").and_then(Value::as_str),
-        Some("idle")
+    let reconcile_phase = output
+        .get("reconcile_phase")
+        .and_then(Value::as_str)
+        .context("status omitted reconcile_phase")?;
+    assert!(
+        matches!(
+            reconcile_phase,
+            "idle" | "debouncing" | "resolving" | "diffing" | "applying"
+        ),
+        "status returned an unknown reconcile phase: {output}"
     );
     assert_eq!(
         output

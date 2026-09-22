@@ -333,6 +333,7 @@ async fn boot_agent_with_action_trigger(
 
 fn request_action_decl() -> WriteToolDecl {
     WriteToolDecl {
+        notification: None,
         tool_name: "request_action".into(),
         collection: "ActionRequest".into(),
         description: "Emit one ActionRequest describing observed drift.".into(),

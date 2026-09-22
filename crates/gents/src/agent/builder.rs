@@ -666,7 +666,6 @@ impl PendingAgentBehavior {
                 openai_wire_api: crate::OpenAiWireApi::effective_for_provider(
                     BackendProviderKind::OpenAiCompatible,
                     None,
-                    "<test>",
                 ),
                 backend_endpoint,
                 backend_auth: crate::document_config::BackendAuth::Unauthenticated,

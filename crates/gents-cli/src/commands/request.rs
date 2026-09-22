@@ -48,6 +48,7 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         args.session_id.as_deref(),
         args.behavior_id.as_deref(),
         RequestSubmitOptions {
+            caused_by_source_doc_id: None,
             input: args
                 .input
                 .as_deref()
@@ -1384,6 +1385,7 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         None,
         stale.behavior_id.as_deref(),
         RequestSubmitOptions {
+            caused_by_source_doc_id: None,
             input: stale.input.clone(),
             valid_until,
             retry_parent_request: Some(stale_id.clone()),

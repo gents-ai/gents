@@ -29,7 +29,10 @@ cd "$(dirname "$0")/.."
 
 mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
 
-if [[ "$target" == "cli" || "$target" == "all" ]]; then
+if [[ "$target" == "cli" || "$target" == "desktop" || "$target" == "all" ]]; then
+  # The desktop app supervises the same foreground runtime through a bundled
+  # CLI sidecar. A desktop-only install therefore still needs the runtime
+  # binary; installing it here also gives local operators a recovery CLI.
   cargo install --profile dev-install --locked --force --path crates/gents-cli "$@"
 fi
 

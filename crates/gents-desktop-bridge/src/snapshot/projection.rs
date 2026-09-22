@@ -93,7 +93,7 @@ pub fn project_bootstrap_summary(
         summary.desktop_home = String::new();
         summary.peer_directory_path = String::new();
         summary.node_data_dir = String::new();
-        summary.log_file_path = String::new();
+        summary.diagnostics_hint = String::new();
     }
     if !grants.fleet_read {
         summary.saved_peers.clear();
@@ -252,7 +252,7 @@ mod tests {
                 desktop_home: "/secret/desktop".into(),
                 peer_directory_path: "/secret/peers.json".into(),
                 node_data_dir: "/secret/node".into(),
-                log_file_path: "/secret/log".into(),
+                diagnostics_hint: "native logging".into(),
                 agent_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,

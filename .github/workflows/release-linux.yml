@@ -10,7 +10,7 @@ on:
         description: Release version without the v prefix; must match workspace.package.version.
         required: true
         type: string
-        default: "0.17.0"
+        default: "0.18.1"
 
 concurrency:
   group: release-linux-${{ github.ref }}
@@ -281,42 +281,27 @@ jobs:
             ${{ steps.measurement.outputs.metrics_file }}
           if-no-files-found: error
 
-  # Runs on the host (not in the build container) because it needs the gh CLI,
-  # which the rust:1-bookworm build container does not ship.
-  attach-release:
-    name: Attach artifacts to GitHub Release
-    # not `success()`: attach whatever legs produced artifacts even when the
-    # other matrix leg failed, matching the old per-leg attach behavior.
+  # The release page is the desktop installers. CLI archives stay on this
+  # workflow so the container image can download them without being listed
+  # next to the DMG, deb, and AppImage.
+  publish-release:
+    name: Open the GitHub Release
     if: ${{ !cancelled() && startsWith(github.ref, 'refs/tags/v') }}
     needs: build-package
     timeout-minutes: 15
-    runs-on:
-      - self-hosted
-      - Linux
-      - X64
-      - workstation-1
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Download workflow artifacts
-        uses: actions/download-artifact@v7
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Attach artifacts to GitHub Release
+      - name: Open the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-
-          ls -lh dist
-
           if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
             gh release create "${GITHUB_REF_NAME}" \
               --verify-tag \
               --title "${GITHUB_REF_NAME}" \
-              --notes "gents release artifacts." \
+              --notes "Desktop installers are attached as they finish." \
               || gh release view "${GITHUB_REF_NAME}" >/dev/null
           fi
-          gh release upload "${GITHUB_REF_NAME}" dist/*.tar.gz dist/*.tar.gz.sha256 dist/*.build-metrics.json --clobber

@@ -23,6 +23,81 @@ async fn build_test_node(name: &str) -> (Arc<EmbeddedNode>, PathBuf) {
     (node, data_path)
 }
 
+#[test]
+fn lease_guard_caps_only_the_cadence_of_pending_progress() {
+    let buffer = StreamBuffer {
+        current: StreamBufferSnapshot::default(),
+        last_flush_at: Instant::now(),
+        persisted: StreamBufferSnapshot::default(),
+        lease: crate::lifecycle::ExecutionWriteFence {
+            request_doc_id: "request-doc".into(),
+            execution_generation: "generation".into(),
+            lease_duration_secs: 1,
+        },
+    };
+
+    assert_eq!(
+        buffer.flush_interval(Duration::from_millis(100)),
+        Duration::from_millis(100),
+        "an explicit faster batching override remains authoritative"
+    );
+    assert_eq!(
+        buffer.flush_interval(Duration::from_secs(1)),
+        Duration::from_millis(500),
+        "default batching leaves margin before a one-second lease"
+    );
+    assert_eq!(
+        buffer.flush_interval(Duration::from_secs(5)),
+        Duration::from_millis(500),
+        "a slower explicit override cannot schedule buffered progress after expiry"
+    );
+}
+
+#[test]
+fn progress_snapshot_writes_only_changed_fields() {
+    let persisted = StreamBufferSnapshot {
+        content: "large stable answer".into(),
+        reasoning: "old".into(),
+        token_count: 3,
+        reasoning_progress_seq: 7,
+    };
+    let snapshot = StreamBufferSnapshot {
+        reasoning: "new".into(),
+        reasoning_progress_seq: 8,
+        ..persisted.clone()
+    };
+
+    assert_eq!(
+        snapshot_changed_fields(&snapshot, &persisted),
+        vec![
+            "reasoning: \"new\"".to_string(),
+            "reasoning_progress_seq: 8".to_string(),
+        ]
+    );
+}
+
+async fn field_commit_cids(node: &EmbeddedNode, doc_id: &str, field: &str) -> Vec<String> {
+    let response = node
+        .execute(&format!(
+            r#"query {{
+                _commits(
+                    docID: ["{}"],
+                    filter: {{ fieldName: {{ _eq: "{}" }} }}
+                ) {{ cid }}
+            }}"#,
+            escape_graphql_string(doc_id),
+            escape_graphql_string(field),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.unwrap()["_commits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["cid"].as_str().unwrap().to_string())
+        .collect()
+}
+
 async fn load_response(
     node: &EmbeddedNode,
     doc_id: &str,
@@ -103,6 +178,37 @@ async fn first_visible_content_does_not_wait_for_the_batch_interval() {
 }
 
 #[tokio::test]
+async fn reasoning_only_progress_does_not_rewrite_unchanged_content_field() {
+    let (node, data_path) = build_test_node("changed-fields-only").await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    let mut lifecycle =
+        create_claimed_request(&node, "changed-fields-request", "changed-fields-session").await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+
+    writer.write_tokens(&doc_id, "stable answer").await.unwrap();
+    let content_before = field_commit_cids(&node, &doc_id, "content").await;
+    let reasoning_before = field_commit_cids(&node, &doc_id, "reasoning").await;
+
+    writer
+        .write_reasoning(&doc_id, "new reasoning")
+        .await
+        .unwrap();
+    assert_eq!(
+        field_commit_cids(&node, &doc_id, "content").await,
+        content_before,
+        "reasoning progress must not create a content-field CRDT block"
+    );
+    assert_ne!(
+        field_commit_cids(&node, &doc_id, "reasoning").await,
+        reasoning_before,
+        "the changed reasoning field must still commit"
+    );
+
+    node.shutdown().await;
+    let _ = fs::remove_dir_all(data_path);
+}
+
+#[tokio::test]
 async fn pending_stream_deadline_is_fixed_until_flush_and_idle_has_no_timer() {
     let (node, data_path) = build_test_node("flush-deadline").await;
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
@@ -121,6 +227,43 @@ async fn pending_stream_deadline_is_fixed_until_flush_and_idle_has_no_timer() {
     assert_eq!(writer.next_flush_deadline(&doc_id).await, Some(deadline));
     writer.flush_pending(&doc_id).await.unwrap();
     assert!(writer.next_flush_deadline(&doc_id).await.is_none());
+    node.shutdown().await;
+    fs::remove_dir_all(data_path).unwrap();
+}
+
+#[tokio::test]
+async fn one_second_lease_caps_pending_flush_deadline_at_half_a_second() {
+    let (node, data_path) = build_test_node("one-second-flush-deadline").await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    let mut lifecycle = create_claimed_request(
+        &node,
+        "one-second-flush-deadline-request",
+        "one-second-flush-deadline-session",
+    )
+    .await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+
+    // The first visible token flushes immediately. Make the following pending
+    // delta use the same one-second fence a short-lived owned execution has.
+    writer.write_tokens(&doc_id, "visible").await.unwrap();
+    {
+        let mut buffers = writer.buffers.lock().await;
+        let buffer = buffers.get_mut(&doc_id).expect("response buffer");
+        buffer.lease.lease_duration_secs = 1;
+        buffer.last_flush_at = Instant::now();
+    }
+    assert!(!writer.write_tokens(&doc_id, " pending").await.unwrap());
+
+    let now = tokio::time::Instant::now();
+    let deadline = writer
+        .next_flush_deadline(&doc_id)
+        .await
+        .expect("one-second lease must schedule pending progress");
+    assert!(
+        deadline <= now + Duration::from_millis(500),
+        "a pending write must become eligible by half of its one-second lease"
+    );
+
     node.shutdown().await;
     fs::remove_dir_all(data_path).unwrap();
 }
@@ -240,6 +383,105 @@ fn live_reasoning_preview_keeps_tail_of_oversized_chunk() {
     assert!(preview.len() <= MAX_LIVE_REASONING_BYTES);
     assert!(preview.ends_with("tail"));
     assert!(!preview.contains("old prefix"));
+}
+
+async fn replay_pending_reasoning_snapshots(
+    node: Arc<EmbeddedNode>,
+    label: &str,
+    batch_interval: Duration,
+) -> Vec<usize> {
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", batch_interval);
+    let mut lifecycle = create_claimed_request(
+        &node,
+        &format!("{label}-request"),
+        &format!("{label}-session"),
+    )
+    .await;
+    let doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+
+    let mut elapsed_since_snapshot = Duration::ZERO;
+    let mut snapshots = Vec::new();
+    for _ in 0..=1_000 {
+        {
+            let mut buffers = writer.buffers.lock().await;
+            let buffer = buffers.get_mut(&doc_id).unwrap();
+            append_live_reasoning_preview(&mut buffer.current.reasoning, "abcdefgh");
+            buffer.current.reasoning_progress_seq += 1;
+            buffer.last_flush_at = Instant::now() - elapsed_since_snapshot;
+        }
+
+        if let Some(snapshot) = writer.pending_snapshot(&doc_id, false).await.unwrap() {
+            snapshots.push(snapshot.reasoning.len());
+            let mut buffers = writer.buffers.lock().await;
+            let buffer = buffers.get_mut(&doc_id).unwrap();
+            buffer.persisted = snapshot;
+            elapsed_since_snapshot = Duration::ZERO;
+        }
+        elapsed_since_snapshot += Duration::from_millis(10);
+    }
+
+    {
+        let mut buffers = writer.buffers.lock().await;
+        let buffer = buffers.get_mut(&doc_id).unwrap();
+        append_live_reasoning_preview(&mut buffer.current.reasoning, "final");
+        buffer.current.reasoning_progress_seq += 1;
+    }
+    let final_snapshot = writer
+        .pending_snapshot(&doc_id, true)
+        .await
+        .unwrap()
+        .expect("forced final snapshot");
+    assert!(final_snapshot.reasoning.ends_with("final"));
+    assert!(final_snapshot.reasoning.len() <= MAX_LIVE_REASONING_BYTES);
+
+    snapshots
+}
+
+#[tokio::test]
+async fn default_batching_bounds_reasoning_snapshot_amplification() {
+    let (node, data_path) = build_test_node("default-batch-amplification").await;
+    let snapshots = replay_pending_reasoning_snapshots(
+        node.clone(),
+        "default-batch-amplification",
+        Duration::from_millis(crate::config::DEFAULT_STREAM_BATCH_MS),
+    )
+    .await;
+
+    // The first reasoning is visible immediately, followed by one eligible
+    // snapshot per default one-second interval across this ten-second stream.
+    assert_eq!(snapshots.len(), 11);
+    assert_eq!(snapshots[0], 8);
+    assert!(snapshots
+        .iter()
+        .all(|bytes| *bytes <= MAX_LIVE_REASONING_BYTES));
+    assert_eq!(snapshots.last(), Some(&MAX_LIVE_REASONING_BYTES));
+
+    let legacy_cadence = replay_pending_reasoning_snapshots(
+        node.clone(),
+        "legacy-cadence-amplification",
+        Duration::from_millis(100),
+    )
+    .await;
+    let selected_bytes = snapshots.iter().sum::<usize>();
+    let legacy_selected_bytes = legacy_cadence.iter().sum::<usize>();
+    tracing::info!(
+        selected_bytes,
+        selected_writes = snapshots.len(),
+        legacy_selected_bytes,
+        legacy_writes = legacy_cadence.len(),
+        "streaming cadence replay selected snapshot bytes"
+    );
+    assert_eq!(legacy_cadence.len(), 101);
+    assert_eq!(snapshots.len(), 11);
+    assert!(
+        legacy_selected_bytes > selected_bytes * 5,
+        "100ms cadence selected {legacy_selected_bytes} bytes across {} writes; default selected {selected_bytes} across {} writes",
+        legacy_cadence.len(),
+        snapshots.len(),
+    );
+
+    node.shutdown().await;
+    fs::remove_dir_all(data_path).unwrap();
 }
 
 #[test]

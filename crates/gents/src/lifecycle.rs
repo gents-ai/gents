@@ -205,6 +205,8 @@ pub enum ClaimOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ClaimAdmissionError {
+    #[error("mailbox reply {item_id} rejected: {reason}")]
+    MailboxReplyRejected { item_id: String, reason: String },
     #[error("session {session_id} requester scope mismatch: {reason}")]
     SessionScopeMismatch { session_id: String, reason: String },
     #[error(

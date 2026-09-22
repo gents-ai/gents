@@ -7,12 +7,12 @@ It is intentionally a local-first client. The app enrolls with a running
 `gents-desktop-core`, and renders conversation, configuration, runtime,
 and fleet views from that local store.
 
-From the initial Fleet screen the desktop app can also provision and host the
-standard `~/.gents` runtime in-process. This is opt-in; remote enrollment remains
-available. Once enabled, the app starts that runtime on later launches and
-keeps it alive in the system tray when the main window closes. The CLI and
-desktop host share the `gents_server::server_host` implementation, so no CLI
-binary or sidecar is bundled.
+From the initial Fleet screen the desktop app can also provision the standard
+`~/.gents` runtime as a per-user OS service. This is opt-in; remote enrollment
+remains available. The desktop is only a frontend: closing or quitting it does
+not stop the runtime, and tray Start, Stop, and Restart controls act on the
+service. Release bundles include the existing `gents` CLI as the service
+sidecar; the GUI binary is never the service executable.
 
 ## Development
 
@@ -37,13 +37,13 @@ npm run dev
 Run the full Tauri shell:
 
 ```bash
-npm run tauri -- dev
+make desktop-native-dev
 ```
 
 First-run click-through (empty desktop home, then the setup wizard):
 
 ```bash
-GENTS_DESKTOP_HOME=/tmp/gents-desktop-fresh npm run tauri -- dev
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-fresh make desktop-native-dev
 ```
 
 That opens setup: Local agent → Start → pick inference (local Ollama/llama.cpp,
@@ -60,10 +60,11 @@ Build the frontend:
 npm run build
 ```
 
-Build the Tauri app:
+Build the Tauri app bundle from the repository root (this builds and stages the
+matching release CLI sidecar before Tauri bundles it):
 
 ```bash
-npm run tauri -- build
+make desktop-native-build
 ```
 
 From the repo root, the Makefile exposes the native app QA commands:
@@ -73,6 +74,11 @@ make desktop-native-preflight
 make desktop-native-dev
 make desktop-native-build
 ```
+
+The Make target builds the debug CLI beside the debug Tauri executable. Do not
+invoke raw `tauri build` for a distributable package: use
+`make desktop-native-build` so Tauri receives the target-suffixed sidecar
+required by `externalBin`.
 
 Build the desktop binary from the repo root:
 
@@ -125,7 +131,7 @@ the Tauri app. The bootstrap summary, peer directory, embedded desktop node,
 and logs all resolve under that directory:
 
 ```bash
-GENTS_DESKTOP_HOME=/tmp/gents-desktop-packs/desktop npm run tauri -- dev
+GENTS_DESKTOP_HOME=/tmp/gents-desktop-packs/desktop make desktop-native-dev
 ```
 
 Start runtimes with `gents init` and `gents server`, then enroll the desktop

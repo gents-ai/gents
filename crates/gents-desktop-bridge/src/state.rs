@@ -51,7 +51,6 @@ pub struct DesktopAppState {
 
 #[derive(Default)]
 pub struct ManagedServerState {
-    pub server: Option<gents_server::server_host::RunningServer>,
     pub pairing_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,

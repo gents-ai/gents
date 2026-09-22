@@ -13,6 +13,7 @@ import {
 import {
   expect,
   gotoLiveHarness,
+  openChat,
   test,
   type Page,
   type TestInfo,
@@ -31,6 +32,79 @@ test.describe("desktop live browser smoke", () => {
     await runner?.dispose();
   });
 
+  test("independent views share inference and closing a view preserves running work", async ({
+    page,
+    context,
+  }, testInfo) => {
+    const liveRunner = runner!;
+    const second = await context.newPage();
+    try {
+      await gotoLiveHarness(page, liveRunner.baseUrl);
+      await gotoLiveHarness(second, liveRunner.baseUrl);
+      for (const view of [page, second]) {
+        await openChat(view);
+        await expect(view.getByRole("textbox", { name: "Message" })).toBeVisible();
+      }
+      const firstEditor = page.getByRole("textbox", { name: "Message" });
+      const secondEditor = second.getByRole("textbox", { name: "Message" });
+      await firstEditor.fill("Unsent draft in the first Gents view");
+      await expect(secondEditor).toHaveValue("");
+
+      const deployment = await firstDeployment(liveRunner);
+      const previousRequestIds = new Set(
+        deployment.sessions.flatMap((session) =>
+          session.latestRequestId ? [session.latestRequestId] : [],
+        ),
+      );
+      await secondEditor.fill("Reply with exactly: SECOND_VIEW_CONFIRMED");
+      await second.getByRole("button", { name: "Send" }).click();
+      const submitted = await waitForSubmittedRequest(liveRunner, {
+        agentDid: deployment.agentDid,
+        previousRequestIds,
+      });
+      await second.close();
+      const completed = await liveRunner.waitForRequestCompletion(submitted);
+      expect(completed.turnState).toBe("completed");
+      await expect(firstEditor).toHaveValue("Unsent draft in the first Gents view");
+
+      await firstEditor.fill("Reply with exactly: FIRST_VIEW_CONFIRMED");
+      previousRequestIds.add(submitted.requestId);
+      await page.getByRole("button", { name: "Send" }).click();
+      const firstSubmitted = await waitForSubmittedRequest(liveRunner, {
+        agentDid: deployment.agentDid,
+        previousRequestIds,
+      });
+      expect(firstSubmitted.sessionId).not.toBe(submitted.sessionId);
+      const firstCompleted = await liveRunner.waitForRequestCompletion(firstSubmitted);
+      expect(firstCompleted.turnState).toBe("completed");
+      const responseText = firstCompleted.timelineItems
+        .filter((item) => item.kind === "assistantMessage")
+        .map((item) => item.content ?? "")
+        .join("\n");
+      expect(responseText).toBeTruthy();
+      await expect(page.getByTestId("transcript-panel")).toContainText(responseText, {
+        timeout: 30_000,
+      });
+      await expect(
+        page.getByText("Reply with exactly: SECOND_VIEW_CONFIRMED", { exact: true }),
+      ).toHaveCount(0);
+      await testInfo.attach("independent-views.json", {
+        body: JSON.stringify(
+          {
+            first: firstSubmitted,
+            closedView: submitted,
+            terminalState: completed.turnState,
+          },
+          null,
+          2,
+        ),
+        contentType: "application/json",
+      });
+    } finally {
+      await second.close();
+    }
+  });
+
   test("drives Chromium through the live bridge and runtime", async ({
     page,
   }, testInfo) => {
@@ -47,7 +121,7 @@ test.describe("desktop live browser smoke", () => {
       await gotoLiveHarness(page, liveRunner.baseUrl);
       await expect(page.getByTestId("app-shell")).toBeVisible();
 
-      await page.getByRole("link", { name: "New", exact: true }).click();
+      await openChat(page);
       await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
       const deployment = await firstDeployment(liveRunner);
       const previousRequestIds = new Set(

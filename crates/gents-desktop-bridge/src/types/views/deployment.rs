@@ -578,7 +578,7 @@ mod peer_remove_response_tests {
                 desktop_home: "/desktop".to_string(),
                 peer_directory_path: "/desktop/peers.json".to_string(),
                 node_data_dir: "/desktop/node".to_string(),
-                log_file_path: "/desktop/desktop.log".to_string(),
+                diagnostics_hint: "native logging".to_string(),
                 agent_home_exists: true,
                 desktop_home_exists: true,
                 peer_directory_exists: true,

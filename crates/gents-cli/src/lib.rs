@@ -18,6 +18,7 @@ mod graphql_access;
 mod home_state;
 mod http;
 mod interactive_backend;
+pub mod native_service;
 mod p2p_relay;
 mod request_helpers;
 mod resolve_helpers;
@@ -55,6 +56,7 @@ const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = p2p::sync::DEFAULT_RATE_LIMIT_RATE;
 const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
 const DEFAULT_LOG_FILTER: &str = concat!(
     "warn,",
+    "gents_server::commands::serve=info,",
     "gents::agent::runtime=info,",
     "gents::agent::daemon=info,",
     "gents::agent::reconcile=info,",
@@ -237,6 +239,15 @@ Examples:
   gents fleet slots
   gents fleet slots --home /path/to/home
   gents fleet slots --graphql http://127.0.0.1:9191/api/v0/graphql";
+const CLOUD_AFTER_HELP: &str = "\
+Signs in through another device: the cloud prints a short code, you approve it on the
+console page it names, and the workspace token is stored as an OAuthCredential document
+for this agent DID. Google authenticates you on that page; gents never sees a password.
+
+Examples:
+  gents cloud login --cloud app.dev.gents.xyz
+  GENTS_CLOUD=app.dev.gents.xyz gents cloud login
+  gents cloud login --cloud http://127.0.0.1:9192 --home /path/to/home";
 const TASK_AFTER_HELP: &str = "\
 Inspect configured Task documents and create pending AgentRequests with manual trigger lineage.
 For a Task with a durable-goal declaration, --session-id is a stable invocation key;
@@ -397,6 +408,7 @@ async fn async_main() -> Result<()> {
         Command::Provision(args) => commands::provision::provision(args).await,
         Command::Reset(args) => commands::reset::reset(args).await,
         Command::Server(args) => commands::serve::serve(args).await,
+        Command::Service { command } => service_command(command),
         Command::Chat(args) => commands::chat::chat(args).await,
         Command::Codex(_) => unreachable!("codex dispatches before telemetry init"),
         Command::CodexLogin(args) => commands::codex_login::codex_login(args).await,
@@ -404,6 +416,7 @@ async fn async_main() -> Result<()> {
         Command::GrokLogin(args) => commands::grok_login::grok_login(args).await,
         Command::GrokAuthProbe(args) => commands::grok_auth_probe::grok_auth_probe(args).await,
         Command::ClaudeLogin(args) => commands::claude_login::claude_login(args).await,
+        Command::Cloud { command } => commands::cloud::dispatch(command).await,
         Command::P2p { command } => commands::p2p::dispatch(command).await,
         Command::Schema { command } => commands::schema::dispatch(command).await,
         Command::Trace { command } => commands::trace::dispatch(command).await,
@@ -430,6 +443,41 @@ async fn async_main() -> Result<()> {
     };
     telemetry.shutdown();
     result
+}
+
+fn service_command(command: ServiceCommand) -> Result<()> {
+    use native_service::{NativeServiceConfig, NativeServiceManager};
+
+    let (home, executable, action) = command.into_parts();
+    let home = absolutize(resolve_home_dir(home.as_deref()))?;
+    let executable = match executable {
+        Some(path) => absolutize(path)?,
+        None => std::env::current_exe().context("resolving the gents executable")?,
+    };
+    let manager = NativeServiceManager::new(NativeServiceConfig::new(home, executable)?)?;
+    match action {
+        ServiceAction::Install => manager.install(),
+        ServiceAction::Start { enable } => manager.start(enable),
+        ServiceAction::Stop { keep_enabled } => manager.stop(!keep_enabled),
+        ServiceAction::Restart => manager.restart(),
+        ServiceAction::Enable => manager.set_enabled(true),
+        ServiceAction::Disable => manager.set_enabled(false),
+        ServiceAction::Status => {
+            print!("{}\n", manager.status()?.summary());
+            Ok(())
+        }
+        ServiceAction::Uninstall => manager.uninstall(),
+    }
+}
+
+fn absolutize(path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()
+            .context("resolving current directory")?
+            .join(path))
+    }
 }
 
 pub(crate) fn expand_nonempty_values(values: &[String], flag_name: &str) -> Result<Vec<String>> {

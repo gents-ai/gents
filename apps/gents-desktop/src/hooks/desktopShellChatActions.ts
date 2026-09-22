@@ -186,7 +186,7 @@ export function createDesktopShellChatActions({
     setSending(true);
     setError(null);
     try {
-      const result = await api.retryRequest(requestId);
+      const result = await api.retryRequest(requestId, selectedDeployment.agentDid);
       if (!acceptsComposeIntent(intentGeneration)) return;
       setSelectedSessionId(result.sessionId);
       setLocalWorkflow({

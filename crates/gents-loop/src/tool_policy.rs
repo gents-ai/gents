@@ -65,7 +65,7 @@ impl CommandExecutionMode {
 
 /// Request `workspace_authority`. ReadWrite meets command mode to WorkspaceWrite,
 /// never Unrestricted. Integrate is inspect-only (no bash writes).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 pub enum WorkspaceAuthority {

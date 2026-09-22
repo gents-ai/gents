@@ -144,6 +144,7 @@ pub(super) async fn run_control_watcher_with_timing(
                     phase_transition_pending = false;
                 }
                 let mut proposed_update = false;
+                let mut resolve_failed = false;
                 match document_view::resolve_document_runtime_snapshot_from_view(
                     node.as_ref(),
                     &resolve_context,
@@ -171,6 +172,7 @@ pub(super) async fn run_control_watcher_with_timing(
                         }
                     }
                     Err(error) => {
+                        resolve_failed = true;
                         tracing::error!(
                             agent_did = %agent_did,
                             error = %error,
@@ -179,19 +181,35 @@ pub(super) async fn run_control_watcher_with_timing(
                         runtime_status.publish_error(&format!("{error:#}")).await;
                     }
                 }
+                if resolve_failed {
+                    if settle_deadline
+                        .is_some_and(|deadline| tokio::time::Instant::now() < deadline)
+                    {
+                        dirty = true;
+                        sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + timing.settle_retry);
+                    } else {
+                        dirty = false;
+                        settle_deadline = None;
+                        sleep
+                            .as_mut()
+                            .reset(tokio::time::Instant::now() + timing.idle_sleep);
+                    }
+                    continue;
+                }
                 if !proposed_update {
                     runtime_status
                         .set_reconcile_phase(ReconcilePhase::Idle)
                         .await;
                 }
-                if settle_deadline.is_some_and(|deadline| tokio::time::Instant::now() < deadline) {
-                    dirty = true;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.settle_retry);
-                } else {
-                    dirty = false;
-                    settle_deadline = None;
-                    sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
-                }
+                // A successful visible snapshot has completed this reconcile.
+                // The settle deadline bounds retries for unresolved references
+                // and failed reloads; it must not turn every observed write into
+                // a one-second full-view polling loop.
+                dirty = false;
+                settle_deadline = None;
+                sleep.as_mut().reset(tokio::time::Instant::now() + timing.idle_sleep);
             }
             Some(()) = health_events_rx.recv() => {
                 tracing::info!(

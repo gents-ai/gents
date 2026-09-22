@@ -97,6 +97,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     let tool = BoundedWriteTool::new(
         node.clone(),
         WriteToolDecl {
+            notification: None,
             tool_name: "write_resumed_output".into(),
             collection: "ResumedGoalOutput".into(),
             description: "Publish the correlated result".into(),

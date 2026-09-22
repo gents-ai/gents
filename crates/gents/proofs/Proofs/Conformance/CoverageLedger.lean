@@ -493,7 +493,12 @@ def stateMachineCoverage : List CoverageEntry :=
   ]
 
 def caseCoverage : List CoverageEntry :=
-  [ tagged (consumerWithFollowUp
+  [ tagged (consumerCoverage
+      "root_admission_cases"
+      "RootAdmissionCases"
+      "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy")
+      "apply-reconcile" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "pairing_reconcile_cases"
       "PairingReconcileCases"
       "conformance::pairing_reconcile::generated_pairing_reconcile_cases_drive_production_projector"
@@ -681,6 +686,16 @@ def caseCoverage : List CoverageEntry :=
       "conformance::generated_tool_policy_cases_match_lean_composition")
       "tool-policy" [Surface.operatorUi, Surface.agentFacing]
   , tagged (consumerCoverage
+      "write_input_cases"
+      "WriteInputCases"
+      "defra_write::tests::native_input_admission_matches_lean")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "invocation_correlation_cases"
+      "InvocationCorrelationCases"
+      "tool_call_lifecycle::runtime::tests::invocation_correlation_matches_lean")
+      "tool-policy" [Surface.agentFacing]
+  , tagged (consumerCoverage
       "lsp_action_cases"
       "LspActionCases"
       "conformance::generated_lsp_action_cases_match_rust_authorization")
@@ -707,6 +722,17 @@ def caseCoverage : List CoverageEntry :=
       "InferenceCallSlotAccounting"
       "conformance::generated_inference_slot_accounting_cases_drive_db_backed_reconstruction")
       "inference-call" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "mailbox_notification_cases"
+      "MailboxNotificationCases"
+      "mailbox::notification_tests::generated_notification_cases_drive_durable_writes")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "mailbox_reply_cases"
+      "MailboxReplyCases"
+      "mailbox::reply_tests::generated_reply_cases_drive_claim_validation"
+      "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
+      "mailbox" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "logical_output_obligation_cases"
       "LogicalOutputObligationCases"

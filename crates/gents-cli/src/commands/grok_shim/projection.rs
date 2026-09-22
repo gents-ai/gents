@@ -1515,7 +1515,7 @@ pub(crate) struct LiveSegmentPlan {
 /// grows by exact prefix append. This cursor tracks:
 ///
 /// - `observed`: the most recent snapshot of the tail (for reasoning, the
-///   rolling 64-KiB preview — the *preview window*, not the logical stream);
+///   bounded rolling preview — the *preview window*, not the logical stream);
 /// - `sent_len` / `sent_bytes`: how many bytes of the current segment's
 ///   logical stream have been *successfully sent*, and their exact bytes;
 /// - `progress_seq`: the durable progress counter observed with the last
@@ -2280,12 +2280,11 @@ fn earliest_live_anchor(
     Some(chain[content_index.min(reasoning_index)].cid.clone())
 }
 
-/// The runtime's live reasoning preview bound (`MAX_LIVE_REASONING_BYTES` in
-/// `gents::streaming`): the durable `AgentResponse.reasoning` tail is a
-/// rolling window that never exceeds this many bytes. Duplicated here
-/// because the projection must prove a rollover against the same bound the
-/// runtime trims to; the two constants must move together.
-const MAX_LIVE_REASONING_WINDOW_BYTES: usize = 64 * 1024;
+/// The runtime's live reasoning preview bound: the durable
+/// `AgentResponse.reasoning` tail is a rolling window that never exceeds this
+/// many bytes. The projection must use the runtime-owned value to prove a
+/// rollover against the same bound used for trimming.
+const MAX_LIVE_REASONING_WINDOW_BYTES: usize = gents::MAX_LIVE_REASONING_BYTES;
 
 /// `tail_window` advances a cut inside a four-byte scalar by at most three
 /// bytes, so a saturated UTF-8 preview may be `MAX-3..=MAX` bytes long.
@@ -5019,7 +5018,7 @@ mod tests {
         );
     }
 
-    /// 7. Reasoning's bounded 64-KiB rolling preview drops its head: the
+    /// 7. Reasoning's bounded rolling preview drops its head: the
     /// rollover emits exactly the newly appended suffix, once, without
     /// re-streaming the window's retained bytes.
     #[tokio::test]
@@ -5033,7 +5032,11 @@ mod tests {
 
         // A full first window with a distinct head that the runtime will
         // trim when 16 new bytes arrive.
-        let head = format!("{}{}", "x".repeat(16), "y".repeat(64 * 1024 - 16));
+        let head = format!(
+            "{}{}",
+            "x".repeat(16),
+            "y".repeat(MAX_LIVE_REASONING_WINDOW_BYTES - 16)
+        );
         seed_response_row(&engine, &fixture_request, "", &head, 0, 1, None).await;
         let first = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
@@ -5044,7 +5047,11 @@ mod tests {
 
         // The runtime appended past the bound: the preview dropped its head
         // but keeps continuity — the suffix past the overlap is the new text.
-        let rolled = format!("{}{}", "y".repeat(64 * 1024 - 16), "z".repeat(16));
+        let rolled = format!(
+            "{}{}",
+            "y".repeat(MAX_LIVE_REASONING_WINDOW_BYTES - 16),
+            "z".repeat(16)
+        );
         update_response_tail(&engine, &fixture_request, "", &rolled, 0, 2).await;
         let second = deliver(&engine, session_id, request_id, &mut cursor).await;
         assert_eq!(
@@ -5125,6 +5132,118 @@ mod tests {
         assert_eq!(
             chunk_texts(&recovered),
             vec![("agent_thought_chunk".into(), missing_suffix)]
+        );
+    }
+
+    /// A production progress mutation omits stable fields rather than relying
+    /// on DefraDB to discard equality writes. Composite history must still
+    /// reconstruct the stable content tail while projecting the new reasoning
+    /// exactly once, and its eventual authoritative row must not replay it.
+    #[tokio::test]
+    async fn reasoning_only_partial_mutation_preserves_content_history_and_projects_once() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-partial-reasoning";
+        let request_id = "req-partial-reasoning";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
+        let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
+        let stable_content = "stable visible content";
+        let reasoning = "new durable reasoning";
+
+        seed_response_row(&engine, &fixture_request, stable_content, "", 1, 0, None).await;
+        assert_eq!(
+            chunk_texts(&deliver(&engine, session_id, request_id, &mut cursor).await),
+            vec![("agent_message_chunk".into(), stable_content.into())]
+        );
+
+        let request_doc =
+            gents::graphql::escape_graphql_string(fixture_request.doc_id.as_deref().unwrap());
+        let escaped_request = gents::graphql::escape_graphql_string(request_id);
+        let escaped_reasoning = gents::graphql::escape_graphql_string(reasoning);
+        let response = engine
+            .node
+            .execute(&format!(
+                r#"mutation {{
+                    update_AgentResponse(
+                        filter: {{ request_id: {{ _eq: "{escaped_request}" }}, request_doc_id: {{ _eq: "{request_doc}" }} }},
+                        input: {{ reasoning: "{escaped_reasoning}" reasoning_progress_seq: 1 }}
+                    ) {{ _docID }}
+                }}"#
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "reasoning-only response update failed: {:?}",
+            response.errors
+        );
+
+        assert_eq!(
+            chunk_texts(&deliver(&engine, session_id, request_id, &mut cursor).await),
+            vec![("agent_thought_chunk".into(), reasoning.into())],
+            "the composite history must retain content while exposing only the new reasoning"
+        );
+
+        seed_assistant_thought_row(&engine, &fixture_request, 5, reasoning).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
+        assert!(
+            deliver(&engine, session_id, request_id, &mut cursor)
+                .await
+                .is_empty(),
+            "the authoritative final thought row must not replay live reasoning"
+        );
+        assert!(
+            deliver(&engine, session_id, request_id, &mut cursor)
+                .await
+                .is_empty(),
+            "the final reconciliation is exactly once"
+        );
+    }
+
+    /// A slow (for example five-second) stream batching override can coalesce
+    /// more reasoning than the bounded live preview holds. The projection
+    /// must fail closed for that live gap, then reconcile the exact complete
+    /// reasoning once the authoritative assistant row materializes.
+    #[tokio::test]
+    async fn oversized_reasoning_burst_reconciles_exactly_after_slow_batch_snapshot() {
+        let (_dir, engine) = embedded_engine().await;
+        let session_id = "s-reason-slow-batch";
+        let request_id = "req-reason-slow-batch";
+        let fixture_request = seed_projection_request(&engine.node, session_id, request_id).await;
+        let mut cursor = RequestCursor::new();
+        cursor.request = Some(fixture_request.clone());
+
+        let prefix = "initial thought ".to_string();
+        let burst = "z".repeat(MAX_LIVE_REASONING_WINDOW_BYTES + 1_024);
+        let full_reasoning = format!("{prefix}{burst}");
+        let bounded_snapshot = tail_bytes(&full_reasoning, MAX_LIVE_REASONING_WINDOW_BYTES);
+
+        seed_response_row(&engine, &fixture_request, "", &prefix, 0, 1, None).await;
+        let first = deliver(&engine, session_id, request_id, &mut cursor).await;
+        assert_eq!(chunk_texts(&first)[0].1, prefix);
+
+        // This is the durable shape produced when one batch interval
+        // coalesces a >4 KiB append: only the runtime-owned bounded tail fits.
+        update_response_tail(&engine, &fixture_request, "", bounded_snapshot, 0, 2).await;
+        let deferred = deliver(&engine, session_id, request_id, &mut cursor).await;
+        assert!(
+            chunk_texts(&deferred).is_empty(),
+            "a lossy live snapshot must not invent continuity"
+        );
+
+        seed_assistant_thought_row(&engine, &fixture_request, 5, &full_reasoning).await;
+        update_materialized_sequence(&engine, &fixture_request, 5).await;
+        let reconciled = deliver(&engine, session_id, request_id, &mut cursor).await;
+        let repaired = chunk_texts(&reconciled)
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<String>();
+        assert_eq!(repaired, burst);
+        assert_eq!(format!("{prefix}{repaired}"), full_reasoning);
+
+        let settled = deliver(&engine, session_id, request_id, &mut cursor).await;
+        assert!(
+            settled.is_empty(),
+            "final reconciliation emits exactly once"
         );
     }
 

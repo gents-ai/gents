@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "app": {
     "security": {
-      "capabilities": ["default", "native-e2e"]
+      "capabilities": ["default", "native-windows", "native-e2e"]
     }
   }
 }

@@ -70,32 +70,59 @@ pub async fn load_session_context_details(
     let [capture] = captures.as_slice() else {
         return Ok(None);
     };
-    if capture["capture_version"].as_u64()
-        != Some(gents_protocol::rendered_request::CAPTURE_VERSION as u64)
-    {
+    let Some(capture_version) = capture["capture_version"]
+        .as_u64()
+        .and_then(|value| u32::try_from(value).ok())
+    else {
+        // Context details are a best-effort UI projection. Old or partially
+        // replicated rows must not make the session itself unavailable.
+        return Ok(None);
+    };
+    if !(1..=gents_protocol::rendered_request::CAPTURE_VERSION).contains(&capture_version) {
         return Ok(None);
     }
-    let provenance: Value = serde_json::from_str(
-        capture["provenance_json"]
-            .as_str()
-            .context("missing capture provenance")?,
-    )?;
-    if provenance["admission"]["call_id"].as_str() != Some(context.call_id.as_str()) {
-        return Ok(None);
+    let details: Result<Option<SessionContextDetails>> = async {
+        let provenance: Value = serde_json::from_str(
+            capture["provenance_json"]
+                .as_str()
+                .context("missing capture provenance")?,
+        )?;
+        if provenance["admission"]["call_id"].as_str() != Some(context.call_id.as_str()) {
+            return Ok(None);
+        }
+        // Other provider shapes require their own audited decomposition.
+        if capture["source"].as_str() != Some("openai_chat_completions")
+            || context.accounting.estimator != "openai_chat_wire_json_bytes_div_4_v1"
+            || context.accounting.components.documents != 0
+        {
+            return Ok(None);
+        }
+        let body = crate::rendered_request::decode_capture_json_embedded(
+            node,
+            capture_version,
+            capture["request_json"]
+                .as_str()
+                .context("missing captured provider request")?,
+            crate::rendered_request::CapturePayloadKind::RequestBody,
+        )
+        .await?;
+        chat_details(&body, context.accounting.components.messages as u64).map(Some)
     }
-    // Other provider shapes require their own audited decomposition.
-    if capture["source"].as_str() != Some("openai_chat_completions")
-        || context.accounting.estimator != "openai_chat_wire_json_bytes_div_4_v1"
-        || context.accounting.components.documents != 0
-    {
-        return Ok(None);
+    .await;
+    match details {
+        Ok(details) => Ok(details),
+        Err(error) => {
+            tracing::debug!(
+                agent_did = agent,
+                session_id = session,
+                request_id = %context.request_id,
+                call_id = %context.call_id,
+                %error,
+                "optional session context details could not decode provider capture"
+            );
+            Ok(None)
+        }
     }
-    let body: Value = serde_json::from_str(
-        capture["request_json"]
-            .as_str()
-            .context("missing captured provider request")?,
-    )?;
-    chat_details(&body, context.accounting.components.messages as u64).map(Some)
 }
 
 fn chat_details(body: &Value, message_tokens: u64) -> Result<SessionContextDetails> {

@@ -6,8 +6,68 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { renderReport } from "./report.mjs";
+import { assessRun, renderReport } from "./report.mjs";
 import { runConfigurator } from "./run-configurator.mjs";
+import { readdir } from "node:fs/promises";
+import { setTimeout as delay } from "node:timers/promises";
+
+test("stale launcher heartbeat is not represented as a running eval", () => {
+  const now = Date.now();
+  assert.equal(
+    assessRun(
+      null,
+      {
+        status: "running",
+        heartbeat_at: new Date(now - 31000).toISOString(),
+      },
+      now,
+    ),
+    "stalled",
+  );
+  assert.equal(
+    assessRun(
+      null,
+      {
+        status: "running",
+        heartbeat_at: new Date(now).toISOString(),
+      },
+      now,
+    ),
+    "running",
+  );
+});
+
+test(
+  "runtime log remains writable after launcher SIGKILL",
+  { timeout: 10000 },
+  async () => {
+    const root = await mkdtemp(join(tmpdir(), "gents-killed-launcher-"));
+    const launcher = spawn(
+      process.execPath,
+      [
+        fileURLToPath(new URL("./run-configurator.mjs", import.meta.url)),
+        process.execPath,
+        "-e",
+        'process.kill(process.ppid, "SIGKILL"); setTimeout(() => console.log("survived observer loss"), 100);',
+        "--",
+      ],
+      {
+        env: { ...process.env, GENTS_EVAL_ROOT: root },
+        stdio: ["ignore", "ignore", "ignore"],
+      },
+    );
+    const [, signal] = await once(launcher, "close");
+    assert.equal(signal, "SIGKILL");
+    const [name] = await readdir(root);
+    let log = "";
+    for (let attempt = 0; attempt < 50; attempt++) {
+      log = await readFile(join(root, name, "runner.log"), "utf8");
+      if (log.includes("survived observer loss")) break;
+      await delay(50);
+    }
+    assert.match(log, /survived observer loss/);
+  },
+);
 
 const counts = {
   passed: 1,
@@ -55,7 +115,79 @@ test("saved report displays canonical counts without reclassifying inconclusive 
   await assert.rejects(renderReport(directory), /Unsupported/);
 });
 
-async function fakeRun(script) {
+test("run assessment keeps completed, failed, interrupted, unfinished, and stalled outcomes distinct", () => {
+  const complete = {
+    ...report,
+    status: "completed",
+    planned: 1,
+    completed: 1,
+    passed: 1,
+    failed: 0,
+    unfinished: 0,
+  };
+  assert.equal(
+    assessRun(complete, { status: "exited", exit_code: 0 }),
+    "passed",
+  );
+  assert.equal(
+    assessRun(complete, { status: "exited", exit_code: 101 }),
+    "failed",
+  );
+  assert.equal(
+    assessRun(report, { status: "interrupted", signal: "SIGINT" }),
+    "interrupted",
+  );
+  assert.equal(
+    assessRun(report, { status: "exited", exit_code: 0 }),
+    "unfinished",
+  );
+  assert.equal(
+    assessRun(
+      { ...report, updated_at: "2026-09-16T00:00:00Z" },
+      { status: "running" },
+      Date.parse("2026-09-16T00:31:00Z"),
+    ),
+    "stalled",
+  );
+  assert.equal(
+    assessRun(
+      { ...report, updated_at: "2026-09-16T00:30:45Z" },
+      { status: "running" },
+      Date.parse("2026-09-16T00:31:00Z"),
+    ),
+    "running",
+  );
+});
+
+test("report renders provenance without treating missing sampling as zero", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "gents-provenance-test-"));
+  await writeFile(
+    join(directory, "report.json"),
+    JSON.stringify({
+      ...report,
+      models: ["model"],
+      provenance: {
+        cohort: "new-cohort",
+        source: { commit: "abc123", dirty: true },
+        grader: { id: "grader-v1", sha256: "def456" },
+        inference: {
+          endpoint: "http://inference.test/v1",
+          requested_reasoning_effort: "high",
+          effective_sampling: { temperature: 1, top_p: 0.95, seed: null },
+        },
+        fixture_sha256: { "fixture.md": "123" },
+      },
+    }),
+  );
+  const output = await renderReport(directory);
+  assert.match(output, /Cohort: new-cohort/);
+  assert.match(output, /Source: abc123 \(dirty\)/);
+  assert.match(output, /temperature=1, top_p=0.95, seed=provider default/);
+  assert.match(output, /Fixture hashes: 1/);
+  assert.match(output, /Requested reasoning effort: high/);
+});
+
+async function fakeRun(script, overrides = {}) {
   const root = await mkdtemp(join(tmpdir(), "gents-launch-test-"));
   let output = "";
   const sink = {
@@ -65,7 +197,12 @@ async function fakeRun(script) {
   };
   const result = await runConfigurator({
     cargo: [process.execPath, "-e", script, "--"],
-    env: { ...process.env, GENTS_EVAL_ROOT: root },
+    env: {
+      ...process.env,
+      GENTS_EVAL_SUITE: "progressive-configurator",
+      ...overrides,
+      GENTS_EVAL_ROOT: root,
+    },
     stdout: sink,
     stderr: sink,
   });
@@ -88,6 +225,22 @@ test("launcher retains diagnostics and exit status before any trial starts", asy
   );
   assert.ok(
     result.directory.startsWith(join(result.root, "progressive-configurator-")),
+  );
+});
+
+test("mailbox suite uses the shared launcher and isolated directory", async () => {
+  const result = await fakeRun(
+    'process.exit(process.env.GENTS_EVAL_SUITE === "monitor-mailbox" ? 101 : 2)',
+    { GENTS_EVAL_SUITE: "monitor-mailbox" },
+  );
+  assert.equal(result.exitCode, 101);
+  assert.ok(result.directory.startsWith(join(result.root, "monitor-mailbox-")));
+});
+
+test("launcher rejects an unknown suite before starting cargo", async () => {
+  await assert.rejects(
+    fakeRun("process.exit(0)", { GENTS_EVAL_SUITE: "typo" }),
+    /Unsupported eval suite/,
   );
 });
 

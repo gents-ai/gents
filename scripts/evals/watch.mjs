@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { readJson, text } from "./report.mjs";
+import { assessRun, readJson, text } from "./report.mjs";
 
 const number = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-US"));
 const duration = (ms) => {
@@ -54,11 +54,37 @@ export function usageFromEvidence(documents) {
   };
 }
 
+export function stageUsageFromEvidence(documents) {
+  const grouped = new Map();
+  for (const document of documents) {
+    const match = document.name.match(/^(.*)-(inference|tools)\.json$/);
+    if (!match) continue;
+    if (!grouped.has(match[1])) grouped.set(match[1], []);
+    grouped.get(match[1]).push(document);
+  }
+  return [...grouped].map(([stage, entries]) => {
+    const calls = entries.flatMap((entry) => entry.data.InferenceCall || []);
+    const inputs = calls
+      .map((call) => call.prompt_tokens)
+      .filter(Number.isFinite);
+    const outputs = calls
+      .map((call) => call.completion_tokens)
+      .filter(Number.isFinite);
+    return {
+      stage,
+      ...usageFromEvidence(entries),
+      inputReportedCalls: inputs.length,
+      outputReportedCalls: outputs.length,
+      peakInput: inputs.length ? Math.max(...inputs) : null,
+    };
+  });
+}
+
 async function trialSnapshot(directory, model, trial, caseIds, cache) {
   const evidence = join(directory, "evidence");
   let names;
   try {
-    names = await readdir(evidence);
+    names = await evidenceNames(evidence);
   } catch (error) {
     if (error.code === "ENOENT")
       return {
@@ -75,6 +101,7 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
   for (const name of names.filter(
     (name) =>
       /-(acceptance|input|inference|tools)\.json$/.test(name) ||
+      name.endsWith("-progress.json") ||
       name === "trial.json",
   )) {
     const path = join(evidence, name);
@@ -86,8 +113,31 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
           ? previous.document
           : null;
       if (!document) {
-        const data = await readJson(path);
+        let data = await readJson(path);
         if (!data) continue;
+        // Keep counters, not transcripts, in the long-lived display cache.
+        if (name.endsWith("-tools.json"))
+          data = { AgentToolCall: (data.AgentToolCall || []).map(() => ({})) };
+        else if (name.endsWith("-inference.json"))
+          data = {
+            InferenceCall: (data.InferenceCall || []).map(
+              ({ prompt_tokens, completion_tokens }) => ({
+                prompt_tokens,
+                completion_tokens,
+              }),
+            ),
+          };
+        else if (name.endsWith("-input.json")) data = { stage: data.stage };
+        else if (name === "trial.json")
+          data = { passed: data.passed, cases: data.cases };
+        if (
+          data.stage &&
+          (name.endsWith("-input.json") || name.endsWith("-progress.json"))
+        )
+          data = {
+            ...data,
+            stage: name.slice(0, name.lastIndexOf("/") + 1) + data.stage,
+          };
         document = { name, data, modified: metadata.mtimeMs };
         cache.set(path, {
           stamp: `${metadata.mtimeMs}:${metadata.size}`,
@@ -109,23 +159,34 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
   const inputs = documents
     .filter(({ name }) => name.endsWith("-input.json"))
     .sort((a, b) => b.modified - a.modified);
+  const progress = documents
+    .filter(({ name }) => name.endsWith("-progress.json"))
+    .sort((a, b) => b.modified - a.modified)[0];
   const current = finished
     ? finished.passed
       ? "passed"
       : "non-pass"
-    : inputs[0]?.data.stage || "starting";
+    : progress?.data.stage || inputs[0]?.data.stage || "starting";
   return {
     model,
     trial,
     current,
     finished: Boolean(finished),
-    stageStarted: inputs[0]?.modified,
+    stageStarted:
+      Date.parse(progress?.data.started_at || "") || inputs[0]?.modified,
+    progressUpdated:
+      Date.parse(progress?.data.updated_at || "") ||
+      progress?.modified ||
+      inputs[0]?.modified,
+    requestId: progress?.data.request_id || null,
+    lifecycleState: progress?.data.lifecycle_state || null,
     cases: caseIds.map(
       (id) =>
         receipts.find(({ data }) => data.case_id === id)?.data ||
         finished?.cases.find((entry) => entry.case_id === id),
     ),
     usage: usageFromEvidence(documents),
+    stageUsage: stageUsageFromEvidence(documents),
     events: receipts.map(({ data, modified }) => ({
       ...data,
       modified,
@@ -133,6 +194,25 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
       trial,
     })),
   };
+}
+
+async function evidenceNames(directory, prefix = "") {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const names = [];
+  for (const entry of entries) {
+    const name = prefix + entry.name;
+    if (entry.isFile()) names.push(name);
+    else if (entry.isDirectory()) {
+      try {
+        names.push(
+          ...(await evidenceNames(join(directory, entry.name), name + "/")),
+        );
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  return names;
 }
 
 export async function snapshotRun(directory, cache = new Map()) {
@@ -179,7 +259,8 @@ export function renderDashboard(
         report?.started_at ||
         new Date(now).toISOString(),
     );
-  const ended = execution && execution.status !== "running";
+  const outcome = assessRun(report, execution, now);
+  const ended = !["running", "stalled"].includes(outcome);
   const complete = trials.filter((trial) => trial.finished).length;
   const active = trials.filter(
     (trial) => !trial.finished && trial.current !== "queued",
@@ -197,7 +278,7 @@ export function renderDashboard(
   const knownInput = trials.some((trial) => trial.usage.input !== null);
   const lines = [
     "GENTS  /  ONBOARDING EVAL",
-    `${ended ? execution.status.toUpperCase() : "RUNNING"}  ${duration(elapsed)}   ${complete}/${report?.planned || "?"} trials finished   ${ended ? 0 : active} active`,
+    `${outcome.toUpperCase()}${outcome === "passed" ? "" : " / NON-PASSING"}  ${duration(elapsed)}   ${complete}/${report?.planned || "?"} trials finished   ${ended ? 0 : active} active`,
   ];
   if (!report)
     lines.push(
@@ -205,7 +286,7 @@ export function renderDashboard(
     );
   else {
     lines.push(
-      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
+      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}   reasoning=${text(report.provenance?.inference?.requested_reasoning_effort ?? "server default")}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
     );
     lines.push(
       `Reported tokens  IN ${number(knownInput ? totals.input : null)}  OUT ${number(known ? totals.output : null)}   |   ${totals.calls} inference calls   ${totals.tools} saved tool calls`,
@@ -218,7 +299,7 @@ export function renderDashboard(
     );
     const multiple = report.models.length > 1;
     lines.push(
-      `${multiple ? "Model         " : ""}Trial  ${cases.map((_, i) => i + 1).join(" ")}   Current work          Age     In tok    Out tok  Calls  Sample age`,
+      `${multiple ? "Model         " : ""}Trial  ${cases.map((_, i) => i + 1).join(" ")}   Current work          Request       Age     In tok    Out tok  Calls  Sample age`,
     );
     const ordered = [...trials].sort(
       (a, b) =>
@@ -232,16 +313,28 @@ export function renderDashboard(
         trial.finished || !trial.stageStarted
           ? "—"
           : duration(now - trial.stageStarted);
+      const stalled =
+        !trial.finished &&
+        trial.progressUpdated &&
+        report.stage_timeout_secs &&
+        now - trial.progressUpdated > (report.stage_timeout_secs + 30) * 1000;
+      const current = stalled
+        ? "stalled"
+        : trial.lifecycleState
+          ? `${trial.current}:${trial.lifecycleState}`
+          : trial.current;
       lines.push(
         `${multiple ? text(trial.model).slice(0, 13).padEnd(14) : ""}${String(trial.trial).padStart(3)}    ${trial.cases
           .map(mark)
           .join(" ")
           .padEnd(cases.length * 2 - 1)}   ${text(
-          ended && !trial.finished ? "unfinished" : trial.current,
+          ended && !trial.finished ? "unfinished" : current,
         )
           .slice(0, 20)
+          .padEnd(20)} ${text(trial.requestId || "—")
+          .slice(0, 12)
           .padEnd(
-            20,
+            12,
           )} ${age.padStart(6)} ${number(trial.usage.input).padStart(10)} ${number(trial.usage.output).padStart(10)} ${String(trial.usage.calls).padStart(5)}  ${trial.usage.latest ? duration(now - trial.usage.latest) : "—"}`,
       );
     }

@@ -1,0 +1,5 @@
+Create one maintenance behavior for this host, with a useful system prompt and read/write Bash to inspect services, perform requested host repairs, and report unresolved problems through the real Gents mailbox. Use /host as its working root. Reuse the existing inference profile. Keep The Engineer and the monitor unchanged.
+
+Apply this configuration now and verify it. Do not repair the host yet: I will open a fresh session with the new behavior and give it the first task. Keep the configuration minimal; no approval workflow, decision collection, schedule, or trigger is needed for these interactive tasks. Do not leave discarded configuration behind.
+
+The maintenance behavior should investigate current evidence rather than act on historical errors, preserve application data and backups, and check actual service health after a repair. It should follow the scope of each user request. If a requested repair cannot resolve a fault, it should report useful unresolved attention in the canonical mailbox. For the client's condition filter use payload.checks with api for the required API; repeated checks of that unresolved condition should reuse the open finding.

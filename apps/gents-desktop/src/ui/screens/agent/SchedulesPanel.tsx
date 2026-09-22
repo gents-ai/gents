@@ -85,7 +85,10 @@ function Editor({
   const id = (f: string) => `${schedule.schedule_id}-${f}`;
   const run = async () => {
     setRunning(true);
-    const pending = shell.runSchedule({ scheduleId: schedule.schedule_id });
+    const pending = shell.runSchedule({
+      scheduleId: schedule.schedule_id,
+      agentDid: schedule.agent_did,
+    });
     const intentGeneration = shell.captureComposeIntent();
     try {
       const result = await pending;

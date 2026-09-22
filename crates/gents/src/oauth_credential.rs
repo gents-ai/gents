@@ -991,6 +991,42 @@ mod tests {
     }
 
     #[test]
+    fn oauth_credential_from_value_rejects_a_blank_refresh_token() {
+        let row = json!({
+            "_docID": "doc-9",
+            "credential_id": "gents-cloud:did:key:zA",
+            "agent_did": "did:key:zA",
+            "provider": "gents-cloud",
+            "access_token": "workspace-token",
+            "refresh_token": "  ",
+            "access_token_expires_at": "2030-01-01T00:00:00Z",
+        });
+        let error = oauth_credential_from_value(row).expect_err("blank refresh token");
+        assert!(
+            error.to_string().contains("missing refresh_token"),
+            "{error}"
+        );
+        let rows = oauth_credentials_from_response(&json!({
+            "data": {
+                "OAuthCredential": [{
+                    "_docID": "doc-9",
+                    "credential_id": "gents-cloud:did:key:zA",
+                    "agent_did": "did:key:zA",
+                    "provider": "gents-cloud",
+                    "access_token": "workspace-token",
+                    "refresh_token": "",
+                    "access_token_expires_at": "2030-01-01T00:00:00Z",
+                }]
+            }
+        }));
+        let listed = rows.into_iter().collect::<Result<Vec<_>, _>>();
+        assert!(listed
+            .expect_err("one blank row fails the list")
+            .to_string()
+            .contains("missing refresh_token"));
+    }
+
+    #[test]
     fn upsert_update_block_omits_immutable_agent_did() {
         let mutation = oauth_credential_upsert_mutation(&sample_credential());
 

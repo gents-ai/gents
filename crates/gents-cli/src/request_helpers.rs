@@ -55,6 +55,7 @@ pub(crate) struct SubmittedRequest {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct RequestSubmitOptions {
+    pub(crate) caused_by_source_doc_id: Option<String>,
     pub(crate) input: Option<RequestInput>,
     pub(crate) valid_until: Option<DateTime<Utc>>,
     pub(crate) retry_parent_request: Option<String>,
@@ -366,6 +367,10 @@ pub(crate) async fn prepare_agent_request(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(agent_did);
     let create = gents::build_signed_request(
         gents::RequestSpec {
+            trigger_lineage: gents::lifecycle::TriggerLineage {
+                source_doc_id: options.caused_by_source_doc_id,
+                ..Default::default()
+            },
             input: request_input,
             valid_until: options
                 .valid_until
@@ -465,6 +470,7 @@ pub(crate) async fn create_goal_backed_agent_request(
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_goal_backed_agent_request_local(
     node: &defra_node::EmbeddedNode,
+    actor: identity::Did,
     graphql: &str,
     agent_did: &str,
     objective: &str,
@@ -487,6 +493,7 @@ pub(crate) async fn create_goal_backed_agent_request_local(
     .await?;
     gents::goal::submit_goal_backed_request_local(
         node,
+        actor,
         agent_did,
         session_id,
         objective,
@@ -1366,6 +1373,7 @@ mod tests {
             None,
             Some("stable-request".into()),
             RequestSubmitOptions {
+                caused_by_source_doc_id: Some("mailbox-doc".into()),
                 input: Some(gents_protocol::request_input::RequestInput {
                     cwd: Some("/work".into()),
                     ..Default::default()
@@ -1380,6 +1388,10 @@ mod tests {
         .await;
         server.abort();
         let create = result?.create;
+        assert_eq!(
+            create.caused_by_source_doc_id.as_deref(),
+            Some("mailbox-doc")
+        );
         assert_eq!(create.request_id, "stable-request");
         assert_eq!(create.requester_did, did);
         assert_eq!(create.behavior_id, "default");
@@ -1399,6 +1411,18 @@ mod tests {
                 .verify(&did, &create.signing_payload(), &create.admission.signature)
                 .await?
         );
+        let mut rerouted = create.clone();
+        rerouted.caused_by_source_doc_id = Some("another-mailbox-item".into());
+        assert!(!matches!(
+            identity
+                .verify(
+                    &did,
+                    &rerouted.signing_payload(),
+                    &rerouted.admission.signature
+                )
+                .await,
+            Ok(true)
+        ));
         Ok(())
     }
 

@@ -10,6 +10,7 @@
 //! controller.
 
 pub mod commits;
+pub(crate) mod encoding;
 pub mod sink;
 
 pub use gents_loop::rendered_request::{
@@ -191,4 +192,252 @@ mod tests {
             );
         }
     }
+}
+
+use anyhow::{Context, Result};
+pub use encoding::CapturePayloadKind;
+use serde_json::Value;
+
+pub fn decode_inline_capture_json(capture_version: u32, stored: &str) -> Result<Value> {
+    encoding::resolve_capture_with(
+        capture_version,
+        stored,
+        CapturePayloadKind::RequestBody,
+        |_| anyhow::bail!("capture delta requires base resolution"),
+    )
+}
+
+#[async_trait::async_trait]
+trait CaptureBaseReader {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value>;
+    async fn capture_field_commit(
+        &self,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<commits::RequestJsonCommit>>;
+}
+
+#[async_trait::async_trait]
+impl CaptureBaseReader for crate::config_client::ConfigAccess {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        self.execute(query).await
+    }
+
+    async fn capture_field_commit(
+        &self,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<commits::RequestJsonCommit>> {
+        commits::field_commit(self, doc_id, field).await
+    }
+}
+
+#[async_trait::async_trait]
+impl CaptureBaseReader for defra_node::EmbeddedNode {
+    async fn execute_capture_query(&self, query: &str) -> Result<Value> {
+        let response = self.execute(query).await;
+        crate::graphql::ensure_no_errors(&response, "reading rendered-request delta base")?;
+        Ok(serde_json::json!({"data": response.data}))
+    }
+
+    async fn capture_field_commit(
+        &self,
+        doc_id: &str,
+        field: &str,
+    ) -> Result<Option<commits::RequestJsonCommit>> {
+        commits::field_commit_embedded(self, doc_id, field).await
+    }
+}
+
+type CaptureBaseCache = std::collections::BTreeMap<String, (Value, String)>;
+
+async fn decode_capture_json_from_cached<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+    cache: &mut CaptureBaseCache,
+) -> Result<Value> {
+    let mut next_version = capture_version;
+    let mut next_stored = stored.to_owned();
+    let mut bases = std::collections::BTreeMap::new();
+    for _ in 0..=encoding::MAX_DELTA_DEPTH {
+        match encoding::decode_capture_record(next_version, &next_stored, kind)? {
+            encoding::DecodedRecord::Legacy(_) | encoding::DecodedRecord::Full(_) => break,
+            encoding::DecodedRecord::Delta { base, .. } => {
+                if !cache.contains_key(&base.doc_id) {
+                    let query = format!(
+                        r#"{{ RenderedRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{
+                            capture_version agent_did requester_did session_id source capture_scope request_json
+                        }} }}"#,
+                        doc_id = crate::graphql::escape_graphql_string(&base.doc_id),
+                    );
+                    let response = reader.execute_capture_query(&query).await?;
+                    let rows = response
+                        .get("data")
+                        .and_then(|data| data.get("RenderedRequest"))
+                        .and_then(Value::as_array)
+                        .context(
+                            "reading witnessed rendered-request base returned an unexpected shape",
+                        )?;
+                    let [row] = rows.as_slice() else {
+                        anyhow::bail!("rendered-request delta base did not resolve uniquely");
+                    };
+                    let actual = reader
+                        .capture_field_commit(&base.doc_id, "request_json")
+                        .await?
+                        .context("rendered-request delta base lacks field commit")?
+                        .cid;
+                    cache.insert(base.doc_id.clone(), (row.clone(), actual));
+                }
+                let (row, actual) = cache
+                    .get(&base.doc_id)
+                    .context("rendered-request delta base cache was not populated")?;
+                for (name, expected) in [
+                    ("agent_did", base.agent_did.as_str()),
+                    ("requester_did", base.requester_did.as_str()),
+                    ("session_id", base.session_id.as_str()),
+                    ("source", base.source.as_str()),
+                    ("capture_scope", base.capture_scope.as_str()),
+                ] {
+                    anyhow::ensure!(
+                        row.get(name).and_then(Value::as_str) == Some(expected),
+                        "rendered-request delta base changed {name} scope"
+                    );
+                }
+                let version = row
+                    .get("capture_version")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .context("rendered-request delta base lacks capture_version")?;
+                let encoded = row
+                    .get("request_json")
+                    .and_then(Value::as_str)
+                    .context("rendered-request delta base lacks encoded field")?
+                    .to_owned();
+                anyhow::ensure!(
+                    encoding::capture_record_depth(version, &encoded, kind)? == base.depth,
+                    "rendered-request delta base depth witness is inconsistent"
+                );
+                bases.insert(
+                    (base.doc_id.clone(), base.field_commit_cid.clone()),
+                    (version, encoded.clone(), actual.clone()),
+                );
+                next_version = version;
+                next_stored = encoded;
+            }
+        }
+    }
+    encoding::resolve_capture_with(capture_version, stored, kind, |base| {
+        bases
+            .remove(&(base.doc_id.clone(), base.field_commit_cid.clone()))
+            .context("capture delta chain exceeds maximum depth or contains a cycle")
+    })
+}
+
+async fn decode_capture_json_from<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+) -> Result<Value> {
+    decode_capture_json_from_cached(
+        reader,
+        capture_version,
+        stored,
+        kind,
+        &mut CaptureBaseCache::new(),
+    )
+    .await
+}
+
+async fn decode_capture_pair_selected_from<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+    want_request: bool,
+    want_provenance: bool,
+) -> Result<(Option<Value>, Option<Value>)> {
+    let mut cache = CaptureBaseCache::new();
+    let request = if want_request {
+        Some(
+            decode_capture_json_from_cached(
+                reader,
+                capture_version,
+                stored,
+                CapturePayloadKind::RequestBody,
+                &mut cache,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    let provenance = if want_provenance {
+        Some(
+            decode_capture_json_from_cached(
+                reader,
+                capture_version,
+                stored,
+                CapturePayloadKind::ProvenancePayload,
+                &mut cache,
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    Ok((request, provenance))
+}
+
+async fn decode_capture_pair_from<R: CaptureBaseReader + Sync>(
+    reader: &R,
+    capture_version: u32,
+    stored: &str,
+) -> Result<(Value, Value)> {
+    let (request, provenance) =
+        decode_capture_pair_selected_from(reader, capture_version, stored, true, true).await?;
+    Ok((
+        request.context("capture pair omitted request body")?,
+        provenance.context("capture pair omitted provenance payload")?,
+    ))
+}
+
+pub(crate) async fn decode_capture_pair_selected(
+    access: &crate::config_client::ConfigAccess,
+    capture_version: u32,
+    stored: &str,
+    request: bool,
+    provenance: bool,
+) -> Result<(Option<Value>, Option<Value>)> {
+    decode_capture_pair_selected_from(access, capture_version, stored, request, provenance).await
+}
+
+/// Decode both payloads from one capture while reusing each witnessed base.
+pub async fn decode_capture_pair(
+    access: &crate::config_client::ConfigAccess,
+    capture_version: u32,
+    stored: &str,
+) -> Result<(Value, Value)> {
+    decode_capture_pair_from(access, capture_version, stored).await
+}
+
+pub async fn decode_capture_json(
+    access: &crate::config_client::ConfigAccess,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+) -> Result<Value> {
+    decode_capture_json_from(access, capture_version, stored, kind).await
+}
+
+/// Decode one capture payload through the same witnessed resolver used by the
+/// sink, for callers that already own the embedded DefraDB node.
+pub async fn decode_capture_json_embedded(
+    node: &defra_node::EmbeddedNode,
+    capture_version: u32,
+    stored: &str,
+    kind: CapturePayloadKind,
+) -> Result<Value> {
+    decode_capture_json_from(node, capture_version, stored, kind).await
 }

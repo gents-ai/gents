@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
+use tokio::sync::{watch, OnceCell};
 
 use crate::http::enrollment::{EnrollmentDecisionServiceHandle, EnrollmentOfferIssuerHandle};
 use crate::http::fleet::load_fleet_snapshot;
@@ -27,12 +28,20 @@ use gents::defra_query::CollectionScope;
 
 const PROMETHEUS_CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 const P2P_METRICS_FETCH_BUDGET: Duration = Duration::from_millis(750);
+/// Identity fields on `/status` have to come back before a caller's own
+/// timeout. GraphQL and P2P probes can sit for much longer while the node
+/// is still opening, which made desktop readiness look like a dead server.
+const STATUS_PROBE_BUDGET: Duration = Duration::from_secs(2);
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHttpState {
     pub(crate) graphql: String,
     pub(crate) agent_name: String,
     pub(crate) agent_did: String,
+    /// Live process ceiling advertised to desktop start/readiness checks.
+    /// Lowercase `meta-only` / `readonly` / `readwrite`, matching `gents status`.
+    pub(crate) tool_ceiling: String,
+    pub(crate) tool_root: Option<String>,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
@@ -45,12 +54,50 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     pub(crate) enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
+    pub(crate) activation_runtime: Arc<OnceCell<gents::Gents>>,
+    pub(crate) activation_observation: watch::Receiver<RuntimeActivationObservation>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RuntimeActivationObservation {
+    pub(crate) event: Option<(u64, String, Result<(), String>)>,
+    pub(crate) router: Option<(u64, String)>,
+}
+
+impl RuntimeActivationObservation {
+    pub(crate) fn successful_for(&self, generation: u64, fingerprint: &str) -> bool {
+        self.event
+            .as_ref()
+            .is_some_and(|(event_generation, event_fingerprint, result)| {
+                *event_generation == generation
+                    && event_fingerprint == fingerprint
+                    && result.is_ok()
+            })
+            && self
+                .router
+                .as_ref()
+                .is_some_and(|(router_generation, router_fingerprint)| {
+                    *router_generation == generation && router_fingerprint == fingerprint
+                })
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn empty_activation_state() -> (
+    Arc<OnceCell<gents::Gents>>,
+    watch::Receiver<RuntimeActivationObservation>,
+) {
+    let (sender, receiver) = watch::channel(RuntimeActivationObservation::default());
+    drop(sender);
+    (Arc::new(OnceCell::new()), receiver)
 }
 
 pub(crate) fn runtime_contract_router(
     graphql: String,
     agent_name: String,
     agent_did: String,
+    tool_ceiling: String,
+    tool_root: Option<String>,
     // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
     // `None` leaves it off. It is opt-in because it is an unauthenticated read
     // surface (same listener exposure as the GraphQL endpoint).
@@ -60,6 +107,8 @@ pub(crate) fn runtime_contract_router(
     codex_shim_health: Option<crate::shared::CodexShimHealthHandle>,
     enrollment_offer_issuer: EnrollmentOfferIssuerHandle,
     enrollment_decisions: EnrollmentDecisionServiceHandle,
+    activation_runtime: Arc<OnceCell<gents::Gents>>,
+    activation_observation: watch::Receiver<RuntimeActivationObservation>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -72,6 +121,8 @@ pub(crate) fn runtime_contract_router(
         graphql,
         agent_name,
         agent_did,
+        tool_ceiling,
+        tool_root,
         started_at: chrono::Utc::now().to_rfc3339(),
         started_instant: Instant::now(),
         backend_health,
@@ -81,6 +132,8 @@ pub(crate) fn runtime_contract_router(
         codex_shim_health,
         enrollment_offer_issuer,
         enrollment_decisions,
+        activation_runtime,
+        activation_observation,
     };
 
     let mut router = Router::new()
@@ -88,6 +141,7 @@ pub(crate) fn runtime_contract_router(
         .route("/version", get(version_handler))
         .route("/healthz", get(healthz_handler))
         .route("/status", get(status_handler))
+        .route("/activation", get(activation_handler))
         .route("/enrollment/decisions", post(enrollment_decision_handler))
         .route("/enrollment/pending", post(enrollment_pending_handler))
         .route("/self", get(self_handler))
@@ -116,6 +170,94 @@ pub(crate) fn runtime_contract_router(
     }
 
     router.with_state(state)
+}
+
+async fn activation_handler(State(state): State<RuntimeHttpState>) -> Response {
+    match tokio::time::timeout(Duration::from_secs(30), wait_for_activation(state)).await {
+        Ok(response) => response,
+        Err(_) => (
+            StatusCode::GATEWAY_TIMEOUT,
+            axum::Json(json!({"error":"runtime did not activate the exact desired configuration"})),
+        )
+            .into_response(),
+    }
+}
+
+async fn wait_for_activation(state: RuntimeHttpState) -> Response {
+    let Some(runtime) = state.activation_runtime.get() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(json!({"error":"runtime activation probe is not ready"})),
+        )
+            .into_response();
+    };
+    let mut observed = state.activation_observation;
+    loop {
+        // Mark before resolving: an acknowledgement that arrives while the
+        // canonical resolver awaits remains visible to this iteration.
+        drop(observed.borrow_and_update());
+        let expected = match runtime.document_runtime_configuration_fingerprint().await {
+            Ok(value) => value,
+            Err(error) => return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(
+                    json!({"error":format!("resolving desired runtime configuration: {error:#}")}),
+                ),
+            )
+                .into_response(),
+        };
+        let current = observed.borrow().clone();
+        if let Some((generation, fingerprint, result)) = current
+            .event
+            .as_ref()
+            .filter(|(_, fingerprint, _)| fingerprint == &expected)
+        {
+            if let Err(error) = result {
+                return (StatusCode::CONFLICT, axum::Json(json!({"error":"event-source activation failed", "generation":generation, "fingerprint":fingerprint, "detail":error}))).into_response();
+            }
+            if current.successful_for(*generation, fingerprint) {
+                let readiness = match crate::commands::status::load_live_behavior_readiness(
+                    &state.graphql,
+                    &state.agent_did,
+                )
+                .await
+                {
+                    Ok(Some(row)) => gents_protocol::row::decode_behavior_readiness_snapshot(
+                        &row,
+                        &state.agent_did,
+                    )
+                    .ok(),
+                    Ok(None) | Err(_) => None,
+                };
+                let ready = readiness.is_some_and(|snapshot| {
+                    snapshot.process_state.accepts_work()
+                        && snapshot.active_generation == *generation
+                        && snapshot.router_generation == *generation
+                });
+                if !ready {
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        axum::Json(json!({"error":"runtime readiness is not current for activated generation"})),
+                    )
+                        .into_response();
+                }
+                // Re-resolve after observing the acknowledgement: a concurrent
+                // writer must never receive a fence for its predecessor.
+                match runtime.document_runtime_configuration_fingerprint().await {
+                    Ok(actual) if actual == expected => return (StatusCode::OK, axum::Json(json!({"generation":generation,"fingerprint":fingerprint}))).into_response(),
+                    Ok(_) => continue,
+                    Err(error) => return (StatusCode::SERVICE_UNAVAILABLE, axum::Json(json!({"error":format!("resolving desired runtime configuration: {error:#}")}))).into_response(),
+                }
+            }
+        }
+        if observed.changed().await.is_err() {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                axum::Json(json!({"error":"runtime activation observer stopped"})),
+            )
+                .into_response();
+        }
+    }
 }
 
 async fn enrollment_decision_handler(
@@ -304,14 +446,27 @@ fn p2p_metrics_from_status(
 }
 
 async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
-    let mut p2p = crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql).await;
+    let mut p2p = match tokio::time::timeout(
+        P2P_METRICS_FETCH_BUDGET,
+        crate::commands::p2p::load_live_http_p2p_status(None, &state.graphql),
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => json!({ "p2p_error": "timed out while the runtime was still starting" }),
+    };
     if let Some(admission) = state.p2p_admission.as_ref() {
         if let Some(map) = p2p.as_object_mut() {
             map.insert("p2p_admission".to_string(), admission.to_json());
         }
     }
-    let mut body = match load_metrics_query_data(&state.graphql, &state.agent_did).await {
-        Ok(data) => {
+    let metrics = tokio::time::timeout(
+        STATUS_PROBE_BUDGET,
+        load_metrics_query_data(&state.graphql, &state.agent_did),
+    )
+    .await;
+    let mut body = match metrics {
+        Ok(Ok(data)) => {
             let data = with_local_native_executors(data);
             let health = render_healthz_payload(&state, Some(&data), None);
             let runtime = data
@@ -328,6 +483,8 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "graphql": state.graphql,
                 "agent_name": state.agent_name,
                 "agent_did": state.agent_did,
+                "tool_ceiling": state.tool_ceiling,
+                "tool_root": state.tool_root,
                 "runtime": runtime,
                 "runtimes": data.agent_runtimes,
                 "backends": data.inference_backends,
@@ -335,7 +492,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "p2p": p2p.clone(),
             })
         }
-        Err(error) => json!({
+        Ok(Err(error)) => json!({
             "status": "unhealthy",
             "ok": false,
             "service": "gents",
@@ -345,17 +502,40 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "graphql": state.graphql,
             "agent_name": state.agent_name,
             "agent_did": state.agent_did,
+            "tool_ceiling": state.tool_ceiling,
+            "tool_root": state.tool_root,
             "runtime": Value::Null,
             "runtimes": [],
             "backends": [],
             "p2p": p2p.clone(),
             "error": error.to_string(),
         }),
+        Err(_) => json!({
+            "status": "starting",
+            "ok": false,
+            "service": "gents",
+            "version": version_response().version,
+            "started_at": state.started_at,
+            "uptime_seconds": state.started_instant.elapsed().as_secs(),
+            "graphql": state.graphql,
+            "agent_name": state.agent_name,
+            "agent_did": state.agent_did,
+            "tool_ceiling": state.tool_ceiling,
+            "tool_root": state.tool_root,
+            "runtime": Value::Null,
+            "runtimes": [],
+            "backends": [],
+            "p2p": p2p.clone(),
+            "error": "runtime metrics were not ready",
+        }),
     };
 
     if body.get("error").is_none() {
-        if let Ok((behaviors, context_budget, context)) =
-            load_self_view(&state.graphql, &state.agent_did).await
+        if let Ok(Ok((behaviors, context_budget, context))) = tokio::time::timeout(
+            STATUS_PROBE_BUDGET,
+            load_self_view(&state.graphql, &state.agent_did),
+        )
+        .await
         {
             if let Some(map) = body.as_object_mut() {
                 map.insert("behaviors".to_string(), json!(behaviors));
@@ -583,10 +763,13 @@ mod tests {
     use super::*;
 
     fn state() -> RuntimeHttpState {
+        let (activation_runtime, activation_observation) = empty_activation_state();
         RuntimeHttpState {
             graphql: "http://127.0.0.1:9181/api/v0/graphql".to_string(),
             agent_name: "amy".to_string(),
             agent_did: "did:key:zAgent".to_string(),
+            tool_ceiling: "readwrite".to_string(),
+            tool_root: Some("/Users/test".to_string()),
             started_at: "2026-06-04T00:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
@@ -596,7 +779,32 @@ mod tests {
             codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
         }
+    }
+
+    #[test]
+    fn activation_observation_requires_one_successful_exact_tuple() {
+        let observed = RuntimeActivationObservation {
+            event: Some((4, "desired".into(), Ok(()))),
+            router: Some((4, "desired".into())),
+        };
+        assert!(observed.successful_for(4, "desired"));
+        assert!(!observed.successful_for(5, "desired"));
+        assert!(!observed.successful_for(4, "other"));
+
+        let failed = RuntimeActivationObservation {
+            event: Some((4, "desired".into(), Err("seed failed".into()))),
+            router: Some((4, "desired".into())),
+        };
+        assert!(!failed.successful_for(4, "desired"));
+
+        let torn = RuntimeActivationObservation {
+            event: Some((4, "desired".into(), Ok(()))),
+            router: Some((5, "desired".into())),
+        };
+        assert!(!torn.successful_for(4, "desired"));
     }
 
     fn behavior(id: &str, enabled: bool, model_name: &str) -> SelfBehavior {

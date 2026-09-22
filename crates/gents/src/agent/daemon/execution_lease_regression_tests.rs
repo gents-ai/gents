@@ -2,6 +2,7 @@
 #[derive(Clone)]
 struct NonTerminalProvider {
     empty_forever: bool,
+    active_chunks: Option<usize>,
     stream_calls: Arc<AtomicUsize>,
     empty_deltas: Arc<AtomicUsize>,
 }
@@ -15,6 +16,7 @@ impl CompletionModel for NonTerminalProvider {
     fn make(_: &(), _: impl Into<String>) -> Self {
         Self {
             empty_forever: false,
+            active_chunks: None,
             stream_calls: Arc::new(AtomicUsize::new(0)),
             empty_deltas: Arc::new(AtomicUsize::new(0)),
         }
@@ -69,6 +71,7 @@ impl CompletionModel for NonTerminalProvider {
 
         self.stream_calls.fetch_add(1, Ordering::SeqCst);
         let endless = self.empty_forever;
+        let active_chunks = self.active_chunks;
         let empty_deltas = self.empty_deltas.clone();
         let inner: rig::streaming::StreamingResult<()> =
             Box::pin(stream::unfold(0usize, move |index| {
@@ -81,6 +84,16 @@ impl CompletionModel for NonTerminalProvider {
                             )),
                             1,
                         ))
+                    } else if index <= active_chunks.unwrap_or(0) {
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        Some((
+                            Ok(RawStreamingChoice::Message(format!(" chunk-{index}"))),
+                            index + 1,
+                        ))
+                    } else if active_chunks.is_some_and(|chunks| index == chunks + 1) {
+                        Some((Ok(RawStreamingChoice::FinalResponse(())), index + 1))
+                    } else if active_chunks.is_some() {
+                        None
                     } else if endless {
                         tokio::time::sleep(Duration::from_millis(10)).await;
                         empty_deltas.fetch_add(1, Ordering::SeqCst);
@@ -110,6 +123,7 @@ async fn eight_nonterminal_requests_converge_on_same_daemon(empty_forever: bool)
     let identity = behavior.principal_identity().clone();
     let model = NonTerminalProvider {
         empty_forever,
+        active_chunks: None,
         stream_calls: Arc::new(AtomicUsize::new(0)),
         empty_deltas: Arc::new(AtomicUsize::new(0)),
     };
@@ -289,4 +303,122 @@ async fn eight_partial_provider_eofs_fail_and_preserve_progress_without_restart(
 #[tokio::test]
 async fn eight_infinite_empty_provider_streams_expire_semantic_leases_without_restart() {
     eight_nonterminal_requests_converge_on_same_daemon(true).await;
+}
+
+#[tokio::test]
+async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() {
+    let data = tempfile::tempdir().unwrap();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(data.path())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let mut behavior = test_behavior();
+    {
+        let behavior = Arc::get_mut(&mut behavior).unwrap();
+        behavior.stream_batch_ms = crate::config::DEFAULT_STREAM_BATCH_MS;
+        behavior.stream_liveness_timeout = Duration::from_secs(1);
+    }
+    let agent_did = behavior.agent_did().to_owned();
+    let identity = behavior.principal_identity().clone();
+    let model = NonTerminalProvider {
+        empty_forever: false,
+        active_chunks: Some(8),
+        stream_calls: Arc::new(AtomicUsize::new(0)),
+        empty_deltas: Arc::new(AtomicUsize::new(0)),
+    };
+    let prompt = LayeredPromptBuilder::for_behavior(
+        &behavior.system_prompt,
+        &behavior.behavior_id,
+        &[],
+        false,
+        &[],
+    );
+    let mut daemon = BehaviorDaemon::new(
+        node.clone(),
+        behavior.clone(),
+        Arc::new(model.clone()),
+        prompt.preamble().to_owned(),
+        Arc::new(Vec::new()),
+        prompt,
+        FailurePolicy::default(),
+        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
+        BackgroundToolRegistry::default(),
+        BackgroundExecutionRegistry::default(),
+        Arc::new(StartupBarrier::ready_for_test()),
+        crate::runtime_status::RuntimeStatusHandle::new(node.clone(), agent_did.clone()),
+        1,
+        crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity,
+            crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        ),
+    )
+    .unwrap();
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let request = create_routed_request(&node, &behavior, &agent_did).await;
+    let request_id = request.request_id.clone();
+    let session = gents_protocol::session::AgentSession {
+        session_id: request.session_id.clone(),
+        agent_did: agent_did.clone(),
+        requester_did: request.requester_did.clone(),
+        behavior_id: behavior.behavior_id.clone(),
+        created_at: request.created_at.clone(),
+        closed_at: None,
+        title: Some(gents_protocol::session::SessionTitle {
+            text: "active short lease".into(),
+            source: gents_protocol::session::SessionTitleSource::Task,
+        }),
+        tags: vec![],
+        provenance: None,
+        observation: None,
+    };
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(session).unwrap())
+            .unwrap();
+    let seeded = node
+        .execute(&format!(
+            "mutation {{ create_AgentSession(input: {input}) {{_docID}} }}"
+        ))
+        .await;
+    assert!(!seeded.has_errors(), "{:?}", seeded.errors);
+
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        daemon.process_request(request, shutdown_rx),
+    )
+    .await
+    .expect("active stream completes across multiple lease durations");
+
+    let request_id = crate::graphql::escape_graphql_string(&request_id);
+    let result = node
+        .execute(&format!(
+            r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state execution_progress_seq }}
+                AgentMessage(filter: {{ request_id: {{ _eq: "{request_id}" }}, role: {{ _eq: "assistant" }} }}) {{ content }}
+            }}"#
+        ))
+        .await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let data = result.data.unwrap();
+    assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "completed");
+    assert!(
+        data["AgentRequest"][0]["execution_progress_seq"]
+            .as_i64()
+            .unwrap()
+            >= 4,
+        "durable nonempty snapshots must renew the lease: {data}"
+    );
+    let content = data["AgentMessage"][0]["content"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        content.contains("chunk-8"),
+        "final output was truncated: {data}"
+    );
+    assert_eq!(model.stream_calls.load(Ordering::SeqCst), 1);
+    node.shutdown().await;
 }

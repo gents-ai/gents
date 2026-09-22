@@ -1701,6 +1701,101 @@ mod tests {
                     .is_none()
             );
         }
+        let mut missing_base_context = context.clone();
+        missing_base_context.accounting.turn_index += 1;
+        let missing_base_container = json!({
+            "gents_capture_json": 1,
+            "request_body": {
+                "gents_lossless_json": 1,
+                "kind": "object_delta",
+                "base": {
+                    "doc_id": "missing-context-details-base",
+                    "field_commit_cid": "missing-cid",
+                    "depth": 0,
+                    "agent_did": "did:key:z-sessions",
+                    "requester_did": "",
+                    "session_id": "session-a",
+                    "source": "openai_chat_completions",
+                    "capture_scope": "inference.1"
+                },
+                "changed": {},
+                "removed": []
+            },
+            "provenance_payload": {
+                "gents_lossless_json": 1,
+                "kind": "full",
+                "value": {}
+            }
+        });
+        let mutation = format!(
+            r#"mutation {{create_RenderedRequest(input: {{
+                capture_key:"context-details-missing-base", request_doc_id:"{}",
+                request_id:"missing-base", agent_did:"did:key:z-sessions",
+                session_id:"session-a", capture_scope:"inference.1",
+                turn_index:{}, attempt:{}, capture_version:2,
+                source:"openai_chat_completions", request_json:"{}", provenance_json:"{}"
+            }}) {{_docID}}}}"#,
+            escape_graphql_string(doc),
+            missing_base_context.accounting.turn_index,
+            missing_base_context.accounting.attempt,
+            escape_graphql_string(&missing_base_container.to_string()),
+            escape_graphql_string(&json!({"admission":{"call_id":context.call_id}}).to_string())
+        );
+        let inserted = node.execute(&mutation).await;
+        assert!(!inserted.has_errors(), "{:?}", inserted.errors);
+        assert!(load_session_context_details(
+            &node,
+            "did:key:z-sessions",
+            None,
+            "session-a",
+            &missing_base_context
+        )
+        .await
+        .unwrap()
+        .is_none());
+        for (offset, key, request_json, provenance_json) in [
+            (
+                2,
+                "context-details-malformed-provenance",
+                json!({"messages":[]}).to_string(),
+                "not-json".to_string(),
+            ),
+            (
+                3,
+                "context-details-malformed-messages",
+                json!({"messages":{}}).to_string(),
+                json!({"admission":{"call_id":context.call_id}}).to_string(),
+            ),
+        ] {
+            let mut malformed_context = context.clone();
+            malformed_context.accounting.turn_index += offset;
+            let mutation = format!(
+                r#"mutation {{create_RenderedRequest(input: {{
+                    capture_key:"{key}", request_doc_id:"{}", request_id:"{key}",
+                    agent_did:"did:key:z-sessions", session_id:"session-a",
+                    capture_scope:"inference.1", turn_index:{}, attempt:{},
+                    capture_version:1, source:"openai_chat_completions",
+                    request_json:"{}", provenance_json:"{}"
+                }}) {{_docID}}}}"#,
+                escape_graphql_string(doc),
+                malformed_context.accounting.turn_index,
+                malformed_context.accounting.attempt,
+                escape_graphql_string(&request_json),
+                escape_graphql_string(&provenance_json),
+            );
+            let inserted = node.execute(&mutation).await;
+            assert!(!inserted.has_errors(), "{:?}", inserted.errors);
+            assert!(load_session_context_details(
+                &node,
+                "did:key:z-sessions",
+                None,
+                "session-a",
+                &malformed_context
+            )
+            .await
+            .unwrap()
+            .is_none());
+        }
         context.call_id = "foreign-call".into();
         assert!(load_session_context_details(
             &node,

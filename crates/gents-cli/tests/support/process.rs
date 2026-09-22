@@ -166,9 +166,7 @@ pub fn spawn_server_with_ready_json(
         .args(extra_args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    for (name, value) in envs {
-        command.env(name, value);
-    }
+    configure_foreground_server_env(&mut command, envs);
     let child = command.spawn().context("spawning gents server")?;
     let mut serve = ServeProcess::with_logs(child, stdout_log, stderr_log);
 
@@ -237,11 +235,19 @@ pub fn spawn_server_with_env(
         .args(extra_args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    configure_foreground_server_env(&mut command, envs);
+    let child = command.spawn().context("spawning gents server")?;
+    Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
+}
+
+/// Foreground test servers must retain ordinary CLI stderr even when the test
+/// runner itself was launched from a native service environment. Explicit
+/// fixture overrides are applied afterward so native logging remains testable.
+pub(crate) fn configure_foreground_server_env(command: &mut Command, envs: &[(&str, &str)]) {
+    command.env_remove("GENTS_SYSTEM_LOG");
     for (name, value) in envs {
         command.env(name, value);
     }
-    let child = command.spawn().context("spawning gents server")?;
-    Ok(ServeProcess::with_logs(child, stdout_log, stderr_log))
 }
 
 pub fn wait_for_port(port: u16, serve: &mut ServeProcess) -> Result<()> {

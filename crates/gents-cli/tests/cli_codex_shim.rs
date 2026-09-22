@@ -38,6 +38,43 @@ use uuid::Uuid;
 type ShimWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 const LIVE_CODEX_SHIM_TIMEOUT_SECS: &str = "900";
 
+#[test]
+fn foreground_server_fixture_isolates_native_service_logging_marker() {
+    fn configured_marker(command: &Command) -> Option<Option<&std::ffi::OsStr>> {
+        command
+            .get_envs()
+            .find(|(name, _)| *name == "GENTS_SYSTEM_LOG")
+            .map(|(_, value)| value)
+    }
+
+    let mut foreground = Command::new("gents");
+    support::process::configure_foreground_server_env(&mut foreground, &[]);
+    assert_eq!(configured_marker(&foreground), Some(None));
+
+    let mut explicit_native = Command::new("gents");
+    support::process::configure_foreground_server_env(
+        &mut explicit_native,
+        &[("GENTS_SYSTEM_LOG", "1")],
+    );
+    assert_eq!(
+        configured_marker(&explicit_native),
+        Some(Some(std::ffi::OsStr::new("1")))
+    );
+
+    explicit_native.env("RUST_LOG", "error");
+    support::process::configure_foreground_server_env(
+        &mut explicit_native,
+        &[("RUST_LOG", "gents_server::commands::serve=info")],
+    );
+    assert_eq!(
+        explicit_native
+            .get_envs()
+            .find(|(name, _)| *name == "RUST_LOG")
+            .and_then(|(_, value)| value),
+        Some(std::ffi::OsStr::new("gents_server::commands::serve=info"))
+    );
+}
+
 fn gents_model_selection_id(backend_id: &str, model_name: &str) -> String {
     format!("{backend_id}::{model_name}")
 }

@@ -35,9 +35,13 @@ pub(super) async fn wait_for_visible_content(
     core: &ClientCore,
     request: &str,
     expected: &str,
+    visibility_budget: Duration,
 ) -> Result<()> {
     let started = Instant::now();
-    timeout(Duration::from_millis(500), async {
+    // The caller selects either the strict first-visible budget or the paced
+    // cadence budget. In both cases the provider completion gate remains
+    // closed, so terminal persistence cannot satisfy this observation.
+    timeout(visibility_budget, async {
         loop {
             let visible = core
                 .store()

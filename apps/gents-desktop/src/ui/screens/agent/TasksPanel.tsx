@@ -130,7 +130,11 @@ function Editor({
       return;
     }
     setRunning(true);
-    const pending = shell.runTask({ taskId: task.taskId, args: parsed });
+    const pending = shell.runTask({
+      taskId: task.taskId,
+      agentDid: deployment.agentDid,
+      args: parsed,
+    });
     const intentGeneration = shell.captureComposeIntent();
     try {
       const r = await pending;

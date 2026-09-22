@@ -145,6 +145,7 @@ fn validate_write_tools(decls: &[WriteToolDecl]) -> anyhow::Result<()> {
 #[test]
 fn validate_rejects_write_tool_with_empty_tool_name() {
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "   ".to_string(),
         collection: "ActionRequest".to_string(),
         description: String::new(),
@@ -164,6 +165,7 @@ fn validate_rejects_write_tool_with_empty_tool_name() {
 fn validate_rejects_invalid_write_tool_collection_identifiers() {
     for collection in ["  ", "ActionRequest) { _docID } mutation {"] {
         let decls = vec![WriteToolDecl {
+            notification: None,
             tool_name: "request_action".to_string(),
             collection: collection.to_string(),
             description: String::new(),
@@ -186,6 +188,7 @@ fn validate_rejects_invalid_write_tool_collection_identifiers() {
 fn validate_rejects_invalid_write_tool_field_identifiers() {
     for field_name in ["  ", "title: \"escaped\""] {
         let decls = vec![WriteToolDecl {
+            notification: None,
             tool_name: "request_action".to_string(),
             collection: "ActionRequest".to_string(),
             description: String::new(),
@@ -211,6 +214,7 @@ fn validate_rejects_invalid_write_tool_field_identifiers() {
 #[test]
 fn validate_rejects_model_provided_requester_identity() {
     let mut decl = WriteToolDecl {
+        notification: None,
         tool_name: "write_gate".to_string(),
         collection: "GraphGate".to_string(),
         description: String::new(),
@@ -235,6 +239,7 @@ fn validate_rejects_model_provided_requester_identity() {
 #[test]
 fn validate_rejects_duplicate_write_tool_names() {
     let decl = |collection: &str| WriteToolDecl {
+        notification: None,
         tool_name: "request_action".to_string(),
         collection: collection.to_string(),
         description: String::new(),
@@ -255,6 +260,7 @@ fn validate_rejects_duplicate_write_tool_names() {
 fn validate_accepts_well_formed_write_tools() {
     let decls = vec![
         WriteToolDecl {
+            notification: None,
             tool_name: "request_action".to_string(),
             collection: "ActionRequest".to_string(),
             description: "Request an action".to_string(),
@@ -266,6 +272,7 @@ fn validate_accepts_well_formed_write_tools() {
             output_obligation: None,
         },
         WriteToolDecl {
+            notification: None,
             tool_name: "log_note".to_string(),
             collection: "Note".to_string(),
             description: String::new(),
@@ -296,6 +303,7 @@ fn write_tool_output_obligation_round_trips_and_rejects_zero_minimum() {
     assert_eq!(serde_json::to_value(&decl).unwrap(), value);
 
     let decls = vec![WriteToolDecl {
+        notification: None,
         output_obligation: Some(WriteToolOutputObligation {
             scope: WriteToolOutputObligationScope::Trigger,
             minimum_writes: 0,
@@ -324,6 +332,7 @@ fn dynamic_output_obligation_requires_a_model_provided_required_field() {
         }],
     ] {
         let decls = vec![WriteToolDecl {
+            notification: None,
             tool_name: "write_result".to_string(),
             collection: "Result".to_string(),
             description: String::new(),
@@ -346,6 +355,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
     // `read_file` is a native tool; reusing it as a write-tool name would
     // silently shadow the native impl at registration.
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "read_file".to_string(),
         collection: "AuditLog".to_string(),
         description: String::new(),
@@ -371,6 +381,7 @@ fn validate_rejects_write_tool_name_colliding_with_builtin() {
 #[test]
 fn validate_rejects_write_tool_name_colliding_with_defra_query() {
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "defra_query".to_string(),
         collection: "AuditLog".to_string(),
         description: String::new(),
@@ -388,6 +399,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
     // A host.cli entry is advertised as its own tool in the same Tools
     // document, so a write tool reusing that name is a dispatch collision.
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "rg".to_string(),
         collection: "AuditLog".to_string(),
         description: String::new(),
@@ -410,6 +422,7 @@ fn validate_rejects_write_tool_name_colliding_with_cli_tool() {
 #[test]
 fn validate_rejects_duplicate_field_names_within_decl() {
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: String::new(),
@@ -742,6 +755,7 @@ fn read_only_commands_absent_decodes_to_none() {
 #[test]
 fn write_tools_round_trip() {
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: "Emit one ActionRequest describing a remediable drift.".to_string(),
@@ -784,6 +798,7 @@ async fn tools_document_round_trips_write_tools() {
     crate::ensure_runtime_schemas(&node).await.unwrap();
 
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "request_action".to_string(),
         collection: "ActionRequest".to_string(),
         description: "Emit one ActionRequest describing a remediable drift.".to_string(),
@@ -1348,6 +1363,7 @@ fn write_tool_fill_grammar_is_exact_and_runtime_fields_cannot_be_required() {
     }
 
     let decls = vec![WriteToolDecl {
+        notification: None,
         tool_name: "write_result".into(),
         collection: "Result".into(),
         description: String::new(),

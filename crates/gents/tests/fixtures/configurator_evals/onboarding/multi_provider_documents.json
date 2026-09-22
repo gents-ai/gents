@@ -1,0 +1,63 @@
+{
+  "claim": "configuration-shape-only",
+  "agent_did": "did:key:onboarding-fixture",
+  "backends": [
+    {
+      "agent_did": "did:key:onboarding-fixture",
+      "backend_id": "local-openai-compatible",
+      "name": "Local OpenAI-compatible endpoint",
+      "provider_kind": "OpenAiCompatible",
+      "openai_wire_api": "chat_completions",
+      "endpoint": "http://127.0.0.1:18000/v1",
+      "auth": { "kind": "unauthenticated" },
+      "connect_timeout_secs": 10,
+      "discovery_timeout_secs": 10,
+      "max_concurrent": 1,
+      "max_queue_depth": 4,
+      "enabled": true,
+      "tags": ["onboarding-fixture"]
+    },
+    {
+      "agent_did": "did:key:onboarding-fixture",
+      "backend_id": "claude-subscription-shape",
+      "name": "Claude subscription shape",
+      "provider_kind": "ClaudeCliSubscription",
+      "endpoint": "https://api.anthropic.com",
+      "auth": { "kind": "principal_oauth" },
+      "connect_timeout_secs": 10,
+      "discovery_timeout_secs": 10,
+      "max_concurrent": 1,
+      "max_queue_depth": 4,
+      "enabled": true,
+      "tags": ["onboarding-fixture", "requires-operator-login"]
+    }
+  ],
+  "sampling": {
+    "agent_did": "did:key:onboarding-fixture",
+    "sampling_id": "onboarding-glm-sampling",
+    "display_name": "Onboarding GLM sampling",
+    "temperature": 1.0,
+    "top_p": 0.95,
+    "tags": ["onboarding-fixture"]
+  },
+  "profiles": [
+    {
+      "agent_did": "did:key:onboarding-fixture",
+      "profile_id": "local-coding",
+      "display_name": "Local coding",
+      "backend_id": "local-openai-compatible",
+      "model_name": "GLM-5.3-Flash-NVFP4",
+      "sampling_id": "onboarding-glm-sampling",
+      "tags": ["onboarding-fixture"]
+    },
+    {
+      "agent_did": "did:key:onboarding-fixture",
+      "profile_id": "claude-coding-shape",
+      "display_name": "Claude coding shape",
+      "backend_id": "claude-subscription-shape",
+      "model_name": "claude-sonnet-shape-only",
+      "tags": ["onboarding-fixture", "requires-operator-login"]
+    }
+  ],
+  "oauth_credentials": []
+}

@@ -7,12 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::cli::output_format::OutputFormat;
 use crate::{
-    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CODEX_AFTER_HELP, CONFIG_AFTER_HELP,
-    CONFIG_EXPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP, INIT_AFTER_HELP,
-    MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP, RESET_AFTER_HELP,
-    RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP, SESSION_AFTER_HELP,
-    STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP, TASK_AFTER_HELP,
-    TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
+    BACKGROUND_AFTER_HELP, CHAT_AFTER_HELP, CLI_AFTER_HELP, CLOUD_AFTER_HELP, CODEX_AFTER_HELP,
+    CONFIG_AFTER_HELP, CONFIG_EXPORT_AFTER_HELP, DIAGNOSE_AFTER_HELP, FLEET_AFTER_HELP,
+    INIT_AFTER_HELP, MCP_AFTER_HELP, P2P_AFTER_HELP, PROVISION_AFTER_HELP, REQUEST_AFTER_HELP,
+    RESET_AFTER_HELP, RESPONSE_AFTER_HELP, SCHEMA_AFTER_HELP, SERVER_AFTER_HELP,
+    SESSION_AFTER_HELP, STATUS_AFTER_HELP, SUBAGENT_AFTER_HELP, SUBAGENT_LIST_AFTER_HELP,
+    TASK_AFTER_HELP, TOOLS_AFTER_HELP, TRACE_AFTER_HELP,
 };
 
 use crate::default_backend_max_queue_depth;
@@ -60,6 +60,11 @@ pub(crate) enum Command {
         after_help = SERVER_AFTER_HELP
     )]
     Server(ServeArgs),
+    #[command(about = "Install and control the per-user native Gents runtime service")]
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
+    },
     #[command(about = "Chat with the local agent in the terminal", after_help = CHAT_AFTER_HELP)]
     Chat(ChatArgs),
     #[command(
@@ -87,6 +92,11 @@ pub(crate) enum Command {
         after_help = "Default: opens the browser and listens on a localhost callback. Use --manual on hosts without a browser: open the printed URL anywhere, then paste the code shown on Anthropic's page."
     )]
     ClaudeLogin(ClaudeLoginArgs),
+    #[command(about = "Sign in to and work with a gents cloud", after_help = CLOUD_AFTER_HELP)]
+    Cloud {
+        #[command(subcommand)]
+        command: CloudCommand,
+    },
     #[command(name = "__native-fs-runner", hide = true)]
     NativeFsRunner(NativeFsRunnerArgs),
     #[command(about = "Inspect and control live P2P runtime connectivity", after_help = P2P_AFTER_HELP)]
@@ -202,6 +212,71 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubagentCommand,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ServiceCommand {
+    #[command(about = "Write the native user-service definition without starting it")]
+    Install(ServiceTargetArgs),
+    #[command(about = "Start the native service")]
+    Start {
+        #[command(flatten)]
+        target: ServiceTargetArgs,
+        #[arg(long, help = "Also enable the service at login")]
+        enable: bool,
+    },
+    #[command(about = "Stop and disable the native service")]
+    Stop {
+        #[command(flatten)]
+        target: ServiceTargetArgs,
+        #[arg(long, help = "Leave login-time enablement unchanged")]
+        keep_enabled: bool,
+    },
+    Restart(ServiceTargetArgs),
+    Enable(ServiceTargetArgs),
+    Disable(ServiceTargetArgs),
+    #[command(about = "Show native supervisor state (not runtime health)")]
+    Status(ServiceTargetArgs),
+    #[command(about = "Remove the service definition while preserving runtime data")]
+    Uninstall(ServiceTargetArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct ServiceTargetArgs {
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "Absolute path to the gents runtime executable")]
+    pub(crate) executable: Option<PathBuf>,
+}
+
+pub(crate) enum ServiceAction {
+    Install,
+    Start { enable: bool },
+    Stop { keep_enabled: bool },
+    Restart,
+    Enable,
+    Disable,
+    Status,
+    Uninstall,
+}
+
+impl ServiceCommand {
+    pub(crate) fn into_parts(self) -> (Option<PathBuf>, Option<PathBuf>, ServiceAction) {
+        let (target, action) = match self {
+            Self::Install(target) => (target, ServiceAction::Install),
+            Self::Start { target, enable } => (target, ServiceAction::Start { enable }),
+            Self::Stop {
+                target,
+                keep_enabled,
+            } => (target, ServiceAction::Stop { keep_enabled }),
+            Self::Restart(target) => (target, ServiceAction::Restart),
+            Self::Enable(target) => (target, ServiceAction::Enable),
+            Self::Disable(target) => (target, ServiceAction::Disable),
+            Self::Status(target) => (target, ServiceAction::Status),
+            Self::Uninstall(target) => (target, ServiceAction::Uninstall),
+        };
+        (target.home, target.executable, action)
+    }
 }
 
 #[derive(clap::Subcommand)]
@@ -686,6 +761,35 @@ pub(crate) struct ClaudeLoginArgs {
     pub(crate) client_id: Option<String>,
     #[arg(long, help = "OAuth token endpoint override for testing")]
     pub(crate) token_url: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub(crate) enum CloudCommand {
+    #[command(
+        name = "login",
+        about = "Sign in to a gents cloud and store the workspace token in DefraDB",
+        after_help = CLOUD_AFTER_HELP
+    )]
+    Login(CloudLoginArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct CloudLoginArgs {
+    #[arg(
+        long,
+        env = "GENTS_CLOUD",
+        value_name = "HOST",
+        help = "gents cloud host to sign in to, for example app.dev.gents.xyz"
+    )]
+    pub(crate) cloud: String,
+    #[arg(long, help = "Agent home directory. Defaults to ~/.gents")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(long, help = "GraphQL endpoint for the target gents node")]
+    pub(crate) graphql: Option<String>,
+    #[arg(long, help = "Agent DID that owns the OAuthCredential document")]
+    pub(crate) agent_did: Option<String>,
+    #[arg(long, default_value = "gents-cloud")]
+    pub(crate) provider: String,
 }
 
 #[derive(clap::Args)]
@@ -1523,7 +1627,7 @@ pub(crate) struct TraceCaptureArgs {
     pub(crate) list: bool,
     #[arg(
         long = "include-body",
-        help = "Include request_json and the raw provenance manifest — the captured provider request body — in the output"
+        help = "Include the recovered provider request_json, raw provenance manifest, and decoded provenance payload in the output"
     )]
     pub(crate) include_body: bool,
     #[arg(long = "output-file", help = "Write JSON to a file instead of stdout")]
@@ -3100,6 +3204,16 @@ pub(crate) enum MailboxCommand {
     Show(MailboxItemArgs),
     #[command(about = "Dismiss one open mailbox item as its owner")]
     Dismiss(MailboxItemArgs),
+    #[command(about = "Submit a signed reply using a mailbox item's existing route")]
+    Reply(MailboxReplyArgs),
+}
+
+#[derive(clap::Args)]
+pub(crate) struct MailboxReplyArgs {
+    #[command(flatten)]
+    pub(crate) item: MailboxItemArgs,
+    #[arg(value_name = "MESSAGE")]
+    pub(crate) message: String,
 }
 
 #[derive(clap::Args)]

@@ -8,6 +8,7 @@ use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
 use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
+use gents::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -584,6 +585,79 @@ async fn seed_rendered_request_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
+async fn seed_v2_rendered_request_rows(node: &Arc<EmbeddedNode>) -> Result<()> {
+    let sink = gents::rendered_request::DefraRenderedRequestSink::new(Arc::clone(node));
+    for turn in 0..2usize {
+        let capture_scope = "inference.1".to_string();
+        let assembly_trace = gents::rendered_request::AssemblyTrace::from_effective_messages(
+            gents::rendered_request::AssemblyBuildPath::Budgeted,
+            Vec::new(),
+        );
+        let mut payload = serde_json::to_value(&assembly_trace)?;
+        payload["threaded_tool_results"] = json!([{
+            "tool_call_id": "native-result",
+            "native_tool_output": {"ok": false, "exit_code": 7},
+            "padding": "p".repeat(4096 + turn * 512)
+        }]);
+        let rendered = RenderedCompletionRequest {
+            capture_key: gents::rendered_request::capture_key(
+                "did:test:amy",
+                "session-cap-v2",
+                "",
+                &capture_scope,
+                turn,
+                0,
+            )?,
+            capture_version: gents::rendered_request::CAPTURE_VERSION,
+            request_doc_id: String::new(),
+            request_commit_cid: String::new(),
+            request_id: "req-cap-v2".into(),
+            capture_scope: capture_scope.clone(),
+            turn_index: turn,
+            attempt: 0,
+            agent_did: "did:test:amy".into(),
+            requester_did: String::new(),
+            behavior_id: "amy".into(),
+            session_id: "session-cap-v2".into(),
+            model_name: "test-model".into(),
+            source: gents::rendered_request::RenderedRequestSource::OpenAiChatCompletions,
+            request_json: json!({
+                "model":"test-model",
+                "messages":[{"role":"user","content":"x".repeat(8192 + turn * 512)}]
+            }),
+            messages_json: json!([]),
+            tools_json: json!([]),
+            tool_choice_json: Value::Null,
+            sampling_json: Value::Null,
+            provenance_json: serde_json::to_value(
+                gents::rendered_request::ProvenanceManifest::captured_only(
+                    capture_scope,
+                    None,
+                    None,
+                    assembly_trace.clone(),
+                ),
+            )?,
+            provenance_payload_json: payload,
+            assembly_trace,
+        };
+        sink.capture(rendered).await?;
+    }
+    let response = node
+        .execute(r#"{RenderedRequest(filter:{request_id:{_eq:"req-cap-v2"}},order:{created_at:ASC}){request_json}}"#)
+        .await;
+    anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["RenderedRequest"]
+        .as_array()
+        .unwrap();
+    anyhow::ensure!(rows.len() == 2);
+    let second: Value = serde_json::from_str(rows[1]["request_json"].as_str().unwrap())?;
+    anyhow::ensure!(
+        second["request_body"]["kind"] == "object_delta"
+            && second["provenance_payload"]["kind"] == "object_delta"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
     let tempdir = tempfile::tempdir().context("creating tempdir")?;
@@ -593,6 +667,7 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         let node = initialized_trace_node(tempdir.path(), &agent_home).await?;
         ensure_runtime_schemas(&node).await?;
         seed_rendered_request_rows(&node).await?;
+        seed_v2_rendered_request_rows(&node).await?;
     }
     let home = agent_home.to_str().context("agent home utf8")?;
 
@@ -689,6 +764,43 @@ async fn trace_capture_fetches_metadata_with_field_commit_cid() -> Result<()> {
         .unwrap_or_else(|| panic!("expected request_json with --include-body: {capture:#}"));
     assert!(body.contains("capture me"));
     assert!(capture.get("provenance_json").is_some());
+    let provenance_payload = capture
+        .get("provenance_payload_json")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("decoded provenance payload must be JSON text: {capture:#}"));
+    let provenance_payload: Value =
+        serde_json::from_str(provenance_payload).context("parsing decoded provenance payload")?;
+    assert_eq!(provenance_payload["trace_version"], 4);
+
+    // Mixed-version exports keep the same JSON-text payload contract. The
+    // second v2 row is a witnessed delta and carries a native tool result.
+    let output = run_cli_text(
+        tempdir.path(),
+        &[
+            "trace",
+            "capture",
+            "--home",
+            home,
+            "--request-id",
+            "req-cap-v2",
+            "--include-body",
+            "--list",
+        ],
+    )?;
+    let listing: Value = serde_json::from_str(&output)?;
+    let v2 = listing["captures"].as_array().context("v2 captures")?;
+    assert_eq!(v2.len(), 2);
+    for capture in v2 {
+        assert!(capture["request_json"].is_string(), "{capture:#}");
+        let payload = capture["provenance_payload_json"]
+            .as_str()
+            .unwrap_or_else(|| panic!("v2 provenance payload must be JSON text: {capture:#}"));
+        let payload: Value = serde_json::from_str(payload)?;
+        assert_eq!(
+            payload["threaded_tool_results"][0]["native_tool_output"]["exit_code"],
+            7
+        );
+    }
 
     // Ambiguity without --list fails with a narrowing hint.
     let stderr = run_cli_failure_stderr(
@@ -1251,7 +1363,7 @@ fn trace_project_eval_jsonl_lines(
 async fn initialized_trace_node(
     cwd: &std::path::Path,
     agent_home: &std::path::Path,
-) -> Result<EmbeddedNode> {
+) -> Result<Arc<EmbeddedNode>> {
     let home = agent_home.to_str().context("agent home utf8")?;
     let init = run_init_json(
         cwd,
@@ -1278,6 +1390,7 @@ async fn initialized_trace_node(
         .build()
         .await
         .context("opening initialized embedded node")
+        .map(Arc::new)
 }
 
 async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Result<String> {

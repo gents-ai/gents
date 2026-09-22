@@ -288,14 +288,16 @@ pub struct RequestResendResultView {
 #[tauri::command]
 pub async fn desktop_request_resend(
     request_id: String,
+    agent_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<RequestResendResultView, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
+    let scope = agent_did.or_else(|| core.selected_agent_did());
     let submitted = core
-        .resend_request(&request_id)
+        .resend_request_in_scope(&request_id, scope.as_deref())
         .await
         .map_err(|error| BridgeError::untyped(error.to_string()))?;
     Ok(RequestResendResultView {
@@ -307,24 +309,17 @@ pub async fn desktop_request_resend(
 #[tauri::command]
 pub async fn desktop_request_retry(
     request_id: String,
+    agent_did: Option<String>,
     state: State<'_, DesktopAppState>,
 ) -> Result<ChatSendResult, BridgeError> {
     let Some(core) = current_core(&state) else {
         return Err(BridgeError::untyped("desktop client is not running"));
     };
 
+    let scope = agent_did.or_else(|| core.selected_agent_did());
     let parent = core
-        .store()
-        .snapshot()
-        .requests
-        .iter()
-        .find(|request| request.request_id == request_id)
-        .cloned()
-        .ok_or_else(|| {
-            BridgeError::untyped(format!(
-                "retry parent request not found: request_id={request_id}"
-            ))
-        })?;
+        .request_in_scope(&request_id, scope.as_deref())
+        .map_err(|error| BridgeError::untyped(error.to_string()))?;
     let submitted = core
         .retry_request(&parent)
         .await

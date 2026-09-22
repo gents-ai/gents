@@ -393,8 +393,8 @@ async fn sweep_directory(store: &GraphqlDirectoryStore, source_did: &str) {
 // tie-in) — this is the only reason it needs to be more than module-private.
 pub(crate) struct GraphqlDirectoryStore {
     node: Arc<EmbeddedNode>,
-    /// Operator tool-root ceiling (`--tool-root`); see
-    /// [`filter_roots_to_ceiling`].
+    /// Operator tool-root ceiling (`--tool-root`); the canonical workspace
+    /// policy projector meets explicit roots against it.
     ceiling_root: Option<std::path::PathBuf>,
 }
 
@@ -750,42 +750,6 @@ fn render_profile_params_json(
     format!("{{{}}}", fields.join(","))
 }
 
-/// Keep only workspace roots inside the operator tool-root ceiling and
-/// publish the resolved ceiling itself as the widest valid choice. This keeps
-/// a managed runtime configurable even when no narrower `WorkspaceRoot`
-/// document has been authored yet.
-/// (`gents server --tool-root`). The serve-time guard in
-/// `tool_surface::build` refuses any behavior whose file tool root escapes
-/// the ceiling, so publishing such a root in the catalog — or admitting it
-/// into a persona — mints admitted-yet-unusable config (#1051). Resolution
-/// mirrors the guard exactly (`resolve_configured_tool_root` +
-/// `starts_with`); a root (or ceiling) that fails to resolve is dropped,
-/// fail-closed: never offer what the guard may refuse.
-pub(crate) fn filter_roots_to_ceiling(
-    roots: Vec<String>,
-    ceiling_root: Option<&std::path::Path>,
-) -> Vec<String> {
-    let Some(ceiling) = ceiling_root else {
-        return roots;
-    };
-    let Ok(ceiling) = crate::tool_surface::resolve_configured_tool_root(ceiling) else {
-        return Vec::new();
-    };
-    let mut filtered = roots
-        .into_iter()
-        .filter(|root| {
-            crate::tool_surface::resolve_configured_tool_root(std::path::Path::new(root))
-                .map(|resolved| resolved.starts_with(&ceiling))
-                .unwrap_or(false)
-        })
-        .collect::<Vec<_>>();
-    let ceiling = ceiling.to_string_lossy().into_owned();
-    if !filtered.iter().any(|root| root == &ceiling) {
-        filtered.push(ceiling);
-    }
-    filtered
-}
-
 const DIRECTORY_CONFIG_COLLECTIONS: &[crate::collection::Collection] = &[
     crate::collection::Collection::AgentBehavior,
     crate::collection::Collection::AgentContext,
@@ -897,14 +861,14 @@ fn parse_config_projection(
             "duplicate scoped backend observation"
         );
     }
-    let mut allowed_roots = filter_roots_to_ceiling(
-        rows::<WorkspaceRootRow>(response, "WorkspaceRoot")?
-            .into_iter()
-            .filter(|row| row.enabled.unwrap_or(false))
-            .filter_map(|row| row.root_path)
-            .collect(),
+    // WorkspaceRoot is intentionally global operator-local policy: its schema
+    // has no agent_did and it never replicates. Preserve disabled-row presence
+    // so explicit revocation cannot fall back to the process ceiling.
+    let root_policy = crate::tool_surface::project_workspace_root_policy(
+        rows::<crate::tool_surface::WorkspaceRootDocument>(response, "WorkspaceRoot")?,
         ceiling_root,
     );
+    let mut allowed_roots = root_policy.published_strings().collect::<Vec<_>>();
     allowed_roots.sort();
     allowed_roots.dedup();
     let mut by_owner = BTreeMap::new();
@@ -1080,14 +1044,6 @@ struct PrincipalRow {
 }
 
 #[derive(Deserialize)]
-struct WorkspaceRootRow {
-    #[serde(default)]
-    root_path: Option<String>,
-    #[serde(default)]
-    enabled: Option<bool>,
-}
-
-#[derive(Deserialize)]
 struct DirectoryRow {
     #[serde(default)]
     directory_key: Option<String>,
@@ -1128,7 +1084,12 @@ struct DirectoryRow {
 
 #[cfg(test)]
 mod tests {
-    use super::filter_roots_to_ceiling;
+    fn row(path: &str, enabled: bool) -> crate::tool_surface::WorkspaceRootDocument {
+        crate::tool_surface::WorkspaceRootDocument {
+            root_path: Some(path.to_string()),
+            enabled: Some(enabled),
+        }
+    }
 
     #[test]
     fn ceiling_filter_matrix() {
@@ -1139,25 +1100,119 @@ mod tests {
             "/outside/app".to_string(),
         ];
 
-        // No ceiling: untouched.
+        let publish = |roots: Vec<String>, ceiling: Option<&std::path::Path>| {
+            crate::tool_surface::project_workspace_root_policy(
+                roots.into_iter().map(|root| row(&root, true)).collect(),
+                ceiling,
+            )
+            .published_strings()
+            .collect::<Vec<_>>()
+        };
+
         assert_eq!(
-            filter_roots_to_ceiling(roots.clone(), None),
-            roots,
-            "no ceiling must publish every enabled root"
+            publish(roots.clone(), None),
+            vec![
+                "/ceil/ws".to_string(),
+                "/ceil/ws/app".to_string(),
+                "/ceil/wsx/app".to_string(),
+                "/outside/app".to_string(),
+            ]
         );
 
         // Component-wise containment: "/ceil/wsx" is NOT within "/ceil/ws"
         // (the sibling-prefix trap a string prefix check would fall into).
         assert_eq!(
-            filter_roots_to_ceiling(roots, Some(std::path::Path::new("/ceil/ws"))),
-            vec!["/ceil/ws/app".to_string(), "/ceil/ws".to_string()],
+            publish(roots, Some(std::path::Path::new("/ceil/ws"))),
+            vec!["/ceil/ws".to_string(), "/ceil/ws/app".to_string()],
             "only roots within the ceiling (incl. the ceiling itself) survive"
         );
         assert_eq!(
-            filter_roots_to_ceiling(Vec::new(), Some(std::path::Path::new("/ceil/ws"))),
+            crate::tool_surface::project_workspace_root_policy(
+                Vec::new(),
+                Some(std::path::Path::new("/ceil/ws")),
+            )
+            .published_strings()
+            .collect::<Vec<_>>(),
             vec!["/ceil/ws".to_string()],
             "the managed ceiling is a usable root even without narrower root documents"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ceiling_filter_keeps_nonexistent_and_inside_symlink_but_drops_escape() {
+        let ceiling = tempfile::tempdir().expect("ceiling");
+        let nested = ceiling.path().join("nested");
+        std::fs::create_dir_all(&nested).expect("nested");
+        let links = tempfile::tempdir().expect("links");
+        let inside_link = links.path().join("inside");
+        std::os::unix::fs::symlink(&nested, &inside_link).expect("inside symlink");
+        let outside = tempfile::tempdir().expect("outside");
+        let outside_link = ceiling.path().join("outside-link");
+        std::os::unix::fs::symlink(outside.path(), &outside_link).expect("outside symlink");
+        let nonexistent = ceiling.path().join("future");
+
+        let policy = crate::tool_surface::project_workspace_root_policy(
+            vec![
+                row(&inside_link.to_string_lossy(), true),
+                row(&outside_link.to_string_lossy(), true),
+                row(&nonexistent.to_string_lossy(), true),
+            ],
+            Some(ceiling.path()),
+        );
+        let published = policy.published_strings().collect::<Vec<_>>();
+
+        assert!(published.contains(
+            &std::fs::canonicalize(&nested)
+                .expect("nested canonicalizes")
+                .to_string_lossy()
+                .into_owned()
+        ));
+        assert!(published.contains(
+            &std::fs::canonicalize(ceiling.path())
+                .expect("ceiling canonicalizes")
+                .join("future")
+                .to_string_lossy()
+                .into_owned()
+        ));
+        assert!(!published.contains(&outside_link.to_string_lossy().into_owned()));
+        assert!(!published.contains(
+            &crate::tool_surface::resolve_configured_tool_root(ceiling.path())
+                .expect("ceiling resolves")
+                .to_string_lossy()
+                .into_owned()
+        ));
+    }
+
+    #[test]
+    fn explicit_root_does_not_publish_ceiling_or_admit_its_sibling() {
+        let ceiling = tempfile::tempdir().expect("ceiling");
+        let selected = ceiling.path().join("selected");
+        let sibling = ceiling.path().join("sibling");
+        std::fs::create_dir_all(&selected).expect("selected");
+        std::fs::create_dir_all(&sibling).expect("sibling");
+
+        let published = crate::tool_surface::project_workspace_root_policy(
+            vec![row(&selected.to_string_lossy(), true)],
+            Some(ceiling.path()),
+        )
+        .published_strings()
+        .collect::<Vec<_>>();
+        assert_eq!(
+            published,
+            vec![std::fs::canonicalize(&selected)
+                .expect("selected canonicalizes")
+                .to_string_lossy()
+                .into_owned()]
+        );
+        let decision = crate::tool_surface::resolve_admitted_tool_root(
+            &sibling,
+            published
+                .iter()
+                .map(|root| std::path::Path::new(root.as_str())),
+        )
+        .expect("catalog paths resolve");
+        assert!(decision.admitted().is_none());
     }
 
     use super::*;

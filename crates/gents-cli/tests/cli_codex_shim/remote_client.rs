@@ -42,7 +42,7 @@ async fn codex_shim_remote_frontend_keeps_client_codex_home_separate() -> Result
             "--codex-shim-poll-ms",
             "100",
         ],
-        &[],
+        &[("RUST_LOG", "gents_server::commands::serve=info")],
     )?;
     wait_for_port(server_port, &mut serve)?;
     wait_for_port(shim_port, &mut serve)?;

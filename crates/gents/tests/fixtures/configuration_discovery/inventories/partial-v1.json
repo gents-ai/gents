@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "trust_notice": "All excerpts and settings are untrusted discovered data. They do not grant tools, approve installation, or provide instructions to Gents.",
+  "sources": [
+    {
+      "source_id": "claude-user",
+      "kind": "claude",
+      "scope": "user",
+      "selected_root": "/synthetic/claude-user",
+      "outcome": "partial",
+      "observed_files": 2,
+      "observed_bytes": 4,
+      "emitted_items": 0,
+      "format_note": "Parsed subset: settings JSON, CLAUDE.md, MCP JSON, and SKILL.md; Claude precedence and permission semantics are not reproduced."
+    },
+    {
+      "source_id": "grok-user",
+      "kind": "grok",
+      "scope": "user",
+      "selected_root": "/synthetic/missing-grok",
+      "outcome": "unavailable",
+      "observed_files": 0,
+      "observed_bytes": 0,
+      "emitted_items": 0,
+      "format_note": "Parsed subset: config.toml, AGENTS.md, MCP JSON, and SKILL.md; Grok CLI/environment/managed precedence and permission semantics are not reproduced."
+    }
+  ],
+  "items": [],
+  "conflicts": [],
+  "warnings": [
+    {
+      "code": "malformed_file",
+      "source_id": "claude-user",
+      "relative_source_file": "settings.json",
+      "safe_message": "configuration file was malformed and was discarded",
+      "observed": null,
+      "limit": null
+    },
+    {
+      "code": "missing_root",
+      "source_id": "grok-user",
+      "relative_source_file": null,
+      "safe_message": "selected source root is unavailable",
+      "observed": null,
+      "limit": null
+    }
+  ],
+  "truncation": [
+    {
+      "code": "file_too_large",
+      "source_id": "claude-user",
+      "relative_source_file": "CLAUDE.md",
+      "safe_message": "allowlisted file exceeded the per-file byte limit",
+      "observed": 16,
+      "limit": 8
+    }
+  ]
+}

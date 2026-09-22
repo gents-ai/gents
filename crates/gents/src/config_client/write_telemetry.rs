@@ -120,9 +120,11 @@ impl WriteAttemptEvent {
         let max_attempts = self.ordinal.max_attempts;
         let retry_index = attempt - 1;
         let max_retries = max_attempts - 1;
-        tracing::event!(
+        macro_rules! emit {
+            ($level:expr) => {
+                tracing::event!(
             target: WRITE_ATTEMPT_EVENT_TARGET,
-            tracing::Level::INFO,
+            $level,
             operation = self.operation.0,
             backend = match self.backend { WriteBackend::Embedded => "embedded", WriteBackend::Http => "http" },
             mode = match self.mode { WriteMode::AutoCommit => "auto_commit", WriteMode::Transaction => "transaction" },
@@ -173,7 +175,25 @@ impl WriteAttemptEvent {
             },
             cancelled = matches!(self.outcome, WriteOutcome::Cancelled),
             "DefraDB committed-write attempt finished"
-        );
+                );
+            };
+        }
+        if self.is_clean_committed_noop() {
+            emit!(tracing::Level::DEBUG);
+        } else {
+            emit!(tracing::Level::INFO);
+        }
+    }
+
+    fn is_clean_committed_noop(&self) -> bool {
+        matches!(self.outcome, WriteOutcome::Committed)
+            && !matches!(self.retry_owner, RetryOwner::DefraDb)
+            && self.ordinal.attempt == 1
+            && self.conflict_source == ConflictSource::None
+            && matches!(self.receipt_recovery, ReceiptRecovery::NotAttempted)
+            && self.backoff.is_none()
+            && self.affected_documents == Some(0)
+            && matches!(self.rollback, RollbackStatus::NotNeeded)
     }
 }
 
@@ -183,7 +203,7 @@ fn millis(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::WriteOperation;
+    use super::*;
 
     #[test]
     fn operation_names_are_static_and_low_cardinality() {
@@ -194,5 +214,41 @@ mod tests {
                 "accepted {invalid:?}"
             );
         }
+    }
+
+    fn committed_event(affected_documents: Option<u64>) -> WriteAttemptEvent {
+        WriteAttemptEvent {
+            operation: WriteOperation::new("test.noop").unwrap(),
+            backend: WriteBackend::Embedded,
+            mode: WriteMode::Transaction,
+            retry_owner: RetryOwner::GentsTransaction,
+            ordinal: WriteAttemptOrdinal::new(1, 4).unwrap(),
+            outcome: WriteOutcome::Committed,
+            conflict_source: ConflictSource::None,
+            receipt_recovery: ReceiptRecovery::NotAttempted,
+            backoff: None,
+            elapsed: Duration::ZERO,
+            affected_documents,
+            rollback: RollbackStatus::NotNeeded,
+        }
+    }
+
+    #[test]
+    fn only_clean_known_zero_effect_commits_are_debug_events() {
+        assert!(committed_event(Some(0)).is_clean_committed_noop());
+        assert!(!committed_event(None).is_clean_committed_noop());
+        assert!(!committed_event(Some(1)).is_clean_committed_noop());
+
+        let mut retried = committed_event(Some(0));
+        retried.ordinal = WriteAttemptOrdinal::new(2, 4).unwrap();
+        assert!(!retried.is_clean_committed_noop());
+
+        let mut recovered = committed_event(Some(0));
+        recovered.receipt_recovery = ReceiptRecovery::StableIdConfirmed;
+        assert!(!recovered.is_clean_committed_noop());
+
+        let mut retry_count_unknown = committed_event(Some(0));
+        retry_count_unknown.retry_owner = RetryOwner::DefraDb;
+        assert!(!retry_count_unknown.is_clean_committed_noop());
     }
 }

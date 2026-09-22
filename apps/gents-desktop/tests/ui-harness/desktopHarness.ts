@@ -613,18 +613,22 @@ export function createDesktopUiHarness(
       lastError: p2pStatus === "healthy" ? null : "fixture transport unavailable",
       lastFailureAt: p2pStatus === "healthy" ? null : STARTED_AT,
     };
+    // A fresh empty fleet has no home until setup provisions one. After that,
+    // the snapshot has to name the initialized agent or the config screen
+    // will not treat it as the local service.
+    const freshHome = scenario === "empty-fleet" && !provisioned;
     const next: DesktopClientSnapshot = {
       bootstrap: {
         defaultAgentHome: "/tmp/gents-bombadil/agent",
-        initAgentName: "Bombadil UI Agent",
-        initAgentDid: AGENT_DID,
-        initToolCeiling: "ReadWrite",
-        initToolRoot: "/tmp/gents-bombadil/workspace",
+        initAgentName: freshHome ? null : deployment.label,
+        initAgentDid: freshHome ? null : AGENT_DID,
+        initToolCeiling: freshHome ? null : "ReadWrite",
+        initToolRoot: freshHome ? null : "/tmp/gents-bombadil/workspace",
         desktopHome: "/tmp/gents-bombadil/desktop",
         peerDirectoryPath: "/tmp/gents-bombadil/peers.json",
         nodeDataDir: "/tmp/gents-bombadil/node",
-        logFilePath: "/tmp/gents-bombadil/desktop.log",
-        agentHomeExists: true,
+        diagnosticsHint: "native logging",
+        agentHomeExists: !freshHome,
         desktopHomeExists: true,
         peerDirectoryExists: true,
         clientStateExists: true,
@@ -855,6 +859,10 @@ export function createDesktopUiHarness(
           },
           async commitManagedServerAutoStart(agentName) {
             managedServer = { ...managedServer, autoStart: true, agentName };
+            return clone(managedServer);
+          },
+          async setManagedServerAutoStart(enabled) {
+            managedServer = { ...managedServer, autoStart: enabled };
             return clone(managedServer);
           },
           async restartManagedServer(agentName, authority) {

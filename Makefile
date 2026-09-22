@@ -1,6 +1,7 @@
 SHELL := /bin/sh
 
 CARGO ?= cargo
+CARGO_TARGET_DIR ?= target
 LAKE ?= lake
 NPM ?= npm
 
@@ -138,6 +139,7 @@ help:
 	@echo "  make desktop-ui-live-e2e   Run live browser-to-runtime desktop smoke"
 	@echo "  make desktop-ui-live-e2e-real  Run live browser smoke against a configured real provider"
 	@echo "  make desktop-native-preflight  Build frontend/Rust shell and print Tauri CLI version"
+	@echo "  make desktop-native-stage-sidecar  Build and stage the release CLI for a Tauri bundle"
 	@echo "  make desktop-native-dev    Launch the native Tauri dev app for manual QA"
 	@echo "  make desktop-native-build  Build the native Tauri app bundle"
 	@echo
@@ -197,7 +199,7 @@ build:
 	$(CARGO) build
 
 build-cli:
-	$(CARGO) build -p gents-cli
+	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli $(CARGO_TARGET_FLAG)
 
 .PHONY: maintain
 maintain:
@@ -363,7 +365,7 @@ RELEASE_ARTIFACT := gents-$(TARGET_TRIPLE)
 
 .PHONY: release-cli release-cli-headless fast-dev-cli dist-cli measure-build-graph measure-release-cli measure-build-attribution
 release-cli:
-	$(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
+	CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(CARGO) build -p gents-cli --release --locked $(CARGO_TARGET_FLAG)
 
 release-cli-headless:
 	$(CARGO) build -p gents-cli --release --locked --no-default-features $(CARGO_TARGET_FLAG)
@@ -407,7 +409,7 @@ check-cli-headless:
 proofs:
 	cd $(PROOFS_DIR) && $(LAKE) build
 
-.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals test-evals-browser live-configurator-eval
+.PHONY: test test-agent test-agent-conformance test-agent-e2e test-cli test-evals live-configurator-eval
 test: test-agent test-cli
 
 test-agent:
@@ -420,12 +422,24 @@ test-evals:
 	node --test scripts/evals/report.test.mjs scripts/evals/watch.test.mjs
 	$(CARGO) test -p gents --test e2e_configurator
 
-test-evals-browser:
-	$(NPM) run test:evals
-	$(CARGO) test -p gents --test e2e_configurator browser_checker_accepts_static_fixture_without_live_inference -- --ignored
-
 live-configurator-eval:
 	node scripts/evals/run-configurator.mjs $(CARGO)
+
+.PHONY: live-mailbox-eval
+.PHONY: live-host-steward-eval
+live-host-steward-eval:
+	GENTS_EVAL_SUITE=host-steward GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
+
+.PHONY: test-host-eval-environment
+.PHONY: live-host-maintenance-eval
+live-host-maintenance-eval:
+	GENTS_EVAL_SUITE=host-maintenance GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
+
+test-host-eval-environment:
+	GENTS_HOST_FIXTURE_TEST=1 node --test scripts/evals/host-environment.test.mjs
+
+live-mailbox-eval:
+	GENTS_EVAL_SUITE=monitor-mailbox GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-10} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-10} node scripts/evals/run-configurator.mjs $(CARGO)
 
 test-agent-e2e:
 	$(CARGO) test -p gents --test e2e_lifecycle
@@ -473,14 +487,22 @@ desktop-ui-live-e2e:
 desktop-ui-live-e2e-real:
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:live:e2e:real
 
-desktop-native-preflight:
+DESKTOP_CLI_PROFILE ?= release
+DESKTOP_CLI_BUILD_DIR = $(CARGO_TARGET_DIR)/$(if $(TARGET),$(TARGET)/,)$(DESKTOP_CLI_PROFILE)
+DESKTOP_CLI_BINARY = $(DESKTOP_CLI_BUILD_DIR)/gents
+
+.PHONY: desktop-native-stage-sidecar
+desktop-native-stage-sidecar: release-cli
+	scripts/stage-tauri-sidecar.sh --source "$(DESKTOP_CLI_BINARY)" --target "$(TARGET_TRIPLE)"
+
+desktop-native-preflight: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run test:ui:native:preflight
 
-desktop-native-dev:
+desktop-native-dev: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
 
-desktop-native-build:
-	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build
+desktop-native-build: desktop-native-stage-sidecar
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:

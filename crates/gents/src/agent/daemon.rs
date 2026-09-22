@@ -138,6 +138,7 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     slot_generation: u64,
     operator_tool_root: Option<PathBuf>,
     request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
+    root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
 }
 
 enum HandleRequestOutcome {
@@ -204,6 +205,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             slot_generation,
             operator_tool_root: None,
             request_admission,
+            root_execution_guard: None,
         })
     }
 
@@ -216,6 +218,26 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         crate::workspace::install_process_operator_tool_root(root.clone());
         self.operator_tool_root = root;
         self
+    }
+
+    pub(super) fn with_root_execution_guard(
+        mut self,
+        guard: Option<crate::tool_surface::RootExecutionGuard>,
+    ) -> Self {
+        self.root_execution_guard = guard;
+        self
+    }
+
+    /// Attach the filesystem-policy observations assembled with a tool
+    /// surface. Production RuntimeContext and focused owned-loop tests share
+    /// this step so request-time root revalidation cannot be test-only wiring.
+    pub(super) fn with_tool_surface_runtime_policy(
+        self,
+        guard: Option<crate::tool_surface::RootExecutionGuard>,
+        operator_root: Option<PathBuf>,
+    ) -> Self {
+        self.with_root_execution_guard(guard)
+            .with_operator_tool_root(operator_root)
     }
 
     /// Request-scoped compaction options: the daemon-lifetime knobs plus the
@@ -430,7 +452,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         behavior_id = %self.behavior.behavior_id,
                         request_id = %request.request_id,
                         error = %error,
-                        "rejecting request with an invalid canonical session binding"
+                        "rejecting request with an invalid canonical admission binding"
                     );
                     if let Err(rejection_error) =
                         lifecycle.reject_admission(&error.to_string()).await

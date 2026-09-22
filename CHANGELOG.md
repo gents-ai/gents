@@ -6,6 +6,93 @@ and is what compatibility decisions key on — see `contracts/desktop-bridge.jso
 
 ## Unreleased
 
+### Changed
+
+- GitHub Releases attach the desktop installers and their checksums. CLI
+  archives, install notes, debug symbols, build metrics, and desktop npm
+  packages stay off the release page. The container image takes the Linux
+  CLI from the release workflow's artifacts.
+
+## 0.18.5 - 2026-09-22
+
+### Added
+
+- `gents cloud login --cloud <host>` signs this machine in to a gents cloud
+  with a device code and stores the workspace token as an `OAuthCredential`.
+- Self-config can preview a native graph proposal through the existing graph
+  permission gate without publishing it.
+
+### Fixed
+
+- An AppImage desktop install copies its runtime to
+  `~/.local/share/gents/desktop/runtime/gents` and runs the user service from
+  that copy. Opening a newer AppImage refreshes the copy, and start or
+  restart rewrites a stopped service definition so it does not keep a
+  temporary `/tmp/.mount_*` path.
+- Desktop startup treats a managed service as ready once it publishes its
+  identity, instead of waiting out GraphQL probes that are still starting.
+  On macOS the background item is attributed to Gents rather than the
+  code-signing name.
+- Admit a tool root that is a real descendant of the reviewed root, and reject
+  sibling prefixes, traversal, and paths that escape the anchor.
+
+## 0.18.4 - 2026-09-21
+
+### Fixed
+
+- Advertise live `tool_ceiling` and `tool_root` on `GET /status` so desktop
+  start can match the initialized identity and reviewed host authority. 0.18.3
+  omitted those fields and failed first-run and existing-home start with
+  "native runtime readiness did not match".
+- Continue an existing `~/.gents` home in desktop setup instead of presenting
+  it as a brand-new agent.
+
+### Changed
+
+- GitHub Releases now ship only user-facing installers and CLI archives: macOS
+  DMG, Linux `.deb`/AppImage, platform `gents-*.tar.gz` plus checksums and
+  install notes. dSYM, build-metrics, and desktop npm tarballs remain workflow
+  artifacts.
+
+## 0.18.3 - 2026-09-18
+
+### Fixed
+
+- Verify Linux desktop sidecars through the canonical `gents version` command.
+
+## 0.18.2 - 2026-09-18
+
+### Changed
+
+- Losslessly delta-encode witnessed request captures while preserving existing
+  capture readability, reducing repeated transcript storage without a history
+  rewrite.
+- Reduce streaming progress and reasoning-preview volume, quiet idle runtime
+  logging, and delegate managed runtime lifetime and logs to native user
+  services.
+
+### Fixed
+
+- Restore signed macOS desktop packaging on release runners using Python 3.14.
+- Include the vendored DefraDB Explorer assets in the Linux runtime image.
+
+## 0.18.1 - 2026-09-18
+
+### Added
+
+- Embed the DefraDB Explorer: `gents serve` hosts the vendored embedded build
+  at `/explorer/` on its HTTP listener (same-origin with the DefraDB API), and
+  the desktop settings menu gains a Developer → DB Explorer option that opens
+  it for the managed runtime in a dedicated window (bridge contract 7.10,
+  `desktop_open_db_explorer`).
+
+### Fixed
+
+- Return the runtime control watcher to idle after a successful visible
+  reconcile instead of polling the full configuration graph every second.
+  Failed reloads and transient resolution errors continue to retry, and local
+  operator configuration writes still hot-reload.
+
 ## 0.17.0 - 2026-09-11
 
 ### Changed

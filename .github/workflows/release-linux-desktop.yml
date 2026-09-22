@@ -1,0 +1,110 @@
+name: Release Linux desktop
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-linux-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: [self-hosted, Linux, X64, workstation-1]
+    container: rust:1-bookworm
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: "8"
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "off"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      GENTS_BUILD_GIT_SHA: ${{ github.sha }}
+      GENTS_BUILD_GIT_REF: ${{ github.ref }}
+      GENTS_BUILD_GIT_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      GENTS_BUILD_GIT_DIRTY: "false"
+      APPIMAGE_EXTRACT_AND_RUN: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install Linux desktop build and smoke-test dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential clang cmake \
+            libclang-dev libssl-dev pkg-config protobuf-compiler \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            patchelf file libfuse2 xdg-utils xvfb xauth dbus-x11 ca-certificates
+      - uses: dtolnay/rust-toolchain@1.97.1
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install frontend dependencies and validate version
+        run: |
+          npm ci
+          node scripts/check-desktop-package-boundaries.mjs
+          version=$(node -p 'require("./package.json").version')
+          if [[ "$GITHUB_REF_TYPE" == tag && "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "Release tag does not match package version" >&2
+            exit 1
+          fi
+      - name: Build and stage managed runtime CLI
+        run: |
+          cargo build --release --locked -p gents-cli
+          bash scripts/stage-tauri-sidecar.sh --source target/release/gents
+      - name: Build desktop installers with embedded managed runtime
+        working-directory: apps/gents-desktop
+        run: npm run tauri -- build --config src-tauri/tauri.bundle.conf.json --ci --bundles deb,appimage -- --locked
+      - name: Verify and smoke-test installed package
+        run: bash scripts/verify-linux-desktop.sh
+      - name: Retain installers and checksums
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-desktop-x86_64-linux
+          path: target/desktop-dist/*
+          if-no-files-found: error
+      - name: Retain smoke diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gents-desktop-linux-smoke
+          path: target/desktop-smoke-*.log
+          if-no-files-found: ignore
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: gents-desktop-x86_64-linux
+          path: dist
+      - name: Attach verified desktop installers
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" \
+              --notes "Gents release with Linux x86_64 desktop installers." \
+              || gh release view "$GITHUB_REF_NAME" >/dev/null
+          fi
+          # Installers and their checksum. The install note stays in the repo docs.
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/gents-desktop_*.deb \
+            dist/gents-desktop_*.AppImage \
+            dist/SHA256SUMS-desktop-linux.txt \
+            --clobber

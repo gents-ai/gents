@@ -1,6 +1,3 @@
-use std::fs::OpenOptions;
-use std::path::Path;
-
 use gents::log_rate::{RateLimitConfig, RateLimitFilter};
 use tracing_subscriber::{prelude::*, EnvFilter};
 
@@ -13,42 +10,23 @@ pub fn init_tracing_with_config(config: crate::config::TracingConfig) {
         Some(ref filter) => EnvFilter::try_new(filter).unwrap_or_else(|_| default_env_filter()),
         None => EnvFilter::try_from_default_env().unwrap_or_else(|_| default_env_filter()),
     };
-    let log_path = config.log_path;
-    if let Some(parent) = log_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let writer_path = log_path.clone();
+    let native = gents::native_logging::layer("desktop");
+    let console = config.console || native.is_none();
+    let _ = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(native.map(|layer| layer.with_filter(log_rate_ceiling())))
+        .with(console.then(|| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                .with_target(true)
+                .with_filter(log_rate_ceiling())
+        }))
+        .try_init();
 
-    if config.console {
-        let file_writer_path = writer_path.clone();
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_target(true)
-            .with_writer(move || open_log_writer(&file_writer_path))
-            .with_filter(log_rate_ceiling());
-        let stderr_layer = tracing_subscriber::fmt::layer()
-            .with_target(false)
-            .compact()
-            .without_time()
-            .with_filter(log_rate_ceiling());
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(stderr_layer)
-            .with(file_layer)
-            .try_init();
-    } else {
-        let file_layer = tracing_subscriber::fmt::layer()
-            .with_ansi(false)
-            .with_target(true)
-            .with_writer(move || open_log_writer(&writer_path))
-            .with_filter(log_rate_ceiling());
-        let _ = tracing_subscriber::registry()
-            .with(env_filter)
-            .with(file_layer)
-            .try_init();
-    }
-
-    tracing::info!(path = %log_path.display(), "desktop logs initialized");
+    tracing::info!(
+        diagnostics = gents::native_logging::diagnostics_hint(),
+        "desktop logs initialized"
+    );
 }
 
 fn default_env_filter() -> EnvFilter {
@@ -60,21 +38,6 @@ fn default_env_filter() -> EnvFilter {
              gents=info,\
              defra_node=info",
     ))
-}
-
-fn open_log_writer(path: &Path) -> std::fs::File {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .unwrap_or_else(|_| {
-            let fallback = std::env::temp_dir().join("gents-desktop.log");
-            OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&fallback)
-                .expect("open fallback desktop log file")
-        })
 }
 
 fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {

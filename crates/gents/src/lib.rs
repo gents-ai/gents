@@ -29,6 +29,7 @@ pub mod compaction;
 pub(crate) mod completion_factory;
 pub mod config;
 pub mod config_client;
+pub mod configuration_discovery;
 pub mod defra_query;
 pub mod defra_write;
 pub mod descendant_graph;
@@ -50,6 +51,7 @@ pub mod inference_setup;
 pub mod interrupt;
 #[cfg(test)]
 pub(crate) mod lean_vocab_test;
+pub mod native_logging;
 pub mod oauth_credential;
 pub(crate) mod oauth_http;
 pub mod openai_wire;
@@ -342,7 +344,7 @@ pub use schema::{
 };
 pub use session::load_history;
 pub use session::{fork, fork_via_http, ForkError, ForkOutcome, ForkParams};
-pub use streaming::{DefraStreamWriter, StreamWriter};
+pub use streaming::{DefraStreamWriter, StreamWriter, MAX_LIVE_REASONING_BYTES};
 pub use template::{
     parse_template_for_validation, render_template, TemplateError, TemplateScope, VariableRef,
 };

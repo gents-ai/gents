@@ -191,10 +191,14 @@ mod tests {
     };
 
     fn state() -> RuntimeHttpState {
+        let (activation_runtime, activation_observation) =
+            crate::http::router::empty_activation_state();
         RuntimeHttpState {
             graphql: "http://localhost:9181/api/v0/graphql".to_string(),
             agent_name: "test-agent".to_string(),
             agent_did: "did:test:test".to_string(),
+            tool_ceiling: "readwrite".to_string(),
+            tool_root: Some("/tmp/work".to_string()),
             started_at: "2026-05-13T12:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,
@@ -204,6 +208,8 @@ mod tests {
             codex_shim_health: None,
             enrollment_offer_issuer: crate::http::enrollment::empty_issuer_handle(),
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
+            activation_runtime,
+            activation_observation,
         }
     }
 

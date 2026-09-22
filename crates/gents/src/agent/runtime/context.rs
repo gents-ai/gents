@@ -176,6 +176,7 @@ impl RuntimeContext {
                 background_tool_registry,
                 tool_surface.remote_tools().cloned(),
                 tool_surface.output_obligations(),
+                tool_surface.root_execution_guard().cloned(),
                 client,
             ))
             .await
@@ -195,6 +196,7 @@ impl RuntimeContext {
         background_tool_registry: BackgroundToolRegistry,
         remote_tools: Option<crate::document_config::RemoteTools>,
         output_obligations: Vec<(String, crate::document_config::WriteToolOutputObligation)>,
+        root_execution_guard: Option<crate::tool_surface::RootExecutionGuard>,
         client: C,
     ) -> Result<()>
     where
@@ -236,7 +238,7 @@ impl RuntimeContext {
         )?
         .with_remote_tools(remote_tools)
         .with_output_obligations(output_obligations)
-        .with_operator_tool_root(self.operator_tool_root.clone());
+        .with_tool_surface_runtime_policy(root_execution_guard, self.operator_tool_root.clone());
         if let Some(compactor) = summary_compactor {
             daemon = daemon.with_compactor(compactor);
         }

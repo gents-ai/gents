@@ -18,6 +18,20 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                 "gents-desktop-bridge initialized"
             );
             app.manage(DesktopAppState::new(policy));
+            // Off the setup path: reading the packaged runtime and asking the
+            // service manager for its state are both blocking.
+            let handle = app.clone();
+            std::thread::spawn(move || {
+                let state = handle.state::<DesktopAppState>();
+                if let Err(error) =
+                    tauri_commands::managed_server::refresh_packaged_install(&handle, &state)
+                {
+                    tracing::warn!(
+                        error = %error.message,
+                        "could not bring the packaged Gents runtime up to date"
+                    );
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -31,8 +45,10 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::managed_server::desktop_managed_server_status,
             tauri_commands::managed_server::desktop_managed_server_start,
             tauri_commands::managed_server::desktop_managed_server_stop,
+            tauri_commands::managed_server::desktop_managed_server_set_auto_start,
             tauri_commands::managed_server::desktop_managed_server_restart,
             tauri_commands::managed_server::desktop_managed_server_validate_root,
+            tauri_commands::db_explorer::desktop_open_db_explorer,
             tauri_commands::peers::desktop_peer_remove,
             tauri_commands::peers::desktop_peer_rename,
             tauri_commands::peers::desktop_peer_status_fetch,

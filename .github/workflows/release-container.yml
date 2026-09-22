@@ -18,6 +18,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: read
   contents: read
   packages: write
 
@@ -102,19 +103,40 @@ jobs:
 
           echo "Packaging $(jq -r '.url' <<<"${release_json}") as ${image}:${release_tag}."
 
-      - name: Download and verify Linux release artifacts
+      - name: Download and verify Linux CLI artifacts
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ steps.release.outputs.release_tag }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
           set -euo pipefail
 
           mkdir -p release-assets release/container/bin
-          gh release download "${RELEASE_TAG}" \
-            --pattern 'gents-*-unknown-linux-gnu.tar.gz' \
-            --pattern 'gents-*-unknown-linux-gnu.tar.gz.sha256' \
-            --dir release-assets
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            run_id="${WORKFLOW_RUN_ID}"
+          else
+            run_id="$(gh run list \
+              --workflow "Release Linux gents" \
+              --branch "${RELEASE_TAG}" \
+              --status success \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId')"
+          fi
+          if [[ -z "${run_id}" || "${run_id}" == "null" ]]; then
+            echo "::error::No successful Release Linux gents run for ${RELEASE_TAG}."
+            exit 1
+          fi
+          # These archives are workflow artifacts, not GitHub Release assets.
+          # Multiple named artifacts extract into subdirectories.
+          staging="$(mktemp -d)"
+          gh run download "${run_id}" --dir "${staging}" \
+            --name gents-x86_64-unknown-linux-gnu \
+            --name gents-aarch64-unknown-linux-gnu
+          find "${staging}" -type f \( -name 'gents-*-unknown-linux-gnu.tar.gz' -o -name 'gents-*-unknown-linux-gnu.tar.gz.sha256' \) \
+            -exec cp {} release-assets/ \;
+          rm -rf "${staging}"
 
           targets=(
             x86_64-unknown-linux-gnu

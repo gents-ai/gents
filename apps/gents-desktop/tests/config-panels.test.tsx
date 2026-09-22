@@ -115,6 +115,18 @@ function expectFields(labels: string[]) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("configuration panels", () => {
+  it("continues an existing local Gents home instead of creating a new identity", async () => {
+    const { shell } = harness();
+    render(<SetupScreen shell={shell} onDone={vi.fn()} />);
+    expect(
+      screen.getByText("Continue the agent already on this computer."),
+    ).toBeVisible();
+    expect(
+      screen.getByText(/Found an existing Gents home for Local Agent/),
+    ).toBeVisible();
+    expect(screen.getByDisplayValue("Local Agent")).toBeVisible();
+  });
+
   it("clears a prior agent sign-in while the next account lookup fails", async () => {
     const { api, shell } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
@@ -810,6 +822,11 @@ describe("configuration panels", () => {
       screen.getByRole("button", { name: "Run task" }).click();
       await Promise.resolve();
     });
+    expect(shell.runTask).toHaveBeenCalledWith({
+      taskId: "task-a",
+      agentDid: deployment.agentDid,
+      args: {},
+    });
     generation += 1;
     await act(async () => {
       resolve({ requestId: "stale-request", sessionId: "stale-session" });
@@ -850,7 +867,10 @@ describe("configuration panels", () => {
       .setup()
       .click(screen.getByRole("button", { name: "Run schedule now" }));
 
-    expect(api.runSchedule).toHaveBeenCalledWith({ scheduleId: "timer-a" });
+    expect(api.runSchedule).toHaveBeenCalledWith({
+      scheduleId: "timer-a",
+      agentDid: deployment.agentDid,
+    });
     expect(await screen.findByText("request-schedule")).toBeInTheDocument();
     expect(shell.refreshSnapshot).toHaveBeenCalledTimes(1);
   });

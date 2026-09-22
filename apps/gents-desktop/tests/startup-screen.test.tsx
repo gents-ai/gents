@@ -99,7 +99,7 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
-  it("names hosted-agent restoration instead of misreporting a configuration read", async () => {
+  it("names local-agent observation instead of misreporting a configuration read", async () => {
     const status = deferred<{
       state: "disabled";
       autoStart: false;
@@ -131,10 +131,10 @@ describe("desktop startup screen", () => {
     );
 
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Checking the hosted agent",
+      "Checking the background agent",
     );
     expect(screen.getByTestId("startup-screen")).toHaveTextContent(
-      "Start hosted agentWorking",
+      "Check local agentWorking",
     );
     expect(base.api.fetchDesktopSnapshot).not.toHaveBeenCalled();
 
@@ -155,14 +155,14 @@ describe("desktop startup screen", () => {
     });
   });
 
-  it("does not block first-run setup when hosted-agent restoration fails", async () => {
+  it("does not block first-run setup when background-agent observation fails", async () => {
     const base = bridge(
       vi.fn(async () => snapshot(false, false)),
       vi.fn(async () => snapshot(false, true)),
     );
     const managedServerStatus = vi
       .fn()
-      .mockRejectedValueOnce(new Error("hosted agent unavailable"));
+      .mockRejectedValueOnce(new Error("background agent unavailable"));
     render(
       <App
         bridge={{
@@ -183,7 +183,9 @@ describe("desktop startup screen", () => {
     expect(screen.queryByTestId("startup-retry")).not.toBeInTheDocument();
     // Restoration probes once; the expanded local card also resolves its
     // default root without blocking entry to the first-run screen.
-    expect(managedServerStatus).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(managedServerStatus).toHaveBeenCalledTimes(2);
+    });
   });
 
   it("does not invent a synchronization phase while client startup is pending", () => {

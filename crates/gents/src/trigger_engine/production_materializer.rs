@@ -50,6 +50,16 @@ impl ProductionMaterializer {
         Self { node, snapshot_rx }
     }
 
+    fn runtime_actor(&self) -> Result<::identity::Did> {
+        let snapshot = self.snapshot_rx.borrow();
+        let principal = snapshot
+            .principal
+            .as_ref()
+            .context("active runtime snapshot has no principal ACP actor")?;
+        ::identity::Did::new(principal.identity.did().to_owned())
+            .context("runtime principal DID is not ACP-addressable")
+    }
+
     fn resolve_behavior(&self, task: &ResolvedTask) -> Result<(String, String, u64, String)> {
         let snapshot = self.snapshot_rx.borrow().clone();
         let behavior = snapshot.behavior(&task.behavior_id).ok_or_else(|| {
@@ -216,6 +226,7 @@ impl MaterializerHandle for ProductionMaterializer {
         }
 
         let resolved = self.resolve_behavior(task);
+        let runtime_actor = self.runtime_actor();
         let node = self.node.clone();
         let task_id = task.task_id.clone();
         let task_label = task.display_label().to_string();
@@ -234,6 +245,7 @@ impl MaterializerHandle for ProductionMaterializer {
 
         Box::pin(async move {
             let (behavior_name, behavior_did, _deadline_secs, _backend_id) = resolved?;
+            let runtime_actor = runtime_actor?;
             let parsed_trigger_context =
                 crate::lifecycle::TriggerExecutionContext::parse(trigger_context.as_deref())?;
             let requester_did = parsed_trigger_context
@@ -295,6 +307,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 .await?;
                 let enqueued = crate::goal::submit_goal_backed_request_local(
                     node.as_ref(),
+                    runtime_actor,
                     &behavior_did,
                     &identity.session_id,
                     objective,
@@ -317,6 +330,7 @@ impl MaterializerHandle for ProductionMaterializer {
                 let enqueued =
                     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
                         node.as_ref(),
+                        runtime_actor,
                         &behavior_did,
                         &behavior_name,
                         &rendered_prompt,

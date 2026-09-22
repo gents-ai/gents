@@ -79,19 +79,8 @@ jobs:
           path: target/desktop-npm-release/*.tgz
           if-no-files-found: error
 
-      - name: Attach package tarballs to GitHub Release
+      - name: Keep package tarballs off the GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          if ! gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release create "${RELEASE_TAG}" \
-              --verify-tag \
-              --title "${RELEASE_TAG}" \
-              --notes "gents release artifacts." \
-              || gh release view "${RELEASE_TAG}" >/dev/null
-          fi
-          gh release upload \
-            "${RELEASE_TAG}" \
-            target/desktop-npm-release/*.tgz \
-            --clobber
+          echo "Desktop npm tarballs are workflow artifacts only."
+          echo "GitHub Releases ship installers and CLI archives, not internal packages."

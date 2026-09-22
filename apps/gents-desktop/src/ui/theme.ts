@@ -1,5 +1,7 @@
 /* Theme is one attribute on <html>. The kit reads nothing else. The first
    run takes the OS preference; after that the choice is the person's. */
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isMacTauriShell } from "../lib/shellPlatform";
 export type ThemePreference = "light" | "dark";
 
 const KEY = "gents-theme";
@@ -17,6 +19,13 @@ export function themePreference(): ThemePreference {
 export function applyTheme(preference: ThemePreference) {
   if (preference === "dark") document.documentElement.dataset.theme = "dark";
   else delete document.documentElement.dataset.theme;
+  if (isMacTauriShell()) {
+    void getCurrentWindow()
+      .setTheme(preference)
+      .catch(() => {
+        // Keep the web theme usable if native appearance is unavailable.
+      });
+  }
   try {
     localStorage.setItem(KEY, preference);
   } catch {

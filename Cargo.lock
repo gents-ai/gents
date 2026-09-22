@@ -1376,7 +1376,7 @@ dependencies = [
  "bitflags 2.11.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -1766,7 +1766,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1795,7 +1795,7 @@ dependencies = [
  "maybe-owned",
  "rustix 1.1.4",
  "rustix-linux-procfs",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "winx",
 ]
 
@@ -4042,7 +4042,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
 dependencies = [
  "cfg-if",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4138,7 +4138,7 @@ checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
 
 [[package]]
 name = "fixture-domain-plugin"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -4250,7 +4250,7 @@ checksum = "94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a"
 dependencies = [
  "io-lifetimes",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4558,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "gents"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "acp",
  "afterburner",
@@ -4628,7 +4628,9 @@ dependencies = [
  "tokio-util",
  "toml 0.8.2",
  "tracing",
+ "tracing-journald",
  "tracing-opentelemetry",
+ "tracing-oslog",
  "tracing-subscriber",
  "tree-sitter",
  "tree-sitter-bash",
@@ -4649,7 +4651,7 @@ dependencies = [
 
 [[package]]
 name = "gents-chatgpt-login"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4669,7 +4671,7 @@ dependencies = [
 
 [[package]]
 name = "gents-claude-login"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "base64 0.22.1",
  "gents-login-ui",
@@ -4687,7 +4689,7 @@ dependencies = [
 
 [[package]]
 name = "gents-cli"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "acp",
  "afterburner",
@@ -4714,12 +4716,14 @@ dependencies = [
  "hostname",
  "identity",
  "ignore",
+ "include_dir",
  "iroh",
  "jsonschema",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "p2p",
+ "plist",
  "query",
  "regex",
  "reqwest 0.12.28",
@@ -4738,11 +4742,12 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "wait-timeout",
 ]
 
 [[package]]
 name = "gents-codex-protocol"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -4753,7 +4758,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -4767,7 +4772,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-bridge"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -4798,7 +4803,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-core"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4830,7 +4835,7 @@ dependencies = [
 
 [[package]]
 name = "gents-desktop-tauri"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -4841,6 +4846,8 @@ dependencies = [
  "gents-desktop-core",
  "gents-fs-runner",
  "gents-protocol",
+ "objc2",
+ "objc2-app-kit",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4856,7 +4863,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fixture-host"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "dirs 5.0.1",
  "fixture-domain-plugin",
@@ -4869,7 +4876,7 @@ dependencies = [
 
 [[package]]
 name = "gents-fs-runner"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "globset",
@@ -4881,7 +4888,7 @@ dependencies = [
 
 [[package]]
 name = "gents-lean-contract"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "gents-protocol",
@@ -4899,14 +4906,14 @@ dependencies = [
 
 [[package]]
 name = "gents-login-ui"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "tiny_http",
 ]
 
 [[package]]
 name = "gents-loop"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4931,7 +4938,7 @@ dependencies = [
 
 [[package]]
 name = "gents-migration"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "defra-node",
@@ -4949,7 +4956,7 @@ dependencies = [
 
 [[package]]
 name = "gents-protocol"
-version = "0.17.0"
+version = "0.18.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -4970,7 +4977,7 @@ dependencies = [
 
 [[package]]
 name = "gents-schemas"
-version = "0.17.0"
+version = "0.18.5"
 
 [[package]]
 name = "getrandom"
@@ -5939,6 +5946,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "include_dir"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
+dependencies = [
+ "include_dir_macros",
+]
+
+[[package]]
+name = "include_dir_macros"
+version = "0.7.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
+dependencies = [
+ "proc-macro2",
+ "quote",
+]
+
+[[package]]
 name = "indexmap"
 version = "1.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5987,7 +6013,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2285ddfe3054097ef4b2fe909ef8c3bcd1ea52a8f0d274416caebeef39f04a65"
 dependencies = [
  "io-lifetimes",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10375,7 +10401,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.4.15",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -11767,7 +11793,7 @@ dependencies = [
  "fd-lock",
  "io-lifetimes",
  "rustix 0.38.44",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
  "winx",
 ]
 
@@ -12713,6 +12739,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-journald"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d3a81ed245bfb62592b1e2bc153e77656d94ee6a0497683a65a12ccaf2438d0"
+dependencies = [
+ "libc",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "tracing-log"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12735,6 +12772,18 @@ dependencies = [
  "tracing-core",
  "tracing-subscriber",
  "web-time",
+]
+
+[[package]]
+name = "tracing-oslog"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d76902d2a8d5f9f55a81155c08971734071968c90f2d9bfe645fe700579b2950"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -14874,7 +14923,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d"
 dependencies = [
  "bitflags 2.11.0",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

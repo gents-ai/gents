@@ -42,10 +42,10 @@ pub(crate) async fn dispatch(command: TraceCommand) -> Result<()> {
 }
 
 /// Fetch rendered-request capture metadata — and, for exactly one match, its
-/// `request_json` field-commit CID. This is the one deliberate body read in
-/// the system: `--include-body` selects `request_json` and the raw provenance
-/// manifest; without it neither is even queried, and the default output is the
-/// same metadata surface the timeline exposes.
+/// `request_json` storage-envelope field-commit CID. This is the one deliberate
+/// body read in the system: `--include-body` selects and losslessly decodes the
+/// provider request and heavy provenance payload; without it neither payload is
+/// queried, and the default output is the timeline's compact metadata surface.
 async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -118,6 +118,54 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
             Ok((row, raw))
         })
         .collect::<Result<Vec<_>>>()?;
+    if args.include_body {
+        for (row, raw) in &mut entries {
+            let version = row
+                .capture_version
+                .and_then(|value| u32::try_from(value).ok())
+                .context("capture has no supported numeric capture_version")?;
+            let stored = raw
+                .get("request_json")
+                .and_then(Value::as_str)
+                .context("capture has no stored request_json")?
+                .to_owned();
+            let decoded_pair = if version == 1 {
+                None
+            } else {
+                Some(gents::rendered_request::decode_capture_pair(&access, version, &stored).await?)
+            };
+            let request = match decoded_pair.as_ref() {
+                Some((request, _)) => request.clone(),
+                None => {
+                    gents::rendered_request::decode_capture_json(
+                        &access,
+                        version,
+                        &stored,
+                        gents::rendered_request::CapturePayloadKind::RequestBody,
+                    )
+                    .await?
+                }
+            };
+            raw["request_json"] = json!(gents::rendered_request::canonical_json_string(&request)?);
+            if version == 1 {
+                let provenance: Value = serde_json::from_str(
+                    row.provenance_json
+                        .as_deref()
+                        .context("legacy capture has no provenance")?,
+                )?;
+                raw["provenance_payload_json"] = json!(
+                    gents::rendered_request::canonical_json_string(&provenance["assembly_trace"],)?
+                );
+            } else {
+                let payload = &decoded_pair
+                    .as_ref()
+                    .context("missing decoded capture pair")?
+                    .1;
+                raw["provenance_payload_json"] =
+                    json!(gents::rendered_request::canonical_json_string(payload)?);
+            }
+        }
+    }
     if entries.is_empty() {
         anyhow::bail!("no capture rows matched");
     }
@@ -165,7 +213,17 @@ async fn trace_capture(args: TraceCaptureArgs) -> Result<()> {
     let commit = match row.doc_id.as_deref() {
         Some(doc_id) => gents::rendered_request::commits::request_json_commit(&access, doc_id)
             .await?
-            .map(|commit| json!({ "cid": commit.cid, "height": commit.height })),
+            .map(|commit| {
+                json!({
+                    "cid": commit.cid,
+                    "height": commit.height,
+                    "semantics": if row.capture_version == Some(1) {
+                        "canonical_body"
+                    } else {
+                        "storage_envelope"
+                    },
+                })
+            }),
         None => None,
     };
     value["request_json_commit"] = commit.unwrap_or_else(|| json!("unavailable"));
@@ -185,6 +243,10 @@ fn capture_metadata_value(
     if include_body {
         value["request_json"] = raw.get("request_json").cloned().unwrap_or(Value::Null);
         value["provenance_json"] = json!(row.provenance_json);
+        value["provenance_payload_json"] = raw
+            .get("provenance_payload_json")
+            .cloned()
+            .unwrap_or(Value::Null);
     }
     value
 }

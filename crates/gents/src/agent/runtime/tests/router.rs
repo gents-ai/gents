@@ -203,6 +203,7 @@ async fn closing_admission_cancels_a_send_to_a_full_executor_queue() {
             shutdown_rx,
             gate_for_router,
             status,
+            None,
         )
         .await
     });
@@ -279,6 +280,7 @@ async fn router_generation_write_failure_closes_admission_before_dequeue_or_disp
         shutdown_rx,
         gate.clone(),
         status,
+        None,
     )
     .await
     .expect_err("router generation persistence failure must stop the router");
@@ -366,6 +368,7 @@ async fn router_holds_request_during_generation_handoff_and_dispatches_after_ali
             &admission_gate,
             &mut admission_rx,
             &mut readiness_rx,
+            None,
             None,
         );
         tokio::pin!(wait);
@@ -477,6 +480,7 @@ async fn router_publishes_observed_generation_without_waiting_for_request() {
             &mut admission_rx,
             &mut readiness_rx,
             Some(&runtime_status_for_router),
+            None,
         )
         .await
     });

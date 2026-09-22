@@ -21,16 +21,14 @@ export function restoreManagedServer(api: DesktopApiAdapter): Promise<boolean | 
 async function restoreManagedServerOnce(
   api: DesktopApiAdapter,
 ): Promise<boolean | null> {
-  if (!api.managedServerStatus || !api.startManagedServer) return null;
+  if (!api.managedServerStatus) return null;
 
   const status = await api.managedServerStatus();
   if (status.state === "running" || status.state === "external") {
     return true;
   }
-  if (!status.autoStart) {
-    return false;
-  }
-
-  await api.startManagedServer(status.agentName?.trim() || "Local Agent");
-  return true;
+  // Native launchd/systemd ownership is intentionally independent of the GUI.
+  // A stopped enabled service is an OS observation, not permission for this
+  // frontend to create a second process during application startup.
+  return false;
 }

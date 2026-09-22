@@ -10,7 +10,11 @@ import type {
   P2PHealth,
 } from "@source-inc/gents-desktop-client";
 import { selectedBehaviorIdForDeployment } from "@source-inc/gents-desktop-client";
-import { isMobileTauriShell } from "../lib/shellPlatform";
+import {
+  isMacTauriShell,
+  isMobileTauriShell,
+  ownsAutomaticRecovery,
+} from "../lib/shellPlatform";
 import {
   logShellEvent,
   shouldAutoRestartP2P,
@@ -92,7 +96,13 @@ export function useDesktopShellEffects({
   }, [selectedSessionId, selectedSessionIdRef]);
 
   useEffect(() => {
-    if (!snapshot || snapshot.client || starting || sending) {
+    if (
+      !ownsAutomaticRecovery() ||
+      !snapshot ||
+      snapshot.client ||
+      starting ||
+      sending
+    ) {
       return;
     }
 
@@ -133,6 +143,7 @@ export function useDesktopShellEffects({
     }
 
     if (
+      !ownsAutomaticRecovery() ||
       autoRestartInFlight.current ||
       starting ||
       stopping ||
@@ -193,15 +204,22 @@ export function useDesktopShellEffects({
     }
 
     let disposed = false;
-    void api.setSelectedAgent(selectedAgentDid).catch((err) => {
-      if (disposed) {
-        return;
-      }
-      setError(String(err));
-    });
+    const publishSelection = () => {
+      void api.setSelectedAgent(selectedAgentDid).catch((err) => {
+        if (disposed) {
+          return;
+        }
+        setError(String(err));
+      });
+    };
+    publishSelection();
+    // Closing siblings returns focus to the surviving view. Republish so the
+    // host can narrow observation again after returning to a single window.
+    if (isMacTauriShell()) window.addEventListener("focus", publishSelection);
 
     return () => {
       disposed = true;
+      window.removeEventListener("focus", publishSelection);
     };
   }, [api, clientAvailable, selectedAgentDid, setError]);
 

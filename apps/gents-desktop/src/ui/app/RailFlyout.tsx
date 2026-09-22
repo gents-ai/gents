@@ -236,7 +236,13 @@ export function RailFlyout({
         hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)
       }
       onPointerLeave={() => hover && later(false, CLOSE_AFTER)}
-      onFocus={() => hover && later(true, 0)}
+      // Do not replace the hit target between pointerdown and pointerup.
+      // Keyboard focus still opens immediately; mouse focus uses hover timing.
+      onPointerDown={() => {
+        if (timer.current) window.clearTimeout(timer.current);
+      }}
+      onPointerUp={(e) => hover && e.pointerType === "mouse" && later(true, OPEN_AFTER)}
+      onFocus={(e) => hover && e.target.matches(":focus-visible") && later(true, 0)}
       onBlur={(e) => {
         if (hover && !e.currentTarget.contains(e.relatedTarget as Node | null))
           later(false, 0);

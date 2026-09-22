@@ -18,6 +18,7 @@ import {
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
 import { restoreManagedServer } from "./managedServerLifecycle";
+import { ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
@@ -146,7 +147,7 @@ export function useDesktopClientLifecycle({
     if (initializationInFlight.current) return initializationInFlight.current;
     const pending = (async () => {
       autostartAttempted.current = false;
-      if (supportsManagedServer) {
+      if (supportsManagedServer && ownsAutomaticRecovery()) {
         setStartupPhase("checking-managed-server");
         try {
           localServerAvailable.current = await restoreManagedServer(api);

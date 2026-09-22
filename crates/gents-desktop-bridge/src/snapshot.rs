@@ -142,7 +142,7 @@ async fn build_bootstrap_summary_raw(
         desktop_home: desktop_paths.root().display().to_string(),
         peer_directory_path: desktop_paths.peer_directory_path().display().to_string(),
         node_data_dir: desktop_paths.node_data_dir().display().to_string(),
-        log_file_path: desktop_paths.log_file_path().display().to_string(),
+        diagnostics_hint: gents::native_logging::diagnostics_hint().to_string(),
         agent_home_exists,
         desktop_home_exists: desktop_paths.root().exists(),
         peer_directory_exists: desktop_paths.peer_directory_path().exists(),

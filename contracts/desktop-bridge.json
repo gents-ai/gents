@@ -45,11 +45,19 @@
       "permissionSet": "runtime-admin"
     },
     {
+      "name": "desktop_managed_server_set_auto_start",
+      "permissionSet": "runtime-admin"
+    },
+    {
       "name": "desktop_managed_server_restart",
       "permissionSet": "runtime-admin"
     },
     {
       "name": "desktop_managed_server_validate_root",
+      "permissionSet": "runtime-admin"
+    },
+    {
+      "name": "desktop_open_db_explorer",
       "permissionSet": "runtime-admin"
     },
     {
@@ -325,7 +333,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "7.8",
+  "contractVersion": "8.0",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -352,9 +360,11 @@
     "desktop://grok-login-url",
     "desktop://claude-login-url",
     "desktop://managed-server-updated",
-    "desktop://managed-server-tray-stop"
+    "desktop://managed-server-tray-start",
+    "desktop://managed-server-tray-stop",
+    "desktop://managed-server-tray-restart"
   ],
-  "packageVersion": "0.17.0",
+  "packageVersion": "0.18.5",
   "permissionSets": [
     {
       "kind": "bundle",
@@ -453,5 +463,5 @@
       "name": "full"
     }
   ],
-  "wireSchemaHash": "d454b6904b19ee01e173908e72c06c623f3454b349a9c84bf378fcf708441737"
+  "wireSchemaHash": "5f2e5db9118bf97e0434818d645b8d43eb1539b685ff85f2ecb26d66344d4f3c"
 }

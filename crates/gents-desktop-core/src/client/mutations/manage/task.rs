@@ -205,6 +205,7 @@ pub async fn delete_event_source_on(
 /// Returns the new `AgentRequest`'s `_docID` on success.
 pub async fn fire_task_now(
     node: &EmbeddedNode,
+    actor: identity::Did,
     task_row: &Task,
     args: serde_json::Value,
 ) -> Result<String> {
@@ -264,7 +265,7 @@ pub async fn fire_task_now(
         bail!("AgentBehavior {behavior_id} is disabled");
     }
 
-    enqueue_task_now(node, task_row, args).await
+    enqueue_task_now(node, actor, task_row, args).await
 }
 
 async fn execute_config_rows<T: DeserializeOwned>(
@@ -481,6 +482,7 @@ pub async fn resolve_task_now_on(
 
 async fn enqueue_task_now(
     node: &EmbeddedNode,
+    actor: identity::Did,
     task_row: &Task,
     args: serde_json::Value,
 ) -> Result<String> {
@@ -557,6 +559,7 @@ async fn enqueue_task_now(
         .await?;
         let enqueued = gents::goal::submit_goal_backed_request_local(
             node,
+            actor,
             agent_did,
             &identity.session_id,
             &objective,
@@ -569,6 +572,7 @@ async fn enqueue_task_now(
 
     write_manual_agent_request_with_conversation_title(
         node,
+        actor,
         agent_did,
         behavior_id,
         task_id,
@@ -592,7 +596,11 @@ async fn enqueue_task_now(
 /// stale (e.g., the schedule was just created and the watcher has not
 /// caught up yet). The `SELECT` mirrors every field on
 /// canonical document so `serde_json::from_value` sees the authoritative shape.
-pub async fn fire_schedule_now(node: &EmbeddedNode, schedule: &Schedule) -> Result<String> {
+pub async fn fire_schedule_now(
+    node: &EmbeddedNode,
+    actor: identity::Did,
+    schedule: &Schedule,
+) -> Result<String> {
     let agent_did = normalize_required("agent_did", &schedule.agent_did)?;
     let schedule_id = normalize_required("schedule_id", &schedule.schedule_id)?;
     let trigger_query = format!(
@@ -681,7 +689,7 @@ pub async fn fire_schedule_now(node: &EmbeddedNode, schedule: &Schedule) -> Resu
     let task_row: Task = serde_json::from_value(task_row_json.clone())
         .map_err(|e| anyhow!("deserialize Task: {e}"))?;
 
-    fire_task_now(node, &task_row, serde_json::json!({})).await
+    fire_task_now(node, actor, &task_row, serde_json::json!({})).await
 }
 
 /// Resolve the schedule, enabled trigger, task, and behavior from canonical

@@ -78,7 +78,7 @@ impl ToolOutcome {
                         "the JSON is missing a required field; add the required field shown below"
                     }
                     UnparseableArgsKind::WrongType => {
-                        "a field has the wrong JSON type; use the expected type shown below"
+                        "a field has the wrong JSON type; use the expected type shown below. Arrays and objects must be native JSON values, not strings containing JSON"
                     }
                     UnparseableArgsKind::Schema => {
                         "the JSON does not match the tool's argument schema; correct the field described below"
@@ -428,6 +428,15 @@ where
     .await
 }
 
+pub fn invocation_correlation<'a>(
+    request: Option<&'a str>,
+    supplied: Option<&'a str>,
+) -> Option<&'a str> {
+    supplied
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| request.filter(|value| !value.trim().is_empty()))
+}
+
 pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
     TOOL_RUNTIME_SCOPE
         .try_with(Clone::clone)
@@ -439,7 +448,11 @@ pub fn current_tool_runtime_context() -> Option<CurrentToolRuntimeContext> {
             session_id: scope.session_id,
             live_output: scope.live_output,
             background: scope.background,
-            correlation: scope.correlation,
+            correlation: invocation_correlation(
+                scope.request_id.as_deref(),
+                scope.correlation.as_deref(),
+            )
+            .map(str::to_owned),
             source_fields: scope.source_fields,
             requester_did: scope.requester_did,
             agent_did: scope.agent_did,

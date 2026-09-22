@@ -82,6 +82,7 @@ async fn resolve_created_agent_request_doc_id(
 
 pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_title(
     node: &EmbeddedNode,
+    actor: ::identity::Did,
     agent_did: &str,
     behavior_id: &str,
     content: &str,
@@ -91,6 +92,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
 ) -> Result<EnqueuedAgentRequest> {
     write_pending_agent_request_with_lineage_workspace_and_conversation_title(
         node,
+        actor,
         agent_did,
         behavior_id,
         content,
@@ -107,6 +109,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_and_conversation_ti
 
 pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conversation_title(
     node: &EmbeddedNode,
+    actor: ::identity::Did,
     agent_did: &str,
     behavior_id: &str,
     content: &str,
@@ -144,7 +147,7 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
         .as_deref()
         .is_some_and(crate::graph_pipeline::graph_artifact_is_reserved)
     {
-        return publish_graph_root_request(node, &create).await;
+        return publish_graph_root_request(node, actor, &create).await;
     }
     let escaped_request_id = escape_graphql_string(&request_id);
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
@@ -152,13 +155,13 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
 
     // A trigger fire is not replayable: `event_kind: created` is first-seen, so
     // dropping this create on a transient conflict loses the stage for good.
-    let response = crate::config_client::ConfigAccess::write_local(
+    let response = crate::config_client::ConfigAccess::transact_local(
         node,
+        Some(actor),
         "lifecycle.materialize_pending",
-        &mutation,
+        |txn| Box::pin(async move { txn.execute_local_response(mutation).await }),
     )
     .await?;
-    let response: defra_node::QueryResponse = serde_json::from_value(response)?;
 
     let doc_id = resolve_created_agent_request_doc_id(
         node,
@@ -182,13 +185,14 @@ pub(crate) async fn write_pending_agent_request_with_lineage_workspace_and_conve
 /// would either lose the stage or bypass a newly committed graph closure.
 async fn publish_graph_root_request(
     node: &EmbeddedNode,
+    actor: ::identity::Did,
     create: &gents_protocol::request_admission::AgentRequestCreate,
 ) -> Result<EnqueuedAgentRequest> {
     let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
     let mutation = &mutation;
     let doc_id = crate::config_client::ConfigAccess::transact_local(
         node,
-        None,
+        Some(actor),
         "lifecycle.publish_graph_root",
         move |txn| {
             Box::pin(async move {

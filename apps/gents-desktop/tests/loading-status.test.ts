@@ -77,7 +77,7 @@ function project(
 describe("startup loading projection", () => {
   it("reports only lifecycle-owned startup work", () => {
     expect(projectStartupLoadingStatus("checking-managed-server", true)).toMatchObject({
-      currentLabel: "Checking the hosted agent",
+      currentLabel: "Checking the background agent",
       managedServerState: "active",
       connectionState: "pending",
       clientState: "pending",

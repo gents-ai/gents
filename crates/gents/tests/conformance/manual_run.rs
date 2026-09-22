@@ -9,6 +9,10 @@ use serde_json::Value;
 
 use crate::support::{test_db, AGENT_NAME};
 
+fn actor(did: &str) -> identity::Did {
+    identity::Did::new(did.to_owned()).expect("fixture creator DID")
+}
+
 async fn fetch_manual_row(node: &gents::defra_node::EmbeddedNode, doc_id: &str) -> Value {
     let escaped = escape_graphql_string(doc_id);
     let query = format!(
@@ -63,6 +67,7 @@ async fn manual_run_materializes_agent_request_with_lineage() {
 
     let doc_id = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-manual-lineage",
@@ -108,6 +113,7 @@ async fn manual_run_renders_args_scope() {
 
     let doc_id = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-args",
@@ -131,6 +137,7 @@ async fn manual_submissions_materialize_distinct_requests() {
 
     let first = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-parallel",
@@ -147,6 +154,7 @@ async fn manual_submissions_materialize_distinct_requests() {
 
     let second = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-parallel",
@@ -192,6 +200,7 @@ async fn manual_run_exposes_manual_event_and_node_scope() {
 
     let doc_id = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-event-scope",
@@ -228,6 +237,7 @@ async fn manual_run_render_failure_materializes_no_request() {
 
     let error = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-render-err",
@@ -249,6 +259,7 @@ async fn manual_run_render_failure_materializes_no_request() {
 
     let doc_id = write_manual_agent_request(
         db.node.as_ref(),
+        actor(db.node_identity.did()),
         db.node_identity.did(),
         AGENT_NAME,
         "task-render-err",

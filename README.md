@@ -6,7 +6,15 @@ Gents runs LLM agents on top of [DefraDB](https://github.com/sourcenetwork/defra
 
 ## Get running
 
-Everything local, on a Mac, in a few minutes:
+On an Apple Silicon Mac, the desktop installer is the supported path. Download
+`gents-desktop_*_aarch64.dmg` from the
+[GitHub release](https://github.com/gents-ai/gents/releases/latest), drag
+**Gents** to **Applications**, and launch it. If `~/.gents` already exists from
+`gents init` or a previous desktop, setup continues that agent instead of
+creating a second identity.
+
+Linux desktops use the `.deb` or AppImage on that same release. Each installer
+has a checksum in `SHA256SUMS-desktop-*.txt`.
 
 ```bash
 brew install llama.cpp
@@ -14,10 +22,8 @@ llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :808
 
 # Install the Codex CLI separately and make sure `codex` is on PATH.
 # `gents chat` remains the dependency-free fallback UI.
-
-gh release download --repo gents-ai/gents -p 'gents-aarch64-apple-darwin.tar.gz'
-tar -xzf gents-aarch64-apple-darwin.tar.gz
-sudo install gents-aarch64-apple-darwin/gents /usr/local/bin/gents
+# Build the `gents` binary from this repo when you want the CLI on PATH:
+#   cargo build -p gents-cli --release
 
 gents init      # provision a safe read-only agent under ~/.gents
 gents server    # start the runtime (embedded DefraDB + GraphQL + P2P)

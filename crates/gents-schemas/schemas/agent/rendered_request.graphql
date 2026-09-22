@@ -19,7 +19,9 @@
 # self-attested: the same writer chooses both the bytes and the digest over
 # them, so it proves nothing an auditor could not have been lied to about.
 # Integrity comes from the DefraDB field commit CID for `request_json`, which is
-# computed over the block that was actually stored and replicates with it.
+# computed over the v2 capture container actually stored and replicates with it.
+# Every logical-record delta pins its base document and exact request_json
+# field-commit CID.
 #
 # No `@policy` and no encryption directives. ACP is blocked on defradb.rs#1318
 # (`EmbeddedNode` exposes no policy or relationship API), and a policy id that
@@ -70,13 +72,16 @@ type RenderedRequest @branchable {
     # openai_chat_completions. Derived from the request path the transport
     # actually posted to, not from behavior configuration.
     source: String @immutable
-    # Canonical JSON of the complete provider request body, captured at the
+    # Version 1 stores canonical provider JSON directly. Version 2 stores a
+    # versioned container with independently decodable, lossless full/delta
+    # records for the provider body and heavy native provenance. The bounded,
+    # witnessed request-body decode is the complete provider body captured at the
     # transport seam: the last point at which the body exists before the HTTP
     # send, after the ChatGPT-Codex instructions/store/strict rewrite, after
     # Grok's `store:false` injection, and after Responses assistant-item
-    # normalization. This is the conformance oracle every reconstruction is
-    # compared against, and it is what the provider received rather than what
-    # the loop assembled.
+    # normalization. The decoded value is the conformance oracle; the current
+    # field commit witnesses the container and either logical record's delta
+    # pins that same physical field commit on its immutable base document.
     request_json: String @immutable
     # Versioned provenance manifest. Never an overloaded empty map: absent
     # required provenance reads as CapturedOnly, not as evidence of

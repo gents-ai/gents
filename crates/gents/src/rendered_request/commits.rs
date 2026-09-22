@@ -1,9 +1,10 @@
-//! The one implementation of the `request_json` field-commit read.
+//! The one implementation of rendered-request field-commit reads.
 //!
-//! The CID of the `request_json` field commit is this fact record's content
-//! address — integrity comes from the database, not from a stored digest (see
-//! the module doc in `mod.rs`). Reading it has two traps every consumer would
-//! otherwise rediscover:
+//! For capture v2 the CID witnesses the stored capture container, while a
+//! logical delta recursively pins the CID of every base container needed to recover the
+//! canonical value. Integrity comes from that witnessed chain, not from a
+//! writer-supplied digest. Reading a field commit has two traps every consumer
+//! would otherwise rediscover:
 //!
 //! * `_commits` accepts exactly ONE `docID`; two or more is a parse error.
 //! * Its `fieldName` filter is evaluated **in memory**, with
@@ -20,8 +21,9 @@ use anyhow::{Context, Result};
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
+use defra_node::EmbeddedNode;
 
-/// The field-commit witness for a stored `request_json` value.
+/// The field-commit witness for a stored rendered-request field value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestJsonCommit {
     pub cid: String,
@@ -35,6 +37,14 @@ pub async fn request_json_commit(
     access: &ConfigAccess,
     doc_id: &str,
 ) -> Result<Option<RequestJsonCommit>> {
+    field_commit(access, doc_id, "request_json").await
+}
+
+pub async fn field_commit(
+    access: &ConfigAccess,
+    doc_id: &str,
+    field_name: &str,
+) -> Result<Option<RequestJsonCommit>> {
     let query = format!(
         r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
         doc_id = escape_graphql_string(doc_id),
@@ -43,12 +53,34 @@ pub async fn request_json_commit(
         .execute(&query)
         .await
         .with_context(|| format!("reading _commits for rendered request {doc_id}"))?;
-    select_request_json_commit(&response)
+    select_field_commit(&response, field_name)
+}
+
+pub(crate) async fn field_commit_embedded(
+    node: &EmbeddedNode,
+    doc_id: &str,
+    field_name: &str,
+) -> Result<Option<RequestJsonCommit>> {
+    let query = format!(
+        r#"query {{ _commits(docID: "{doc_id}") {{ cid height fieldName }} }}"#,
+        doc_id = escape_graphql_string(doc_id),
+    );
+    let response = node.execute(&query).await;
+    crate::graphql::ensure_no_errors(&response, "reading rendered-request field commit")?;
+    select_field_commit(&serde_json::json!({"data": response.data}), field_name)
 }
 
 /// Pure selection over a `_commits` response: pick the highest
 /// `request_json` field commit, in Rust rather than in a query filter.
+#[cfg(test)]
 fn select_request_json_commit(response: &serde_json::Value) -> Result<Option<RequestJsonCommit>> {
+    select_field_commit(response, "request_json")
+}
+
+fn select_field_commit(
+    response: &serde_json::Value,
+    field_name: &str,
+) -> Result<Option<RequestJsonCommit>> {
     let commits = response
         .get("data")
         .and_then(|data| data.get("_commits"))
@@ -58,7 +90,7 @@ fn select_request_json_commit(response: &serde_json::Value) -> Result<Option<Req
     Ok(commits
         .iter()
         .filter(|commit| {
-            commit.get("fieldName").and_then(serde_json::Value::as_str) == Some("request_json")
+            commit.get("fieldName").and_then(serde_json::Value::as_str) == Some(field_name)
         })
         .filter_map(|commit| {
             Some(RequestJsonCommit {

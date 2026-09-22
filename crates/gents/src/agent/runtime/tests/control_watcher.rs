@@ -1,9 +1,49 @@
 use super::support::*;
 use super::*;
 use crate::agent::DocumentResolveContext;
+use crate::config_client::write_telemetry::WRITE_ATTEMPT_EVENT_TARGET;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
 use crate::runtime_status::ReconcilePhase;
 use anyhow::Result;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing::field::{Field, Visit};
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::layer::{Context as LayerContext, SubscriberExt};
+use tracing_subscriber::{Layer, Registry};
+
+#[derive(Clone, Default)]
+struct RuntimeViewLoadCapture {
+    count: Arc<AtomicUsize>,
+}
+
+#[derive(Default)]
+struct RuntimeViewLoadField(bool);
+
+impl Visit for RuntimeViewLoadField {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "operation" {
+            self.0 = value == "load_runtime_document_view";
+        }
+    }
+
+    fn record_debug(&mut self, _field: &Field, _value: &dyn std::fmt::Debug) {}
+}
+
+impl<S> Layer<S> for RuntimeViewLoadCapture
+where
+    S: tracing::Subscriber,
+{
+    fn on_event(&self, event: &tracing::Event<'_>, _context: LayerContext<'_, S>) {
+        if event.metadata().target() != WRITE_ATTEMPT_EVENT_TARGET {
+            return;
+        }
+        let mut operation = RuntimeViewLoadField::default();
+        event.record(&mut operation);
+        if operation.0 {
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
 
 const TEST_CONTROL_WATCHER_TIMING: ControlWatcherTiming = ControlWatcherTiming {
     debounce: Duration::from_millis(20),
@@ -91,6 +131,9 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+    let reloads = RuntimeViewLoadCapture::default();
+    let reload_count = Arc::clone(&reloads.count);
+    let subscriber = Registry::default().with(reloads);
 
     // Subscribe first, then publish before the watcher future is ever polled.
     // DefraDB subscriptions are live-only, so this deterministically guards
@@ -123,16 +166,19 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
     .await
     .unwrap();
 
-    let watcher_task = tokio::spawn(run_test_control_watcher(
-        node.clone(),
-        subscription,
-        agent.agent_did().to_string(),
-        resolve_context,
-        proposal_tx,
-        runtime_status.clone(),
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
-    ));
+    let watcher_task = tokio::spawn(
+        run_test_control_watcher(
+            node.clone(),
+            subscription,
+            agent.agent_did().to_string(),
+            resolve_context,
+            proposal_tx,
+            runtime_status.clone(),
+            mpsc::channel::<()>(1).1,
+            shutdown_rx,
+        )
+        .with_subscriber(subscriber),
+    );
 
     let debouncing =
         wait_for_runtime_reconcile_phase(node.as_ref(), agent.agent_did(), "debouncing").await;
@@ -156,11 +202,21 @@ async fn control_watcher_publishes_reconciled_snapshot_after_relevant_update() {
         .set_reconcile_phase(ReconcilePhase::Idle)
         .await;
     let settled = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
-    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_retry + Duration::from_millis(10)).await;
+    let loads_after_reconcile = reload_count.load(Ordering::Relaxed);
+    assert!(
+        loads_after_reconcile > 0,
+        "runtime-view telemetry was captured"
+    );
+    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.settle_retry * 5).await;
     tokio::task::yield_now().await;
     let retried = fetch_runtime_status(node.as_ref(), agent.agent_did()).await;
     assert_eq!(retried.reconcile_phase, "idle");
     assert_eq!(retried.updated_at, settled.updated_at);
+    assert_eq!(
+        reload_count.load(Ordering::Relaxed),
+        loads_after_reconcile,
+        "a visible reconcile must quiesce instead of polling the full runtime view"
+    );
 
     // A new metadata-only write resolves to the same runtime fingerprint but
     // still needs a proposal so the reconciler can publish its normal no-op
@@ -345,17 +401,23 @@ async fn control_watcher_recovers_after_resolve_error() {
         .unwrap();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (proposal_tx, mut proposal_rx) = mpsc::channel(4);
+    let reloads = RuntimeViewLoadCapture::default();
+    let reload_count = Arc::clone(&reloads.count);
+    let subscriber = Registry::default().with(reloads);
 
-    let watcher_task = tokio::spawn(run_test_control_watcher(
-        node.clone(),
-        node.subscribe_document_changes(),
-        agent.agent_did().to_string(),
-        resolve_context,
-        proposal_tx,
-        runtime_status.clone(),
-        mpsc::channel::<()>(1).1,
-        shutdown_rx,
-    ));
+    let watcher_task = tokio::spawn(
+        run_test_control_watcher(
+            node.clone(),
+            node.subscribe_document_changes(),
+            agent.agent_did().to_string(),
+            resolve_context,
+            proposal_tx,
+            runtime_status.clone(),
+            mpsc::channel::<()>(1).1,
+            shutdown_rx,
+        )
+        .with_subscriber(subscriber),
+    );
 
     tokio::task::yield_now().await;
     update_agent_principal_enabled(node.as_ref(), agent.agent_did(), false).await;
@@ -369,6 +431,10 @@ async fn control_watcher_recovers_after_resolve_error() {
     assert_eq!(failed_status.active_generation, 0);
     assert_eq!(failed_status.last_reconcile_result, "error");
     assert!(!failed_status.last_reconcile_error.is_empty());
+    assert!(
+        reload_count.load(Ordering::Relaxed) > 1,
+        "a transient resolution failure must retry during the settle window"
+    );
 
     update_agent_principal_enabled(node.as_ref(), agent.agent_did(), true).await;
 

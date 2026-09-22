@@ -122,10 +122,8 @@ describe("canonical tool selections", () => {
     expect(api.saveToolsConfig.mock.calls[0][0].document.remote.services).toEqual([
       { mcp_service_id: "service-a", tool_names: null },
     ]);
-    await user.type(
-      screen.getByRole("textbox", { name: "Service A tool names" }),
-      "read\nse?rch",
-    );
+    await user.click(screen.getByRole("textbox", { name: "Service A tool names" }));
+    await user.paste("read\nse?rch");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("exact names");
     expect(api.saveToolsConfig).toHaveBeenCalledTimes(1);

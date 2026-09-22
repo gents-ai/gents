@@ -26,6 +26,14 @@ use crate::document_config::Tools;
 use crate::tool_surface::SelfConfigProcessCeiling;
 use crate::toolset::CommandNetworkMode;
 
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "behavior {behavior_id} not found; self-config is anchored on the running behavior document"
+)]
+pub(super) struct MissingBehavior {
+    pub behavior_id: String,
+}
+
 /// How a self-config write lands: config documents are watched by the control
 /// reconciler; a committed patch applies at the next generation swap, not to
 /// the in-flight turn. Surfaced in tool descriptions and result payloads.
@@ -153,10 +161,10 @@ impl SelfConfigCore {
         )
         .await?
         else {
-            bail!(
-                "behavior {} not found; self-config is anchored on the running behavior document",
-                self.behavior_id
-            );
+            return Err(MissingBehavior {
+                behavior_id: self.behavior_id.clone(),
+            }
+            .into());
         };
         let owner = doc.get("agent_did").and_then(Value::as_str).unwrap_or("");
         if owner != self.agent_did {
@@ -272,6 +280,7 @@ impl SelfConfigCore {
             (request.on_create)(&unique_value, &mut merged)?;
         }
 
+        (request.normalize)(txn, &anchor, &stored_doc, &mut merged).await?;
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
 
         if self.no_lockout && request.guard_selected_chain {
@@ -419,6 +428,7 @@ impl SelfConfigCore {
         if creating {
             (request.on_create)(&unique_value, &mut merged)?;
         }
+        (request.normalize)(txn, &anchor, &stored_doc, &mut merged).await?;
         (request.validate)(txn, &anchor, &stored_doc, &merged).await?;
         if self.no_lockout && request.guard_selected_chain {
             if self.lockout_behavior_id == self.behavior_id {
@@ -492,6 +502,7 @@ pub(crate) struct ApplyRequest<'a> {
     pub(crate) resolve_unique: Box<dyn Fn(&BehaviorAnchor) -> Result<String> + Send + Sync + 'a>,
     pub(crate) on_create:
         Box<dyn Fn(&str, &mut Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
+    pub(crate) normalize: NormalizeFn<'a>,
     pub(crate) validate: ValidateFn<'a>,
     pub(crate) guard:
         Box<dyn Fn(&BehaviorAnchor, &Map<String, Value>) -> Result<()> + Send + Sync + 'a>,
@@ -509,6 +520,18 @@ pub(crate) type ValidateFn<'a> = Box<
         + 'a,
 >;
 
+pub(crate) type NormalizeFn<'a> = Box<
+    dyn for<'b> Fn(
+            &'b ConfigApplyTxn<'b>,
+            &'b BehaviorAnchor,
+            &'b Map<String, Value>,
+            &'b mut Map<String, Value>,
+        ) -> futures::future::BoxFuture<'b, Result<()>>
+        + Send
+        + Sync
+        + 'a,
+>;
+
 impl<'a> ApplyRequest<'a> {
     pub(crate) fn new(target: SelfConfigTarget, patch: SelfConfigPatch) -> Self {
         Self {
@@ -519,6 +542,7 @@ impl<'a> ApplyRequest<'a> {
             guard_selected_chain: true,
             resolve_unique: Box::new(|_| bail!("resolve_unique not set (internal bug)")),
             on_create: Box::new(|_, _| Ok(())),
+            normalize: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),
             validate: Box::new(|_, _, _, _| Box::pin(async { Ok(()) })),
             guard: Box::new(|_, _| Ok(())),
         }

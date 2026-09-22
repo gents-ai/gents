@@ -194,7 +194,24 @@ async fn run_contract_with_streaming_cadence(
         assert_observer_did_not_overflow(&core).await?;
 
         let session = Uuid::new_v4().to_string();
-        visible_turn(&core, &graphql, &agent_did, &behavior, &session, "First conversation turn", stream_gate.as_deref()).await?;
+        // Paced tiny frames exercise the one-second production cadence timer;
+        // the ordinary first-visible contract retains its stricter 500ms bound.
+        let stream_visibility_budget = if paced {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_millis(500)
+        };
+        visible_turn(
+            &core,
+            &graphql,
+            &agent_did,
+            &behavior,
+            &session,
+            "First conversation turn",
+            stream_gate.as_deref(),
+            stream_visibility_budget,
+        )
+        .await?;
 
         // A request reaches the runtime, then the app closes before inference
         // finishes. Reopen exactly the same home: no re-enrollment, identity
@@ -241,7 +258,17 @@ async fn run_contract_with_streaming_cadence(
             elapsed_ms = reply_ready.as_millis(),
             "app recovered offline reply",
         );
-        visible_turn(&core, &graphql, &agent_did, &behavior, &session, FOLLOWUP_PROMPT, followup_stream_gate.as_deref()).await?;
+        visible_turn(
+            &core,
+            &graphql,
+            &agent_did,
+            &behavior,
+            &session,
+            FOLLOWUP_PROMPT,
+            followup_stream_gate.as_deref(),
+            stream_visibility_budget,
+        )
+        .await?;
         assert_local_pagination(&core, &session, &agent_did).await?;
         assert_observer_did_not_overflow(&core).await?;
         anyhow::ensure!(query_collection_dids(core.node(), "AgentPrincipal").await?.is_empty(), "reopen replicated runtime principal");
@@ -272,6 +299,7 @@ async fn visible_turn(
     session: &str,
     prompt: &str,
     stream_gate: Option<&tokio::sync::Semaphore>,
+    stream_visibility_budget: Duration,
 ) -> Result<()> {
     let started = Instant::now();
     let result = timeout(TURN_BUDGET, async {
@@ -293,7 +321,13 @@ async fn visible_turn(
             async {
                 let expected = if prompt == FOLLOWUP_PROMPT { FOLLOWUP_REPLY } else { REPLY };
                 if let Some(gate) = stream_gate {
-                    let visibility = streaming::wait_for_visible_content(core, &request, expected).await;
+                    let visibility = streaming::wait_for_visible_content(
+                        core,
+                        &request,
+                        expected,
+                        stream_visibility_budget,
+                    )
+                    .await;
                     gate.add_permits(1);
                     visibility?;
                 }

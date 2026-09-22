@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1.7
+FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends clang cmake libclang-dev protobuf-compiler pkg-config libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN rustup target add wasm32-unknown-unknown
+WORKDIR /src
+COPY . .
+ARG GENTS_BUILD_GIT_SHA
+ARG GENTS_BUILD_GIT_DIRTY=true
+ENV CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=4
+RUN --mount=type=cache,target=/usr/local/cargo/registry --mount=type=cache,target=/usr/local/cargo/git --mount=type=cache,target=/src/target \
+    cargo build --locked -p gents-cli && install -Dm755 target/debug/gents /out/gents
+
+FROM debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 libstdc++6 busybox curl procps && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 1000 --create-home engineer \
+    && ln -s /bin/busybox /usr/local/bin/httpd \
+    && ln -s /bin/busybox /usr/local/bin/wget
+COPY --from=builder /out/gents /usr/local/bin/gents
+COPY scripts/evals/host-fixture/*.sh /opt/steward-fixture/
+RUN chmod 755 /opt/steward-fixture/*.sh
+USER 1000:1000
+WORKDIR /host
+ENTRYPOINT ["/opt/steward-fixture/start.sh"]
+ARG GENTS_BUILD_GIT_SHA
+ARG GENTS_BUILD_GIT_DIRTY=true
+LABEL org.opencontainers.image.revision=$GENTS_BUILD_GIT_SHA gents.eval.source-dirty=$GENTS_BUILD_GIT_DIRTY

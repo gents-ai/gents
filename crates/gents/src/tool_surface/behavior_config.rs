@@ -9,7 +9,7 @@ use super::build::{
     build_host_tools, dedupe_strings, dedupe_subagent_targets, downgrade_bash,
     downgrade_file_tools, enabled_mcp_service_ids, measured_available_mcp_service_ids,
 };
-use super::modes::{BashMode, ToolCeiling};
+use super::modes::{BashMode, FileToolMode, ToolCeiling};
 use super::policy::{EndpointScope, RuntimeToolAvailability, ToolPolicySurface};
 use super::selection::{
     BackgroundToolConfig, CustomToolFactory, ResolvedToolSelection, SubagentToolConfig,
@@ -20,6 +20,7 @@ use crate::document_config::{QueryToolDecl, WriteToolDecl};
 #[derive(Clone)]
 pub struct BehaviorToolConfig {
     host_tools: ToolSet,
+    root_execution_guard: Option<super::RootExecutionGuard>,
     enable_meta_tools: bool,
     enable_goal_tools: bool,
     enable_goal_creation: bool,
@@ -61,6 +62,7 @@ impl BehaviorToolConfig {
         behavior_policy.self_config_categories = EndpointScope::none();
         Self {
             host_tools: ToolSet::meta_only(),
+            root_execution_guard: None,
             enable_meta_tools: true,
             enable_goal_tools: true,
             enable_goal_creation: false,
@@ -228,6 +230,7 @@ impl BehaviorToolConfig {
             downgrade_file_tools(behavior_name, requested_file_tools, static_policy.file);
         let bash = downgrade_bash(behavior_name, requested_bash, static_policy.bash.tool);
         let cli_tool_names = static_policy.filter_cli_names(cli_tool_names);
+        let root_was_authored = file_tool_root.is_some();
         let host_tools = build_host_tools(
             behavior_name,
             file_tools,
@@ -236,8 +239,20 @@ impl BehaviorToolConfig {
             &static_policy.bash,
             file_tool_root.as_deref(),
             &cli_tool_names,
+            static_policy.lsp,
             ceiling,
         )?;
+        let root_execution_guard = (file_tools != FileToolMode::Off
+            || bash != BashMode::Off
+            || !cli_tool_names.is_empty()
+            || static_policy.lsp)
+            .then(|| super::RootExecutionGuard {
+                behavior_id: behavior_name.to_string(),
+                selected_root: root_was_authored
+                    .then(|| host_tools.read_root().map(ToOwned::to_owned))
+                    .flatten(),
+                ceiling_root: ceiling.root().map(ToOwned::to_owned),
+            });
 
         let effective_allowed_mcp_service_ids =
             effective_string_allowlist(allowed_mcp_service_ids, &static_policy.mcp_services);
@@ -313,6 +328,7 @@ impl BehaviorToolConfig {
 
         Ok(Self {
             host_tools,
+            root_execution_guard,
             enable_meta_tools: static_policy.meta,
             enable_goal_tools: static_policy.include_goal_tools(),
             enable_goal_creation: static_policy.include_goal_creation(),
@@ -488,6 +504,7 @@ impl BehaviorToolConfig {
 
         ToolSurface {
             host_tools: self.host_tools.clone(),
+            root_execution_guard: self.root_execution_guard.clone(),
             include_meta_tools,
             include_goal_tools,
             include_goal_creation,

@@ -1,6 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { watchProviderLoginUrl } from "../src/ui/lib/providerLogin";
-import { providerSignInState } from "../src/ui/screens/setup/SetupScreen";
+import {
+  ceilingFromInit,
+  providerSignInState,
+} from "../src/ui/screens/setup/SetupScreen";
 
 const { listen, openExternalUrl } = vi.hoisted(() => ({
   listen: vi.fn(),
@@ -30,6 +33,13 @@ it.each(["openai", "anthropic", "grok"] as const)(
     expect(openExternalUrl).not.toHaveBeenCalled();
   },
 );
+
+it("maps stored init.json ceilings onto reviewed setup authority", () => {
+  expect(ceilingFromInit("Readwrite")).toBe("readwrite");
+  expect(ceilingFromInit("readonly")).toBe("readonly");
+  expect(ceilingFromInit("meta-only")).toBe("meta-only");
+  expect(ceilingFromInit(null)).toBe("readwrite");
+});
 
 it("replaces stale provider sign-ins from the latest account snapshot", () => {
   const account = (provider: string, credentialId: string, enabled = true) => ({

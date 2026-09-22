@@ -1,8 +1,8 @@
 use std::net::TcpStream;
+use std::path::Path;
 use std::path::PathBuf;
-use std::process::{Command as ProcessCommand, Stdio};
+use std::process::Command as ProcessCommand;
 use std::time::Duration;
-use std::{fs::OpenOptions, path::Path};
 
 use clap::{Parser, Subcommand};
 use gents_desktop_core::client::DesktopPaths;
@@ -116,54 +116,12 @@ fn launch_desktop() -> anyhow::Result<()> {
         );
     }
 
-    if desktop_console_log_enabled() {
-        ProcessCommand::new(&tauri_binary)
-            .spawn()
-            .map_err(|error| {
-                anyhow::anyhow!("failed to launch {}: {error}", tauri_binary.display())
-            })?;
-        return Ok(());
-    }
-
-    let log_path = DesktopPaths::discover()
-        .map(|paths| paths.log_file_path())
-        .unwrap_or_else(|_| std::env::temp_dir().join("gents-desktop.log"));
-    let stderr = open_log_writer(&log_path)?;
-    let stdout = stderr.try_clone().map_err(|error| {
-        anyhow::anyhow!(
-            "failed to clone desktop log writer {}: {error}",
-            log_path.display()
-        )
-    })?;
-
+    // The frontend is not a runtime or logging supervisor. Native logging is
+    // initialized inside the app; the OS service owns the agent's lifetime.
     ProcessCommand::new(&tauri_binary)
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
         .spawn()
         .map_err(|error| anyhow::anyhow!("failed to launch {}: {error}", tauri_binary.display()))?;
     Ok(())
-}
-
-fn desktop_console_log_enabled() -> bool {
-    std::env::var("GENTS_DESKTOP_CONSOLE_LOG")
-        .ok()
-        .is_some_and(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
-fn open_log_writer(path: &Path) -> anyhow::Result<std::fs::File> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .map_err(|error| anyhow::anyhow!("failed to open desktop log {}: {error}", path.display()))
 }
 
 fn is_debug_build(binary: &Path) -> bool {
@@ -277,4 +235,37 @@ fn with_default_transport_noise_filters(filter: EnvFilter) -> EnvFilter {
     .fold(filter, |filter, directive| {
         filter.add_directive(directive.parse().expect("valid tracing directive"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_build_detection_uses_path_components() {
+        assert!(is_debug_build(Path::new(
+            "/repo/target/debug/gents-desktop-tauri"
+        )));
+        assert!(!is_debug_build(Path::new(
+            "/repo/target/release/gents-desktop-tauri"
+        )));
+        assert!(!is_debug_build(Path::new(
+            "/repo/debugger/gents-desktop-tauri"
+        )));
+    }
+
+    #[test]
+    fn removed_log_supervisor_is_not_a_cli_command() {
+        assert!(Cli::try_parse_from(["gents-desktop", "__log-supervisor", "/tmp/app"]).is_err());
+    }
+
+    #[test]
+    fn init_remains_available_without_starting_a_runtime() {
+        assert!(matches!(
+            Cli::try_parse_from(["gents-desktop", "init", "--json"])
+                .unwrap()
+                .command,
+            Some(Command::Init(_))
+        ));
+    }
 }

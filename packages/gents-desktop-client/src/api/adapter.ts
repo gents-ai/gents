@@ -68,13 +68,18 @@ export function createDesktopApiAdapter(
         "desktop_managed_server_validate_root",
         { request: { path } },
       ).then((result) => result.canonicalPath),
-    commitManagedServerAutoStart: (agentName) =>
-      invokeDesktop<ManagedServerStatus>("desktop_managed_server_start", {
-        request: { agentName },
+    commitManagedServerAutoStart: (_agentName) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
+        enabled: true,
       }),
     stopManagedServer: (disableAutoStart) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_stop", {
         disableAutoStart,
+      }),
+    openDbExplorer: () => invokeDesktop<string>("desktop_open_db_explorer"),
+    setManagedServerAutoStart: (enabled) =>
+      invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
+        enabled,
       }),
     setSelectedAgent: (agentDid) =>
       invokeDesktop<void>("desktop_set_selected_agent", { agentDid }),
@@ -147,13 +152,15 @@ export function createDesktopApiAdapter(
       }),
     renameSession: (request) =>
       invokeDesktop<void>("desktop_session_rename", { request }),
-    resendRequest: (requestId) =>
+    resendRequest: (requestId, agentDid) =>
       invokeDesktop<RequestResendResult>("desktop_request_resend", {
         requestId,
+        agentDid,
       }),
-    retryRequest: (requestId) =>
+    retryRequest: (requestId, agentDid) =>
       invokeDesktop<ChatSendResult>("desktop_request_retry", {
         requestId,
+        agentDid,
       }),
     applyConfigComponents: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_config_components_apply", {

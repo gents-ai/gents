@@ -28,7 +28,7 @@ pub const D4F_BACKEND_ID: &str = "backend-d4f-live";
 pub const OPENROUTER_BACKEND_ID: &str = "backend-openrouter-live";
 
 /// Live backend endpoint/model, overridable for workstation deployments.
-fn d4f_endpoint() -> String {
+pub fn d4f_endpoint() -> String {
     std::env::var("GENTS_D4F_ENDPOINT")
         .unwrap_or_else(|_| "http://workstation-1:8000/v1".to_string())
 }

@@ -3,6 +3,8 @@ import Proofs.Conformance.GraphWorkspaceLineage
 import Proofs.Conformance.OperatorBaseFreeze
 import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
+import Proofs.Conformance.MailboxNotification
+import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.Contracts.Json.Core
@@ -50,6 +52,7 @@ import Proofs.Conformance.GraphFailureAttribution
 import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
+import Proofs.Conformance.RootAdmission
 
 namespace Conformance.Contracts
 
@@ -58,6 +61,8 @@ open Conformance.ContractCases
 def snapshotJson : String :=
   "{"
     ++ "\"generated_by\":\"lake env lean --run Proofs/Conformance/Contracts.lean\","
+    ++ "\"root_admission_cases\":"
+      ++ Conformance.RootAdmissionContracts.casesJson ++ ","
     ++ "\"vocabularies\":"
       ++ jsonArray (vocabularies.map VocabularyContract.toJson) ++ ","
     ++ "\"state_machines\":"
@@ -160,6 +165,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
+    ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
+    ++ "\"invocation_correlation_cases\":" ++ invocationCorrelationCasesJson ++ ","
     ++ "\"goal_capability_resolution_cases\":"
       ++ goalCapabilityResolutionCasesJson ++ ","
     ++ "\"lsp_action_cases\":"
@@ -293,6 +300,10 @@ def snapshotJson : String :=
         (cancelPropagationCases.map cancelPropagationCaseJson) ++ ","
     ++ "\"logical_output_obligation_cases\":"
       ++ Conformance.LogicalOutputObligationContracts.casesJson ++ ","
+    ++ "\"mailbox_notification_cases\":"
+      ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
+    ++ "\"mailbox_reply_cases\":"
+      ++ Conformance.MailboxReplyContracts.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"operator_base_freeze_cases\":"
@@ -344,6 +355,8 @@ def snapshotJson : String :=
       ++ promptAssemblyClaudeStreamCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
+    ++ "\"rendered_capture_storage_cases\":"
+      ++ renderedCaptureStorageCasesJson ++ ","
     ++ "\"durable_reduction_cases\":"
       ++ durableReductionCasesJson ++ ","
     ++ "\"rolling_compaction_cases\":"

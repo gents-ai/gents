@@ -7,13 +7,13 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-pub const CONTRACT_VERSION: &str = "7.8";
+pub const CONTRACT_VERSION: &str = "8.0";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "d454b6904b19ee01e173908e72c06c623f3454b349a9c84bf378fcf708441737";
+    "5f2e5db9118bf97e0434818d645b8d43eb1539b685ff85f2ecb26d66344d4f3c";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -52,7 +52,9 @@ pub const CLIENT_UPDATED_EVENT: &str = "desktop://client-updated";
 /// One-shot auth URL emission during the guided Codex login flow.
 pub const CODEX_LOGIN_URL_EVENT: &str = "desktop://codex-login-url";
 pub const MANAGED_SERVER_UPDATED_EVENT: &str = "desktop://managed-server-updated";
+pub const MANAGED_SERVER_TRAY_START_EVENT: &str = "desktop://managed-server-tray-start";
 pub const MANAGED_SERVER_TRAY_STOP_EVENT: &str = "desktop://managed-server-tray-stop";
+pub const MANAGED_SERVER_TRAY_RESTART_EVENT: &str = "desktop://managed-server-tray-restart";
 
 /// One-shot auth URL emission during the guided Grok login flow.
 pub const GROK_LOGIN_URL_EVENT: &str = "desktop://grok-login-url";
@@ -81,8 +83,10 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_status", "runtime-admin"),
         ("desktop_managed_server_start", "runtime-admin"),
         ("desktop_managed_server_stop", "runtime-admin"),
+        ("desktop_managed_server_set_auto_start", "runtime-admin"),
         ("desktop_managed_server_restart", "runtime-admin"),
         ("desktop_managed_server_validate_root", "runtime-admin"),
+        ("desktop_open_db_explorer", "runtime-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -248,7 +252,9 @@ pub fn current_contract() -> BridgeContract {
             GROK_LOGIN_URL_EVENT.to_string(),
             CLAUDE_LOGIN_URL_EVENT.to_string(),
             MANAGED_SERVER_UPDATED_EVENT.to_string(),
+            MANAGED_SERVER_TRAY_START_EVENT.to_string(),
             MANAGED_SERVER_TRAY_STOP_EVENT.to_string(),
+            MANAGED_SERVER_TRAY_RESTART_EVENT.to_string(),
         ],
         event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
         error_codes: error_code_inventory(),
@@ -554,8 +560,10 @@ mod tests {
             ("desktop_managed_server_status", "mutate"),
             ("desktop_managed_server_start", "mutate"),
             ("desktop_managed_server_stop", "mutate"),
+            ("desktop_managed_server_set_auto_start", "mutate"),
             ("desktop_managed_server_restart", "mutate"),
             ("desktop_managed_server_validate_root", "mutate"),
+            ("desktop_open_db_explorer", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),

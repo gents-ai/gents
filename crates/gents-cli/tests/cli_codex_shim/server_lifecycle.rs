@@ -123,7 +123,7 @@ async fn server_keeps_running_when_codex_shim_port_is_taken() -> Result<()> {
         &home_dir,
         server_port,
         &["--codex-shim-port", &shim_port_string],
-        &[],
+        &[("RUST_LOG", "gents_server::commands::serve=info")],
     )?;
     wait_for_port(server_port, &mut serve)?;
     serve
@@ -188,7 +188,7 @@ async fn codex_shim_waits_for_a_missing_bound_behavior_instead_of_disabling() ->
             "--codex-shim-behavior-id",
             "behavior-that-does-not-exist",
         ],
-        &[],
+        &[("RUST_LOG", "gents_server::commands::serve=info")],
     )?;
     wait_for_port(server_port, &mut serve)?;
     serve
@@ -280,7 +280,7 @@ async fn codex_shim_binds_when_config_apply_supplies_its_behavior() -> Result<()
             "--codex-shim-behavior-id",
             LATE_BEHAVIOR,
         ],
-        &[],
+        &[("RUST_LOG", "gents_server::commands::serve=info")],
     )?;
     wait_for_port(server_port, &mut serve)?;
     serve

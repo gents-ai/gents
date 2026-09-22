@@ -1,4 +1,5 @@
 use anyhow::{anyhow, bail, Result};
+use gents::document_config::{Schedule, Task};
 use gents::graphql::escape_graphql_string;
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
@@ -9,15 +10,46 @@ use super::super::types::{
 };
 use super::util::require_trimmed;
 
+fn schedule_for_run<'a>(
+    rows: &'a [Schedule],
+    id: &str,
+    agent_did: Option<&str>,
+) -> Result<&'a Schedule> {
+    let mut matches = rows
+        .iter()
+        .filter(|row| row.schedule_id == id && agent_did.is_none_or(|did| row.agent_did == did));
+    let row = matches
+        .next()
+        .ok_or_else(|| anyhow!("schedule {id} was not found"))?;
+    if matches.next().is_some() {
+        bail!("schedule {id} is ambiguous across agent scopes");
+    }
+    Ok(row)
+}
+
+fn task_for_run<'a>(rows: &'a [Task], id: &str, agent_did: Option<&str>) -> Result<&'a Task> {
+    let mut matches = rows
+        .iter()
+        .filter(|row| row.task_id == id && agent_did.is_none_or(|did| row.agent_did == did));
+    let row = matches
+        .next()
+        .ok_or_else(|| anyhow!("task {id} was not found"))?;
+    if matches.next().is_some() {
+        bail!("task {id} is ambiguous across agent scopes");
+    }
+    Ok(row)
+}
+
 async fn load_agent_request_by_request_id(
     core: &ClientCore,
     agent_did: &str,
     request_id: &str,
 ) -> Result<AgentRequestRow> {
     let escaped_request_id = escape_graphql_string(request_id);
+    let escaped_agent_did = escape_graphql_string(agent_did);
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }}, agent_did: {{ _eq: "{escaped_agent_did}" }} }}, limit: 1) {{
                 _docID
                 request_id
                 agent_did
@@ -71,22 +103,16 @@ pub async fn run_schedule_config(
 ) -> Result<TaskRunResult> {
     let schedule_id = require_trimmed("schedule_id", request.schedule_id)?;
     let store = core.store().snapshot();
-    let selected_agent_did = core.selected_agent_did();
-    let mut schedules = store
-        .schedules
-        .iter()
-        .filter(|row| row.schedule_id == schedule_id)
-        .filter(|row| {
-            selected_agent_did
-                .as_deref()
-                .is_none_or(|agent_did| row.agent_did == agent_did)
-        });
-    let schedule = schedules
-        .next()
-        .ok_or_else(|| anyhow!("schedule {schedule_id} was not found"))?;
-    if schedules.next().is_some() {
-        bail!("schedule {schedule_id} is ambiguous across agent scopes");
-    }
+    let selected_agent_did = request
+        .agent_did
+        .map(|did| require_trimmed("agent_did", did))
+        .transpose()?
+        .or_else(|| core.selected_agent_did());
+    let schedule = schedule_for_run(
+        &store.schedules,
+        &schedule_id,
+        selected_agent_did.as_deref(),
+    )?;
     let submitted = core
         .fire_schedule_now_for_agent(&schedule.agent_did, &schedule_id)
         .await?;
@@ -115,22 +141,12 @@ pub async fn run_task_config(core: &ClientCore, request: TaskRunRequest) -> Resu
     let task_id = require_trimmed("task_id", request.task_id)?;
     let args = request.args.unwrap_or_else(|| serde_json::json!({}));
     let store = core.store().snapshot();
-    let selected_agent_did = core.selected_agent_did();
-    let mut tasks = store
-        .tasks
-        .iter()
-        .filter(|row| row.task_id == task_id)
-        .filter(|row| {
-            selected_agent_did
-                .as_deref()
-                .is_none_or(|agent_did| row.agent_did == agent_did)
-        });
-    let task = tasks
-        .next()
-        .ok_or_else(|| anyhow!("task {task_id} was not found"))?;
-    if tasks.next().is_some() {
-        bail!("task {task_id} is ambiguous across agent scopes");
-    }
+    let selected_agent_did = request
+        .agent_did
+        .map(|did| require_trimmed("agent_did", did))
+        .transpose()?
+        .or_else(|| core.selected_agent_did());
+    let task = task_for_run(&store.tasks, &task_id, selected_agent_did.as_deref())?;
     let submitted = core
         .fire_task_now_for_agent(&task.agent_did, &task_id, args)
         .await?;
@@ -164,4 +180,42 @@ pub async fn delete_event_source_config(
 ) -> Result<()> {
     core.delete_event_source(&request.event_source_id, &request.agent_did)
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn task_and_schedule_actions_keep_their_agent_scope_across_views() {
+        let tasks: Vec<Task> = ["did:alpha", "did:beta"].into_iter().map(|did| serde_json::from_value(json!({
+            "agent_did": did, "task_id": "daily", "behavior_id": "default", "prompt_template": "hello"
+        })).unwrap()).collect();
+        let schedules: Vec<Schedule> = ["did:alpha", "did:beta"].into_iter().map(|did| serde_json::from_value(json!({
+            "agent_did": did, "schedule_id": "daily", "cadence": { "kind": "interval", "interval_secs": 60 }
+        })).unwrap()).collect();
+        for did in ["did:alpha", "did:beta"] {
+            assert_eq!(
+                task_for_run(&tasks, "daily", Some(did)).unwrap().agent_did,
+                did
+            );
+            assert_eq!(
+                schedule_for_run(&schedules, "daily", Some(did))
+                    .unwrap()
+                    .agent_did,
+                did
+            );
+        }
+        assert!(task_for_run(&tasks, "daily", None)
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous"));
+        assert!(schedule_for_run(&schedules, "daily", None)
+            .unwrap_err()
+            .to_string()
+            .contains("ambiguous"));
+        assert!(task_for_run(&tasks, "daily", Some("did:missing")).is_err());
+        assert!(schedule_for_run(&schedules, "daily", Some("did:missing")).is_err());
+    }
 }

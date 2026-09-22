@@ -27,6 +27,7 @@ pub(crate) struct LeanContractVocabulary<'a> {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanContractSnapshot {
     pub(crate) generated_by: String,
+    pub(crate) root_admission_cases: Vec<LeanRootAdmissionCase>,
     pub(crate) vocabularies: Vec<LeanVocabularyContract>,
     pub(crate) state_machines: Vec<LeanStateMachineContract>,
     /// Bridge-owner child-terminal failure projections
@@ -52,6 +53,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) workspace_path_alias_cases: Vec<serde_json::Value>,
     pub(crate) logical_output_obligation_cases: Vec<serde_json::Value>,
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
+    pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
+    pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
@@ -104,6 +107,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
+    pub(crate) write_input_cases: Vec<serde_json::Value>,
+    pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
     pub(crate) goal_capability_resolution_cases: Vec<LeanGoalCapabilityResolutionCase>,
     pub(crate) lsp_action_cases: Vec<LeanLspActionCase>,
     pub(crate) self_config_field_tables: Vec<LeanSelfConfigFieldTable>,
@@ -185,6 +190,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
+    pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
     pub(crate) rolling_compaction_cases: Vec<LeanRollingCompactionCase>,
     pub(crate) reduction_engine_cases: Vec<LeanReductionEngineCase>,
@@ -206,6 +212,30 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanRootAdmissionCase {
+    pub(crate) name: String,
+    pub(crate) operation: String,
+    pub(crate) authored: String,
+    pub(crate) blank: bool,
+    pub(crate) observation: String,
+    pub(crate) configured: bool,
+    pub(crate) ceiling: Option<LeanCanonicalPath>,
+    pub(crate) enabled: Vec<LeanCanonicalPath>,
+    pub(crate) published: Vec<LeanCanonicalPath>,
+    pub(crate) candidate: Option<LeanCanonicalPath>,
+    pub(crate) expected: bool,
+    pub(crate) stored_requires_root: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCanonicalPath {
+    pub(crate) anchor: String,
+    pub(crate) components: Vec<String>,
 }
 
 /// One bridge-owner child-terminal failure projection
@@ -953,6 +983,10 @@ pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
     &lean_contract_snapshot().tool_policy_cases
 }
 
+pub(crate) fn lean_write_input_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().write_input_cases
+}
+
 pub(crate) fn lean_goal_capability_resolution_cases() -> &'static [LeanGoalCapabilityResolutionCase]
 {
     &lean_contract_snapshot().goal_capability_resolution_cases
@@ -1371,6 +1405,10 @@ pub(crate) fn lean_prompt_assembly_claude_stream_cases(
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {
     &lean_contract_snapshot().rendered_capture_cases
+}
+
+pub(crate) fn lean_rendered_capture_storage_cases() -> &'static [LeanRenderedCaptureStorageCase] {
+    &lean_contract_snapshot().rendered_capture_storage_cases
 }
 
 pub(crate) fn lean_durable_reduction_cases() -> &'static [LeanDurableReductionCase] {

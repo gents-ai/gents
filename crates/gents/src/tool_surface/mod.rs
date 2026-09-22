@@ -3,19 +3,26 @@ mod build;
 mod explain;
 mod modes;
 mod policy;
+mod root_admission;
 mod runtime_context;
 mod selection;
 
 pub use behavior_config::BehaviorToolConfig;
 pub use build::measured_mcp_services_for_access;
-pub(crate) use build::{
-    measured_available_mcp_service_ids, resolve_configured_tool_root, resolve_effective_tool_root,
-};
+pub(crate) use build::{measured_available_mcp_service_ids, resolve_effective_tool_root};
 pub use explain::{ToolSurfaceExplanation, ToolSurfaceWarning};
 pub use modes::{BashMode, FileToolMode, ToolCeiling};
 pub use policy::{
     EndpointScope, RuntimeToolAvailability, ToolPolicyBash, ToolPolicySurface, ToolPolicyVersion,
     TOOL_POLICY_V1,
+};
+pub(crate) use root_admission::{
+    canonicalize_tools_root, load_workspace_root_policy_in_txn, resolve_admitted_tool_root,
+    resolve_configured_tool_root, RootAdmission, RootExecutionGuard,
+};
+#[doc(hidden)]
+pub use root_admission::{
+    project_workspace_root_policy, WorkspaceRootDocument, WorkspaceRootPolicy,
 };
 pub use runtime_context::ToolRuntimeContext;
 pub use selection::{resolve_goal_capabilities, CustomToolFactory, ResolvedToolSelection};
@@ -25,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::llm::tool::ToolDyn;
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use crate::defra_query::{
     build_defra_query_tool, BoundedQueryTool, CollectionScope, DEFRA_QUERY_TOOL_NAME,
@@ -46,6 +53,7 @@ const DEFAULT_CLI_TIMEOUT_SECS: u64 = 10;
 #[derive(Clone)]
 pub struct ToolSurface {
     host_tools: ToolSet,
+    root_execution_guard: Option<RootExecutionGuard>,
     include_meta_tools: bool,
     include_goal_tools: bool,
     include_goal_creation: bool,
@@ -91,6 +99,10 @@ pub struct SelfConfigProcessCeiling {
 }
 
 impl ToolSurface {
+    pub(crate) fn root_execution_guard(&self) -> Option<&RootExecutionGuard> {
+        self.root_execution_guard.as_ref()
+    }
+
     pub(crate) fn source_fill_fields(&self) -> std::collections::BTreeSet<String> {
         let mut fields = self
             .write_tools
@@ -251,6 +263,9 @@ impl ToolSurface {
     }
 
     pub async fn build_tools(&self, runtime: &ToolRuntimeContext) -> Result<Vec<Box<dyn ToolDyn>>> {
+        if let Some(guard) = &self.root_execution_guard {
+            guard.validate(&runtime.node).await?;
+        }
         let writethrough = self.lsp.as_ref().map(|config| {
             crate::toolset::lsp::LspWritethrough::new(runtime.lsp_pool.clone(), config.clone())
         });
@@ -333,12 +348,20 @@ impl ToolSurface {
                 );
             }
             if decl.collection == crate::mailbox::MAILBOX_COLLECTION {
-                tools.push(
-                    Box::new(crate::mailbox::MailboxCreateTool::new(runtime.node.clone()))
-                        as Box<dyn ToolDyn>,
-                );
+                tools.push(Box::new(crate::mailbox::MailboxCreateTool::new(
+                    runtime.node.clone(),
+                    decl.notification
+                        .clone()
+                        .context("missing notification policy")?,
+                )) as Box<dyn ToolDyn>);
             } else {
                 let tool = BoundedWriteTool::new(runtime.node.clone(), decl.clone());
+                if !tool.is_well_formed() {
+                    anyhow::bail!(
+                        "write tool `{}` has an unavailable or unsupported collection schema",
+                        decl.tool_name
+                    );
+                }
                 tools.push(Box::new(tool) as Box<dyn ToolDyn>);
             }
         }

@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
@@ -60,6 +60,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         mut shutdown: tokio::sync::watch::Receiver<bool>,
         mut interrupt_rx: tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
     ) -> Result<HandleRequestOutcome> {
+        if let Some(guard) = &self.root_execution_guard {
+            guard
+                .validate(&self.node)
+                .await
+                .context("validating current WorkspaceRoot policy for fresh request")?;
+        }
         let request_token = tokio_util::sync::CancellationToken::new();
         let request = lifecycle.request().clone();
         let effective_sampling = self.behavior.sampling;

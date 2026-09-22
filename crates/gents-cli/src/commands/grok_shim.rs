@@ -148,6 +148,8 @@ pub(crate) struct GrokShimBindArgs {
     pub(crate) background_executions: gents::hook::BackgroundExecutionRegistry,
     /// In-process node every request, interrupt, and projection query uses.
     pub(crate) node: Arc<EmbeddedNode>,
+    /// Authenticated server principal used as DefraDB's transaction actor.
+    pub(crate) actor: identity::Did,
     /// GraphQL endpoint string accepted by `create_agent_request`; the
     /// in-process embedded node is authoritative for reads.
     pub(crate) graphql: String,
@@ -201,6 +203,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
     let factory_inputs = AcpDelegateFactoryInputs {
         background_executions: args.background_executions.clone(),
         node: args.node.clone(),
+        actor: args.actor.clone(),
         graphql: args.graphql.clone(),
         agent_did: args.agent_did.clone(),
         behavior_id: behavior_id.clone(),
@@ -232,6 +235,7 @@ pub(crate) async fn bind_grok_shim(args: GrokShimBindArgs) -> Result<LeaderHandl
 struct AcpDelegateFactoryInputs {
     background_executions: gents::hook::BackgroundExecutionRegistry,
     node: Arc<EmbeddedNode>,
+    actor: identity::Did,
     graphql: String,
     agent_did: String,
     behavior_id: String,
@@ -266,6 +270,7 @@ impl AcpDelegateFactoryInputs {
         let turns = Arc::new(crate::commands::grok_shim::turn::TurnManager::new(
             inputs.node.clone(),
             crate::commands::grok_shim::turn::TurnManagerConfig {
+                actor: inputs.actor.clone(),
                 agent_did: inputs.agent_did.clone(),
                 behavior_id: inputs.behavior_id.clone(),
                 graphql: inputs.graphql.clone(),
@@ -370,6 +375,7 @@ mod tests {
         let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
             .expect("test signing identity");
         let agent_did = gents::AgentIdentity::did(&identity).to_string();
+        let actor = ::identity::Did::new(agent_did.clone()).expect("fixture creator DID");
         let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
         let node = Arc::new(
             EmbeddedNode::builder()
@@ -395,6 +401,7 @@ mod tests {
         let inputs = AcpDelegateFactoryInputs {
             background_executions: Default::default(),
             node: node.clone(),
+            actor,
             graphql,
             agent_did,
             behavior_id,
@@ -1042,6 +1049,10 @@ mod tests {
     #[tokio::test]
     async fn bind_args_carry_socket_behavior_and_identity() {
         let tempdir = tempfile::tempdir().expect("tempdir");
+        let identity = gents::KeyIdentity::load_or_create(tempdir.path().join("agent.key"), None)
+            .expect("test signing identity");
+        let actor = ::identity::Did::new(gents::AgentIdentity::did(&identity).to_owned())
+            .expect("fixture creator DID");
         let node = Arc::new(
             EmbeddedNode::builder()
                 .data_path(tempdir.path().join("node"))
@@ -1053,6 +1064,7 @@ mod tests {
         let args = GrokShimBindArgs {
             background_executions: Default::default(),
             node,
+            actor: actor.clone(),
             graphql: "http://127.0.0.1:8000/api/v0/graphql".to_string(),
             behavior_id: Some("behavior-a".to_string()),
             agent_did: "did:test:agent".to_string(),
@@ -1061,6 +1073,7 @@ mod tests {
         };
         assert_eq!(args.behavior_id.as_deref(), Some("behavior-a"));
         assert_eq!(args.agent_did, "did:test:agent");
+        assert_eq!(args.actor, actor);
         assert_eq!(
             args.socket_path,
             std::path::PathBuf::from("/tmp/gents-grok.sock")

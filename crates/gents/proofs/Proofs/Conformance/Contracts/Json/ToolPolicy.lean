@@ -1,5 +1,6 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.ToolPolicy.Cases
+import Proofs.ToolPolicy.WriteInput
 
 namespace Conformance.Contracts
 
@@ -13,6 +14,39 @@ def writeGrantViewJson (grant : WriteGrantView) : String :=
   ++ "}"
 
 def boolJson (b : Bool) : String := if b then "true" else "false"
+
+def writeInputKindName : ToolPolicy.WriteInput.Kind → String
+  | .text => "text" | .integer => "integer" | .number => "number"
+  | .boolean => "boolean" | .array => "array" | .object => "object" | .null => "null"
+
+def writeInputCasesJson : String := Id.run do
+  let mut rows := []
+  for expected in [ToolPolicy.WriteInput.Kind.text, .integer, .number, .boolean] do
+    for actual in [none, some .text, some .integer, some .number, some .boolean,
+        some .array, some .object, some .null] do
+      for nullable in [false, true] do
+        for required in [false, true] do
+          for filled in [false, true] do
+            rows := rows ++ ["{\"expected\":" ++ jsonString (writeInputKindName expected)
+              ++ ",\"actual\":" ++ (match actual with
+                | none => "null" | some kind => jsonString (writeInputKindName kind))
+              ++ ",\"nullable\":" ++ boolJson nullable
+              ++ ",\"required\":" ++ boolJson required
+              ++ ",\"filled\":" ++ boolJson filled
+              ++ ",\"accepted\":" ++ boolJson (ToolPolicy.WriteInput.admits expected nullable required filled actual)
+              ++ "}"]
+  return jsonArray rows
+
+def invocationCorrelationCasesJson : String := Id.run do
+  let encode := fun value : Option String => match value with
+    | none => "null" | some text => jsonString text
+  let mut rows := []
+  for request in [none, some "", some " ", some "request-1"] do
+    for supplied in [none, some "", some " ", some "event-1"] do
+      rows := rows ++ ["{\"request\":" ++ encode request
+        ++ ",\"supplied\":" ++ encode supplied
+        ++ ",\"expected\":" ++ encode (ToolPolicy.WriteInput.invocationCorrelation request supplied) ++ "}"]
+  return jsonArray rows
 
 def surfaceViewJson (v : SurfaceView) : String :=
   "{"

@@ -99,6 +99,9 @@ export type DesktopApiAdapter = {
   stopManagedServer?: (
     disableAutoStart: boolean,
   ) => Promise<ManagedServerStatus>;
+  /** Opens the managed runtime's DB explorer window; resolves to its URL. */
+  openDbExplorer?: () => Promise<string>;
+  setManagedServerAutoStart?: (enabled: boolean) => Promise<ManagedServerStatus>;
   setSelectedAgent: (agentDid: string | null) => Promise<void>;
   removePeer: (peerId: string) => Promise<DesktopClientSnapshot>;
   renamePeer: (peerId: string, label: string) => Promise<DesktopClientSnapshot>;
@@ -151,8 +154,14 @@ export type DesktopApiAdapter = {
   startMailboxRequest: (itemId: string) => Promise<MailboxItemView>;
   dismissMailboxItem: (itemId: string) => Promise<void>;
   renameSession: (request: SessionRenameRequest) => Promise<void>;
-  resendRequest: (requestId: string) => Promise<RequestResendResult>;
-  retryRequest: (requestId: string) => Promise<ChatSendResult>;
+  resendRequest: (
+    requestId: string,
+    agentDid?: string,
+  ) => Promise<RequestResendResult>;
+  retryRequest: (
+    requestId: string,
+    agentDid?: string,
+  ) => Promise<ChatSendResult>;
   applyConfigComponents: (
     request: ConfigComponentsApplyRequest,
   ) => Promise<DesktopClientSnapshot>;
