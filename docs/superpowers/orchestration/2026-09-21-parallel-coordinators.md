@@ -55,3 +55,17 @@ Filled in by the orchestrator at spin-up.
 |---|---|
 | `eval/05-contract` pinned for M6a and M2 | `595fd8bc2` |
 | `eval/03-definition` for M3 | `2629d4a11` |
+
+## Orchestrator rulings
+
+- 2026-09-21, for `m3`: every stage is a prompt the runner submits directly (runner spec section 2
+  step 4). A case's input is the stage prompt text, authored as the rendered form of the pack's Task
+  template. `fixtures.documents` are static state and never sit in a collection an EventSource
+  watches. Multi-input scenarios are sequential stages. The pack's trigger triple stays as the
+  deployment path and is not exercised by evals. `StageInput::Document` is a spec 3a candidate; the
+  reason it is not in 2a is the trigger engine's overlap behavior (`trigger_engine/mod.rs:511-537`).
+  Cost if wrong: trigger plumbing is untested by evals; both arms share it.
+- 2026-09-21, for `m6a`: the `structure.rs` entry for `Proofs/Optimization.lean` stays a `Gap`
+  naming the lib unit-test consumer, because `structure.rs` has no form for that consumer kind.
+  Accepted as the coordinator ruled. The Lean review minors (`import Proofs.Eval` nominal;
+  `accept_antitone` naming) go in the PR 1 description, not a fix round.
