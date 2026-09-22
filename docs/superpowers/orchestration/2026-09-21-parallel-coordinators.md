@@ -100,3 +100,11 @@ Filled in by the orchestrator at spin-up.
   lib 2482/2482; `cargo test -p gents` fails only the two libp2p dial timeouts. Nine rulings in its
   ledger (`.superpowers/sdd/2026-09-21-optimization-policy-and-lean/progress.md`); R7 added
   `max_missing_usage_bp` to `PolicyV2` per spec §4. Deferred items are recorded per PR in the ledger.
+- `m2` complete 2026-09-22: 20 commits on four stacked branches over `eval/05-contract` @ `851db85d6`.
+  After the orchestrator's Grok-trailer rewrite (tree identical): `eval/10-runner-support` `054eca35d`,
+  `eval/11-runner-core` `d3e1acfd8`, `eval/12-runner-loop` `d38c623df`, `eval/13-runner-embedded`
+  `028aa4188`. On the head: `--lib eval` 98, canary 3 passed / 1 ignored, workspace check clean,
+  `e2e_configurator --no-run` ok. 27 coordinator rulings (`.superpowers/sdd/2026-09-21-eval-runner/`).
+  Residuals: R26 (observation-failed arm grades Runtime; must be Infrastructure), three doc items;
+  the three fix-wave commits on `eval/13` touch files owned by 10/11/12 (layer map in the ledger) and
+  may be redistributed before push. Workspace retained for PR descriptions.
