@@ -56,7 +56,8 @@ Filled in by the orchestrator at spin-up.
 
 | Name | Commit |
 |---|---|
-| `eval/05-contract` pinned for M6a and M2 | `851db85d6` (was `595fd8bc2` before the M1 final-review rewrite) |
+| `eval/05-contract` (amended 2026-09-22: `EvalStage.capture`, `breaker_threshold`, `evidence_digest`) | `00a8ea84b` |
+| M3 base and M6b base root: `eval/13-runner-embedded` on the amended contract | `7d1ca360f` |
 | `eval/03-definition` for M3 | `2629d4a11` |
 
 ## Orchestrator rulings
@@ -108,3 +109,13 @@ Filled in by the orchestrator at spin-up.
   Residuals: R26 (observation-failed arm grades Runtime; must be Infrastructure), three doc items;
   the three fix-wave commits on `eval/13` touch files owned by 10/11/12 (layer map in the ledger) and
   may be redistributed before push. Workspace retained for PR descriptions.
+- 2026-09-22 amendment wave: `eval/05-contract` → `00a8ea84b`; rebased heads `eval/06-protected`
+  `075e1970b`, `eval/10` `21b899aae`, `eval/11` `b6b44fdca` (+ literal fix), `eval/12` `754165696`
+  (+ literal fix: origin carries `breaker_threshold`, completion carries `evidence_digest`),
+  `eval/13` `7d1ca360f`, `optimization/10` `a1093a1bb`, `11` `c71911c7f`, `12` `d61ab88cd`. Tip
+  checks: eval lib 105, canary 3/1 ignored, workspace check clean.
+- New workspaces 2026-09-22, coordinators on `--model opus`: `m3` (plan
+  `2026-09-22-eval-definition-and-checks.md`, base `eval/13` @ `7d1ca360f`) and `m6b` (plan
+  `2026-09-22-optimization-driver.md`; its first step builds the M6b base by cherry-picking
+  `eval/06-protected`, `optimization/01..03` and `optimization/10..12` onto `eval/13` @ `7d1ca360f`
+  as branch `optimization/19-base`). M4 waits for spec 4a.
