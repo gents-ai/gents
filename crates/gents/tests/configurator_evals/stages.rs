@@ -1,13 +1,19 @@
 //! Shared native execution and evidence collection for progressive consumer evals.
 //! Assertions remain outside the evaluated behaviors and their writable roots.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use super::access::RuntimeAccess;
 use anyhow::{ensure, Context, Result};
 use gents::defra_node::EmbeddedNode;
+use gents::eval::runner::embedded::{
+    await_terminal_with, classify_request_outcome, collect_request_evidence, evidence_query,
+    inference_sample_query, request_evidence_from_query_data, ObservationHook, RequestEvidence,
+};
 use gents::graphql::escape_graphql_string;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -849,160 +855,6 @@ pub(super) async fn observed_request_outcome<'a>(
     Ok(outcome)
 }
 
-fn classify_request_outcome(
-    terminal_state: &str,
-    observation_timed_out: bool,
-    outcome: &Value,
-) -> Option<&'static str> {
-    if observation_timed_out {
-        return Some("deadline");
-    }
-    if terminal_state == "completed" {
-        return None;
-    }
-    let rows = |name: &str| {
-        outcome
-            .get(name)
-            .and_then(Value::as_array)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    };
-    // Tool-budget exhaustion can also drop the provider stream. Classify from
-    // terminal runtime evidence, never arbitrary tool-result prose.
-    let invalid_tool_call_budget_exhausted = rows("AgentRequest")
-        .iter()
-        .filter_map(|row| row["failure_reason"].as_str())
-        .any(|reason| reason.contains("invalid_tool_call_budget_exhausted"));
-    if invalid_tool_call_budget_exhausted {
-        return Some("tool");
-    }
-    let inference_failed = rows("InferenceCall").iter().any(|row| {
-        matches!(row["call_state"].as_str(), Some("failed" | "error"))
-            || row["failure_reason"]
-                .as_str()
-                .is_some_and(|reason| !reason.is_empty())
-    });
-    let tool_failed = rows("AgentToolCall")
-        .iter()
-        .any(|row| matches!(row["lifecycle_state"].as_str(), Some("failed")));
-    // Failed tool execution can terminate an otherwise healthy provider stream.
-    // Co-occurrence does not establish which boundary caused termination.
-    if inference_failed && tool_failed {
-        return Some("unknown");
-    }
-    if inference_failed {
-        return Some("provider");
-    }
-    if tool_failed {
-        return Some("tool");
-    }
-    if rows("AgentRequest").iter().any(|row| {
-        matches!(
-            row["lifecycle_state"].as_str(),
-            Some("failed" | "cancelled" | "interrupted")
-        )
-    }) {
-        return Some("runtime");
-    }
-    Some("unknown")
-}
-
-#[test]
-fn request_failure_taxonomy_uses_structured_observations_and_preserves_unknown() {
-    let outcome = |request: &str, inference: Value, tools: Value| {
-        serde_json::json!({
-            "AgentRequest":[{"lifecycle_state":request}],
-            "InferenceCall":inference,
-            "AgentToolCall":tools,
-        })
-    };
-    assert_eq!(
-        classify_request_outcome(
-            "failed",
-            false,
-            &outcome(
-                "failed",
-                serde_json::json!([{"call_state":"failed"}]),
-                serde_json::json!([{"lifecycle_state":"failed","tool_failure_class":"argumentInvalid"}])
-            )
-        ),
-        Some("unknown")
-    );
-    assert_eq!(
-        classify_request_outcome(
-            "failed",
-            false,
-            &serde_json::json!({
-                "AgentRequest":[{
-                    "lifecycle_state":"failed",
-                    "failure_reason":"agent stream failed: CompletionError: ProviderError: invalid_tool_call_budget_exhausted: limit=8, used=8"
-                }],
-                "InferenceCall":[{
-                    "call_state":"failed",
-                    "failure_reason":"StreamDroppedBeforeTerminalResponse"
-                }],
-                "AgentToolCall":[{
-                    "lifecycle_state":"failed",
-                    "tool_failure_class":"policyDenied"
-                }]
-            })
-        ),
-        Some("tool")
-    );
-    assert_eq!(
-        classify_request_outcome(
-            "failed",
-            false,
-            &outcome(
-                "failed",
-                serde_json::json!([{"call_state":"failed","failure_reason":"503"}]),
-                serde_json::json!([])
-            ),
-        ),
-        Some("provider")
-    );
-    assert_eq!(
-        classify_request_outcome(
-            "failed",
-            false,
-            &outcome(
-                "failed",
-                serde_json::json!([]),
-                serde_json::json!([{"lifecycle_state":"failed"}])
-            ),
-        ),
-        Some("tool")
-    );
-    assert_eq!(
-        classify_request_outcome(
-            "failed",
-            false,
-            &outcome("failed", serde_json::json!([]), serde_json::json!([]))
-        ),
-        Some("runtime")
-    );
-    assert_eq!(
-        classify_request_outcome(
-            "mystery",
-            false,
-            &outcome("mystery", serde_json::json!([]), serde_json::json!([]))
-        ),
-        Some("unknown")
-    );
-    assert_eq!(
-        classify_request_outcome(
-            "completed",
-            false,
-            &outcome("completed", serde_json::json!([]), serde_json::json!([]))
-        ),
-        None
-    );
-    assert_eq!(
-        classify_request_outcome("processing", true, &serde_json::json!({})),
-        Some("deadline")
-    );
-}
-
 async fn execute_inner(
     activation: &ActivationFence,
     node: &std::sync::Arc<EmbeddedNode>,
@@ -1036,6 +888,195 @@ async fn execute_inner(
 }
 
 pub(super) async fn observe_request(
+    access: RuntimeAccess<'_>,
+    request_id: String,
+    stage: &str,
+    evidence: &Path,
+    started: Instant,
+    started_at: String,
+) -> Result<StageResult> {
+    match access {
+        RuntimeAccess::Embedded(node) => {
+            observe_embedded(node, request_id, stage, evidence, started, started_at).await
+        }
+        access @ RuntimeAccess::ControlPlane(_) => {
+            observe_control_plane(access, request_id, stage, evidence, started, started_at).await
+        }
+    }
+}
+
+struct EmbeddedObservation<'a> {
+    node: &'a std::sync::Arc<EmbeddedNode>,
+    evidence: PathBuf,
+    stage: String,
+    request_id: String,
+    started_at: String,
+    next_sample: Mutex<Instant>,
+    last_state: Mutex<String>,
+    last_session: Mutex<Option<String>>,
+    error: Mutex<Option<anyhow::Error>>,
+}
+
+#[async_trait::async_trait]
+impl ObservationHook for EmbeddedObservation<'_> {
+    async fn on_state(&self, state: &str, session_id: Option<&str>) {
+        {
+            let mut last_state = self
+                .last_state
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            *last_state = state.to_owned();
+            let mut last_session = self
+                .last_session
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            *last_session = session_id.map(str::to_owned);
+        }
+        self.note(write_stage_progress(
+            &self.evidence,
+            &self.stage,
+            "observing",
+            Some(&self.request_id),
+            session_id,
+            Some(state),
+            &self.started_at,
+        ));
+    }
+
+    async fn on_interrupt_requested(&self) {
+        let state = self
+            .last_state
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+        let session = self
+            .last_session
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .clone();
+        self.note(write_stage_progress(
+            &self.evidence,
+            &self.stage,
+            "interrupt_requested",
+            Some(&self.request_id),
+            session.as_deref(),
+            Some(&state),
+            &self.started_at,
+        ));
+    }
+
+    async fn on_tick(&self, _elapsed: Duration) {
+        let due = {
+            let next = self
+                .next_sample
+                .lock()
+                .unwrap_or_else(|err| err.into_inner());
+            Instant::now() >= *next
+        };
+        if !due {
+            return;
+        }
+        // Display sampling must not fail the evaluated request or stall its deadline.
+        let _ = tokio::time::timeout(
+            Duration::from_millis(500),
+            retain_inference_evidence(self.node, &self.request_id, &self.stage, &self.evidence),
+        )
+        .await;
+        let mut next = self
+            .next_sample
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        *next = Instant::now() + Duration::from_secs(2);
+    }
+}
+
+impl EmbeddedObservation<'_> {
+    fn note(&self, result: Result<()>) {
+        if let Err(error) = result {
+            let mut slot = self.error.lock().unwrap_or_else(|err| err.into_inner());
+            if slot.is_none() {
+                *slot = Some(error);
+            }
+        }
+    }
+}
+
+async fn observe_embedded(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_id: String,
+    stage: &str,
+    evidence: &Path,
+    started: Instant,
+    started_at: String,
+) -> Result<StageResult> {
+    let timeout = stage_timeout()?.saturating_sub(started.elapsed());
+    write_stage_progress(
+        evidence,
+        stage,
+        "observing",
+        Some(&request_id),
+        None,
+        Some("materialized"),
+        &started_at,
+    )?;
+    let hook = EmbeddedObservation {
+        node,
+        evidence: evidence.to_path_buf(),
+        stage: stage.to_owned(),
+        request_id: request_id.clone(),
+        started_at: started_at.clone(),
+        next_sample: Mutex::new(Instant::now()),
+        last_state: Mutex::new(String::new()),
+        last_session: Mutex::new(None),
+        error: Mutex::new(None),
+    };
+    let observed = await_terminal_with(
+        node,
+        &request_id,
+        timeout,
+        Duration::from_secs(30),
+        Duration::from_millis(250),
+        &hook,
+    )
+    .await?;
+    if let Some(error) = hook
+        .error
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .take()
+    {
+        return Err(error);
+    }
+    let collected = collect_request_evidence(node, &request_id).await?;
+    let access = RuntimeAccess::Embedded(node);
+    let observed_outcome = observed_request_outcome(access, &request_id)
+        .await
+        .map_err(infrastructure)?;
+    let failure_kind = classify_request_outcome(
+        observed.terminal_state,
+        observed.interrupted_on_deadline,
+        &collected,
+    )
+    .map(str::to_owned);
+    let answer = access.terminal_answer(&request_id).await?;
+    finish_observation(
+        access,
+        request_id,
+        stage,
+        evidence,
+        started,
+        &started_at,
+        observed.terminal_state.as_str().to_owned(),
+        observed.session_id,
+        observed.interrupted_on_deadline,
+        failure_kind,
+        observed_outcome,
+        answer,
+    )
+    .await
+}
+
+async fn observe_control_plane(
     access: RuntimeAccess<'_>,
     request_id: String,
     stage: &str,
@@ -1119,9 +1160,46 @@ pub(super) async fn observe_request(
     let observed_outcome = observed_request_outcome(access, &request_id)
         .await
         .map_err(infrastructure)?;
-    let failure_kind =
-        classify_request_outcome(&terminal_state, observation_timed_out, &observed_outcome)
-            .map(str::to_owned);
+    let parsed_state =
+        RequestLifecycleState::parse(&terminal_state).unwrap_or(RequestLifecycleState::Interrupted);
+    let failure_kind = classify_request_outcome(
+        parsed_state,
+        observation_timed_out,
+        &request_evidence_from_query_data(&observed_outcome),
+    )
+    .map(str::to_owned);
+    let answer = access.terminal_answer(&request_id).await?;
+    finish_observation(
+        access,
+        request_id,
+        stage,
+        evidence,
+        started,
+        &started_at,
+        terminal_state,
+        session_id,
+        observation_timed_out,
+        failure_kind,
+        observed_outcome,
+        answer,
+    )
+    .await
+}
+
+async fn finish_observation(
+    access: RuntimeAccess<'_>,
+    request_id: String,
+    stage: &str,
+    evidence: &Path,
+    started: Instant,
+    started_at: &str,
+    terminal_state: String,
+    session_id: Option<String>,
+    observation_timed_out: bool,
+    failure_kind: Option<String>,
+    observed_outcome: Value,
+    answer: String,
+) -> Result<StageResult> {
     super::reporting::write_json(
         &evidence.join(format!("{stage}-outcome.json")),
         &observed_outcome,
@@ -1133,9 +1211,8 @@ pub(super) async fn observe_request(
         Some(&request_id),
         session_id.as_deref(),
         Some(&terminal_state),
-        &started_at,
+        started_at,
     )?;
-    let answer = access.terminal_answer(&request_id).await?;
     let result = StageResult {
         stage: stage.to_owned(),
         request_id,
@@ -1170,15 +1247,13 @@ pub async fn retain_request_evidence<'a>(
     stage: &str,
     evidence: &Path,
 ) -> Result<()> {
-    let access = access.into();
-    // Tool evidence is reconstructed through the same canonical timeline owner
-    // used by runtime clients; missing payloads are evidence failures.
-    let calls = access.timeline(request_id).await?.tool_calls;
+    let collected = load_request_evidence(access.into(), request_id).await?;
+    let tools = serde_json::json!({ "AgentToolCall": collected.tool_calls });
     std::fs::write(
         evidence.join(format!("{stage}-tools.json")),
-        serde_json::to_vec_pretty(&calls)?,
+        serde_json::to_vec_pretty(&tools)?,
     )?;
-    retain_inference_evidence(access, request_id, stage, evidence).await
+    write_inference_evidence(evidence, stage, &collected)
 }
 
 async fn retain_inference_evidence<'a>(
@@ -1187,12 +1262,46 @@ async fn retain_inference_evidence<'a>(
     stage: &str,
     evidence: &Path,
 ) -> Result<()> {
-    let escaped = escape_graphql_string(request_id);
-    let diagnostics = access.into().query(&format!(
-        r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{call_seq call_state failure_reason prompt_tokens completion_tokens queued_at started_at ended_at}} }}"#
-    )).await?;
+    let data = match access.into() {
+        RuntimeAccess::Embedded(node) => {
+            let response = gents::graphql::graphql_with_transaction_retry(
+                node,
+                &inference_sample_query(request_id),
+                "inference sample",
+            )
+            .await?;
+            response.data.context("inference sample returned no data")?
+        }
+        control @ RuntimeAccess::ControlPlane(_) => {
+            control.query(&inference_sample_query(request_id)).await?
+        }
+    };
+    write_inference_evidence(evidence, stage, &request_evidence_from_query_data(&data))
+}
+
+async fn load_request_evidence(
+    access: RuntimeAccess<'_>,
+    request_id: &str,
+) -> Result<RequestEvidence> {
+    match access {
+        RuntimeAccess::Embedded(node) => collect_request_evidence(node, request_id).await,
+        control @ RuntimeAccess::ControlPlane(_) => {
+            let data = control.query(&evidence_query(request_id)).await?;
+            Ok(request_evidence_from_query_data(&data))
+        }
+    }
+}
+
+fn write_inference_evidence(
+    evidence: &Path,
+    stage: &str,
+    collected: &RequestEvidence,
+) -> Result<()> {
     super::reporting::write_json(
         &evidence.join(format!("{stage}-inference.json")),
-        &diagnostics,
+        &serde_json::json!({
+            "AgentResponse": collected.responses,
+            "InferenceCall": collected.inference_calls,
+        }),
     )
 }

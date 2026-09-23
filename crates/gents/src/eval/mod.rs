@@ -3,6 +3,7 @@
 
 pub mod documents;
 pub mod outcome;
+pub mod runner;
 pub mod scoring;
 
 pub use documents::{
