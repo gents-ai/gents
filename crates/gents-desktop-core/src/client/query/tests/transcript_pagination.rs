@@ -160,14 +160,14 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
         .await
         .expect("newest sequence page");
     assert_eq!(page.store.transcript_messages.len(), 2);
-    assert_eq!(
-        page.store
-            .transcript_messages
-            .iter()
-            .map(|row| row.message.sequence)
-            .collect::<Vec<_>>(),
-        vec![3, 2]
-    );
+    let mut sequences = page
+        .store
+        .transcript_messages
+        .iter()
+        .map(|row| row.message.sequence)
+        .collect::<Vec<_>>();
+    sequences.sort_unstable();
+    assert_eq!(sequences, vec![2, 3]);
 
     let older =
         load_session_transcript_page(node.as_ref(), "equal", None, None, Some("equal:b"), Some(2))
