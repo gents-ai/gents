@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -72,6 +72,7 @@ function harness() {
     deleteEventSourceConfig: vi.fn().mockResolvedValue({}),
     deleteTriggerConfig: vi.fn().mockResolvedValue({}),
     deleteInferenceProfileConfig: vi.fn().mockResolvedValue({}),
+    fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
   };
   const refreshSnapshot = vi.fn().mockResolvedValue(undefined);
   const shell = {
@@ -462,12 +463,30 @@ describe("configuration panels", () => {
 
   it("opens shared provider setup without eagerly creating a blank backend", async () => {
     const { api, shell } = harness();
-    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+      providers: [
+        {
+          id: "openai",
+          displayName: "OpenAI",
+          description: "OpenAI models",
+          authMethods: ["api_key"],
+          authOptions: [
+            {
+              method: "api_key",
+              displayName: "API key",
+              defaultEndpoint: "https://api.openai.com/v1",
+            },
+          ],
+          defaultAuthMethod: "api_key",
+          defaultEndpoint: "https://api.openai.com/v1",
+        },
+      ],
+    });
     render(<InferencePanel shell={shell} deployment={deployment} />);
-    await userEvent.setup().click(screen.getByRole("button", { name: "New backend" }));
-    expect(
-      await screen.findByRole("heading", { name: "Add an inference backend" }),
-    ).toBeVisible();
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "New backend" }));
+    await user.click(await screen.findByRole("menuitem", { name: "OpenAI" }));
+    expect(await screen.findByRole("heading", { name: "Set up OpenAI" })).toBeVisible();
     expect(api.getInferenceSetupCatalog).toHaveBeenCalled();
     expect(api.saveBackendConfig).not.toHaveBeenCalled();
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
@@ -476,7 +495,7 @@ describe("configuration panels", () => {
   it("requires the agent identity fields and saves editable principal tags", async () => {
     const { api, shell } = harness();
     render(<AgentPanel shell={shell} deployment={deployment} />);
-    expectFields(["Display name", "Default behaviour", "Enabled", "Tags"]);
+    expectFields(["Display name", "Default behavior", "Enabled", "Tags"]);
 
     const user = await replace("Display name", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -486,7 +505,7 @@ describe("configuration panels", () => {
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
 
     await replace("Display name", "Acceptance Agent");
-    await replace("Tags", "acceptance\ndesktop");
+    await replace("Tags", "acceptance{Enter}desktop{Enter}");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveAgentConfig).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -504,32 +523,40 @@ describe("configuration panels", () => {
     expectFields([
       "Display name",
       "Description",
-      "Context",
+      "System prompt",
       "Inference profile",
-      "Enabled",
-      "Default behaviour",
       "Tags",
     ]);
     const user = await replace("Display name", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Display name is required",
+      "Give the behavior a name.",
     );
     expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
   });
 
-  it("creates behavior scaffolds disabled until the operator saves them", async () => {
+  it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
     const { api, shell } = harness();
     render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
 
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "New behaviour" }));
+    await user.click(screen.getByRole("button", { name: "New behavior" }));
 
-    expect(api.saveBehaviorConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        document: expect.objectContaining({ enabled: false }),
-      }),
+    expect(screen.getByLabelText("Display name")).toHaveValue("");
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() =>
+      expect(api.saveBehaviorConfig).toHaveBeenCalledWith(
+        expect.objectContaining({
+          document: expect.objectContaining({
+            display_name: "Reviewer",
+            enabled: false,
+          }),
+        }),
+      ),
     );
   });
 
@@ -591,13 +618,16 @@ describe("configuration panels", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
-  it("creates only the new context and represents empty lists as null", async () => {
+  it("creates only the new behavior's context and represents empty lists as null", async () => {
     const { api, shell } = harness();
-    render(<ContextsPanel shell={shell} deployment={deployment} />);
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "New context" }));
+    await user.click(screen.getByRole("button", { name: "New behavior" }));
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
-    expect(api.applyConfigComponents).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
     const request = api.applyConfigComponents.mock.calls[0][0];
     expect(request.document.contexts).toHaveLength(1);
     expect(request.document.contexts[0]).toEqual(
@@ -785,17 +815,17 @@ describe("configuration panels", () => {
     render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
     expectFields([
       "Name",
-      "Behaviour",
+      "Behavior",
       "Enabled",
       "Description",
       "Prompt template",
       "Durable goal objective",
       "Goal token budget",
       "Output schema ref",
-      "Task hooks",
       "Tags",
       "Args",
     ]);
+    expect(screen.getByText("Hooks")).toBeInTheDocument();
     const user = await replace("Prompt template", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -1113,15 +1143,27 @@ describe("configuration panels", () => {
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
       expect(api[testCase.method], testCase.method).not.toHaveBeenCalled();
-      const confirmation = screen.getByRole("textbox", {
+      /* the name is asked for only when something depends on the document,
+         and always for behaviors and backends */
+      const confirmation = screen.queryByRole("textbox", {
         name: /^Type .+ to confirm$/,
       });
-      const accessibleName = confirmation.getAttribute("aria-label")!;
-      await user.type(
-        confirmation,
-        accessibleName.replace(/^Type /, "").replace(/ to confirm$/, ""),
+      if (testCase.method === "deleteBehaviorConfig")
+        expect(confirmation, testCase.method).not.toBeNull();
+      if (testCase.method === "deleteBackendConfig")
+        expect(confirmation, testCase.method).not.toBeNull();
+      if (confirmation) {
+        const accessibleName = confirmation.getAttribute("aria-label")!;
+        await user.type(
+          confirmation,
+          accessibleName.replace(/^Type /, "").replace(/ to confirm$/, ""),
+        );
+      }
+      await user.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: /^Delete /,
+        }),
       );
-      await user.click(screen.getByRole("button", { name: /^Delete / }));
       expect(api[testCase.method], testCase.method).toHaveBeenCalledWith(
         testCase.request,
       );

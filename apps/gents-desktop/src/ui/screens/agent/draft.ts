@@ -5,7 +5,8 @@ import { toast } from "sonner";
    saves; reset restores the last bridge-confirmed value. */
 export function useDraft<T extends object>(
   saved: T,
-  persist: (next: T) => Promise<unknown>,
+  /* `intent` is whatever a caller passes to save, for a save with a choice */
+  persist: (next: T, intent?: unknown) => Promise<unknown>,
 ) {
   const [draft, setDraft] = useState<T>(saved);
   const [baseline, setBaseline] = useState<T>(saved);
@@ -25,15 +26,25 @@ export function useDraft<T extends object>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedKey]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
-  const save = async () => {
+  const save = async (intent?: unknown) => {
     if (!dirty || saving) return;
     setSaving(true);
     setError(null);
     try {
-      await persist(draft);
+      const result = await persist(draft, intent);
       baselineRef.current = draft;
       setBaseline(draft);
-      toast("Saved");
+      /* a persist can say more than Saved, with one follow-up action */
+      const said = result as {
+        savedToast?: string;
+        savedAction?: { label: string; onClick: () => void };
+      } | null;
+      if (said && typeof said === "object" && typeof said.savedToast === "string")
+        toast(
+          said.savedToast,
+          said.savedAction ? { action: said.savedAction } : undefined,
+        );
+      else toast("Saved");
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);

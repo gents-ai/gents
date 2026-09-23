@@ -5,6 +5,23 @@ import type {
   RenderedToolCallView,
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
+import { shortPath } from "./tool-runs";
+
+/* `cd <somewhere> && real-command …` is how a shell tool is usually
+   called, and the cd is scaffolding: a real export had it leading 1,037 of
+   1,525 commands. The row says what ran; the body still has the whole of
+   it, exactly as it was issued. */
+export { shortPath };
+
+export const spoken = (command: string): string => {
+  const parts = command
+    .split("&&")
+    .map((part) => part.trim())
+    .filter(
+      (part) => part && !/^cd\b/.test(part) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(part),
+    );
+  return parts.length ? parts.join(" && ") : command.trim();
+};
 
 const compact = (value: string | null | undefined, max = 80) => {
   const flat = value?.replace(/\s+/g, " ").trim();
@@ -54,11 +71,11 @@ export function toolSummary(t: RenderedToolCallView): {
     };
   switch (p.kind) {
     case "command":
-      return { kind: "$", primary: p.command, secondary: exit(p), mono: true };
+      return { kind: "$", primary: spoken(p.command), secondary: exit(p), mono: true };
     case "fileRead":
       return {
         kind: p.operation.replace("_file", ""),
-        primary: p.target ?? t.toolName,
+        primary: p.target ? shortPath(p.target) : t.toolName,
         secondary: readCount(p),
         mono: true,
       };
@@ -75,7 +92,7 @@ export function toolSummary(t: RenderedToolCallView): {
               : "edited";
       return {
         kind: verb,
-        primary: p.path ?? t.toolName,
+        primary: p.path ? shortPath(p.path) : t.toolName,
         secondary:
           p.replacementsApplied != null && p.replacementsApplied > 1
             ? `×${p.replacementsApplied}`

@@ -22,6 +22,16 @@ beforeAll(() => {
         dispatchEvent: () => false,
       }) as MediaQueryList;
   }
+  if (typeof globalThis.ResizeObserver !== "function") {
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+  }
+  if (typeof Element.prototype.getAnimations !== "function") {
+    Element.prototype.getAnimations = () => [];
+  }
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = () => {};
   }

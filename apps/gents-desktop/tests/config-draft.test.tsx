@@ -64,7 +64,10 @@ describe("configuration drafts", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Name is required");
-    expect(persist).toHaveBeenLastCalledWith({ name: "Draft", enabled: false });
+    expect(persist).toHaveBeenLastCalledWith(
+      { name: "Draft", enabled: false },
+      undefined,
+    );
 
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(persist).toHaveBeenCalledTimes(2);

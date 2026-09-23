@@ -80,14 +80,17 @@ import {
 
 type Step = "welcome" | "starting" | "inference";
 
-type ProviderId = InferenceProviderId;
+export type ProviderId = InferenceProviderId;
 type ConnectionDraft = {
   authMethod: InferenceAuthMethod;
   endpoint: string;
   apiKey: string;
 };
 
-const PROVIDER_VISUALS: Record<ProviderId, { icon: typeof Server; logo: string }> = {
+export const PROVIDER_VISUALS: Record<
+  ProviderId,
+  { icon: typeof Server; logo: string }
+> = {
   openai: { icon: KeyRound, logo: "/logos/openai.svg" },
   anthropic: { icon: Sparkles, logo: "/logos/claude.svg" },
   grok: { icon: Orbit, logo: "/logos/grok.svg" },
@@ -116,9 +119,11 @@ const oauthProviderFor = (method: InferenceAuthMethod): OauthProvider | null =>
 function Frame({
   children,
   embedded = false,
+  onBack,
 }: {
   children: React.ReactNode;
   embedded?: boolean;
+  onBack?: () => void;
 }) {
   const [theme, setTheme] = useState(themePreference);
   const flip = () => {
@@ -128,7 +133,16 @@ function Frame({
   };
   if (embedded)
     return (
-      <div className="w-full min-w-0 max-w-xl py-2" data-testid="inference-setup-panel">
+      <div className="w-full min-w-0" data-testid="inference-setup-panel">
+        {onBack && (
+          <button
+            type="button"
+            onClick={onBack}
+            className="mb-6 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-3.5" /> Back
+          </button>
+        )}
         {children}
       </div>
     );
@@ -138,7 +152,7 @@ function Frame({
       data-testid="setup-screen"
     >
       <div className="px-8">
-        {/* anchored a fixed way down, not centred: a step can grow or shrink without moving its title */}
+        {/* anchored a fixed way down, not centered: a step can grow or shrink without moving its title */}
         <div className="mx-auto w-full max-w-xl pt-[10vh] pb-8">{children}</div>
         <Button
           variant="ghost"
@@ -338,6 +352,7 @@ export function SetupScreen({
   purpose = "onboarding",
   agentDid,
   onCancel,
+  provider: fixedProvider,
 }: {
   shell: Shell;
   onDone: (snapshot: DesktopClientSnapshot) => void;
@@ -345,6 +360,8 @@ export function SetupScreen({
   purpose?: "onboarding" | "add-backend";
   agentDid?: string;
   onCancel?: () => void;
+  /* a catalog row was chosen, so the form is that provider's inputs only */
+  provider?: ProviderId;
 }) {
   const [step, setStep] = useState<Step>(initialStep);
   const allowLocal = supportsLocalManagedServer();
@@ -376,7 +393,7 @@ export function SetupScreen({
     "checking-managed-server",
   );
   const [catalog, setCatalog] = useState<InferenceSetupCatalog | null>(null);
-  const [provider, setProvider] = useState<ProviderId>("openai");
+  const [provider, setProvider] = useState<ProviderId>(fixedProvider ?? "openai");
   const [connections, setConnections] = useState<
     Partial<Record<ProviderId, ConnectionDraft>>
   >({});
@@ -519,7 +536,7 @@ export function SetupScreen({
           }
           return initialized;
         });
-        if (next.providers[0]) setProvider(next.providers[0].id);
+        if (next.providers[0] && !fixedProvider) setProvider(next.providers[0].id);
       })
       .catch((cause) => setError(setupErrorMessage(cause)));
   }, [api, catalog, step]);
@@ -1383,13 +1400,34 @@ export function SetupScreen({
   );
 
   return (
-    <Frame embedded={purpose === "add-backend"}>
-      <Title note="Choose a provider, connect, then select a model and its defaults—all here.">
-        {purpose === "add-backend"
-          ? "Add an inference backend"
-          : "Choose an inference provider"}
-      </Title>
-      {catalog ? (
+    <Frame
+      embedded={purpose === "add-backend"}
+      onBack={purpose === "add-backend" ? onCancel : undefined}
+    >
+      {fixedProvider ? (
+        <header className="mb-6">
+          <h2 className="font-heading text-lg text-heading">
+            Set up{" "}
+            {catalog?.providers.find((o) => o.id === fixedProvider)?.displayName ??
+              fixedProvider}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {catalog?.providers.find((o) => o.id === fixedProvider)?.description}
+          </p>
+        </header>
+      ) : (
+        <Title note="Choose a provider, connect, then select a model and its defaults—all here.">
+          {purpose === "add-backend"
+            ? "Add an inference backend"
+            : "Choose an inference provider"}
+        </Title>
+      )}
+      {catalog && fixedProvider ? (
+        /* the chosen provider's own inputs, no grid */
+        <div className="rounded-3xl bg-raised px-5 py-4 shadow-sm ring-1 ring-foreground/5">
+          {providerDetails}
+        </div>
+      ) : catalog ? (
         <div className="grid gap-3" role="radiogroup" aria-label="Inference provider">
           {catalog.providers.map((option) => {
             const visual = PROVIDER_VISUALS[option.id];
@@ -1422,14 +1460,16 @@ export function SetupScreen({
           ) : null}
         </div>
       )}
-      <Nav
-        onBack={
-          busy
-            ? undefined
-            : (onCancel ??
-              (initialStep === "inference" ? undefined : () => setStep("welcome")))
-        }
-      />
+      {!fixedProvider && (
+        <Nav
+          onBack={
+            busy
+              ? undefined
+              : (onCancel ??
+                (initialStep === "inference" ? undefined : () => setStep("welcome")))
+          }
+        />
+      )}
     </Frame>
   );
 }

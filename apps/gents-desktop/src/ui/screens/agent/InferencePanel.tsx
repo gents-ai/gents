@@ -5,7 +5,8 @@
    the account card sits in the row with connect, cancel and disconnect.
    Everything else is the desktop app's Backends panel field for field. */
 import { useEffect, useRef, useState } from "react";
-import { SetupScreen } from "../setup/SetupScreen";
+import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
+import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
 import { toast } from "sonner";
 import type {
   BackendProviderKind,
@@ -27,25 +28,27 @@ import {
   PROVIDER_CREDENTIAL_KIND,
   setupErrorMessage,
 } from "@/lib/providerLogin";
+import { optionalInteger, requiredHttpUrl, str, useDraft } from "./draft";
 import {
-  fromLinesOrNull,
-  optionalInteger,
-  requiredHttpUrl,
-  str,
-  toLines,
-  useDraft,
-} from "./draft";
-import {
-  AreaRow,
   ChoiceRow,
   DraftActions,
   FactRow,
   NumberRow,
   SwitchRow,
   TextRow,
+  TagsRow,
 } from "./editors";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { DeleteButton, ListDetail, type ListRow } from "./ListDetail";
 import { Group, Row } from "./rows";
+import { RowMenu } from "./RowMenu";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@gents/ui/components/dropdown-menu";
+import { Plus } from "lucide-react";
 import { ProviderLogo } from "../ProviderLogo";
 
 export function backendSave(
@@ -141,7 +144,7 @@ const SUBSCRIPTION: Record<
   },
 };
 
-function useAccounts(shell: Shell, agentDid: string) {
+export function useAccounts(shell: Shell, agentDid: string) {
   const [accounts, setAccounts] = useState<ProviderAccountView[]>([]);
   const api = shell.api;
   const load = () =>
@@ -304,18 +307,21 @@ function AccountRows({
   );
 }
 
-function Editor({
+export function BackendEditor({
   shell,
   deployment,
   backend,
   accounts,
   reload,
+  embedded = false,
 }: {
   shell: Shell;
   deployment: DeploymentView;
   backend: InferenceBackendView;
   accounts: ProviderAccountView[];
   reload: () => Promise<void>;
+  /* in a sheet beside another page: no Danger zone */
+  embedded?: boolean;
 }) {
   const base = {
     name: "agent" as const,
@@ -334,7 +340,7 @@ function Editor({
     maxConcurrent: str(backend.maxConcurrent),
     maxQueueDepth: str(backend.maxQueueDepth),
     enabled: backend.enabled ?? true,
-    tags: toLines(backend.tags),
+    tags: backend.tags,
   };
   const d = useDraft(saved, async (next) => {
     const name = next.name.trim();
@@ -380,7 +386,7 @@ function Editor({
       max_concurrent: maxConcurrent,
       max_queue_depth: maxQueueDepth,
       enabled: next.enabled,
-      tags: fromLinesOrNull(next.tags),
+      tags: next.tags.length ? next.tags : null,
     };
     if (auth) changes.auth = auth;
     await shell.applyConfig((api) =>
@@ -406,7 +412,7 @@ function Editor({
   return (
     <>
       <Group
-        title={backend.name ?? backend.backendId}
+        title={embedded ? undefined : (backend.name ?? backend.backendId)}
         action={
           <span className="flex items-center gap-2">
             <ProviderLogo
@@ -503,9 +509,9 @@ function Editor({
         )}
         <FactRow
           label="Used by"
-          description="Delete is blocked while a behaviour points here."
+          description="Delete is blocked while a behavior points here."
         >
-          {users.length ? users.join(", ") : "no behaviour"}
+          {users.length ? users.join(", ") : "no behavior"}
         </FactRow>
       </Group>
       <Group title={subscription ? "Subscription" : "Credential"}>
@@ -651,14 +657,11 @@ function Editor({
           checked={d.draft.enabled}
           onChange={(v) => d.choose("enabled", v)}
         />
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One optional discovery label per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={2}
         />
       </Group>
       <DraftActions
@@ -668,52 +671,123 @@ function Editor({
         onSave={d.save}
         onCancel={d.reset}
       />
-      <DeleteButton
-        label={backend.name ?? backend.backendId}
-        base={base}
-        onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteBackendConfig({
-              backendId: backend.backendId,
-              agentDid: deployment.agentDid,
-            }),
-          )
-        }
-      />
+      {!embedded && (
+        <DeleteButton
+          strict
+          label={backend.name ?? backend.backendId}
+          base={base}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteBackendConfig({
+                backendId: backend.backendId,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
     </>
   );
 }
 
+/* the provider catalog the bridge publishes, once per mount */
+function useSetupCatalog(shell: Shell) {
+  const [providers, setProviders] = useState<InferenceProviderOption[]>([]);
+  useEffect(() => {
+    let live = true;
+    shell.api
+      .getInferenceSetupCatalog?.()
+      .then((c) => {
+        if (live) setProviders(c.providers);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [shell.api]);
+  return providers;
+}
+
+/* which catalog provider a configured backend belongs to */
+function providerOf(b: InferenceBackendView): ProviderId {
+  switch (b.providerKind) {
+    case "ChatGptCodex":
+      return "openai";
+    case "ClaudeCliSubscription":
+      return "anthropic";
+    case "XaiGrokOAuth":
+      return "grok";
+    case "OpenRouter":
+      return "openrouter";
+  }
+  const host = b.endpoint ?? "";
+  if (/openai\.com/.test(host)) return "openai";
+  if (/anthropic\.com/.test(host)) return "anthropic";
+  if (/openrouter/.test(host)) return "openrouter";
+  return "local";
+}
+
+/* The backends: the provider catalog, every provider a row. A configured
+   one shows its backend (state, switch, menu); one not set up opens the
+   provider step with it chosen. The editor sits behind the `inference`
+   route; Back from it goes to Models. */
 export function InferencePanel({
   shell,
   deployment,
   item,
+  onAddingChange,
+  under,
 }: {
   shell: Shell;
   deployment: DeploymentView;
   item?: string;
+  /* tells the Models page the New backend form is open, so it steps aside */
+  onAddingChange?: (adding: boolean) => void;
+  /* rows to nest under a configured backend: its models */
+  under?: (b: InferenceBackendView) => ListRow[];
 }) {
   const base = {
     name: "agent" as const,
     agentDid: deployment.agentDid,
     section: "inference",
   };
+  const models = {
+    name: "agent" as const,
+    agentDid: deployment.agentDid,
+    section: "profiles",
+  };
   const { accounts, reload } = useAccounts(shell, deployment.agentDid);
-  const [adding, setAdding] = useState(false);
+  const providers = useSetupCatalog(shell);
+  /* the provider whose inputs are open, from a catalog row or Add another */
+  const [adding, setAddingState] = useState<ProviderId | null>(null);
+  const setAdding = (next: ProviderId | null) => {
+    setAddingState(next);
+    onAddingChange?.(next !== null);
+  };
   if (adding)
     return (
       <SetupScreen
         shell={shell}
         initialStep="inference"
         purpose="add-backend"
+        provider={adding}
         agentDid={deployment.agentDid}
-        onCancel={() => setAdding(false)}
+        onCancel={() => setAdding(null)}
         onDone={() => {
-          setAdding(false);
+          /* back to the catalog: the new backend's row now offers Add profile */
+          setAdding(null);
+          toast("Backend connected. Add a profile under it to use it.");
           void reload();
         }}
       />
     );
+  /* the catalog: configured backends under their provider, then the rest */
+  /* backends in the catalog's provider order, so two of one provider sit together */
+  const order = (id: ProviderId) => providers.findIndex((p) => p.id === id);
+  const configured = deployment.inferenceBackends
+    .map((b) => ({ b, provider: providerOf(b) }))
+    .sort((x, y) => order(x.provider) - order(y.provider));
+  const missing = providers.filter((p) => !configured.some((c) => c.provider === p.id));
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const account =
@@ -737,21 +811,120 @@ export function InferencePanel({
     <ListDetail
       base={base}
       item={item}
-      rows={deployment.inferenceBackends.map((b) => ({
-        id: b.backendId,
-        title: b.name ?? b.backendId,
-        meta: rowMeta(b),
-        icon: <ProviderLogo kind={b.providerKind} endpoint={b.endpoint} />,
-        badge: b.probeStatus ?? undefined,
-        badgeTone: healthy(b.probeStatus) ? "default" : "bad",
-      }))}
-      createLabel="New backend"
-      empty="No inference yet. Add a backend: a local server, a key, or a subscription."
-      onCreate={() => setAdding(true)}
+      back={{ route: models, label: "Providers" }}
+      rows={[
+        ...configured.map(({ b, provider }) => ({
+          id: b.backendId,
+          children: under?.(b),
+          metaLeadToggles: true,
+          title: b.name ?? b.backendId,
+          /* the provider, only when the backend's name does not already say it */
+          titleNote: (() => {
+            const title = providers.find((p) => p.id === provider)?.displayName ?? "";
+            const name = (b.name ?? b.backendId).toLowerCase();
+            return name.includes(title.toLowerCase()) ||
+              name.includes(title.toLowerCase().replace(/\s+/g, ""))
+              ? undefined
+              : title;
+          })(),
+          meta: rowMeta(b),
+          icon: <ProviderLogo kind={b.providerKind} endpoint={b.endpoint} />,
+          /* only trouble is worth a badge; a healthy backend just has its switch on */
+          badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
+          badgeTone: "bad" as const,
+          trailing: (
+            <RowMenu
+              name={b.name ?? b.backendId}
+              base={base}
+              id={b.backendId}
+              enabled={{
+                checked: b.enabled !== false,
+                onChange: (enabled) =>
+                  shell.applyConfig((api) =>
+                    api.patchConfigComponents({
+                      agentDid: deployment.agentDid,
+                      patches: [
+                        {
+                          collection: "InferenceBackend",
+                          id: b.backendId,
+                          changes: { enabled },
+                        },
+                      ],
+                    }),
+                  ),
+              }}
+              strict
+              onDelete={() =>
+                shell.applyConfig((api) =>
+                  api.deleteBackendConfig({
+                    backendId: b.backendId,
+                    agentDid: deployment.agentDid,
+                  }),
+                )
+              }
+              warning={(() => {
+                const n = deployment.inferenceProfiles.filter(
+                  (p) => p.backend_id === b.backendId,
+                ).length;
+                return n
+                  ? `${n} ${n === 1 ? "profile uses" : "profiles use"} it.`
+                  : undefined;
+              })()}
+            >
+              {/* another local server or a second key, yes; a second subscription, no:
+                  a principal_oauth backend has no account of its own, it uses the
+                  agent's one sign-in for that provider */}
+              {provider !== "anthropic" && provider !== "grok" && (
+                <DropdownMenuItem onClick={() => setAdding(provider)}>
+                  Add another{" "}
+                  {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
+                </DropdownMenuItem>
+              )}
+            </RowMenu>
+          ),
+        })),
+        ...missing.map((p) => ({
+          id: `setup:${p.id}`,
+          title: p.displayName,
+          meta: p.description,
+          icon: (
+            <img
+              src={PROVIDER_VISUALS[p.id].logo}
+              alt=""
+              className="size-4 opacity-70 dark:invert"
+            />
+          ),
+          badge: "Not set up",
+          onOpen: () => setAdding(p.id),
+        })),
+      ]}
+      createLabel=""
+      empty="No providers."
+      createMenu={
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button variant="outline" />}>
+            <Plus /> New backend
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-auto min-w-52">
+            <DropdownMenuGroup>
+              {providers.map((p) => (
+                <DropdownMenuItem key={p.id} onClick={() => setAdding(p.id)}>
+                  <img
+                    src={PROVIDER_VISUALS[p.id].logo}
+                    alt=""
+                    className="size-4 opacity-70 dark:invert"
+                  />
+                  {p.displayName}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      }
       detail={(id) => {
         const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
         return (
-          <Editor
+          <BackendEditor
             key={backend.backendId}
             shell={shell}
             deployment={deployment}

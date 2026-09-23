@@ -12,21 +12,39 @@ import {
   FactRow,
   SwitchRow,
   TextRow,
+  PathRow,
 } from "./editors";
 import { newId, optionalAbsolutePath, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { TOOL_LIMIT_DEFAULTS, ToolGroupControls } from "./ToolGroupControls";
+import { RowMenu } from "./RowMenu";
 import { useCallback, useState } from "react";
 
-function Editor({
+/* the document a draft starts from: read-only files, no commands */
+export function newToolsDocument(deployment: DeploymentView): Tools {
+  return {
+    tools_id: newId("tools"),
+    agent_did: deployment.agentDid,
+    display_name: "",
+    host: { files: { mode: "ReadOnly" }, bash: { mode: "Off" } },
+  };
+}
+
+export function ToolsEditor({
   shell,
   deployment,
   tools,
+  embedded = false,
+  draft: draftMode,
 }: {
   shell: Shell;
   deployment: DeploymentView;
+  /* in a sheet beside another page: no Danger zone */
+  embedded?: boolean;
   tools: Tools;
+  /* a new document that exists only here until Save */
+  draft?: { onSaved: (toolsId: string) => void; onCancel: () => void };
 }) {
   const [invalidLimits, setInvalidLimits] = useState<Record<string, string>>({});
   const [controlsGeneration, setControlsGeneration] = useState(0);
@@ -258,10 +276,16 @@ function Editor({
   const id = (f: string) => `${tools.tools_id}-${f}`;
   return (
     <>
-      <Group title={tools.display_name ?? tools.tools_id}>
-        <FactRow label="Tools ID" mono>
-          {tools.tools_id}
-        </FactRow>
+      <Group
+        title={
+          embedded || draftMode ? undefined : (tools.display_name ?? tools.tools_id)
+        }
+      >
+        {!draftMode && (
+          <FactRow label="Tools ID" mono>
+            {tools.tools_id}
+          </FactRow>
+        )}
         <TextRow
           id={id("name")}
           label="Display name"
@@ -270,9 +294,10 @@ function Editor({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
-        <TextRow
+        <PathRow
           id={id("root")}
           label="Workspace root"
+          description="The directory file and command tools are confined to."
           value={d.draft.root}
           onChange={(v) => d.set("root", v)}
           onCommit={d.commit}
@@ -343,43 +368,63 @@ function Editor({
         }}
       />
       <Group title="Advanced tool groups">
-        <AreaRow
-          id={id("advanced")}
-          label="Canonical JSON"
-          stacked
-          description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
-          value={d.draft.advanced}
-          onChange={(v) => d.set("advanced", v)}
-          onCommit={d.commit}
-          rows={12}
-          mono
-        />
+        {/* the whole document as JSON: an escape hatch, closed by default; open, it
+            shows in full so the page is the only thing that scrolls */}
+        <details>
+          <summary className="cursor-pointer px-5 py-4 text-sm text-muted-foreground">
+            Canonical JSON
+          </summary>
+          <AreaRow
+            id={id("advanced")}
+            label="Canonical JSON"
+            stacked
+            expandedByDefault
+            description="Host limits, MCP grants, subagents, built-ins, datastore, integrations, self-config, and tags. Invalid or unknown fields are rejected before persistence."
+            value={d.draft.advanced}
+            onChange={(v) => d.set("advanced", v)}
+            onCommit={d.commit}
+            rows={12}
+            mono
+          />
+        </details>
       </Group>
       <DraftActions
-        dirty={d.dirty || limitError !== null}
+        dirty={draftMode ? true : d.dirty || limitError !== null}
         saving={d.saving}
         error={limitError ?? d.error}
+        saveLabel={draftMode ? "Create" : undefined}
         onSave={() => {
-          if (!limitError) void d.save();
+          if (limitError) return;
+          if (draftMode) {
+            void d.save().then(() => draftMode.onSaved(tools.tools_id));
+            return;
+          }
+          void d.save();
         }}
         onCancel={() => {
+          if (draftMode) {
+            draftMode.onCancel();
+            return;
+          }
           d.reset();
           setInvalidLimits({});
           setControlsGeneration((current) => current + 1);
         }}
       />
-      <DeleteButton
-        label={tools.display_name ?? tools.tools_id}
-        base={base}
-        onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteToolsConfig({
-              toolsId: tools.tools_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
-        }
-      />
+      {!embedded && !draftMode && (
+        <DeleteButton
+          label={tools.display_name ?? tools.tools_id}
+          base={base}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteToolsConfig({
+                toolsId: tools.tools_id,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
     </>
   );
 }
@@ -407,9 +452,45 @@ export function ToolsPanel({
         title: t.display_name ?? t.tools_id,
         meta: t.host?.files?.mode ?? "no host tools",
         tags: t.tags,
+        trailing: (
+          <RowMenu
+            name={t.display_name ?? t.tools_id}
+            base={base}
+            id={t.tools_id}
+            onDuplicate={async () => {
+              const tools_id = newId("tools");
+              await shell.applyConfig((api) =>
+                api.saveToolsConfig({
+                  document: {
+                    ...t,
+                    tools_id,
+                    display_name: `${t.display_name ?? t.tools_id} copy`,
+                  },
+                }),
+              );
+              return tools_id;
+            }}
+            onDelete={() =>
+              shell.applyConfig((api) =>
+                api.deleteToolsConfig({
+                  toolsId: t.tools_id,
+                  agentDid: deployment.agentDid,
+                }),
+              )
+            }
+            warning={(() => {
+              const n = deployment.contexts.filter(
+                (c) => c.tools_id === t.tools_id,
+              ).length;
+              return n
+                ? `${n} ${n === 1 ? "context uses" : "contexts use"} it.`
+                : undefined;
+            })()}
+          />
+        ),
       }))}
       createLabel="New tools"
-      empty="No Tools documents. A behaviour reaches tools only through its context."
+      empty="No Tools documents. A behavior reaches tools only through its context."
       onCreate={async () => {
         const tools_id = newId("tools");
         await shell.applyConfig((api) =>
@@ -433,7 +514,7 @@ export function ToolsPanel({
       detail={(id) => {
         const tools = deployment.tools.find((t) => t.tools_id === id)!;
         return (
-          <Editor
+          <ToolsEditor
             key={tools.tools_id}
             shell={shell}
             deployment={deployment}

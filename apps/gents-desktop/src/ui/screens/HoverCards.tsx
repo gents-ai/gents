@@ -1,6 +1,9 @@
 /* Delayed cards on avatars: what a reader most wants to know without
    opening anything. The agent: online, what it may touch, how much it
-   has, its DID. A behaviour: what it is for, what it runs on, its access. */
+   has, its DID. A behavior: what it is for, whether it is enabled, what it
+   runs on, its access, whether its instructions are shared, and a way to
+   its settings. Shown where an avatar stands in for a behavior, not where
+   the behavior is already on screen. */
 import { useState, type ReactElement } from "react";
 import { ArrowUpRight } from "lucide-react";
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
@@ -65,7 +68,7 @@ export function AgentHoverCard({
             {ceiling ? access(ceiling) : env ? access(env.fileAccess) : "—"}
             {env ? `, ${network(env.networkAccess)}` : ""}
           </Line>
-          <Line label="Behaviours">{deployment.behaviors.length}</Line>
+          <Line label="Behaviors">{deployment.behaviors.length}</Line>
           <Line label="Tasks">{deployment.tasks.length}</Line>
           <Line label="Inference">{deployment.inferenceBackends.length}</Line>
         </dl>
@@ -114,7 +117,7 @@ export function BehaviorHoverCard({
         side="right"
         align="start"
         className="w-80"
-        data-testid="behaviour-hover-card"
+        data-testid="behavior-hover-card"
       >
         <div className="flex items-baseline justify-between gap-3">
           <span className="font-heading text-lg font-medium text-heading">

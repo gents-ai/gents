@@ -125,11 +125,15 @@ export function AgentsScreen({ shell }: { shell: Shell }) {
                 key={d.agentDid}
                 className="flex items-center gap-4 rounded-2xl border border-border/60 bg-raised px-5 py-4 transition-colors hover:border-border hover:bg-accent"
               >
+                {/* the row lights up whole, so it is clickable whole: the
+                    link reaches back through the padding it sits in rather
+                    than ending where its text does, which left the top and
+                    bottom of every row looking live and doing nothing */}
                 <a
                   href={href({ name: "sessions" })}
                   onClick={() => shell.selectAgent(d.agentDid)}
                   aria-label={`${name} sessions`}
-                  className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden"
+                  className="-my-4 -ml-5 flex min-w-0 flex-1 items-center gap-3 overflow-hidden py-4 pl-5"
                 >
                   <AgentHoverCard
                     deployment={d}

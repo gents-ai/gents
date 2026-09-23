@@ -1,6 +1,7 @@
 /* Agent configuration: the Settings screen from the Branding file. A
    sidebar of groups (the desktop app's config tabs, grouped) beside a
    page of field rows. Sections are routes, so a tab is linkable. */
+import { useEffect, useRef } from "react";
 import {
   SidebarGroup,
   SidebarItem,
@@ -43,6 +44,14 @@ export function AgentScreen({
   section: string;
   item?: string;
 }) {
+  /* a new section or document starts at the top; the scroll area keeps its
+     position across hash changes otherwise */
+  const page = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    page.current
+      ?.querySelector("[data-slot=scroll-area-viewport]")
+      ?.scrollTo({ top: 0 });
+  }, [section, item]);
   const deployment = shell.deployments.find((d) => d.agentDid === agentDid) ?? null;
   if (!deployment) {
     return (
@@ -53,10 +62,8 @@ export function AgentScreen({
   }
   const counts: Partial<Record<SectionId, number>> = {
     behaviors: deployment.behaviors.length,
-    contexts: deployment.contexts.length,
     skills: deployment.skills.length,
-    inference: deployment.inferenceBackends.length,
-    profiles: deployment.inferenceProfiles.length,
+    profiles: deployment.inferenceBackends.length,
     tools: deployment.tools.length,
     "tool-services": deployment.toolServiceRegistries.length,
     tasks: deployment.tasks.length,
@@ -64,12 +71,19 @@ export function AgentScreen({
     "event-sources": deployment.eventSources.length,
     triggers: deployment.triggers.length,
   };
+  /* routes that older links still use */
+  const ALIASES: Record<string, string> = {
+    contexts: "behaviors",
+    automations: "triggers",
+    inference: "profiles",
+  };
   const groups = [...new Set(SECTIONS.map((s) => s.group))];
   return (
     <div
       className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[20rem_minmax(0,1fr)]"
       data-testid="agent-screen"
       data-section={section}
+      ref={page}
     >
       <ScrollArea className="hidden h-full md:block">
         <SidebarNav className="w-auto">
@@ -80,7 +94,12 @@ export function AgentScreen({
                   key={s.id}
                   href={href({ name: "agent", agentDid, section: s.id })}
                   icon={<s.icon />}
-                  active={section === s.id}
+                  active={
+                    section === s.id ||
+                    (s.id === "behaviors" && section === "contexts") ||
+                    (s.id === "triggers" && section === "automations") ||
+                    (s.id === "profiles" && section === "inference")
+                  }
                   count={counts[s.id]}
                 >
                   {s.label}
@@ -95,7 +114,7 @@ export function AgentScreen({
         <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur md:hidden">
           <Select
             items={SECTIONS.map((s) => ({ value: s.id, label: s.label }))}
-            value={section}
+            value={ALIASES[section] ?? section}
             onValueChange={(v) =>
               v && navigate({ name: "agent", agentDid, section: v })
             }
@@ -163,7 +182,7 @@ export function AgentScreen({
           {section === "event-sources" && (
             <EventSourcesPanel shell={shell} deployment={deployment} item={item} />
           )}
-          {section === "triggers" && (
+          {(section === "automations" || section === "triggers") && (
             <TriggersPanel shell={shell} deployment={deployment} item={item} />
           )}
         </div>

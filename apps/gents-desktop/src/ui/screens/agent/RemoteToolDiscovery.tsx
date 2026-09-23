@@ -16,7 +16,7 @@ export function RemoteToolDiscovery({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   return (
-    <div className="p-4">
+    <div className="px-5 py-4">
       <Button
         disabled={busy}
         onClick={async () => {

@@ -8,32 +8,37 @@ import type {
   InferenceSampling,
 } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
-import { navigate } from "@/lib/router";
+import { href, navigate } from "@/lib/router";
 import {
   AreaRow,
   ChoiceRow,
   DraftActions,
   FactRow,
   NumberRow,
+  RefRow,
+  TagsRow,
   TextRow,
 } from "./editors";
-import {
-  newId,
-  optionalInteger,
-  optionalNumber,
-  str,
-  toLines,
-  fromLinesOrNull,
-  useDraft,
-} from "./draft";
+import { ProfileSheet } from "./ProfileSheet";
+import { InferencePanel } from "./InferencePanel";
+import { BackendSheet } from "./BackendSheet";
+import { Plus } from "lucide-react";
+import type { InferenceBackendView } from "@source-inc/gents-desktop-client";
+import type { ListRow } from "./ListDetail";
+import { SetupScreen } from "../setup/SetupScreen";
+import { newId, optionalInteger, optionalNumber, str, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
+import { RowMenu } from "./RowMenu";
 import {
   InferenceModelControls,
   recommendedInferenceSettings,
   validateInferenceSettings,
   type InferenceSettingsDraft,
 } from "../inference/InferenceModelControls";
+
+/* behaviors named in Used by before the rest are counted */
+const USERS_SHOWN = 3;
 
 function settingsForDraft(
   recommendation: InferenceModelRecommendation,
@@ -68,14 +73,39 @@ function settingsForDraft(
   };
 }
 
-function Editor({
+/* the profile a draft starts from: the first backend that advertises a
+   model, or the one asked for, and its first model */
+export function newProfileDocument(
+  deployment: DeploymentView,
+  backendId?: string,
+): InferenceProfile {
+  const backend =
+    deployment.inferenceBackends.find((b) => b.backendId === backendId) ??
+    deployment.inferenceBackends.find((b) => b.models.length > 0) ??
+    deployment.inferenceBackends[0];
+  return {
+    agent_did: deployment.agentDid,
+    profile_id: newId("profile"),
+    display_name: "",
+    backend_id: backend?.backendId ?? "",
+    model_name: backend?.models[0] ?? "",
+  };
+}
+
+export function ProfileEditor({
   shell,
   deployment,
   profile,
+  embedded = false,
+  draft: draftMode,
 }: {
   shell: Shell;
   deployment: DeploymentView;
+  /* in a sheet beside another page: no Danger zone */
+  embedded?: boolean;
   profile: InferenceProfile;
+  /* a new profile that exists only here until Create */
+  draft?: { onSaved: (profileId: string) => void; onCancel: () => void };
 }) {
   const base = {
     name: "agent" as const,
@@ -161,7 +191,7 @@ function Editor({
       deployment.inferenceExecution.find(
         (row) => row.execution_id === profile.execution_id,
       )?.retry_policy_id ?? "",
-    tags: toLines(profile.tags ?? []),
+    tags: profile.tags ?? [],
   };
   const [recommendation, setRecommendation] =
     useState<InferenceModelRecommendation | null>(null);
@@ -286,7 +316,7 @@ function Editor({
       max_output_tokens: maxOutputTokens,
       sampling_id: effectiveSamplingId || null,
       execution_id: next.executionId.trim() || null,
-      tags: fromLinesOrNull(next.tags),
+      tags: next.tags.length ? next.tags : null,
     };
     const nextSampling: InferenceSampling | null = effectiveSamplingId
       ? {
@@ -331,16 +361,16 @@ function Editor({
     Record<string, number | null | undefined>
   >({});
   useEffect(() => {
-    let cancelled = false;
+    let canceled = false;
     if (shell.api.getInferenceSetupCatalog)
       void shell.api
         .getInferenceSetupCatalog()
         .then((catalog) => {
-          if (!cancelled) setExecutionDefaults(catalog.executionDefaults ?? {});
+          if (!canceled) setExecutionDefaults(catalog.executionDefaults ?? {});
         })
         .catch(() => {});
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [shell.api]);
   const executionDefault = (key: string) =>
@@ -391,7 +421,7 @@ function Editor({
     setRecommendation(null);
     setRecommendationKey(null);
     setRecommendationError(null);
-    let cancelled = false;
+    let canceled = false;
     const timeout = window.setTimeout(() => {
       void shell.api
         .getInferenceBackendRecommendation({
@@ -415,7 +445,7 @@ function Editor({
           reasoningEfforts: advertisedModel?.reasoning_efforts ?? null,
         })
         .then((next) => {
-          if (cancelled) return;
+          if (canceled) return;
           const defaults = recommendedInferenceSettings(next);
           const deliberate = deliberateSelectionRef.current === requestKey;
           setRecommendation(next);
@@ -436,14 +466,14 @@ function Editor({
           }
         })
         .catch((error) => {
-          if (cancelled) return;
+          if (canceled) return;
           setRecommendationError(
             `Model-aware settings unavailable: ${error instanceof Error ? error.message : String(error)}`,
           );
         });
     }, 150);
     return () => {
-      cancelled = true;
+      canceled = true;
       window.clearTimeout(timeout);
     };
     // Draft fields are intentionally captured for the exact backend/model request.
@@ -491,12 +521,61 @@ function Editor({
       )
     : null;
   const id = (f: string) => `${profile.profile_id}-${f}`;
+  /* the backend's full editor, open beside the model */
+  const [besideBackend, setBesideBackend] = useState<string | null>(null);
+  /* New backend… from the Backend field: the onboarding's provider step, in place */
+  const [addingBackend, setAddingBackend] = useState<
+    ((id: string | null) => void) | null
+  >(null);
+  if (addingBackend) {
+    const before = new Set(deployment.inferenceBackends.map((b) => b.backendId));
+    return (
+      <SetupScreen
+        shell={shell}
+        initialStep="inference"
+        purpose="add-backend"
+        agentDid={deployment.agentDid}
+        onCancel={() => {
+          addingBackend(null);
+          setAddingBackend(null);
+        }}
+        onDone={(snapshot) => {
+          const added = (snapshot.client?.deployments ?? [])
+            .find((x) => x.agentDid === deployment.agentDid)
+            ?.inferenceBackends.find((b) => !before.has(b.backendId));
+          addingBackend(added?.backendId ?? null);
+          setAddingBackend(null);
+        }}
+      />
+    );
+  }
+  const usedBy = deployment.behaviors.filter(
+    (b) => b.inferenceProfileId === profile.profile_id,
+  );
   return (
     <>
-      <Group title={profile.display_name ?? profile.profile_id}>
-        <FactRow label="Profile ID" mono>
-          {profile.profile_id}
-        </FactRow>
+      <BackendSheet
+        shell={shell}
+        deployment={deployment}
+        backendId={besideBackend}
+        onClose={() => setBesideBackend(null)}
+      />
+      {!embedded && (
+        <header className="mb-6">
+          <h2 className="font-heading text-lg text-heading">
+            {profile.display_name ?? profile.profile_id}
+          </h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {modelSentence(deployment, profile)}
+          </p>
+        </header>
+      )}
+      <Group title="Model">
+        {!draftMode && (
+          <FactRow label="Profile ID" mono>
+            {profile.profile_id}
+          </FactRow>
+        )}
         <TextRow
           id={id("name")}
           label="Display name"
@@ -518,9 +597,10 @@ function Editor({
             rows={2}
           />
         </details>
-        <ChoiceRow
+        <RefRow
           id={id("backend")}
           label="Backend"
+          description="The provider and endpoint the model is served from."
           value={d.draft.backendId}
           onChange={(v) => {
             const modelName =
@@ -534,6 +614,13 @@ function Editor({
             value: b.backendId,
             label: b.name ?? b.backendId,
           }))}
+          createLabel="New backend…"
+          onCreate={() =>
+            new Promise<string | null>((resolve) => {
+              setAddingBackend(() => resolve);
+            })
+          }
+          onOpen={(backendId) => setBesideBackend(backendId)}
         />
         <ChoiceRow
           id={id("model")}
@@ -554,10 +641,30 @@ function Editor({
             .filter(Boolean)
             .map((model) => ({ value: model, label: model }))}
         />
+        <FactRow label="Used by">
+          {usedBy.length ? (
+            <span className="flex flex-wrap justify-end gap-x-3 gap-y-1">
+              {usedBy.slice(0, USERS_SHOWN).map((b) => (
+                <a
+                  key={b.behaviorId}
+                  href={href({ ...base, section: "behaviors", item: b.behaviorId })}
+                  className="max-w-48 truncate underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  {b.displayName}
+                </a>
+              ))}
+              {usedBy.length > USERS_SHOWN && (
+                <span>and {usedBy.length - USERS_SHOWN} more</span>
+              )}
+            </span>
+          ) : (
+            "No behavior yet. Pick it under a behavior’s Model."
+          )}
+        </FactRow>
       </Group>
       {recommendation && guided ? (
         <Group title="Model-aware defaults">
-          <div className="p-4">
+          <div className="px-5 py-4">
             <InferenceModelControls
               recommendation={recommendation}
               value={guided}
@@ -668,41 +775,78 @@ function Editor({
         />
       </Group>
       <Group title="Metadata">
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={3}
         />
       </Group>
       <DraftActions
-        dirty={d.dirty}
+        dirty={draftMode ? true : d.dirty}
         saving={d.saving}
         error={d.error}
-        onSave={d.save}
+        saveLabel={draftMode ? "Create" : undefined}
+        onSave={() =>
+          draftMode
+            ? void d.save().then(() => draftMode.onSaved(profile.profile_id))
+            : d.save()
+        }
         onCancel={() => {
+          if (draftMode) {
+            draftMode.onCancel();
+            return;
+          }
           setEditedExecution(new Set());
           setEditedModelFields(new Set());
           d.reset();
         }}
       />
-      <DeleteButton
-        label={profile.display_name ?? profile.profile_id}
-        base={base}
-        onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteInferenceProfileConfig({
-              profileId: profile.profile_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
-        }
-      />
+      {!embedded && !draftMode && (
+        <DeleteButton
+          label={profile.display_name ?? profile.profile_id}
+          base={base}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteInferenceProfileConfig({
+                profileId: profile.profile_id,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
     </>
   );
+}
+
+/* "claude-sonnet-5 · via Anthropic · 2 behaviors" */
+export function modelSentence(deployment: DeploymentView, p: InferenceProfile) {
+  const backend = deployment.inferenceBackends.find(
+    (b) => b.backendId === p.backend_id,
+  );
+  const users = deployment.behaviors.filter(
+    (b) => b.inferenceProfileId === p.profile_id,
+  ).length;
+  return [
+    p.model_name,
+    `via ${backend?.name ?? p.backend_id}`,
+    users ? `${users} ${users === 1 ? "behavior" : "behaviors"}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/* why a model cannot serve right now */
+function modelProblem(deployment: DeploymentView, p: InferenceProfile): string | null {
+  const backend = deployment.inferenceBackends.find(
+    (b) => b.backendId === p.backend_id,
+  );
+  if (!backend) return "Backend is missing";
+  if (backend.enabled === false) return "Backend is disabled";
+  if (backend.authKind === "api_key" && !backend.apiKeyConfigured)
+    return "Backend has no API key";
+  return null;
 }
 
 export function ProfilesPanel({
@@ -719,52 +863,113 @@ export function ProfilesPanel({
     agentDid: deployment.agentDid,
     section: "profiles",
   };
-  return (
-    <ListDetail
-      base={base}
-      item={item}
-      rows={deployment.inferenceProfiles.map((p) => ({
-        id: p.profile_id,
-        title: p.display_name ?? p.profile_id,
-        meta: `${p.model_name} · ${deployment.inferenceBackends.find((backend) => backend.backendId === p.backend_id)?.name ?? p.backend_id}`,
-      }))}
-      createLabel="New profile"
-      empty="No inference profiles."
-      onCreate={async () => {
-        const profile_id = newId("profile");
-        const backend = deployment.inferenceBackends[0];
-        if (!backend) throw new Error("Add a backend first");
-        const model = backend.models[0];
-        if (!model) throw new Error("Probe the backend and discover a model first");
-        await shell.applyConfig((api) =>
-          api.saveInferenceProfileConfig({
-            document: {
-              agent_did: deployment.agentDid,
-              profile_id,
-              display_name: "New profile",
-              backend_id: backend.backendId,
-              model_name: model,
+  /* Add profile under a backend: the dialog opens on it */
+  const [creating, setCreating] = useState<string | null>(null);
+  const modelRows = (b: InferenceBackendView): ListRow[] => [
+    ...deployment.inferenceProfiles
+      .filter((p) => p.backend_id === b.backendId)
+      .map((p) => {
+        const problem = modelProblem(deployment, p);
+        return {
+          id: p.profile_id,
+          href: href({ ...base, item: p.profile_id }),
+          title: p.display_name ?? p.profile_id,
+          meta: (() => {
+            const users = deployment.behaviors.filter(
+              (b) => b.inferenceProfileId === p.profile_id,
+            ).length;
+            return `${p.model_name}${users ? ` · ${users} ${users === 1 ? "behavior" : "behaviors"}` : ""}`;
+          })(),
+          badge: problem ?? undefined,
+          badgeTone: "bad" as const,
+          tags: p.tags,
+          trailing: (
+            <RowMenu
+              name={p.display_name ?? p.profile_id}
+              base={base}
+              id={p.profile_id}
+              onDuplicate={async () => {
+                const profile_id = newId("profile");
+                await shell.applyConfig((api) =>
+                  api.saveInferenceProfileConfig({
+                    document: {
+                      ...p,
+                      profile_id,
+                      display_name: `${p.display_name ?? p.profile_id} copy`,
+                    },
+                  }),
+                );
+                return profile_id;
+              }}
+              onDelete={() =>
+                shell.applyConfig((api) =>
+                  api.deleteInferenceProfileConfig({
+                    profileId: p.profile_id,
+                    agentDid: deployment.agentDid,
+                  }),
+                )
+              }
+              warning={(() => {
+                const n = deployment.behaviors.filter(
+                  (x) => x.inferenceProfileId === p.profile_id,
+                ).length;
+                return n
+                  ? `${n} ${n === 1 ? "behavior loses" : "behaviors lose"} its profile.`
+                  : undefined;
+              })()}
+            />
+          ),
+        };
+      }),
+    {
+      id: `add:${b.backendId}`,
+      title: "Add profile",
+      meta: b.models.length
+        ? `${b.models.length} advertised`
+        : "probe the backend for models first",
+      icon: <Plus className="size-3.5 text-muted-foreground" />,
+      onOpen: () => setCreating(b.backendId),
+    },
+  ];
+  if (item) {
+    const profile = deployment.inferenceProfiles.find((p) => p.profile_id === item);
+    if (profile)
+      return (
+        <ListDetail
+          base={base}
+          item={item}
+          rows={[
+            {
+              id: profile.profile_id,
+              title: profile.display_name ?? profile.profile_id,
             },
-          }),
-        );
-        navigate({
-          name: "agent",
-          agentDid: deployment.agentDid,
-          section: "profiles",
-          item: profile_id,
-        });
-      }}
-      detail={(id) => {
-        const profile = deployment.inferenceProfiles.find((p) => p.profile_id === id)!;
-        return (
-          <Editor
-            key={profile.profile_id}
-            shell={shell}
-            deployment={deployment}
-            profile={profile}
-          />
-        );
-      }}
-    />
+          ]}
+          createLabel=""
+          empty=""
+          detail={() => (
+            <ProfileEditor
+              key={profile.profile_id}
+              shell={shell}
+              deployment={deployment}
+              profile={profile}
+            />
+          )}
+        />
+      );
+  }
+  return (
+    <>
+      <ProfileSheet
+        shell={shell}
+        deployment={deployment}
+        open={creating !== null}
+        backendId={creating ?? undefined}
+        onClose={(profileId) => {
+          setCreating(null);
+          if (profileId) navigate({ ...base, item: profileId });
+        }}
+      />
+      <InferencePanel shell={shell} deployment={deployment} under={modelRows} />
+    </>
   );
 }

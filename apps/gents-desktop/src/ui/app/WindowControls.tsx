@@ -51,7 +51,7 @@ function CaptionButton({
       onClick={onClick}
       className={cn(
         "grid w-[46px] cursor-default place-items-center text-foreground transition-colors",
-        /* #c42b1c is Windows' own close red, not a brand colour */
+        /* #c42b1c is Windows' own close red, not a brand color */
         close ? "hover:bg-[#c42b1c] hover:text-[#fff]" : "hover:bg-accent",
       )}
     >

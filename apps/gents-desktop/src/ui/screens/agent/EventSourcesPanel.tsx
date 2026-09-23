@@ -2,35 +2,37 @@ import type { DeploymentView, EventSource } from "@source-inc/gents-desktop-clie
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
-  AreaRow,
   ChoiceRow,
   DraftActions,
   FactRow,
   NumberRow,
   TextRow,
+  TagsRow,
 } from "./editors";
 import {
-  fromLinesOrNull,
   newId,
   optionalInteger,
   optionalGraphqlFilter,
   requiredGraphqlCollection,
   requiredGraphqlName,
   str,
-  toLines,
   useDraft,
 } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
+import { RowMenu } from "./RowMenu";
 
-function Editor({
+export function EventSourceEditor({
   shell,
   deployment,
   source,
+  embedded = false,
 }: {
   shell: Shell;
   deployment: DeploymentView;
   source: EventSource;
+  /* in a sheet beside another page: no Danger zone */
+  embedded?: boolean;
 }) {
   const base = {
     name: "agent" as const,
@@ -54,7 +56,7 @@ function Editor({
     timeoutSecs: str(source.group?.timeout_secs),
     minCount: str(source.group?.min_count),
     workspaceAuthority: source.workspace_authority ?? "",
-    tags: toLines(source.tags ?? []),
+    tags: source.tags ?? [],
   };
   const d = useDraft(saved, async (next) => {
     const sourceCollection = requiredGraphqlCollection(
@@ -113,7 +115,7 @@ function Editor({
             : null,
           workspace_authority: (next.workspaceAuthority || null) as
             "readOnly" | "readWrite" | "integrate" | null,
-          tags: fromLinesOrNull(next.tags),
+          tags: next.tags.length ? next.tags : null,
         },
       }),
     );
@@ -121,7 +123,9 @@ function Editor({
   const id = (f: string) => `${source.event_source_id}-${f}`;
   return (
     <>
-      <Group title={source.display_name ?? source.event_source_id}>
+      <Group
+        title={embedded ? undefined : (source.display_name ?? source.event_source_id)}
+      >
         <FactRow label="Event source ID" mono>
           {source.event_source_id}
         </FactRow>
@@ -214,14 +218,11 @@ function Editor({
         />
       </Group>
       <Group title="Metadata">
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={3}
         />
       </Group>
       <DraftActions
@@ -231,18 +232,20 @@ function Editor({
         onSave={d.save}
         onCancel={d.reset}
       />
-      <DeleteButton
-        label={source.display_name ?? source.event_source_id}
-        base={base}
-        onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteEventSourceConfig({
-              eventSourceId: source.event_source_id,
-              agentDid: deployment.agentDid,
-            }),
-          )
-        }
-      />
+      {!embedded && (
+        <DeleteButton
+          label={source.display_name ?? source.event_source_id}
+          base={base}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteEventSourceConfig({
+                eventSourceId: source.event_source_id,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
     </>
   );
 }
@@ -270,6 +273,46 @@ export function EventSourcesPanel({
         title: s.display_name ?? s.event_source_id,
         meta: s.source_collection,
         tags: s.tags,
+        trailing: (
+          <RowMenu
+            name={s.display_name ?? s.event_source_id}
+            base={base}
+            id={s.event_source_id}
+            onDuplicate={async () => {
+              const event_source_id = newId("evsrc");
+              await shell.applyConfig((api) =>
+                api.saveEventSourceConfig({
+                  document: {
+                    ...s,
+                    event_source_id,
+                    display_name: `${s.display_name ?? s.event_source_id} copy`,
+                    created_at: null,
+                    updated_at: null,
+                  },
+                }),
+              );
+              return event_source_id;
+            }}
+            onDelete={() =>
+              shell.applyConfig((api) =>
+                api.deleteEventSourceConfig({
+                  eventSourceId: s.event_source_id,
+                  agentDid: deployment.agentDid,
+                }),
+              )
+            }
+            warning={(() => {
+              const n = deployment.triggers.filter(
+                (x) =>
+                  x.config.source.kind === "event" &&
+                  x.config.source.event_source_id === s.event_source_id,
+              ).length;
+              return n
+                ? `${n} ${n === 1 ? "automation uses" : "automations use"} it.`
+                : undefined;
+            })()}
+          />
+        ),
       }))}
       createLabel="New event source"
       empty="No event sources. A trigger binds a task to a reusable source."
@@ -296,7 +339,7 @@ export function EventSourcesPanel({
       detail={(id) => {
         const source = deployment.eventSources.find((s) => s.event_source_id === id)!;
         return (
-          <Editor
+          <EventSourceEditor
             key={source.event_source_id}
             shell={shell}
             deployment={deployment}

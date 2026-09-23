@@ -50,6 +50,15 @@ test.describe("desktop stable screenshot states", () => {
       "stable-agent-config",
     );
 
+    for (const [section, name] of [
+      [/^Behaviors\b/, "stable-behaviors"],
+      [/^Providers\b/, "stable-providers"],
+      [/^Tasks\b/, "stable-tasks"],
+    ] as const) {
+      await openConfigSection(page, section);
+      await captureReviewScreenshot(name.replace("stable-", ""), "default", name);
+    }
+
     await gotoHarness(page, "empty-fleet");
     await expect(page.getByTestId("setup-screen")).toBeVisible();
     await captureReviewScreenshot("first-run setup", "empty-fleet", "stable-setup");
@@ -70,11 +79,14 @@ test.describe("desktop stable screenshot states", () => {
   test("captures reconciliation states", async ({ page }, testInfo) => {
     await gotoHarness(page);
     await openConfig(page);
-    await openConfigSection(page, /^Contexts\b/);
-    await page.getByRole("link", { name: /Default context/ }).click();
-    await page.getByRole("button", { name: "Delete context" }).click();
+    await openConfigSection(page, /^Behaviors\b/);
+    await page
+      .getByRole("link", { name: /^Ops\b/ })
+      .first()
+      .click();
+    await page.getByRole("button", { name: "Delete behavior" }).click();
     await expect(
-      page.getByRole("textbox", { name: "Type Default context to confirm" }),
+      page.getByRole("textbox", { name: "Type Ops to confirm" }),
     ).toBeFocused();
     await captureStableScreenshot(page, testInfo, "reconciliation-delete-confirmation");
     await expect(page.getByRole("alertdialog")).toHaveCSS("opacity", "1");

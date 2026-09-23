@@ -109,7 +109,7 @@ describe("BehaviorPicker popover lifetime", () => {
     const user = userEvent.setup();
     const view = render(<Harness />);
 
-    await user.click(screen.getByRole("button", { name: "Behaviour" }));
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
     expect(
       await screen.findByRole("dialog", { name: "Choose behavior" }),
     ).toBeVisible();
@@ -136,7 +136,7 @@ describe("BehaviorPicker popover lifetime", () => {
       await screen.findByRole("dialog", { name: "Database sync details" }),
     ).toBeVisible();
 
-    await user.click(screen.getByRole("button", { name: "Behaviour" }));
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
     expect(
       screen.queryByRole("dialog", { name: "Database sync details" }),
     ).not.toBeInTheDocument();

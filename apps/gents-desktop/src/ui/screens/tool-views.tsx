@@ -103,7 +103,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
       {tool.cancelCause && (
         <Meta
           items={[
-            `cancelled · ${tool.cancelCause.cause}`,
+            `canceled · ${tool.cancelCause.cause}`,
             tool.cancelCause.source,
             tool.cancelCause.at
               ? new Date(tool.cancelCause.at).toLocaleTimeString()

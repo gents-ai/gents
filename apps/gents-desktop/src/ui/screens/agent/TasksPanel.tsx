@@ -6,32 +6,44 @@ import type { DeploymentView, TaskView } from "@source-inc/gents-desktop-client"
 import { Button } from "@gents/ui/components/button";
 import { Textarea } from "@gents/ui/components/textarea";
 import type { Shell } from "@/hooks/useShell";
-import { navigate } from "@/lib/router";
 import {
   AreaRow,
-  ChoiceRow,
   DraftActions,
   FactRow,
   NumberRow,
+  RefRow,
   SwitchRow,
   TextRow,
+  TagsRow,
 } from "./editors";
-import { fromLinesOrNull, optionalInteger, str, toLines, useDraft } from "./draft";
+import { optionalInteger, str, useDraft } from "./draft";
+import { HooksRows, hooksFromDraft, toHookDraft } from "./HooksRows";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
 import { Group, Row } from "./rows";
+import { RowMenu } from "./RowMenu";
+import { BehaviorSheet } from "./BehaviorSheet";
+import { NewAutomationDialog } from "./NewAutomationDialog";
+import { EditorSheet } from "./EditorSheet";
+import { TriggerEditor } from "./TriggersPanel";
+import { sourceInWords, triggerReadiness } from "./automation";
+import { Switch } from "@gents/ui/components/switch";
+import { ExternalLink, Plus } from "lucide-react";
 
 const when = (iso: string | null | undefined) =>
   iso ? new Date(iso).toLocaleString() : "—";
 
-function Editor({
+export function TaskEditor({
   shell,
   deployment,
   task,
+  embedded = false,
 }: {
   shell: Shell;
   deployment: DeploymentView;
   task: TaskView;
+  /* in a sheet beside another page: no Danger zone */
+  embedded?: boolean;
 }) {
   const base = {
     name: "agent" as const,
@@ -47,49 +59,19 @@ function Editor({
     goalObjectiveTemplate: task.goalObjectiveTemplate ?? "",
     goalTokenBudget: str(task.goalTokenBudget),
     outputSchemaRef: task.outputSchemaRef ?? "",
-    hooks: JSON.stringify(task.hooks ?? [], null, 2),
-    tags: toLines(task.tags ?? []),
+    hooks: (task.hooks ?? []).map(toHookDraft),
+    tags: task.tags ?? [],
   };
   const d = useDraft(saved, (n) => {
     if (!deployment.behaviors.some((behavior) => behavior.behaviorId === n.behaviorId))
-      return Promise.reject(new Error("Choose an existing behaviour"));
+      return Promise.reject(new Error("Choose an existing behavior"));
     if (!n.promptTemplate.trim())
       return Promise.reject(new Error("Prompt template is required"));
     if (n.goalTokenBudget.trim() && !n.goalObjectiveTemplate.trim()) {
       return Promise.reject(new Error("A goal budget needs a goal objective"));
     }
-    let hooks: typeof task.hooks;
-    try {
-      hooks = JSON.parse(n.hooks) as typeof task.hooks;
-      if (!Array.isArray(hooks)) throw new Error();
-    } catch {
-      return Promise.reject(new Error("Hooks must be a JSON array"));
-    }
-    const hookIds = new Set<string>();
-    for (const hook of hooks) {
-      if (!hook || typeof hook !== "object")
-        return Promise.reject(new Error("Every hook must be a JSON object"));
-      if (!hook.hook_id?.trim())
-        return Promise.reject(new Error("Every hook needs a hook_id"));
-      if (hookIds.has(hook.hook_id))
-        return Promise.reject(new Error(`Duplicate hook ID: ${hook.hook_id}`));
-      hookIds.add(hook.hook_id);
-      if (!["before", "after_success", "after_failure", "finally"].includes(hook.phase))
-        return Promise.reject(new Error(`Invalid hook phase: ${String(hook.phase)}`));
-      if (
-        !Array.isArray(hook.command) ||
-        !hook.command.length ||
-        !hook.command[0]?.trim()
-      )
-        return Promise.reject(new Error(`Hook ${hook.hook_id} needs a command`));
-      if (
-        hook.timeout_secs != null &&
-        (!Number.isInteger(hook.timeout_secs) || hook.timeout_secs < 1)
-      )
-        return Promise.reject(
-          new Error(`Hook ${hook.hook_id} timeout must be a positive whole number`),
-        );
-    }
+    const hooks = hooksFromDraft(n.hooks);
+    if (typeof hooks === "string") return Promise.reject(new Error(hooks));
     return shell.applyConfig((api) =>
       api.saveTaskConfig({
         document: {
@@ -106,16 +88,86 @@ function Editor({
           enabled: n.enabled,
           output_schema_ref: n.outputSchemaRef || null,
           hooks: hooks.length ? hooks : null,
-          tags: fromLinesOrNull(n.tags),
+          tags: n.tags.length ? n.tags : null,
         },
       }),
     );
   });
+  /* the New behavior dialog's resolver while it is open */
+  const [newBehavior, setNewBehavior] = useState<((id: string | null) => void) | null>(
+    null,
+  );
+  /* this task's triggers, and the one open beside the page */
+  const myTriggers = deployment.triggers.filter(
+    (x) => x.config.task_id === task.taskId,
+  );
+  const [besideTrigger, setBesideTrigger] = useState<string | null>(null);
+  const besideTriggerView =
+    deployment.triggers.find((x) => x.config.trigger_id === besideTrigger) ?? null;
+  /* a schedule or event source with sensible defaults, its trigger, then the trigger beside the page to adjust */
+  const addTrigger = async (kind: "schedule" | "event") => {
+    const agent_did = deployment.agentDid;
+    const trigger_id = newId("trig");
+    try {
+      let source:
+        | { kind: "schedule"; schedule_id: string }
+        | { kind: "event"; event_source_id: string };
+      if (kind === "schedule") {
+        const schedule_id = newId("sched");
+        await shell.applyConfig((api) =>
+          api.saveScheduleConfig({
+            document: {
+              agent_did,
+              schedule_id,
+              display_name: "Every day at 09:00",
+              cadence: {
+                kind: "cron",
+                expression: "0 9 * * *",
+                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+                missed_run_policy: "latest_only",
+              },
+            },
+          }),
+        );
+        source = { kind: "schedule", schedule_id };
+      } else {
+        const event_source_id = newId("evsrc");
+        await shell.applyConfig((api) =>
+          api.saveEventSourceConfig({
+            document: {
+              agent_did,
+              event_source_id,
+              display_name: "When an AgentRequest is created",
+              source_collection: "AgentRequest",
+              event_kind: "created",
+            },
+          }),
+        );
+        source = { kind: "event", event_source_id };
+      }
+      await shell.applyConfig((api) =>
+        api.saveTriggerConfig({
+          document: {
+            agent_did,
+            trigger_id,
+            display_name: task.name ?? task.taskId,
+            task_id: task.taskId,
+            source,
+            enabled: true,
+            concurrency: "serial",
+          },
+        }),
+      );
+      setBesideTrigger(trigger_id);
+    } catch (e) {
+      toast(`Couldn’t add it: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   const [args, setArgs] = useState("{}");
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const id = (f: string) => `${task.taskId}-${f}`;
-  const behaviours = deployment.behaviors.map((b) => ({
+  const behaviors = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
     label: b.displayName,
   }));
@@ -152,7 +204,7 @@ function Editor({
   };
   return (
     <>
-      <Group title={task.name ?? task.taskId}>
+      <Group title={embedded ? undefined : (task.name ?? task.taskId)}>
         <FactRow label="Task ID" mono>
           {task.taskId}
         </FactRow>
@@ -164,13 +216,34 @@ function Editor({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
-        <ChoiceRow
+        <RefRow
           id={id("behavior")}
-          label="Behaviour"
+          label="Behavior"
+          description="Runs the prompt with its instructions, tools and model."
           value={d.draft.behaviorId}
           onChange={(v) => d.choose("behaviorId", v)}
-          items={behaviours}
+          items={behaviors}
           none="Unset"
+          createLabel="New behavior…"
+          onCreate={() =>
+            new Promise<string | null>((resolve) => {
+              setNewBehavior(() => resolve);
+            })
+          }
+          openRoute={(behaviorId) => ({
+            ...base,
+            section: "behaviors",
+            item: behaviorId,
+          })}
+        />
+        <BehaviorSheet
+          shell={shell}
+          deployment={deployment}
+          open={newBehavior !== null}
+          onClose={(behaviorId) => {
+            newBehavior?.(behaviorId);
+            setNewBehavior(null);
+          }}
         />
         <SwitchRow
           id={id("enabled")}
@@ -193,6 +266,7 @@ function Editor({
           onChange={(v) => d.set("promptTemplate", v)}
           onCommit={d.commit}
           rows={5}
+          stacked
         />
         <AreaRow
           id={id("goal")}
@@ -202,6 +276,7 @@ function Editor({
           onChange={(v) => d.set("goalObjectiveTemplate", v)}
           onCommit={d.commit}
           rows={2}
+          stacked
         />
         <NumberRow
           id={id("budget")}
@@ -222,33 +297,17 @@ function Editor({
           onEnter={d.onEnter}
           mono
         />
-        <AreaRow
+        <HooksRows
           id={id("hooks")}
-          label="Task hooks"
-          description={
-            <>
-              Canonical JSON array. Commands are argv arrays, for example:
-              <code className="mt-1 block w-0 min-w-full overflow-x-auto font-mono text-xs whitespace-pre">
-                {
-                  '[{"hook_id":"verify","phase":"after_success","command":["cargo","test"],"timeout_secs":120}]'
-                }
-              </code>
-            </>
-          }
           value={d.draft.hooks}
           onChange={(v) => d.set("hooks", v)}
           onCommit={d.commit}
-          rows={8}
-          mono
         />
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={3}
         />
       </Group>
       <DraftActions
@@ -258,6 +317,95 @@ function Editor({
         onSave={d.save}
         onCancel={d.reset}
       />
+      <Group
+        title="When it runs"
+        action={
+          <span className="flex gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void addTrigger("schedule")}
+            >
+              <Plus /> Schedule
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void addTrigger("event")}
+            >
+              <Plus /> Event
+            </Button>
+          </span>
+        }
+      >
+        {myTriggers.length === 0 && (
+          <Row
+            label="When you run it"
+            description="No schedule or event yet; Run task below starts it."
+          />
+        )}
+        {myTriggers.map((tr) => {
+          const r = triggerReadiness(deployment, tr);
+          return (
+            <Row
+              key={tr.config.trigger_id}
+              label={sourceInWords(deployment, tr) ?? "A missing source"}
+              description={r.ok ? (r.note ?? undefined) : `Won’t fire: ${r.reason}`}
+            >
+              <span className="flex items-center gap-1">
+                <Switch
+                  aria-label={`${tr.config.display_name ?? tr.config.trigger_id} enabled`}
+                  checked={tr.config.enabled !== false}
+                  onCheckedChange={(next) =>
+                    void shell.applyConfig((api) =>
+                      api.saveTriggerConfig({
+                        document: { ...tr.config, enabled: next },
+                      }),
+                    )
+                  }
+                />
+                <Button
+                  variant="quiet"
+                  size="icon"
+                  aria-label="Open trigger"
+                  onClick={() => setBesideTrigger(tr.config.trigger_id)}
+                >
+                  <ExternalLink />
+                </Button>
+              </span>
+            </Row>
+          );
+        })}
+      </Group>
+      <EditorSheet
+        open={besideTriggerView !== null}
+        onClose={() => setBesideTrigger(null)}
+        title={besideTriggerView?.config.display_name ?? "Trigger"}
+        description={
+          besideTriggerView
+            ? (sourceInWords(deployment, besideTriggerView) ?? undefined)
+            : undefined
+        }
+        page={
+          besideTriggerView
+            ? {
+                ...base,
+                section: "triggers",
+                item: besideTriggerView.config.trigger_id,
+              }
+            : undefined
+        }
+      >
+        {besideTriggerView && (
+          <TriggerEditor
+            key={besideTriggerView.config.trigger_id}
+            shell={shell}
+            deployment={deployment}
+            trigger={besideTriggerView}
+            embedded
+          />
+        )}
+      </EditorSheet>
       <Group title="Runs">
         <FactRow label="Total fires">{task.recentRuns.totalFires}</FactRow>
         <FactRow label="Last attempt">{when(task.recentRuns.lastAttemptAt)}</FactRow>
@@ -300,20 +448,56 @@ function Editor({
           </FactRow>
         )}
       </Group>
-      <DeleteButton
-        label={task.name ?? task.taskId}
-        base={base}
-        onDelete={() =>
-          shell.applyConfig((api) =>
-            api.deleteTaskConfig({
-              taskId: task.taskId,
-              agentDid: deployment.agentDid,
-            }),
-          )
-        }
-      />
+      {!embedded && (
+        <DeleteButton
+          label={task.name ?? task.taskId}
+          base={base}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteTaskConfig({
+                taskId: task.taskId,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
     </>
   );
+}
+
+/* when a task runs, from its triggers, and the first reason it would not */
+function whenItRuns(deployment: DeploymentView, t: TaskView) {
+  const triggers = deployment.triggers.filter((x) => x.config.task_id === t.taskId);
+  if (t.enabled === false) return { when: "Disabled", problem: "Task is disabled" };
+  if (!triggers.length) return { when: "Runs when you run it", problem: null };
+  const whens = triggers.map((x) => sourceInWords(deployment, x) ?? "a missing source");
+  const bad = triggers.map((x) => triggerReadiness(deployment, x)).find((r) => !r.ok);
+  return {
+    when:
+      whens.length <= 2
+        ? whens.join(" and ")
+        : `${whens[0]} and ${whens.length - 1} more`,
+    problem: bad && !bad.ok ? bad.reason : null,
+  };
+}
+
+/* the canonical document for a task view, for row edits and copies */
+function taskDocument(deployment: DeploymentView, t: TaskView) {
+  return {
+    agent_did: deployment.agentDid,
+    task_id: t.taskId,
+    display_name: t.name ?? t.taskId,
+    description: t.description,
+    behavior_id: t.behaviorId ?? "",
+    prompt_template: t.promptTemplate ?? "",
+    goal_objective_template: t.goalObjectiveTemplate,
+    goal_token_budget: t.goalTokenBudget,
+    hooks: t.hooks.length ? t.hooks : null,
+    enabled: t.enabled ?? true,
+    output_schema_ref: t.outputSchemaRef,
+    tags: t.tags.length ? t.tags : null,
+  };
 }
 
 export function TasksPanel({
@@ -330,54 +514,92 @@ export function TasksPanel({
     agentDid: deployment.agentDid,
     section: "tasks",
   };
+  const [creating, setCreating] = useState(false);
   return (
-    <ListDetail
-      base={base}
-      item={item}
-      rows={deployment.tasks.map((t) => ({
-        id: t.taskId,
-        title: t.name ?? t.taskId,
-        meta: `${deployment.behaviors.find((b) => b.behaviorId === t.behaviorId)?.displayName ?? "no behaviour"} · ${t.recentRuns.totalFires} fires${t.enabled === false ? " · disabled" : ""}`,
-        badge: t.recentRuns.lastStatus ?? undefined,
-        badgeTone: t.recentRuns.lastStatus === "failed" ? "bad" : "default",
-        tags: t.tags,
-      }))}
-      createLabel="New task"
-      empty="No tasks. A task is a prompt the agent runs on a schedule or a trigger."
-      onCreate={async () => {
-        const taskId = newId("task");
-        await shell.applyConfig((api) =>
-          api.saveTaskConfig({
-            document: {
-              agent_did: deployment.agentDid,
-              task_id: taskId,
-              display_name: "New task",
-              description: null,
-              behavior_id:
-                deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
-                deployment.behaviors[0]?.behaviorId ??
-                "",
-              prompt_template: "Describe what this task should do.",
-              goal_objective_template: null,
-              goal_token_budget: null,
-              enabled: false,
-              output_schema_ref: null,
-            },
-          }),
-        );
-        navigate({
-          name: "agent",
-          agentDid: deployment.agentDid,
-          section: "tasks",
-          item: taskId,
-        });
-      }}
-      detail={(id) => {
-        const task = deployment.tasks.find((t) => t.taskId === id)!;
-        return (
-          <Editor key={task.taskId} shell={shell} deployment={deployment} task={task} />
-        );
-      }}
-    />
+    <>
+      <NewAutomationDialog
+        shell={shell}
+        deployment={deployment}
+        open={creating}
+        onOpenChange={setCreating}
+        forTask
+      />
+      <ListDetail
+        base={base}
+        item={item}
+        rows={deployment.tasks.map((t) => {
+          const w = whenItRuns(deployment, t);
+          return {
+            id: t.taskId,
+            title: t.name ?? t.taskId,
+            tags: t.tags,
+            meta: `${w.when} · with ${deployment.behaviors.find((b) => b.behaviorId === t.behaviorId)?.displayName ?? "no behavior"}`,
+            badge:
+              w.problem ??
+              (t.recentRuns.lastStatus === "failed" ? "last run failed" : undefined),
+            badgeTone: "bad" as const,
+            trailing: (
+              <RowMenu
+                name={t.name ?? t.taskId}
+                base={base}
+                id={t.taskId}
+                enabled={{
+                  checked: t.enabled !== false,
+                  onChange: (enabled) =>
+                    shell.applyConfig((api) =>
+                      api.saveTaskConfig({
+                        document: { ...taskDocument(deployment, t), enabled },
+                      }),
+                    ),
+                }}
+                onDuplicate={async () => {
+                  const task_id = newId("task");
+                  await shell.applyConfig((api) =>
+                    api.saveTaskConfig({
+                      document: {
+                        ...taskDocument(deployment, t),
+                        task_id,
+                        display_name: `${t.name ?? t.taskId} copy`,
+                      },
+                    }),
+                  );
+                  return task_id;
+                }}
+                onDelete={() =>
+                  shell.applyConfig((api) =>
+                    api.deleteTaskConfig({
+                      taskId: t.taskId,
+                      agentDid: deployment.agentDid,
+                    }),
+                  )
+                }
+                warning={(() => {
+                  const n = deployment.triggers.filter(
+                    (x) => x.config.task_id === t.taskId,
+                  ).length;
+                  return n
+                    ? `${n} ${n === 1 ? "automation runs" : "automations run"} it.`
+                    : undefined;
+                })()}
+              />
+            ),
+          };
+        })}
+        createLabel="New task"
+        empty="No tasks. A task is a prompt a behavior runs: when you run it, on a schedule, or when something happens."
+        onCreate={() => setCreating(true)}
+        detail={(id) => {
+          const task = deployment.tasks.find((t) => t.taskId === id)!;
+          return (
+            <TaskEditor
+              key={task.taskId}
+              shell={shell}
+              deployment={deployment}
+              task={task}
+            />
+          );
+        }}
+      />
+    </>
   );
 }
