@@ -1,0 +1,4 @@
+type MonitorInput {
+  correlation: String
+  message: String
+}

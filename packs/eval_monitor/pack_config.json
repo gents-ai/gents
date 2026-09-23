@@ -1,0 +1,131 @@
+{
+  "agent_principal": {},
+  "agent_behaviors": [
+    {
+      "behavior_id": "eval-monitor",
+      "display_name": "Monitor",
+      "description": "Turns each monitoring input into findings on one maintained mailbox record.",
+      "context_id": "eval-monitor-context",
+      "inference_profile_id": "gents:inference-slot:monitor"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "eval-monitor-context",
+      "display_name": "Monitor",
+      "system_prompt": "./agent_behaviors/eval_monitor/system_prompt.md",
+      "tools_id": "eval-monitor-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "eval-monitor-tools",
+      "display_name": "Monitor: read-only files plus the mailbox surface",
+      "host": {
+        "root": "${GENTS_EVAL_WORKSPACE_ROOT:-.}",
+        "files": {
+          "mode": "ReadOnly"
+        }
+      },
+      "datastore": {
+        "datastore_tool_surface_ids": [
+          "eval-monitor-mailbox"
+        ]
+      }
+    }
+  ],
+  "datastore_tool_surfaces": [
+    {
+      "surface_id": "eval-monitor-mailbox",
+      "display_name": "Monitor mailbox record",
+      "entries": [
+        {
+          "tool_name": "file_mailbox_item",
+          "collection": "MailboxItem",
+          "description": "Publish notification content using the configured identity and handling policy; runtime stamps ownership and provenance.",
+          "fields": [
+            {
+              "name": "title",
+              "required": true
+            },
+            {
+              "name": "summary",
+              "required": false
+            },
+            {
+              "name": "payload",
+              "required": false
+            }
+          ],
+          "notification": {
+            "identity": {
+              "mode": "condition",
+              "key": "eval_monitor"
+            },
+            "kind": "flag",
+            "action": "ack"
+          }
+        },
+        {
+          "kind": "query",
+          "tool_name": "list_mailbox_findings",
+          "collection": "MailboxItem",
+          "description": "Read the mailbox record this monitor maintains, so the next write can restate every finding already reported.",
+          "fields": [
+            "item_key",
+            "status",
+            "kind",
+            "action",
+            "title",
+            "summary",
+            "payload",
+            "source_kind",
+            "source_id",
+            "created_at",
+            "updated_at"
+          ],
+          "filter_fields": [
+            {
+              "name": "status",
+              "required": false
+            },
+            {
+              "name": "kind",
+              "required": false
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "eval-monitor-task",
+      "display_name": "eval-monitor-task",
+      "behavior_id": "eval-monitor",
+      "prompt_template": "./tasks/eval_monitor_task/prompt.md"
+    }
+  ],
+  "event_sources": [
+    {
+      "event_source_id": "eval-monitor-input",
+      "display_name": "eval-monitor-input",
+      "source_collection": "MonitorInput",
+      "event_kind": "created",
+      "correlation_field": "correlation"
+    }
+  ],
+  "triggers": [
+    {
+      "trigger_id": "eval-monitor-input",
+      "display_name": "eval-monitor-input",
+      "task_id": "eval-monitor-task",
+      "source": {
+        "kind": "event",
+        "event_source_id": "eval-monitor-input"
+      },
+      "enabled": true,
+      "concurrency": "serial"
+    }
+  ]
+}

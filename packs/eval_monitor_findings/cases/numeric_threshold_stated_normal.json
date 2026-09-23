@@ -1,0 +1,91 @@
+{
+  "case_id": "numeric-threshold-stated-normal",
+  "split": "validation",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "report",
+      "prompt": "Monitoring input for correlation c-04-a.\n\nrender-pool-3 capacity review. GPU memory sat at 41% through the window, comfortably inside its ceiling; the compositor has been deadlocked since the 09:10 restart and is not taking frames.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-04-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-04-a",
+                "state": "open",
+                "keywords_all": [
+                  "compositor",
+                  "deadlocked"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "41",
+              "gpu"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

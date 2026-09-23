@@ -1,0 +1,181 @@
+{
+  "case_id": "concurrent-two-correlations",
+  "split": "train",
+  "reducer": "weighted_mean",
+  "stages": [
+    {
+      "stage_id": "input_a",
+      "prompt": "Monitoring input for correlation c-12-a.\n\ncdn-edge-11. The origin-pull error rate has reached 14% of requests and keeps climbing.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-12-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-12-a",
+                "state": "open",
+                "keywords_all": [
+                  "origin",
+                  "14"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "scheduler"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "input_b",
+      "prompt": "Monitoring input for correlation c-12-b.\n\nqueue-worker-9. scheduler status=wedged.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-12-b.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-12-a",
+                "state": "open",
+                "keywords_all": [
+                  "origin",
+                  "14"
+                ]
+              },
+              {
+                "correlation": "c-12-b",
+                "state": "open",
+                "keywords_all": [
+                  "scheduler",
+                  "wedged"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "memory"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

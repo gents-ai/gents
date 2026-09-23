@@ -1,0 +1,191 @@
+{
+  "case_id": "recovery-clearance-never-reported",
+  "split": "held_out",
+  "reducer": "all",
+  "stages": [
+    {
+      "stage_id": "report",
+      "prompt": "Monitoring input for correlation c-11-a.\n\ntap-host-6 reports its capture-ring overflowing continuously since 21:15.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-11-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_state_counts",
+          "params": {
+            "open": 1,
+            "resolved": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-11-a",
+                "state": "open",
+                "keywords_all": [
+                  "capture",
+                  "overflowing"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "pcap-export"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    },
+    {
+      "stage_id": "update",
+      "prompt": "Monitoring input for correlation c-11-a.\n\ntap-host-6. capture-ring status=overflowing. pcap-export delay has cleared.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-11-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_state_counts",
+          "params": {
+            "open": 1,
+            "resolved": 0
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-11-a",
+                "state": "open",
+                "keywords_all": [
+                  "capture",
+                  "overflowing"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "pcap-export"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

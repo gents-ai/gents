@@ -1,0 +1,106 @@
+{
+  "case_id": "file-findings-from-inventory",
+  "split": "train",
+  "reducer": "weighted_mean",
+  "fixtures": {
+    "files": [
+      {
+        "path": "inventory/edge-07.json",
+        "contents": "{\n  \"host\": \"edge-07\",\n  \"disk\": \"usage is at 84% of capacity and still filling\",\n  \"nginx\": \"running\",\n  \"cert-renewer\": \"stopped\"\n}\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "report",
+      "prompt": "Monitoring input for correlation c-18-a.\n\nInventory for edge-07 is in inventory/edge-07.json; read it and record what it shows.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-18-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-18-a",
+                "state": "open",
+                "keywords_all": [
+                  "disk",
+                  "84"
+                ]
+              },
+              {
+                "correlation": "c-18-a",
+                "state": "open",
+                "keywords_all": [
+                  "cert",
+                  "stopped"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "nginx"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

@@ -13,9 +13,6 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-};
 use gents::document_config::EvalSplit;
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
@@ -466,24 +463,7 @@ impl Canary {
     }
 
     async fn install(&self, documents: Vec<(Collection, Value)>) {
-        let plan = DesiredStateApplyPlan::new(
-            documents
-                .into_iter()
-                .map(|(collection, value)| DesiredStateApplyDocument {
-                    collection,
-                    add: value.clone(),
-                    update: value,
-                })
-                .collect(),
-        )
-        .unwrap();
-        self.access
-            .transact("canary.install", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-            })
-            .await
-            .unwrap();
+        support::desired_state::install_documents(&self.access, "canary.install", documents).await;
     }
 }
 

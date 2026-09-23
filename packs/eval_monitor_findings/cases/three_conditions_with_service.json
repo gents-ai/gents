@@ -1,0 +1,106 @@
+{
+  "case_id": "three-conditions-with-service",
+  "split": "held_out",
+  "reducer": "weighted_mean",
+  "stages": [
+    {
+      "stage_id": "report",
+      "prompt": "Monitoring input for correlation c-03-a.\n\nstorefront-gw-9 at 14:22Z. payments-api status=failing. p99 latency has reached 1800ms and is still worsening. The retry backlog has grown to 640 and is not draining.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-03-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 3
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-03-a",
+                "state": "open",
+                "keywords_all": [
+                  "payments",
+                  "failing"
+                ]
+              },
+              {
+                "correlation": "c-03-a",
+                "state": "open",
+                "keywords_all": [
+                  "latency",
+                  "1800"
+                ]
+              },
+              {
+                "correlation": "c-03-a",
+                "state": "open",
+                "keywords_all": [
+                  "backlog",
+                  "640"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "cpu"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

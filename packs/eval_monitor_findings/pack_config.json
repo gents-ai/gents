@@ -1,0 +1,41 @@
+{
+  "agent_principal": {},
+  "eval_definitions": [
+    {
+      "definition_id": "monitor-findings",
+      "comparability_version": 1,
+      "title": "Monitor findings",
+      "subject": {
+        "kind": "behavior",
+        "inference_slots": [
+          "monitor"
+        ]
+      },
+      "cases": [
+        "./cases/ambiguous_empty_message.json",
+        "./cases/ambiguous_number_no_condition.json",
+        "./cases/ambiguous_omitted_condition.json",
+        "./cases/concurrent_grouping_by_correlation.json",
+        "./cases/concurrent_no_cross_talk.json",
+        "./cases/concurrent_two_correlations.json",
+        "./cases/dedup_new_correlation_same_content.json",
+        "./cases/dedup_same_correlation_new_content.json",
+        "./cases/dedup_same_correlation_resubmitted.json",
+        "./cases/file_findings_from_inventory.json",
+        "./cases/file_with_contradicting_input.json",
+        "./cases/file_without_contradiction_multi.json",
+        "./cases/numeric_threshold_stated_normal.json",
+        "./cases/recovery_clearance_never_reported.json",
+        "./cases/recovery_condition_cleared.json",
+        "./cases/recovery_partial_clearance.json",
+        "./cases/service_name_only.json",
+        "./cases/single_disk_warning.json",
+        "./cases/three_conditions_with_service.json",
+        "./cases/two_conditions_disk_docker.json"
+      ],
+      "tags": [
+        "monitor"
+      ]
+    }
+  ]
+}

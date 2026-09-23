@@ -619,11 +619,6 @@ mod tests {
             let config = pack
                 .load_config(&options)
                 .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
-            assert!(
-                !manifest.metadata.inference_slots.is_empty(),
-                "{}",
-                manifest.name
-            );
             assert!(config.inference_backends.is_empty(), "{}", manifest.name);
             assert!(config.inference_profiles.is_empty(), "{}", manifest.name);
             assert!(config.inference_sampling.is_empty(), "{}", manifest.name);
@@ -633,6 +628,20 @@ mod tests {
                 "{}",
                 manifest.name
             );
+            if config.agent_behaviors.is_empty() && !config.eval_definitions.is_empty() {
+                // A definition pack carries cases, not a subject: it binds no model.
+                assert!(
+                    manifest.metadata.inference_slots.is_empty(),
+                    "{}: a definition pack declares no inference slot",
+                    manifest.name
+                );
+            } else {
+                assert!(
+                    !manifest.metadata.inference_slots.is_empty(),
+                    "{}",
+                    manifest.name
+                );
+            }
         }
     }
 

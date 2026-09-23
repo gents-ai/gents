@@ -11,6 +11,7 @@ use serde::Deserialize;
 
 pub mod accepted_turn;
 pub mod conformance_consumers;
+pub mod desired_state;
 pub mod enrollment;
 pub mod fixtures;
 pub mod http_mock;

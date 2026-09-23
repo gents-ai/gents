@@ -1,0 +1,114 @@
+{
+  "case_id": "file-without-contradiction-multi",
+  "split": "held_out",
+  "reducer": "all",
+  "fixtures": {
+    "files": [
+      {
+        "path": "feeds/pop-12.status",
+        "contents": "pop=pop-12\nbgp session to upstream-as64999 status=down\npacket loss is at 7% and worsening\ndns-resolver status=servfail\nntp status=synced\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "report",
+      "prompt": "Monitoring input for correlation c-20-a.\n\npop-12's collector wrote its latest feed to feeds/pop-12.status before the shift ended — that file is the current picture.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-20-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 3
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-20-a",
+                "state": "open",
+                "keywords_all": [
+                  "bgp",
+                  "down"
+                ]
+              },
+              {
+                "correlation": "c-20-a",
+                "state": "open",
+                "keywords_all": [
+                  "packet",
+                  "7"
+                ]
+              },
+              {
+                "correlation": "c-20-a",
+                "state": "open",
+                "keywords_all": [
+                  "dns",
+                  "servfail"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "ntp"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

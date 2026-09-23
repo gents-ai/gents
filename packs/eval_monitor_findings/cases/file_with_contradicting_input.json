@@ -1,0 +1,106 @@
+{
+  "case_id": "file-with-contradicting-input",
+  "split": "validation",
+  "reducer": "weighted_mean",
+  "fixtures": {
+    "files": [
+      {
+        "path": "notes/queue-host-4.txt",
+        "contents": "host=queue-host-4\nheap usage stands at 73% and is above the watermark\nconsumer-lag has grown to 320 seconds and is still growing\narchiver status=down\n"
+      }
+    ]
+  },
+  "stages": [
+    {
+      "stage_id": "report",
+      "prompt": "Monitoring input for correlation c-19-a.\n\nStatus for queue-host-4 is in notes/queue-host-4.txt; read it. The archiver line is stale: the archiver has since been restarted and is running.\n\nRecord the conditions this message describes, following your standing\ninstructions. Every finding you take from this input carries correlation\nc-19-a.",
+      "deadline_secs": 600,
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "items",
+          "collection": "MailboxItem",
+          "filter": {
+            "requester_did": {
+              "_eq": "$trial"
+            }
+          },
+          "fields": [
+            "title",
+            "summary",
+            "payload",
+            "status"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "check": "mailbox_item_count",
+          "params": {
+            "count": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "payload_well_formed",
+          "params": {
+            "version": 1
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_pairs_unique",
+          "params": {},
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "finding_count",
+          "params": {
+            "count": 2
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "findings_match",
+          "params": {
+            "matchers": [
+              {
+                "correlation": "c-19-a",
+                "state": "open",
+                "keywords_all": [
+                  "heap",
+                  "73"
+                ]
+              },
+              {
+                "correlation": "c-19-a",
+                "state": "open",
+                "keywords_all": [
+                  "consumer",
+                  "320"
+                ]
+              }
+            ],
+            "exact": true
+          },
+          "tier": "acceptance",
+          "weight": 1
+        },
+        {
+          "check": "mailbox_text_excludes",
+          "params": {
+            "keywords": [
+              "archiver"
+            ]
+          },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ]
+    }
+  ]
+}

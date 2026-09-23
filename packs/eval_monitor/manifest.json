@@ -1,0 +1,32 @@
+{
+  "manifest_version": 1,
+  "name": "eval_monitor",
+  "version": "1.0.0",
+  "description": "Fixed document-driven monitor subject: MonitorInput -> monitor request -> maintained mailbox record",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval",
+    "monitor"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/eval_monitor/system_prompt.md",
+    "pack_config.json",
+    "schemas/monitor_input.graphql",
+    "tasks/eval_monitor_task/prompt.md"
+  ],
+  "dependencies": [],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "monitor",
+      "description": "Runs the monitor behavior that turns each MonitorInput into mailbox findings.",
+      "behaviors": [
+        "eval-monitor"
+      ]
+    }
+  ]
+}

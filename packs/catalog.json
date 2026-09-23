@@ -4,6 +4,8 @@
     "background_continuation",
     "code_review",
     "defending_code",
+    "eval_monitor",
+    "eval_monitor_findings",
     "graph_pipeline",
     "grok_tui_port",
     "lsp_rust",
