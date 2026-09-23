@@ -37,6 +37,7 @@ private def requestAdmissionCase (name : String)
   , signerMatchesTarget := observation.signerMatchesTarget
   , signerMatchesIssuer := observation.signerMatchesIssuer
   , requesterMatchesIssuer := observation.requesterMatchesIssuer
+  , requesterMatchesBridgeAuthor := observation.requesterMatchesBridgeAuthor
   , currentApproval := observation.currentApproval
   , exactGeneration := observation.exactGeneration
   , authorizationFresh := observation.authorizationFresh
@@ -67,6 +68,7 @@ private def requestAdmissionBase (kind : AgentRequestAdmissionKind) :
   , signerMatchesTarget := true
   , signerMatchesIssuer := true
   , requesterMatchesIssuer := true
+  , requesterMatchesBridgeAuthor := false
   , currentApproval := true
   , exactGeneration := true
   , authorizationFresh := true
@@ -108,6 +110,8 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "valid-runtime-cross-principal-child-without-parent-document"
       { requestAdmissionBase .runtimeInternal with
           runtimeSourceKind := .crossPrincipalChild
+          requesterMatchesIssuer := false, requesterMatchesTarget := false
+          requesterMatchesBridgeAuthor := true
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceDocumentBindingCurrent := false
           sourceToolCallBindingCurrent := true, bridgeAuthorBindingCurrent := true
@@ -158,6 +162,8 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "cross-principal-author-revoked"
       { requestAdmissionBase .runtimeInternal with
           runtimeSourceKind := .crossPrincipalChild
+          requesterMatchesIssuer := false, requesterMatchesTarget := false
+          requesterMatchesBridgeAuthor := true
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
           bridgeAuthorBindingCurrent := true
@@ -166,11 +172,40 @@ def agentRequestAdmissionCases : List AgentRequestAdmissionCase :=
   , requestAdmissionCase "cross-principal-target-policy-denied"
       { requestAdmissionBase .runtimeInternal with
           runtimeSourceKind := .crossPrincipalChild
+          requesterMatchesIssuer := false, requesterMatchesTarget := false
+          requesterMatchesBridgeAuthor := true
           runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
           sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
           bridgeAuthorBindingCurrent := true
           bridgeAuthorAuthorizationFresh := true
           targetCrossPrincipalPolicyAllows := false }
+  , requestAdmissionCase "cross-principal-wrong-requester"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .crossPrincipalChild
+          requesterMatchesIssuer := false, requesterMatchesTarget := false
+          requesterMatchesBridgeAuthor := false
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
+          bridgeAuthorBindingCurrent := true, bridgeAuthorAuthorizationFresh := true
+          targetCrossPrincipalPolicyAllows := true }
+  , requestAdmissionCase "cross-principal-requester-is-host-not-coordinator"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .crossPrincipalChild
+          requesterMatchesIssuer := true, requesterMatchesTarget := true
+          requesterMatchesBridgeAuthor := false
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
+          bridgeAuthorBindingCurrent := true, bridgeAuthorAuthorizationFresh := true
+          targetCrossPrincipalPolicyAllows := true }
+  , requestAdmissionCase "cross-principal-wrong-bridge-author-binding"
+      { requestAdmissionBase .runtimeInternal with
+          runtimeSourceKind := .crossPrincipalChild
+          requesterMatchesIssuer := false, requesterMatchesTarget := false
+          requesterMatchesBridgeAuthor := true
+          runtimeEvidencePresent := true, targetRuntimeAttestationValid := true
+          sourceBindingCurrent := true, sourceToolCallBindingCurrent := true
+          bridgeAuthorBindingCurrent := false, bridgeAuthorAuthorizationFresh := true
+          targetCrossPrincipalPolicyAllows := true }
   , requestAdmissionCase "cross-target-local-self"
       { requestAdmissionBase .localSelf with requesterMatchesTarget := false }
   , requestAdmissionCase "tampered-signed-request-fields"

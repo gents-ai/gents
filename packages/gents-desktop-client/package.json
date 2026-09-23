@@ -26,6 +26,7 @@
     "README.md"
   ],
   "scripts": {
+    "prebuild": "node ../../scripts/check-desktop-bridge-fingerprint.mjs",
     "build": "node ../../scripts/clean-desktop-package-dist.mjs && tsc -p tsconfig.json",
     "test": "vitest run"
   },

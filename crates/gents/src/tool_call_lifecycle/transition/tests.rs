@@ -51,6 +51,23 @@ async fn complete_rejects_subagent_typed_tool() {
         ),
         "expected NativeCompleteOnSubagentTool, got: {err:?}"
     );
+    let mut lc = subagent_lc_in_running().await;
+    let err = lc
+        .complete_raw_with_presentation(
+            "raw",
+            "rendered",
+            gents_protocol::output::PayloadPresentation::Composed {
+                parts: vec![gents_protocol::output::PresentationPart::Literal {
+                    text: "rendered".to_owned(),
+                }],
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<IllegalToolCallTransition>(),
+        Some(IllegalToolCallTransition::NativeCompleteOnSubagentTool)
+    ));
 }
 
 #[tokio::test]
@@ -68,6 +85,24 @@ async fn fail_rejects_subagent_typed_tool() {
         ),
         "expected NativeFailOnSubagentTool, got: {err:?}"
     );
+    let mut lc = subagent_lc_in_running().await;
+    let err = lc
+        .fail_raw_with_presentation(
+            "raw",
+            "rendered",
+            FailureClass::External,
+            gents_protocol::output::PayloadPresentation::Composed {
+                parts: vec![gents_protocol::output::PresentationPart::Literal {
+                    text: "rendered".to_owned(),
+                }],
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err.downcast_ref::<IllegalToolCallTransition>(),
+        Some(IllegalToolCallTransition::NativeFailOnSubagentTool)
+    ));
 }
 
 #[tokio::test]

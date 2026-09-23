@@ -187,7 +187,11 @@ mod tests {
         .unwrap();
 
         assert!(collections.iter().any(|name| name == "AgentRequest"));
-        assert!(collections.iter().any(|name| name == "AgentResponse"));
+        assert!(collections.iter().any(|name| name == "AgentOutputSegment"));
+        assert!(collections.iter().any(|name| name == "AgentMessage"));
+        assert!(!collections
+            .iter()
+            .any(|name| matches!(name.as_str(), "AgentResponse" | "AgentToolResult")));
         assert!(collections.iter().any(|name| name == "ToolServiceRegistry"));
         assert_eq!(
             collections

@@ -10,7 +10,7 @@ type PeerActionParams = {
   api: DesktopApiAdapter;
   snapshot: DesktopClientSnapshot | null;
   /** Shared single-flight start used by autostart and peer actions. */
-  ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot | null>;
+  ensureDesktopClientStarted: () => Promise<DesktopClientSnapshot>;
   mutateSnapshot: <T>(operation: () => Promise<T>) => Promise<T>;
   refreshSnapshot: () => Promise<void>;
   setAddingPeer: Dispatch<SetStateAction<boolean>>;
@@ -50,10 +50,7 @@ export function createDesktopShellPeerActions({
       });
       // Init durably writes the local-standard peer entry. Restarting the
       // client is the only supported way to hydrate that trusted local route.
-      const next = await ensureDesktopClientStarted();
-      if (!next) {
-        throw new Error("desktop client failed to start after local runtime init");
-      }
+      await ensureDesktopClientStarted();
       selectAgent(summary.agentDid);
       return summary;
     } catch (err) {
@@ -88,10 +85,7 @@ export function createDesktopShellPeerActions({
     setError(null);
     try {
       if (!snapshot?.client) {
-        const started = await ensureDesktopClientStarted();
-        if (!started) {
-          throw new Error("desktop client failed to start before enrollment");
-        }
+        await ensureDesktopClientStarted();
       }
       const request = await api.requestStatusEnrollment(serverAddress);
       await refreshSnapshot();

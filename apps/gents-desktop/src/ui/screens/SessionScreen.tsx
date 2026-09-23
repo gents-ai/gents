@@ -337,10 +337,12 @@ const TranscriptItem = memo(function TranscriptItem({
       );
     case "liveAssistant":
       return (
-        <AssistantMessage>
-          {item.content && <Markdown>{item.content}</Markdown>}
-          <Thinking />
-        </AssistantMessage>
+        <div data-testid="live-assistant">
+          <AssistantMessage>
+            {item.content && <Markdown>{item.content}</Markdown>}
+            <Thinking />
+          </AssistantMessage>
+        </div>
       );
   }
 });
@@ -367,18 +369,12 @@ export const TranscriptPanel = memo(function TranscriptPanel({
     sessionIdRef.current = session?.sessionId ?? null;
   }, [session?.sessionId]);
 
-  const latest = session?.latestResponse;
   const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
-  const wasInterrupted =
-    session?.turnState === "interrupted" ||
-    Boolean(latest?.interruptedAt) ||
-    latest?.cancelCause?.cause === "interrupted" ||
-    latest?.cancelCause?.cause === "userCancelled";
+  const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
-    latest?.errorMessage?.trim() ||
-    (session?.turnState === "failed"
+    session?.turnState === "failed"
       ? "The request failed before a response was available. Check the request trace for details."
-      : "");
+      : "";
   const showError = Boolean(responseError) && !wasInterrupted && !inFlight;
 
   const loadOlder = async () => {
@@ -429,15 +425,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         <TranscriptItem key={item.itemKey} item={item} />
       ))}
       {wasInterrupted && !inFlight && (
-        <p className="px-2 text-xs text-muted-foreground">
-          Interrupted
-          {latest?.cancelCause
-            ? ` · ${latest.cancelCause.cause} (${latest.cancelCause.source}, ${latest.cancelCause.confidence} confidence)`
-            : ""}
-          {latest?.cancelCause?.evidence.length
-            ? ` · ${latest.cancelCause.evidence.join("; ")}`
-            : ""}
-        </p>
+        <p className="px-2 text-xs text-muted-foreground">Interrupted</p>
       )}
       {showError && (
         <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
@@ -492,6 +480,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             case "liveAssistant":
               return `${item.itemKey}:${item.content?.length ?? 0}:${item.reasoning?.length ?? 0}`;
             case "userMessage":
+              return `${item.itemKey}:${item.content?.length ?? 0}`;
             case "pendingUserTurn":
               return `${item.itemKey}:${item.content.length}`;
             case "toolGroup":

@@ -3,6 +3,7 @@ import Proofs.Conformance.ContractCases
 import Proofs.StreamingResponse.Executable
 import Proofs.Compaction.Executable
 import Proofs.Recovery.ContractCases
+import Proofs.QueuedSteering
 
 namespace Conformance.Contracts
 
@@ -11,8 +12,7 @@ open Conformance.ContractCases
 def liveOverlayCaseJson (witness : LiveOverlayCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"responseStatus\":" ++ jsonString witness.responseStatus ++ ","
-    ++ "\"materialized\":" ++ boolString witness.materialized ++ ","
+    ++ "\"liveOutputAvailable\":" ++ boolString witness.liveOutputAvailable ++ ","
     ++ "\"hasDurableOwner\":" ++ boolString witness.hasDurableOwner ++ ","
     ++ "\"precedingToolCalls\":" ++ toString witness.precedingToolCalls ++ ","
     ++ "\"turnTerminal\":" ++ boolString witness.turnTerminal ++ ","
@@ -39,71 +39,212 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
     ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
     ++ "}"
 
-def responseTransitionCaseJson
-    (witness : StreamingResponse.ResponseTransitionCase) : String :=
+def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"legal\":" ++ boolString witness.legal ++ ","
-    ++ "\"token_delta\":" ++ jsonOptionalNat witness.tokenDelta ++ ","
-    ++ "\"input_error_reason\":" ++ jsonOptionalString witness.inputErrorReason ++ ","
-    ++ "\"materialize_sequence\":" ++ jsonOptionalNat witness.materializeSequence ++ ","
-    ++ "\"pre_status\":" ++ jsonString witness.preStatus ++ ","
-    ++ "\"post_status\":" ++ jsonString witness.postStatus ++ ","
-    ++ "\"pre_live_tail\":" ++ jsonString witness.preLiveTail ++ ","
-    ++ "\"post_live_tail\":" ++ jsonString witness.postLiveTail ++ ","
-    ++ "\"pre_tail_reasoning\":" ++ jsonString witness.preTailReasoning ++ ","
-    ++ "\"post_tail_reasoning\":" ++ jsonString witness.postTailReasoning ++ ","
-    ++ "\"pre_durable_reasoning\":" ++ jsonString witness.preDurableReasoning ++ ","
-    ++ "\"post_durable_reasoning\":" ++ jsonString witness.postDurableReasoning ++ ","
-    ++ "\"pre_token_count\":" ++ toString witness.preTokenCount ++ ","
-    ++ "\"post_token_count\":" ++ toString witness.postTokenCount ++ ","
-    ++ "\"error_reason\":" ++ jsonOptionalString witness.errorReason ++ ","
-    ++ "\"pre_materialized_seq\":"
-      ++ jsonOptionalNat witness.preMaterializedSeq ++ ","
-    ++ "\"post_materialized_seq\":"
-      ++ jsonOptionalNat witness.postMaterializedSeq ++ ","
-    ++ "\"expected_request_state\":"
-      ++ jsonOptionalString witness.expectedRequestState ++ ","
-    ++ "\"expected_request_persistence\":"
-      ++ jsonOptionalString witness.expectedRequestPersistence
+    ++ "\"requestId\":" ++ toString witness.requestId ++ ","
+    ++ "\"requestDocId\":" ++ toString witness.requestDocId ++ ","
+    ++ "\"contentToken\":" ++ toString witness.contentToken ++ ","
+    ++ "\"lifecycleState\":" ++ jsonString witness.lifecycleState ++ ","
+    ++ "\"admissionVisible\":" ++ boolString witness.admissionVisible ++ ","
+    ++ "\"canonicalAuthoredCount\":" ++ toString witness.canonicalAuthoredCount
     ++ "}"
 
-def responseInterruptFlowCaseJson
-    (witness : StreamingResponse.ResponseInterruptFlowCase) : String :=
+def queuedSteeringGuardJson (witness : QueuedSteering.GuardObservation) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"group\":" ++ jsonString witness.group ++ ","
-    ++ "\"action\":" ++ jsonString witness.action ++ ","
-    ++ "\"pre_request_state\":"
-      ++ jsonString witness.preRequestState ++ ","
-    ++ "\"post_request_state\":"
-      ++ jsonString witness.postRequestState ++ ","
-    ++ "\"pre_response_status\":"
-      ++ jsonString witness.preResponseStatus ++ ","
-    ++ "\"post_response_status\":"
-      ++ jsonString witness.postResponseStatus ++ ","
-    ++ "\"pre_inference_call_state\":"
-      ++ jsonString witness.preInferenceCallState ++ ","
-    ++ "\"post_inference_call_state\":"
-      ++ jsonString witness.postInferenceCallState ++ ","
-    ++ "\"response_error_reason\":"
-      ++ jsonString witness.responseErrorReason ++ ","
-    ++ "\"interrupted_at_required\":"
-      ++ boolString witness.interruptedAtRequired ++ ","
-    ++ "\"completed_at_required\":"
-      ++ boolString witness.completedAtRequired ++ ","
-    ++ "\"live_tail_cleared\":"
-      ++ boolString witness.liveTailCleared ++ ","
-    ++ "\"partial_turn_materialized\":"
-      ++ boolString witness.partialTurnMaterialized ++ ","
-    ++ "\"request_terminal\":"
-      ++ boolString witness.requestTerminal ++ ","
-    ++ "\"response_terminal\":"
-      ++ boolString witness.responseTerminal ++ ","
-    ++ "\"inference_call_terminal\":"
-      ++ boolString witness.inferenceCallTerminal
+    ++ "\"admitted\":" ++ boolString witness.admitted
+    ++ "}"
+
+private def tagged (kind fields : String) : String :=
+  "{\"kind\":" ++ jsonString kind ++ fields ++ "}"
+
+private def optionalNatJson : Option Nat → String
+  | none => "null"
+  | some value => toString value
+
+private def byteArrayJson (bytes : List UInt8) : String :=
+  jsonArray (bytes.map (fun byte => toString byte.toNat))
+
+private def sourceJson : CanonicalOutput.Source → String
+  | .provider scope turn attempt => tagged "provider"
+      (",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
+       ",\"attempt\":" ++ toString attempt)
+  | .tool call => tagged "tool" (",\"call\":" ++ toString call)
+  | .authored key => tagged "authored" (",\"key\":" ++ toString key)
+
+private def writerJson : CanonicalOutput.Writer → String
+  | .request generation => tagged "request" (",\"generation\":" ++ toString generation)
+  | .tool call => tagged "tool" (",\"call\":" ++ toString call)
+
+private def outcomeJson : CanonicalOutput.Outcome → String
+  | .complete => jsonString "complete"
+  | .partial => jsonString "partial"
+
+private def payloadKindJson : CanonicalOutput.PayloadKind → String
+  | .text => "text" | .reasoning => "reasoning" | .summary => "summary"
+  | .opaque => "opaque" | .arguments => "arguments" | .toolOutput => "tool_output"
+  | .media => "media"
+
+private def mediaKindJson : CanonicalOutput.MediaKind → String
+  | .image => "image" | .audio => "audio" | .video => "video" | .document => "document"
+
+private def optionalStringJson : Option String → String
+  | none => "null" | some value => jsonString value
+
+private def payloadRefJson (ref : CanonicalOutput.PayloadRef) : String :=
+  "{\"close_id\":" ++ toString ref.closeId ++ ",\"stream\":" ++ toString ref.stream ++ "}"
+
+private def presentationJson : CanonicalOutput.Presentation → String
+  | .full => tagged "full" ""
+  | .composed parts => tagged "composed" (",\"parts\":" ++ jsonArray (parts.map fun part =>
+      match part with
+      | .range start stop => tagged "range"
+          (",\"start\":" ++ toString start ++ ",\"end\":" ++ toString stop)
+      | .literal bytes => tagged "literal" (",\"bytes\":" ++ byteArrayJson bytes)))
+
+private def payloadSpecJson (spec : CanonicalOutput.PayloadSpec) : String :=
+  "{\"reference\":" ++ payloadRefJson spec.reference ++
+    ",\"presentation\":" ++ presentationJson spec.presentation ++ "}"
+
+private def declarationJson (declaration : CanonicalOutput.Declaration) : String :=
+  let tool := match declaration.tool with
+    | none => "null"
+    | some value => "{\"id\":" ++ jsonString value.id ++ ",\"call_id\":" ++
+        optionalStringJson value.callId ++ ",\"name\":" ++ jsonString value.name ++ "}"
+  "{\"block\":" ++ toString declaration.block ++ ",\"part\":" ++
+    toString declaration.part ++ ",\"kind\":" ++ jsonString (payloadKindJson declaration.kind) ++
+    ",\"tool\":" ++ tool ++ ",\"media_kind\":" ++
+    (match declaration.mediaKind with | none => "null" | some kind => jsonString (mediaKindJson kind)) ++ "}"
+
+private def runJson (run : CanonicalOutput.Run) : String :=
+  "{\"stream\":" ++ toString run.stream ++ ",\"bytes\":" ++ toString run.bytes ++
+    ",\"declaration\":" ++ (match run.declaration with
+      | none => "null" | some declaration => declarationJson declaration) ++ "}"
+
+private def flushJson (flush : CanonicalOutput.Flush) : String :=
+  "{\"ordinal\":" ++ toString flush.ordinal ++ ",\"runs\":" ++
+    jsonArray (flush.runs.map runJson) ++ ",\"payload\":" ++ byteArrayJson flush.payload ++ "}"
+
+private def closureJson : CanonicalOutput.Closure → String
+  | .retracted => tagged "retracted" ""
+  | .closed outcome segments streamBytes => tagged "closed"
+      (",\"outcome\":" ++ outcomeJson outcome ++ ",\"segments\":" ++ toString segments ++
+       ",\"stream_bytes\":" ++ jsonArray (streamBytes.map toString))
+
+def canonicalSegmentJson (segment : CanonicalOutput.Segment) : String :=
+  "{\"id\":" ++ toString segment.id ++ ",\"coordinate\":{\"request\":" ++
+    toString segment.coordinate.request ++ ",\"source\":" ++ sourceJson segment.coordinate.source ++
+    "},\"writer\":" ++ writerJson segment.writer ++ ",\"flush\":" ++
+    (match segment.flush with | none => "null" | some flush => flushJson flush) ++
+    ",\"close\":" ++ (match segment.close with | none => "null" | some close => closureJson close) ++
+    ",\"created_at\":" ++ toString segment.createdAt ++ "}"
+
+private def roleJson : CanonicalOutput.MessageRole → String
+  | .system => "system" | .user => "user" | .assistant => "assistant"
+
+private def publicationJson : CanonicalOutput.MessagePublication → String
+  | .requestExecution generation => tagged "request_execution" (",\"generation\":" ++ toString generation)
+  | .requestRecovery generation => tagged "request_recovery" (",\"generation\":" ++ toString generation)
+  | .toolDelivery call => tagged "tool_delivery" (",\"call\":" ++ toString call)
+  | .fork origin => tagged "fork" (",\"origin\":" ++ toString origin)
+
+private def reasoningPartJson {α : Type} (payloadJson : α → String) : CanonicalOutput.ReasoningPart α → String
+  | .text payload signature => tagged "text" (",\"payload\":" ++ payloadJson payload ++
+      ",\"signature\":" ++ optionalStringJson signature)
+  | .encrypted payload => tagged "encrypted" (",\"payload\":" ++ payloadJson payload)
+  | .redacted payload => tagged "redacted" (",\"payload\":" ++ payloadJson payload)
+  | .summary payload => tagged "summary" (",\"payload\":" ++ payloadJson payload)
+
+private def mediaJson {α : Type} (payloadJson : α → String)
+    (media : CanonicalOutput.Media α) : String :=
+  let data := match media.data with
+    | .url url => tagged "url" (",\"url\":" ++ jsonString url)
+    | .base64 payload => tagged "base64" (",\"payload\":" ++ payloadJson payload)
+    | .raw payload => tagged "raw" (",\"payload\":" ++ payloadJson payload)
+    | .string payload => tagged "string" (",\"payload\":" ++ payloadJson payload)
+    | .unknown => tagged "unknown" ""
+  "{\"kind\":" ++ jsonString (mediaKindJson media.kind) ++ ",\"data\":" ++ data ++
+    ",\"media_type\":" ++ optionalStringJson media.mediaType ++
+    ",\"detail\":" ++ optionalStringJson media.detail ++
+    ",\"additional_params\":" ++ optionalStringJson media.additionalParams ++ "}"
+
+private def resultPartJson {α : Type} (payloadJson : α → String) : CanonicalOutput.ResultPart α → String
+  | .text payload => tagged "text" (",\"payload\":" ++ payloadJson payload)
+  | .media value => tagged "media" (",\"value\":" ++ mediaJson payloadJson value)
+
+private def messageBlockJson {α : Type} (payloadJson : α → String) : CanonicalOutput.MessageBlock α → String
+  | .text payload => tagged "text" (",\"payload\":" ++ payloadJson payload)
+  | .reasoning id parts => tagged "reasoning" (",\"id\":" ++ optionalStringJson id ++
+      ",\"parts\":" ++ jsonArray (parts.map (reasoningPartJson payloadJson)))
+  | .toolCall docId id callId name arguments signature additionalParams => tagged "tool_call"
+      (",\"doc_id\":" ++ toString docId ++ ",\"id\":" ++ jsonString id ++
+       ",\"call_id\":" ++ optionalStringJson callId ++ ",\"name\":" ++ jsonString name ++
+       ",\"arguments\":" ++ payloadJson arguments ++ ",\"signature\":" ++ optionalStringJson signature ++
+       ",\"additional_params\":" ++ optionalStringJson additionalParams)
+  | .toolResult docId id callId parts => tagged "tool_result"
+      (",\"doc_id\":" ++ toString docId ++ ",\"id\":" ++ jsonString id ++
+       ",\"call_id\":" ++ optionalStringJson callId ++ ",\"parts\":" ++
+       jsonArray (parts.map (resultPartJson payloadJson)))
+  | .media value => tagged "media" (",\"value\":" ++ mediaJson payloadJson value)
+
+def reconstructedMessageJson (native : CanonicalOutput.ReconstructedMessage) : String :=
+  "{\"role\":" ++ jsonString (roleJson native.role) ++
+    ",\"native_id\":" ++ optionalStringJson native.nativeId ++
+    ",\"blocks\":" ++ jsonArray (native.blocks.map (messageBlockJson byteArrayJson)) ++ "}"
+
+def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
+  let h := message.header
+  "{\"header\":{\"id\":" ++ toString h.id ++ ",\"session\":" ++ toString h.session ++
+    ",\"request\":" ++ optionalNatJson h.request ++ ",\"origin\":" ++ optionalNatJson h.origin ++
+    ",\"refs\":" ++ jsonArray (h.refs.map payloadRefJson) ++ ",\"outcome\":" ++ outcomeJson h.outcome ++
+    ",\"role\":" ++ jsonString (roleJson h.role) ++ ",\"publication\":" ++ publicationJson h.publication ++
+    "},\"key\":" ++ jsonString message.key ++ ",\"sequence\":" ++ toString message.sequence ++
+    ",\"native_id\":" ++ optionalStringJson message.nativeId ++ ",\"blocks\":" ++
+    jsonArray (message.blocks.map (messageBlockJson payloadSpecJson)) ++
+    ",\"created_at\":" ++ toString message.createdAt ++ "}"
+
+private def streamsJson (streams : CanonicalOutput.Streams) : String :=
+  jsonArray (streams.map fun stream => "{\"declaration\":" ++ declarationJson stream.1 ++
+    ",\"bytes\":" ++ byteArrayJson stream.2 ++ "}")
+
+private def outputObservationJson (observation : StreamingResponse.Observation) : String :=
+  "{\"request\":" ++ toString observation.request ++ ",\"session\":" ++ toString observation.session ++
+    ",\"records\":" ++ jsonArray (observation.records.map canonicalSegmentJson) ++
+    ",\"messages\":" ++ jsonArray (observation.messages.map canonicalMessageJson) ++
+    ",\"denied_headers\":" ++ jsonArray (observation.deniedHeaders.map toString) ++
+    ",\"denied_segments\":" ++ jsonArray (observation.deniedSegments.map toString) ++
+    ",\"dependency_denials\":" ++ jsonArray (observation.dependencyDenials.map fun denial =>
+      "{\"root_close_id\":" ++ toString denial.rootCloseId ++
+       ",\"denied_doc_id\":" ++ toString denial.deniedDocId ++ "}") ++
+    ",\"owner\":{\"current_request\":" ++ (match observation.owner.currentRequest with
+      | none => "null" | some value => "[" ++ toString value.1 ++ "," ++ toString value.2 ++ "]") ++
+    ",\"live_tools\":" ++ jsonArray (observation.owner.liveTools.map toString) ++ "}," ++
+    "\"target\":{\"coordinate\":{\"request\":" ++ toString observation.target.coordinate.request ++
+    ",\"source\":" ++ sourceJson observation.target.coordinate.source ++ "},\"writer\":" ++
+    writerJson observation.target.writer ++ ",\"message_id\":" ++ optionalNatJson observation.target.messageId ++ "}," ++
+    "\"request_terminal\":" ++ boolString observation.requestTerminal ++
+    ",\"terminal_selection\":" ++ (match observation.terminalSelection with
+      | none => "null" | some .noMessage => tagged "no_message" ""
+      | some (.message id) => tagged "message" (",\"id\":" ++ toString id)) ++ "}"
+
+private def outputViewJson : StreamingResponse.View → String
+  | .absent => tagged "absent" "" | .loading => tagged "loading" ""
+  | .denied => tagged "denied" "" | .conflicted => tagged "conflicted" ""
+  | .invalid => tagged "invalid" "" | .retracted => tagged "retracted" ""
+  | .live streams => tagged "live" (",\"streams\":" ++ streamsJson streams)
+  | .settling streams => tagged "settling" (",\"streams\":" ++ streamsJson streams)
+  | .retainedPartial streams => tagged "retained_partial" (",\"streams\":" ++ streamsJson streams)
+  | .published message native => tagged "published"
+      (",\"message\":" ++ canonicalMessageJson message ++
+       ",\"native\":" ++ reconstructedMessageJson native)
+
+def outputProjectionCaseJson
+    (witness : StreamingResponse.OutputProjectionCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"input\":" ++ outputObservationJson witness.input ++ ","
+    ++ "\"expected\":" ++ outputViewJson witness.expected
     ++ "}"
 
 def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
@@ -117,7 +258,9 @@ def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : Str
     ++ "\"preserves_pairs\":" ++ boolString witness.preservesPairs ++ ","
     ++ "\"preserves_order\":" ++ boolString witness.preservesOrder ++ ","
     ++ "\"gate_open\":" ++ jsonOptionalBool witness.gateOpen ++ ","
-    ++ "\"response_status\":" ++ jsonString witness.responseStatus.toDefraDB ++ ","
+    ++ "\"publication_ready\":" ++ boolString witness.publicationReady ++ ","
+    ++ "\"provider_fixpoint\":" ++ boolString witness.providerFixpoint ++ ","
+    ++ "\"turn_boundary\":" ++ boolString witness.turnBoundary ++ ","
     ++ "\"safe_to_reduce\":" ++ boolString witness.safeToReduce ++ ","
     ++ "\"reducer_is_identity\":"
       ++ boolString witness.reducerIsIdentity ++ ","

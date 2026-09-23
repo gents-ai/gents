@@ -1,3 +1,19 @@
+# Tool-call lifecycle document (#1571). Carries execution state and, only for
+# remotely addressed calls, immutable argument-only admission input. The
+# model's arguments are output of the provider turn and the tool's output is
+# its own stream, canonically stored as AgentOutputSegment and referenced from
+# AgentMessage blocks by this document's _docID. Retired: args, result,
+# partial_output_tail, partial_output_seq, and the AgentToolResult spill
+# collection (full output is the stream; narrowing is a PayloadPresentation).
+#
+# Accepted provider turns create pending rows atomically with their Complete
+# closing record and assistant header before dispatch. Partial diagnostic headers may
+# name only terminal, nondispatchable rows. Dispatch/recovery read arguments
+# through the message block and recheck existing lifecycle authorization.
+# A separately spawned process is admitted by its accepted meta-call owner and
+# carries spawned_by_tool_call_doc_id; it is not another provider tool intent.
+# Remote hosts receive delegated_input instead of parent output dependencies:
+# document-level ACP cannot disclose only one stream of a mixed segment.
 type AgentToolCall @branchable {
     tool_call_key: String @index(unique: true)
     request_id: String @index @immutable
@@ -8,12 +24,10 @@ type AgentToolCall @branchable {
     message_sequence: Int
     tool_name: String @index
     tool_call_id: String @index @immutable
-    args: String
-    result: String
     # Persistence/delivery state. A terminal failed tool may still use
     # "completed" here once its result or background notification is durable.
     status: String
-    # Authoritative execution outcome: pending, awaitingApproval, running,
+    # Authoritative execution outcome: pending, running,
     # completed, failed, timedOut, or cancelled.
     lifecycle_state: String @index
     started_at: DateTime
@@ -35,12 +49,30 @@ type AgentToolCall @branchable {
     cancel_policy: String
     cancel_cause: String
     child_request_id: String @index @immutable
+    # Separate spawn_process execution: exact accepted meta-call provenance.
+    # Same sequence/name is not sufficient when a turn has multiple spawns.
+    spawned_by_tool_call_doc_id: String @index @immutable
     spawn_target_did: String @index @immutable
+    # Exact behavior selected from the target alias at accepted publication.
+    # Remote hosts validate this local behavior directly; args are never
+    # enriched or re-read as routing authority.
+    spawn_behavior_id: String @index @immutable
+    # DelegatedToolInput JSON: exact argument bytes, source provenance, and
+    # immutable parent subagent depth for remote child depth derivation.
+    # Required iff remotely delegated, absent on local calls; populated once
+    # with accepted publication. No host grant to parent output is implied.
+    delegated_input: JSON @immutable
+    # Authenticated parent workspace capability snapshot used only to verify
+    # remote child attenuation; this is not a new grant.
+    delegated_workspace: JSON @immutable
     unclaimed_deadline_at: DateTime
+    # Durable cancellation/recovery handoff, not evidence the host has stopped.
+    # Generation recovery accounts for accepted pending/running calls in the
+    # same transaction; late acknowledgements/results retain this exact owner.
     cancel_cascade_intent_at: DateTime
     cancel_pending_remote_ack: Boolean
     stuck_since: DateTime
-    partial_output_tail: String
-    partial_output_seq: Int
+    # Delivery is separate from lifecycle_state; a failed/cancelled/timedOut
+    # result can be durably published without changing its execution outcome.
     completion_notification_delivered_at: DateTime
 }

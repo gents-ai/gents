@@ -1,4 +1,4 @@
-import Proofs.Recovery.Sweeps.RequestResponse
+import Proofs.Recovery.Sweeps.Requests
 import Proofs.Recovery.Sweeps.Inference
 
 /-!
@@ -25,8 +25,8 @@ This module models the gate and pins the ordering contract:
   state the defect: with the sweeps in the wrong order, a crash-orphaned call
   is untouched and a running orphan still holds its slot after startup.
 - `request_before_inference_converges` is the contract the runtime implements:
-  running the request sweep first terminalizes the parent (its durable outcome
-  exists because response recovery writes one for every stuck request), after
+  running the request sweep first terminalizes the parent after its execution
+  lease expires, after
   which the gated inference sweep terminalizes the call and its slot
   contribution reaches zero in the same startup pass.
 
@@ -73,12 +73,12 @@ def gatedInferenceSweep (s : OrphanedCallState) : OrphanedCallState :=
 def requestSweep (s : OrphanedCallState) : OrphanedCallState :=
   if requestRecoveryStale s.parent then { s with parent := requestRecover s.parent } else s
 
-/-- The crash shape: the parent is stuck `claimed`/`processing` with a durable
-    outcome (response recovery guarantees one exists for every stuck request),
+/-- The crash shape: the parent is stuck `claimed`/`processing` with an expired
+    execution lease,
     and the linked call is still `queued`/`running`. -/
 def crashOrphaned (s : OrphanedCallState) : Prop :=
   (s.parent.request.state = .claimed ∨ s.parent.request.state = .processing) ∧
-    s.parent.durableOutcome ≠ .absent ∧
+    s.parent.leaseExpired = true ∧
     (s.call.call.state = .queued ∨ s.call.call.state = .running)
 
 /-- The defect gate shape: with a crash-stuck (non-terminal) parent, the gated
@@ -86,7 +86,7 @@ def crashOrphaned (s : OrphanedCallState) : Prop :=
 theorem inference_first_skips_crash_orphan
     {s : OrphanedCallState} (h_crash : crashOrphaned s) :
     (gatedInferenceSweep s).call = s.call := by
-  rcases h_crash with ⟨h_parent, _h_outcome, _h_call⟩
+  rcases h_crash with ⟨h_parent, _h_expired, _h_call⟩
   cases h_parent with
   | inl h_claimed => simp [gatedInferenceSweep, gatedInferenceCause, h_claimed]
   | inr h_processing => simp [gatedInferenceSweep, gatedInferenceCause, h_processing]
@@ -118,58 +118,41 @@ theorem request_before_inference_converges
       s'.parent.request.admission = .released ∧
       isTerminal s'.call.call.state ∧
       ∀ bid : BackendId, s'.call.call.slotContribution bid = 0 := by
-  rcases h_crash with ⟨h_parent, h_outcome, h_call⟩
-  have h_stale : requestRecoveryStale s.parent := ⟨h_parent, h_outcome⟩
+  rcases h_crash with ⟨h_parent, h_expired, h_call⟩
+  have h_stale : requestRecoveryStale s.parent := ⟨h_parent, h_expired⟩
   have h_sweep : requestSweep s = { s with parent := requestRecover s.parent } := by
     simp [requestSweep, h_stale]
   rw [h_sweep]
-  cases h_outcome_value : s.parent.durableOutcome with
-  | absent => exact absurd h_outcome_value h_outcome
-  | completed =>
+  cases h_interrupt : s.parent.interruptRequested with
+  | false =>
       cases h_call with
       | inl h_queued =>
           refine ⟨?_, ?_, ?_, ?_⟩ <;>
             simp [gatedInferenceSweep, gatedInferenceCause, requestRecover,
-              recoveredRequestState, h_outcome_value, h_queued, inferenceCallRecover,
+              recoveredRequestState, h_interrupt, h_queued, inferenceCallRecover,
               HasTerminal.isTerminal, RequestState.instHasTerminal,
               InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
               InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]
       | inr h_running =>
           refine ⟨?_, ?_, ?_, ?_⟩ <;>
             simp [gatedInferenceSweep, gatedInferenceCause, requestRecover,
-              recoveredRequestState, h_outcome_value, h_running, inferenceCallRecover,
+              recoveredRequestState, h_interrupt, h_running, inferenceCallRecover,
               HasTerminal.isTerminal, RequestState.instHasTerminal,
               InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
               InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]
-  | failed =>
+  | true =>
       cases h_call with
       | inl h_queued =>
           refine ⟨?_, ?_, ?_, ?_⟩ <;>
             simp [gatedInferenceSweep, gatedInferenceCause, requestRecover,
-              recoveredRequestState, h_outcome_value, h_queued, inferenceCallRecover,
+              recoveredRequestState, h_interrupt, h_queued, inferenceCallRecover,
               HasTerminal.isTerminal, RequestState.instHasTerminal,
               InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
               InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]
       | inr h_running =>
           refine ⟨?_, ?_, ?_, ?_⟩ <;>
             simp [gatedInferenceSweep, gatedInferenceCause, requestRecover,
-              recoveredRequestState, h_outcome_value, h_running, inferenceCallRecover,
-              HasTerminal.isTerminal, RequestState.instHasTerminal,
-              InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
-              InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]
-  | interrupted =>
-      cases h_call with
-      | inl h_queued =>
-          refine ⟨?_, ?_, ?_, ?_⟩ <;>
-            simp [gatedInferenceSweep, gatedInferenceCause, requestRecover,
-              recoveredRequestState, h_outcome_value, h_queued, inferenceCallRecover,
-              HasTerminal.isTerminal, RequestState.instHasTerminal,
-              InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
-              InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]
-      | inr h_running =>
-          refine ⟨?_, ?_, ?_, ?_⟩ <;>
-            simp [gatedInferenceSweep, gatedInferenceCause, requestRecover,
-              recoveredRequestState, h_outcome_value, h_running, inferenceCallRecover,
+              recoveredRequestState, h_interrupt, h_running, inferenceCallRecover,
               HasTerminal.isTerminal, RequestState.instHasTerminal,
               InferenceCallState.instHasTerminal, InferenceCall.slotContribution,
               InferenceCall.holdsBackendSlot, InferenceCallState.holdsBackendSlot]

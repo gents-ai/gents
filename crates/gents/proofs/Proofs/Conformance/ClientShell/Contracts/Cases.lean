@@ -16,19 +16,16 @@ def reqOther : RequestId := 202
 def turnWaiting : ClientTurnState :=
   deriveAttempt
     { request := { lifecycleState := .pending, isSuperseded := false }
-    , response := none
     }
 
-def turnStreaming : ClientTurnState :=
+def turnRunning : ClientTurnState :=
   deriveAttempt
     { request := { lifecycleState := .processing, isSuperseded := false }
-    , response := some { status := .streaming, tailEmpty := false }
     }
 
 def turnCompleted : ClientTurnState :=
   deriveAttempt
     { request := { lifecycleState := .completed, isSuperseded := false }
-    , response := none
     }
 
 def sessionObs
@@ -57,8 +54,8 @@ def storeOldCompleted : LocalStore :=
 def storeNewCompleted : LocalStore :=
   storeWith [sessionObs sid1 (some reqNew) (some turnCompleted)]
 
-def storeNewStreaming : LocalStore :=
-  storeWith [sessionObs sid1 (some reqNew) (some turnStreaming)]
+def storeNewRunning : LocalStore :=
+  storeWith [sessionObs sid1 (some reqNew) (some turnRunning)]
 
 def storeSid2Completed : LocalStore :=
   storeWith [sessionObs sid2 (some reqOther) (some turnCompleted) alternateAgent]
@@ -333,12 +330,12 @@ def clientShellCases : List ClientShellContractCase :=
       "awaiting_stale_request_observation"
       "awaiting_stale_request_observation"
       awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeOldCompleted
-  , let input := ShellInput.snapshot storeNewStreaming
+  , let input := ShellInput.snapshot storeNewRunning
     let post := step awaitingNew input emptyStore .healthy ctxReady
     clientShellCaseFromStep
       "awaiting_matching_request_observation"
       "awaiting_matching_request_observation"
-      awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewStreaming
+      awaitingNew input emptyStore .healthy ctxReady awaitingNew post storeNewRunning
   , let input := ShellInput.user (.selectSession sid2)
     let post := step staleBeforeSwitch input storeSid2Completed .wedged ctxReady
     clientShellCaseFromStep
@@ -391,7 +388,7 @@ def clientShellCases : List ClientShellContractCase :=
     clientShellCaseFromStep
       "blocked_submit_nonterminal_turn"
       "blocked_submit_gates"
-      pre input storeNewStreaming .healthy ctxReady pre pre storeNewStreaming
+      pre input storeNewRunning .healthy ctxReady pre pre storeNewRunning
   , let pre := selectedShell (some sid1)
     let input := ShellInput.user .startSubmit
     clientShellCaseFromStep
@@ -413,7 +410,7 @@ def clientShellCases : List ClientShellContractCase :=
         ("unrelated_terminal_keeps_awaiting_" ++ clientTurnStateName turn)
         "unrelated_terminal_does_not_retire_awaiting"
         awaitingNew staleInput emptyStore .healthy ctxReady awaitingNew stalePost oldTerminalStore
-    ]) ++ ([ClientTurnState.interrupted, .streaming].map fun turn =>
+    ]) ++ ([ClientTurnState.interrupted, .running].map fun turn =>
     let observed := storeWith [sessionObs sid1 (some reqNew) (some turn)]
     let pre := selectedShell (some sid1) (.submitting contractAgent (some sid1))
     let input := ShellInput.mutation (.submitted sid1 reqNew)

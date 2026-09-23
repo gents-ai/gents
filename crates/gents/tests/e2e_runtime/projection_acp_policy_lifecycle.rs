@@ -10,8 +10,8 @@ use identity::Did;
 const PROJECTION_RUNTIME_RESOURCES: &[&str] = &[
     "AgentRequest",
     "AgentMessage",
+    "AgentOutputSegment",
     "AgentToolCall",
-    "AgentResponse",
     "AgentSession",
 ];
 

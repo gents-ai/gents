@@ -2,6 +2,321 @@
 
 This directory contains the Lean 4 model for `gents`.
 
+## Canonical output stack (#1571): Lean contract layer
+
+Status: composed Lean revision validated; native conformance and implementation
+remain the next layers, not completed coverage. Explicit renewal separates
+liveness from output. The request/tool revision below composes lifecycle and
+delivery in a shared session world. The composition map records the checked
+joins and their limits, not a universal application-correctness theorem.
+Retention and existing-install upgrade behavior remain product boundaries; no
+garbage collector, migration conversion or data wipe is introduced here.
+
+The waiting-parent scheduler repair now composes `Execution/WorkerCapacity`
+with `SessionComposition.Trace`. It proves bounded/disjoint active and parked
+tickets, exact-generation reacquisition, and authorized fresh-child and
+earlier-request existing-child waits, with a capacity-one yield/child/resume
+witness and model-derived conformance cases. The native local worker retains
+parked continuations while children run; capacity-one slot and database-backed
+owner-resume tests exercise the integration. The resource-case adapter does not
+exercise every semantic refusal, and neither the model nor these tests prove
+fair scheduling, bounded progress, or continuation survival across host-process
+loss.
+
+Branch `feat/1571-canonical-transcript-lean` targets
+`feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
+protocol/SDL corrections belong on that spec parent; this layer changes Lean
+models and their documentation. Rust conformance/implementation remain later layers.
+
+`Proofs/CanonicalOutput` supplies immutable facts, conflict-aware closure lookup,
+dense extent reconstruction, UTF-8 run validation, native block reconstruction,
+presentation windows, conservative recovery text, and exact terminal selection.
+`Execution` composes these facts with the lease and transcript owners; producer
+acceptance publishes closure, header and pending tool intent atomically before
+dispatch. Recovery covers all unresolved provider sources before swapping the
+generation. `Execution/ToolDelivery` applies the existing tool lifecycle and
+bridge transitions to that same world, including partial results wrapped in
+complete notifications. `ToolDelivery` is now only the source-validation kernel;
+it has no independent world, delivery flag or sequence allocator.
+
+`StreamingResponse` is now a pure immutable-output projection, not a mutable
+response lifecycle. Request-only status remains in `Client`; missing output does
+not turn a terminal request into a running one. `CompletionRetry/CanonicalGate`
+couples the existing retry transitions to actual gate-held canonical
+retraction/acceptance; the old gate-bypassing paired-world wrappers are deleted.
+`SessionFork` copies native headers without payload duplication, and
+`CanonicalOutput/Hydration` computes the authorized transitive dependency manifest.
+Receiver completion requires reconstruction as well as signed identity coverage.
+`Compaction.safe_prefix_stable_under_arbitrary_suffix` uses a checked, already
+published ordinary boundary; it does not assume future provider call IDs are fresh.
+Its row projection uses collision-free symbols for native provider call keys,
+separately from physical tool-document identity. Headers that the single-result
+row model cannot represent are rejected; full native content-normalization
+refinement remains a provider-input bridge obligation.
+
+Assumptions: authorized observations, exact physical owner membership, DefraDB
+genesis identity and signed manifests come from the native bridge. The model
+checks UTF-8 boundaries and parses argument JSON, but does not prove equivalence
+of Lean/Rust codecs, media decoding, provider adapters, or signature verification.
+Lease decisions read only the explicit deadline, with due-only owner renewal
+serialized under the existing mutation gate and a nondecreasing clock. Output
+and publication never renew. Independent owner scheduling while waiting is a
+native obligation; sleep may expire ownership and cannot be repaired by a late
+renewal. This is not cross-replica consensus or
+enforcement of the one-runtime-per-principal convention. Finite-silence recovery
+eligibility does not establish scheduler fairness or database termination.
+Configured remote routes and cancellation/tool-policy admission are supplied by
+their existing authenticated owners, not inferred from published tool intent.
+Hydration roots are owner-authorized; recursive fork ancestry is checked by
+hydration, not by decoding one isolated message. Global identity allocation and
+immutable signed hydration-receipt identity remain native obligations.
+Atomic Lean post-states do not prove DefraDB transaction/rollback behavior or
+native generation-token allocation and nonreuse.
+Usage belongs to `InferenceCall` and the existing aggregate-budget owner:
+retry proofs preserve accounted usage but do not prove provider reporting or
+exactly-once ingestion of those reports.
+
+Remote subagents retain argument-only disclosure: the existing addressed tool-call
+document carries one immutable validated argument copy. Its source reference is
+provenance, not permission to hydrate a multi-stream parent document. Local calls
+use canonical arguments without that copy. `Delegation` models this boundary.
+
+Lean conformance-source adapters change with their owners; external fixture
+regeneration and native bridge implementation belong to the next PR. Historical
+Rust bridge coverage is not evidence that these new contracts are implemented.
+Validate this layer with `lake build` on pinned Lean 4.18.0. Rust builds and external
+fixture regeneration are intentionally not run in this layer.
+
+### Review repairs and proof boundaries
+
+Fresh Complete publication checks the entire authoritative data extent and
+timestamp order. Reconstruction and exact replay still ignore late facts outside
+the committed extent. Recovery replay validates committed artifacts independently
+of new-recovery eligibility; ordinary Text at part zero is the only recovery
+survivor. Normal completion requires foreground execution and delivery to finish;
+background ownership must already be explicit. Recovery and exceptional
+terminalization cancel exact owned pending calls and hand running calls to the
+existing cancellation/recovery owner without claiming a host stop. Other
+requests' calls are not part of that accounting, even when generation numbers
+coincide. Tool result delivery uses the same session cursor as provider and
+authored publication and preserves the actual terminal lifecycle outcome.
+
+### Composition map
+
+| Join | Shared owner and checked guarantee |
+| --- | --- |
+| Lease → publication → dispatch | `Execution/Gate` applies operations to the current gate-held world. Publication installs the exact physical tool reservations before dispatch. Output is not renewal evidence. |
+| Request → native/child tool → transcript | `Execution/ToolDelivery` applies existing lifecycle/bridge transitions to `Execution.World`; there is no second transcript allocator. A running background invocation receipt is distinct from a later ordinary completion notification. |
+| Recovery/revocation → tool effects | Generation swap cancels exact pending calls and records running-call handoff without pretending a process stopped. Policy revocation preserves corrupt bytes and uses structural ownership, not successful reconstruction, to account for tools. |
+| Notification → Goal/session queue | `Execution/BackgroundContinuation` atomically publishes the canonical ordinary notification and its queue decision. The notification belongs to the exact physical wake request, not its logical ID; Goal-owned input-only delivery stays parent-bound. `BackgroundGate` carries both existing owners under the same local gate. |
+| Queue → physical claim → terminal acknowledgement | `Execution/Handover` invokes the actual queue and lease transitions, binds logical queue identity to the authenticated physical request and exact requester scope, preserves session history and earlier tools, and derives wake snapshots at the canonical claim cutoff. Failed work releases its claim without acknowledging input. |
+| Goal publication → queue → claim | `Execution/GoalContinuation` invokes the existing claimed-publication owner with exact physical predecessor/child observations. Fresh publication checks the actual idle queue and terminal predecessor; exact replay is inert, including while paused. Its typed receipt supplies the subsequent physical claim. |
+| Restart sweep → physical tool → notification | `Execution/RestartRecovery.commit` admits the current storage-gate holder and atomically commits the existing close/notification owners' result plus its wake queue. `SessionComposition.Trace.restart` carries this operation through allocator, sequence-bound and claim-coherence proofs. Recovery requires an authenticated exact physical tool observation and registry-based orphan classification; parent expiry alone is insufficient. It may close committed bytes as Partial, never invent output. Native cleanup/stop and notification-template fidelity remain refinement obligations. |
+| Canonical native blocks → provider compaction | `Execution/Compaction` reconstructs published messages and extracts native provider keys, never physical tool IDs. Cursor advancement requires a provider-stable published prefix below the shared allocator; inspection alone cannot advance the cursor. |
+| Fork → hydration → publication | Forks retain origin references and numeric sequence order. The writer's copied headers satisfy the reader's provenance predicate; reordered copies cannot advance compaction. Authorized hydration follows that dependency closure; missing origin is loading, denial stays denial, conflicting origin stays conflict. Origin tool identity is provenance, not permission to dispatch in the child. |
+| Retry → retraction → next provider attempt | `CompletionRetry/CanonicalGate` invokes the existing retry step and actual latest-world gate commit. Its other-operation types exclude raw acceptance/retraction and policy-only confirmation. Exact replay revalidates canonical facts without spending retry budget twice. |
+| Tool read → original immutable output | `Background/ToolOutput` resolves the exact physical tool and reconstructs its canonical open prefix or committed extent. Registry loss is not output loss; missing/conflicting facts are not successful empty output. Generic paging arithmetic survives, but the ring-buffer/persisted-result dispatch machine is deleted. |
+
+The native `spawn_process` meta-call and its spawned background process are
+different physical rows. Immutable `spawned_by_tool_call_doc_id` supplies their
+provenance join; matching tool name or message sequence is not sufficient. This
+edge does not expand the hydration authorization graph. The spawned process owes
+no invented second provider invocation reply.
+`ToolGenesis` is a replay comparison over existing immutable/genesis observations,
+not another stored column. Where the current SDL permits a field such as tool
+name to change, native replay must read its genesis/accepted-header provenance;
+the current mutable value is not proof of the original operation.
+
+The older `CrossMachineComposed`/bridge theorems retain their stated coherence
+premises and domains. They are not silently promoted into universal facts about
+the richer shared world: independent background deadlines and eventual host
+acknowledgements still need the specified native refinement. Likewise,
+`RequestExecutionLease` kernel actions alone do not settle tool effects; the
+application owner must use their composed `Execution` transitions.
+
+Hydration selection runs the canonical builder for the exact admitted request,
+with scoped native ACP observations for every document. A missing/ambiguous input
+is failure, not a successfully served empty manifest. Fork dependencies may cross
+sessions; selected roots may not. Native authorization observations remain inputs,
+not a second authorization implementation.
+
+Execution wrapper theorems using `checked_success` prove checked postconditions;
+they are not inductive invariants over all execution traces. Separate core lemmas
+cover exact replay, fresh extent validation and terminal commits, while executable
+multi-step regressions establish non-vacuity. `Execution/Gate` composes actual
+operations with the existing gate schedule: another holder cannot commit, and the
+next holder reads the preceding durable world. `Execution/Sequence` derives
+allocator preservation/growth from the actual core operations.
+The raw-append core directly establishes its former wrapper postcondition, so it
+needs no second check. Retraction is different: an arbitrary imported snapshot
+may contain an exact replay closure plus another closure at the same coordinate;
+the core replay is then inert while the wrapper rejects the ambiguous closure
+set. Removing that check requires a source-closure uniqueness reachability proof,
+not only message-sequence or tool-lifecycle coherence.
+`Execution/SessionComposition.Trace.nextSequence_monotone` lifts those laws over
+the single composed trace, including execution commits and atomic notification/
+queue commits, without a raw gate trace escape around retry policy.
+Its allocator monotonicity theorem also crosses physical
+request activation, finish, Goal publication and wake delivery. Authentication of
+native claim/Goal/configuration observations remains a bridge premise; these
+adapters do not introduce a second identity or configuration authority.
+These do not prove a native mutex, database atomicity, scheduler fairness or a
+global reachability invariant for every owner.
+
+The composed owners now share `Execution.World`: gate scheduling, queue, claim,
+and retry state are fields rather than nested state wrappers. Gate commits retain
+the queue/claim/retry controls, and acquisition/scheduling preserve every field
+except gate ownership and scheduling. Tool-delivery cores return a restricted
+four-field write (segments, messages, transcript, tool contexts); the common lift
+cannot write the parent lease or composed controls. `Gate.Operation` remains the
+closed admitted-operation vocabulary, not an arbitrary transition callback.
+Provider acceptance/retraction still require the retry-mediated application path.
+Four inductive invariants now use that same application trace, with no invariant
+premises added to its constructors. `InvariantComposition.Trace.sequenceBound`
+proves that every current-session canonical header remains below the shared
+allocator, assuming this bound initially. `ClaimInvariant` proves
+`Trace.claimCoherent`: an idle world has no active queue entry; a claimed world
+agrees on physical request, session, logical queue entry and retry owner.
+`CoherenceComposition.Trace.toolProjectionCoherent` preserves the full physical
+tool/header/transcript join, including canonical result reconstruction and running
+receipt provenance. `ClosureInvariant.Trace.closureUnique` preserves pairwise
+equality of closure records at each source coordinate; exact duplicate delivery
+is allowed, distinct competing closures are not.
+Empty message storage establishes the allocator invariant; an unclaimed world
+with an inactive queue establishes claim coherence. Empty tool contexts and
+transcript tool rows establish tool coherence; empty segment storage establishes
+closure uniqueness. Activation establishes claim coherence, and finish restores
+the idle case. All four proofs cover provider/retry commits,
+ordinary gate operations, handover, Goal publication and background wake delivery.
+They also cover the gated restart commit, including its queue application.
+They do not assert sequence uniqueness or correctness of arbitrary imported seeds.
+`SessionCompositionCases.actual_activation_trace_preserves_all_invariants`
+constructs a successful activation trace from the existing ordinary-request
+fixture and applies all four inductive proofs, rather than only checking its endpoint.
+`RunningRevocation.running_revocation_trace_preserves_new_invariants` also
+constructs a real gated revocation trace with a running tool, transports both new
+invariants, and checks that the parent's in-flight claim is released.
+
+Tool publication proofs now expose the actual replay-or-append effect on both
+headers and their allocator. Provider acceptance likewise has one core success
+effect consumed by coherence, allocator, identity and sequence-bound proofs;
+accounting folds share frame proofs instead of separate field inductions.
+Tool append exposes its exact clock-only tool replacement. Close combines its
+checked lifecycle guarantee with a proof that terminal accounting retains existing
+canonical result authority. Request revocation preserves coherence through the
+whole accounting fold: pending calls cancel, running calls hand off, and later
+fold entries retain their exact original tool identities. Shared key-preserving
+map proofs replace separate selected/foreign lookup scaffolding.
+`ReconstructionFrame.reconstructMessage_append_open` proves that globally fresh
+writes at an open coordinate preserve every already successful native message
+reconstruction, across all block kinds and metadata checks. This is the common
+argument for provider, authored, and tool writes—not an assumption that immutable
+bytes alone make a later append harmless. Goal publication consumes
+its stored proof evidence, and terminal classification uses the tool lifecycle
+owner's `isTerminal` rather than separate output-layer definitions.
+Acceptance and header-only publication establish
+tool projection coherence inside their cores, so their duplicate outer coherence
+checks are removed. Other defensive postchecks remain where their guarantees are
+used by the induction; an inductive theorem that consumes a check does not justify
+removing that check. These theorems describe admitted application transitions from
+valid seeds, not arbitrary conflicting replica imports, native scheduler fairness,
+or cross-process exclusion. Native
+conformance regeneration remains deferred until that proof/encoding work settles.
+
+Retry cap, deadline-fit and one-repair guarantees are retained as transition
+proofs. Segment retention is proved across observation traces; projected prefix
+growth is now proved in `StreamingResponse/PrefixGrowth`: immutable record
+retention with no competing facts at already observed ordinals implies stable
+ordinal lookup, an extending contiguous flush list, and per-stream declaration
+and byte-prefix preservation in successful reconstruction. The live-view theorem
+uses the actual shared projection. Missing ordinals may arrive in any order;
+denial, conflict, retraction, recovery narrowing and final presentation changes
+are not benign extensions. Closed/loading and header-before-payload transitions
+also have executable regressions. Reconstruction is proved inert beyond the
+committed extent, but twins or conflicting closures must still invalidate a
+previously readable projection.
+Request interrupt intent remains modeled; writing the native `terminalized_at`
+timestamp is an explicit request-row adapter obligation, not a proved Lean field.
+
+### Next-layer conformance handoff
+
+The stack is now published as specification #1585 and Lean #1586. The branch
+`feat/1571-canonical-transcript-conformance` starts the generated bridge; see
+[`contracts/canonical-output-conformance.md`](../../../contracts/canonical-output-conformance.md)
+for native adapter boundaries, external-premise experiments and remaining breadth.
+The four application-trace invariants are universal Lean proofs, not additional
+finite case groups or evidence that a native adapter has run.
+`Conformance/Contracts/Json/NativeExecution` derives every execution expectation by
+folding modeled inputs through the real gate; a replicated fact is delivered
+outside it, as a remote merge is. Its observations include exact normalized
+immutable segments and messages, not only row counts.
+`Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
+payload lengths from reconstruction, not provider request sizes or token usage.
+The compaction projection join connects exact canonical message reconstruction
+to a fallible complete-request projection and estimation boundary, then to the
+existing reduction decision. Rebuilt requests are projected and measured again;
+dispatch requires both threshold admission and positive output capacity. The
+provider serializer and estimator remain explicit native parameters, not a
+second implementation in Lean. `compaction_projection_join_cases` supplies
+controlled observations at that boundary; it does not establish that native
+serialization produced them. `compaction_canonical_projection_cases` supplies
+the immutable records and checks full reconstructed native messages;
+`repaired_projection_admission_cases` covers remeasurement of repaired input.
+The actual serialized-request/threshold experiment
+remains `native.external-projected-request-threshold` in the implementation layer.
+
+The canonical output groups are registered in `tests/conformance/coverage.rs`.
+Native projection consumers live in `src/lean_vocab_test/canonical_presentation.rs`,
+and `src/lean_vocab_test/canonical_execution/native_adapter.rs` binds selected
+execution scripts to native owners, including live partial publication and replay.
+The retired `streaming_response_cases` generator is no longer a runtime/test
+dependency. This is partial native coverage, not completion of every mapped seam;
+the canonical-output handoff maps record the remaining adapter and experiment work.
+Bindings marked follow-up in the coverage ledger remain implementation debt, not
+completed native coverage. Do not restore deleted generators as compatibility code.
+
+Composition repair validation: pinned Lean 4.18.0 `lake build` passed (1,154 targets,
+including the import-closure guard and standalone fixture roots),
+`git diff --check` passes, and the proof tree has no `sorry` or added axioms.
+Sol implementation agents cross-reviewed the execution, hydration and gate
+boundaries. Root review checked native compaction/fork joins, the live-prefix
+growth proof chain, physical continuation provenance, and the integrated build.
+All fourteen gate seam regression checks pass, alongside tool-delivery,
+continuation/restart, compaction and reordered-hydration cases.
+The subsequent seam review added actual physical handover with late old-tool
+completion, failed-wake release and exact completed acknowledgement, ordinary
+request activation through delayed retry to terminal queue finish, typed Goal
+publication/activation, and canonical tool-read regressions (including valid
+empty output versus an incomplete advertised extent). Fork writer/reader order
+and retry timer overshoot are checked. Retired response-only recovery,
+gate-bypassing retry wrappers, and ring/persisted-result reader dispatch are
+removed rather than retained as alternative machines.
+No Rust build/tests or external fixture regeneration were run in this layer.
+
+The structural cleanup was cross-reviewed by Sol agents for frame strength,
+validator equivalence, and preservation of every migrated regression assertion.
+The full-state continuation case caught an accidental queue/retry reset during
+gate initialization; initialization now touches only gate controls. The final
+aggregate build passes, as do the import-closure guard's three unit tests.
+
+The subsequent sequence/claim invariant checkpoint passed the pinned Lean 4.18.0
+aggregate build (1,157 targets) and all three import-closure guard tests. Sol review
+checked every application trace constructor, unchanged admission semantics and
+the new activation trace witness. No `sorry` or new axioms were introduced.
+This checkpoint adds inductive proof coverage; it is not a net line-count reduction
+or completion of the remaining full-coherence invariant work.
+
+The explicit-renewal revision removed lease `OutputFact`/eligibility and global
+derived-progress scans. Renewal
+uses a due-only generation/observed-deadline CAS; output and producer decisions
+are lease stutters. The cadence bound, silent/input-wait cases, stale/expired
+rejection, arbitrary-output independence and renewal/recovery ordering are checked.
+Native decision fencing without an implicit deadline write remains a refinement
+obligation; a read-only snapshot check must not be mistaken for a serializing CAS.
+Affected-source validation still traverses its prefix, so this is not a proof of
+linear total streaming cost. The subsequent tool-composition revision does not
+remove the remaining product gaps listed above.
+
 ## Configuration and session refactor contract layer
 
 This branch is layer 2 above spec PR [#1430](https://github.com/gents-ai/gents/pull/1430),
@@ -23,7 +338,7 @@ Historical bridge references below are not evidence that this target already run
 | Execution | Tool execution removes per-call approval states/transitions. Request terminalization, managed execution, foreground progress, and enrollment authorization retain their owners. `TaskHooks` command results are external observations; the hook contract covers sequencing and failure handling, not exactly-once host effects. |
 | Identity | `Identity` resolves behavior labels with an explicit principal; shared labels never determine permissions or imply a global ID-to-principal mapping. Structural fixture results evaluate the actual well-formedness predicate. |
 | Durable sessions | `AgentSession` owns identity, provenance, title, and request observation. Session observation updates use exact requester scope; same-request refresh consumes a transactional reread of the current request, not an out-of-order notification payload. Head selection queries authoritative request rows; cached observations do not authorize retries or background wakes. Retry selection uses exact requester scope; background wake selection spans requester scopes. |
-| Forks | `SessionFork` copies a transcript prefix, remaps collection-qualified physical references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings. |
+| Forks | `SessionFork` copies native message headers for a transcript prefix, preserves origin payload references, detaches live request links, and requires compaction cursors to name retained messages. The adapter must supply an authorized, coherent snapshot and translate user cuts and cursor encodings; hydration retains authorized origin dependencies. |
 | Request inputs | `Enrollment/RequestInput` reuses title and queue types and admits selected skills within context authority. Goal continuations carry original sequence/wrapup facts verified by the existing receipt owner. Sampling and aggregate limits come from inference configuration. |
 | Locality | Workspace/callback ownership uses the principal DID. Filesystem availability remains an execution boundary; no host fingerprint or single-runtime enforcement is introduced. |
 
@@ -66,8 +381,8 @@ state machines explicit enough that:
 The proofs are strongest where the runtime is a state machine:
 
 - request, process, and persistence lifecycle transitions
-- request execution leases with opaque generations, semantic-progress renewal,
-  atomic request/response terminalization, and recovery race exclusion (#1341)
+- request execution leases with opaque generations, explicit owner-renewed deadlines,
+  generation-fenced terminalization, and atomic expiry recovery (#1341, #1571)
 - daemon-visible storage observation assumptions at the persistence boundary
 - inference-call lifecycle, cancellation transitions, and slot reconstruction
 - scheduler and fleet slot accounting from persisted call rows
@@ -150,6 +465,16 @@ lake build Proofs.Conformance.Contracts
 lake env lean --run Proofs/Conformance/Contracts.lean
 ```
 
+The default build also checks that every local proof module belongs to the
+transitive import closure of the build roots. `proofRoots` in `lakefile.lean`
+feeds both the compiler and this inventory check. Three standalone conformance
+programs (`ClientObservationOrdering`, `ClientPresentationAgreement`, and
+`StorageWriteGate`) have separate `main` definitions and are explicit build
+roots, rather than unchecked files or imports of the shared barrel. The obsolete
+`CancelPropagation` wrapper and unused generic `Recovery/Outcome` accounting
+module are removed; cancellation and canonical recovery retain their existing
+owners and executable cases.
+
 ## What Is Proven
 
 The current proof suite covers twenty practical areas:
@@ -162,7 +487,7 @@ The current proof suite covers twenty practical areas:
 6. Runtime reconcile generation publication and visibility
 7. Atomic configuration publication, reference closure, and config/runtime field separation
 8. Trigger dispatch for manual, schedule, and event-driven tasks
-9. Client turn-state derivation from replicated request/response documents
+9. Client turn-state derivation from replicated request documents
 10. Client-shell workflow rules for selection, submission, and transport decoupling
 11. Command/tool execution policy: argv prefixes, read-only allowlists,
     disabled-network fail-closed behavior, sandbox selection, and filtered env
@@ -200,11 +525,12 @@ The current proof suite covers twenty practical areas:
     event identity; open condition content can update without changing the
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated
     cases exercise the database write owner and its typed receipts.
-20. Request execution leases (#1341): opaque fresh ownership generations,
-    claim deadlines, renewal only from persisted semantic response/tool/
-    transcript progress, expiry/drop recovery, matching-generation terminal
-    CAS, atomic request/response agreement, and at-most-one winner-owned goal
-    continuation/token-charge effect
+20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
+    explicit deadlines independent of output, bounded owner renewal,
+    atomic expiry recovery, drop recovery, matching-generation terminal CAS,
+    and bounded winner-owned continuation/token-charge effects. Canonical
+    classification and publication composition are modeled in `CanonicalOutput`;
+    their native transaction realization and conformance remain obligations.
 
 Separately, **obligation models** (no Rust refinement tests yet):
 
@@ -275,6 +601,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
 | `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
+| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: cross-principal children keep the target runtime as signer/issuer but bind `requesterDid` to the authenticated, fresh bridge author; local runtime sources retain requester=target. Generated enrollment cases fence the branch distinction. |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
 | `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; bounded delivery outcomes separated from terminal-write success or failure; explicit attempted versus confirmed-complete delivery for ambiguous transport failures; idempotent crash re-drive; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. Pairing transition invariants remain owned by `Proofs/PairingReconcile.lean`. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
@@ -294,12 +621,13 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
 | `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Projection cases and publication traces target signed-row and transaction tests; new cases require consumer migration in the conformance layer. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
+| `Proofs/PromptAssembly/CurrentInput.lean` | Request membership alone never identifies admission input. `current_input_cases` derives retained header indices from the model; `session::output::tests::current_input_selection_matches_lean_owner` binds the canonical prompt/context key classification. Current-request tool results, notifications and assistant output remain history. The separate database regression exercises actual reconstruction; neither test claims reachability of arbitrary imported facts. |
 | `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: advertised reasoning metadata gates `selectedEffort` (unknown/unsupported efforts are omitted), plus `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |
 | `Proofs/PeerRegistryDiscovery/RootAdmission.lean` | Canonical component-and-anchor containment plus operator-local `WorkspaceRoot` publication: no-document ceiling default, explicit-root narrowing, and all-disabled revocation without fallback. Filesystem resolution and execution-boundary re-resolution are Rust refinement obligations; the model makes no TOCTOU claim. Fence: generated `root_admission_cases` consumed by `tests/conformance/persona_request.rs`. |
 | `Proofs/Background/` | Subagent/background bridge model: `BridgedState` (one parent and one child composed state; native tools retain their own executor models), six bridge transitions, completion-notification/continuation composition, and property modules (B1/B2 projection, B3/B3′ cascade/detach, B4 depth, B5 link symmetry, B6 foreground blocking, B7 budget, INV-UNIQUE, delegation graph) |
-| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`, outcome accounting #693), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them) |
+| `Proofs/Recovery/` | Recovery sweep contracts (`RecoverySweep`), the registered sweep registry, per-collection sweeps including subagent liveness (#465) and the startup restart-disposition classifier (#937), and the startup sweep ordering contract (`StartupOrder.lean`, #1001: the parent-gated inference-call sweep converges only after request repair; #1341 adds startup-and-periodic inference cadence and proves a live-lease startup defers both rows until an expired ordered periodic pass converges them). Canonical-output accounting is owned by `CanonicalOutput/Execution`, not the retired `Recovery/Outcome` module. |
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
@@ -329,7 +657,7 @@ Semantic submodules:
 | `Proofs.ApplyReconcile` | `Collections`, `Manifest`, `Diff`, `Apply`, `ApplyProperties`, `Prefix`, `RuntimeBridge`, `Convergence` |
 | `Proofs.Triggers` | `Types`, `Dispatch`, `Reachability`, `SerialSupport`, `Serial`, `LatestOnly`, `Lineage` |
 | `Proofs.Triggers.SerialSupport` | `Counting`, `Preservation` |
-| `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement` |
+| `Proofs.Client` | `Types`, `Lifecycle`, `Terminal`, `Replacement`, `Output` |
 | `Proofs.ClientShell` | `Types`, `Submission`, `Transition`, `Projection`, `Timeline`, `PresentationAgreement`, `ObservationOrdering`, `Theorems` |
 | `Proofs.CommandPolicy` | `Types`, `Validation`, `Sandbox`, `Env`, `Theorems` |
 | `Proofs.ToolExecution` | standalone health/schema preflight and retry eligibility model |
@@ -365,14 +693,12 @@ predicates, executable `step?` functions, and finite witness contexts. It
 currently covers:
 
 - `Request`
-- `RequestExecutionLease` one-step and recovery/race traces: 34 one-step cases
-  cover live authorization and exact-observation Dead/Superseded revocation.
-  `generated_request_execution_lease_cases_fence_production_policy` exercises
-  the production authorization seam for begin, progress, finalize, and revocation.
-  Two generated provider-EOF cases also fence the production requirement for an
-  explicit provider final event before successful turn completion.
-  Abstract claim/recovery and database race traces retain explicit coverage
-  follow-ups; no standalone Rust reference machine is counted as a consumer.
+- `RequestExecutionLease` one-step and recovery/race traces now describe the
+  #1571 target owner: explicit lease deadlines, replay, expiry admission, atomic recovery,
+  explicit renewal and policy revocation. The old generated Rust fixtures and
+  production seam do not yet conform to these cases. Provider-EOF cases retain
+  the explicit-final-event requirement. Native database ordering and projection
+  classification still require refinement tests in the later layer.
 - `Process`
 - `Persistence.failClosed`
 - `Persistence.failOpen`
@@ -573,7 +899,7 @@ request by `request_id` and bound to a backend by `backend_id`.
 | ID | Property | Why it matters | Theorem |
 |----|----------|----------------|---------|
 | S1 | Terminal requests stay terminal | A completed, failed, superseded, dead, or interrupted request cannot silently re-enter processing | `terminal_irreversibility` |
-| S3 | `progressSeq` never decreases | Clients can treat progress as monotonic and avoid rewind bugs | `progress_monotonic` |
+| S3 | Processing continuation does not rewrite request state | The owned loop's continuation admission is a lifecycle stutter; immutable output separately owns progress | `continue_processing_is_lifecycle_stutter` |
 | S4 | Completion cannot be a hidden deadline violation | A request that reaches `completed` did not get there through deadline expiry | `completed_not_deadline_expired`, `deadline_structural_bound` |
 | S5 | Recovery blocks claims | New work is not accepted while recovery is still repairing stuck state | `recovery_blocks_claims` |
 | S6 | Completion implies persistence | The model does not allow `completed` without a committed durable state | `persistence_before_completion` |
@@ -862,19 +1188,16 @@ Model → conformance → Rust bindings:
   orphaned native-background ownership repair, including volatile execution
   reservations and retryable completion-notification/wake obligations) →
   `recovery_sweep_cases` → `tests/conformance/recovery_sweeps.rs`.
-- **Partial output (#937)** — `Proofs/Background/ToolOutput.lean` models the
-  three-way `read_tool_output` dispatch (terminal → persisted completion;
-  running + live snapshot → ring-buffer tail; running + no snapshot — the
-  post-restart shape — → empty), the retained-window paging contract
-  (contiguity, eviction detectability, progress, `has_more`), and ring tail
-  retention. The `r4c.read_tool_output.dispatch_by_state` witness values and
-  the `tool_output_paging_cases` rows are computed from `readDispatch` /
-  `readSlice`; the dispatch is driven against the real hook by
-  `conformance::generated_read_tool_output_witness_drives_hook_dispatch` and
-  the paging rows against `read_retained_output_slice` by
-  `background_tools::tests::generated_tool_output_paging_cases_match_slice_function`.
-  UTF-8 boundary snapping is a Rust representation detail below the byte
-  model.
+- **Partial output (#937, revised by #1571)** —
+  `Proofs/Background/ToolOutput.lean` reads canonical segments for the exact
+  physical tool, independently of volatile executor registries. Open-prefix and
+  closed-extent cases cover conflicts, missing/foreign physical identity and late
+  suffix inertness. Generic paging retains contiguity, bounds, progress and
+  `has_more`; canonical windows start at zero without ring eviction. Generated
+  output witnesses now describe canonical reads, not state/registry dispatch.
+  Native readers and fixture consumers must migrate in the implementation layer;
+  their old ring-buffer tests are not evidence for this new contract. UTF-8 page
+  boundary snapping remains a native representation obligation.
 - **Executable bridge step (#937)** — `Proofs/Background/Executable.lean`
   now executes the bridge-local events on the subagent leg
   (`bridge_complete`, `bridge_failure`, `bridge_cancel_cascade`) with a
@@ -894,7 +1217,7 @@ Model → conformance → Rust bindings:
   `bridge_failure(Dead/Failed)` refines `fail` at the same persistence seam
   (`is_bridge()` admits both kinds). `BridgedState` is subagent-only; native
   tools use these existing executor transitions without a second child payload.
-- **Terminal completion → next agent turn (#937)** —
+- **Terminal completion → next agent turn (#937, revised by #1571)** —
   `Proofs/Background/CompletionContinuation.lean` composes the terminal
   parent-visible tool state, ordinary user-role transcript append, canonical
   `background_completion:<session>` coalesced wake, and FIFO claim. Its
@@ -903,10 +1226,14 @@ Model → conformance → Rust bindings:
   built after notification persistence, and claiming it retains that message
   in the parent transcript. The executable canonical path emits
   `terminal_completion_message_precedes_claimed_continuation` in
-  `r6_backgrounding_cases`; the Rust consumer projects a real background
-  subagent completion, verifies the message and wake, releases the active
-  parent, claims the wake through `DefraWatcher`, and verifies the message is
-  still present.
+  `r6_backgrounding_cases`. Native consumers must migrate to the canonical
+  execution/claim join before their historical coverage applies to this revision.
+  Wake snapshots are immutable claim observations, not terminal state. Recovery
+  preserves the authoritative request lifecycle: neither a snapshot nor a
+  separately persisted response can manufacture completion or failure. Only an
+  actually completed attempt acknowledges its claimed bindings; live work does
+  not acknowledge or redrive. The obsolete response-persistence crash boundary
+  and its generated case are deleted.
 - **Goal-owned background input (#1410)** — the completion composition checks
   canonical Goal presence before enqueue or failed-wake redrive. All six Goal
   statuses retain their existing continuation owner: the background path
@@ -925,6 +1252,18 @@ Model → conformance → Rust bindings:
   backgrounding is single-node and carried by Lean).
 
 ### Compaction
+
+`Compaction.ReductionEngine.reduceRebuildAndAuthorize` binds the initial request
+estimate to its projection, computes the canonical effective threshold, and
+rebuilds from the exact reduction checkpoint and retained suffix before measuring
+again. `CanonicalOutput.Execution.Compaction.reduceCanonicalRebuildAndAuthorize`
+adds exact canonical-message reconstruction on both sides, with one fixed request
+context and a separate checkpoint callback (a new summary is not a document ID).
+Successful dispatch proves threshold admission, positive output, the exact dynamic
+output clamp and estimated input-plus-output within context. Fresh repaired views
+use `projectAndAuthorize`. Projection, estimation and the authorized snapshot are
+explicit native premises; these proofs do not establish provider serialization,
+tokenizer accuracy, summarizer quality or the repair transformation itself.
 
 `Proofs/Compaction` models transcript reduction — the one place where the
 durable transcript and the provider view diverge on purpose, and therefore the
@@ -966,30 +1305,35 @@ accepted failure mode.
 
 ### Durable transcript operations
 
-`Transcript` models permissive durable writes, sequence allocation, tool/result
-reservation and duplicate-result observation. Ordering is proved from the append
-operation and its pre-state sequence bound. Duplicate result observation executes
-the same completion function and preserves all state. Fixture counts, pair closure,
-ordering, and drain observations are computed from actual operations with legal
-transition traces. Durable orphan result rows are representable and are not falsely
-labeled pair-closed. Provider-input sanitation owns the stricter boundary.
+`Transcript` models immutable assistant publication, sequence allocation,
+tool/result reservation and duplicate-result observation. Accepted publication
+appends the header and ordered pending tool rows atomically; separate dispatch
+requires a published reservation and the first pending call. Partial publication
+is nondispatchable. `transition_retains_messages` and `trace_retains_messages`
+retain prior rows, including after tool failure; physical identity validation is
+a native bridge premise. Closure validity and lifecycle authorization still need
+composition with the output and lease owners. Durable orphan results remain
+representable; provider-input sanitation owns the stricter boundary.
 
 ### Client Turn Projection
 
 `Proofs/Client.lean` models how clients derive a turn state from replicated
-`AgentRequest` and `AgentResponse` snapshots:
+`AgentRequest` snapshots only:
 
 - derivation is total for every non-empty attempt chain
-- server lifecycle and response advances do not decrease client rank
-- terminal client states line up with effectively terminal server observations
+- legal server lifecycle advances do not decrease client rank
+- terminal client states line up with terminal request observations
 - retry replacement derives from the new tip, with retry restart as the one
   allowed rank decrease
+- unordered scoped observations resolve only a unique retry tip; output readiness
+  cannot alter execution status
 
-The implementation-facing version is `client-state-machine.md`.
+`client-state-machine.md` and external fixtures still need migration to this
+target contract.
 
 The Codex shim reuses this projection directly. Its adapter only maps the
 generic `ClientTurnState` into Codex wire phases and applies the acknowledged
-local-interrupt override; request/response precedence, lifecycle monotonicity,
+local-interrupt override; request-only projection, lifecycle monotonicity,
 and terminal coherence stay owned by `Proofs/Client.lean`. Generated Codex
 conformance rows are evaluated from that composition rather than restating a
 parallel Codex-specific state machine.

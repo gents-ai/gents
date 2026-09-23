@@ -492,8 +492,8 @@ impl GraphqlEnrollmentStore {
                     .map(|candidate| candidate.revision_doc_id.clone())
                     .with_context(|| {
                         format!(
-                        "revocation commit was not observably recovered after: {commit_error:#}"
-                    )
+                            "revocation commit was not observably recovered after: {commit_error:#}"
+                        )
                     })?
             }
         };

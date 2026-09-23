@@ -258,7 +258,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some(session_id.as_str())
     );
     let first_content = first
-        .pointer("/response/content")
+        .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("first live chat output missing response content: {first}"))?;
     assert!(
@@ -289,7 +289,7 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
         Some(session_id.as_str())
     );
     let second_content = second
-        .pointer("/response/content")
+        .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("second live chat output missing response content: {second}"))?;
     assert!(
@@ -299,11 +299,11 @@ async fn standard_onboarding_live_demo_runs_real_conversation_with_filesystem_to
 
     wait_for_completed_tool_calls(&graphql, &session_id, "list_files", 1).await?;
     let read_calls = wait_for_completed_tool_calls(&graphql, &session_id, "read_file", 2).await?;
-    let read_results = read_calls
-        .iter()
-        .filter_map(|row| row.get("result").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut read_results = Vec::new();
+    for call in &read_calls {
+        read_results.push(canonical_tool_result_text(&graphql, call).await?);
+    }
+    let read_results = read_results.join("\n");
     assert!(
         read_results.contains(&alpha_token) && read_results.contains(&beta_token),
         "expected persisted read_file tool results to contain {alpha_token} and {beta_token}: {read_results}"
@@ -419,7 +419,7 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         Some(session_id.as_str())
     );
     let response = result
-        .pointer("/response/content")
+        .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow!("live request result missing response content: {result}"))?;
     assert!(
@@ -427,11 +427,11 @@ async fn trace_project_exports_live_inference_turn_as_adapter_artifacts() -> Res
         "expected live response to contain {token}, got {response:?}; full output={result}"
     );
     let read_calls = wait_for_completed_tool_calls(&graphql, &session_id, "read_file", 1).await?;
-    let tool_results = read_calls
-        .iter()
-        .filter_map(|row| row.get("result").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut tool_results = Vec::new();
+    for call in &read_calls {
+        tool_results.push(canonical_tool_result_text(&graphql, call).await?);
+    }
+    let tool_results = tool_results.join("\n");
     assert!(
         tool_results.contains(&token),
         "expected persisted read_file result to contain {token}: {tool_results}"
@@ -779,7 +779,7 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
             Some(spec.behavior_id.as_str())
         );
         let response = result
-            .pointer("/response/content")
+            .pointer("/output/presentation/body_markdown")
             .and_then(Value::as_str)
             .ok_or_else(|| {
                 anyhow!("request submit result did not include response content: {result}")
@@ -798,11 +798,11 @@ async fn cli_flow_runs_real_tool_loop_against_live_endpoint() -> Result<()> {
         let tool_calls =
             wait_for_completed_tool_calls(&graphql, session_id, "read_file", spec.tokens.len())
                 .await?;
-        let tool_results = tool_calls
-            .iter()
-            .filter_map(|row| row.get("result").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let mut tool_results = Vec::new();
+        for call in &tool_calls {
+            tool_results.push(canonical_tool_result_text(&graphql, call).await?);
+        }
+        let tool_results = tool_results.join("\n");
         for token in &spec.tokens {
             assert!(
                 tool_results.contains(token),

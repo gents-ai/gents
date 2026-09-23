@@ -1,13 +1,8 @@
 use super::*;
 
-async fn legacy_fixture(name: &str) -> (TestDb, AgentRequest, String) {
+async fn fixture(name: &str) -> (TestDb, AgentRequest) {
     let db = test_db(name).await;
     let mut parent = parent_request(db.agent_did(), name);
-    parent.subagent_depth = 0;
-    parent.caused_by_parent_request_id = None;
-    parent.caused_by_parent_request_doc_id = None;
-    parent.caused_by_parent_tool_call_id = None;
-    parent.caused_by_parent_tool_call_doc_id = None;
     parent.doc_id = insert_raw_queue_request(
         &db.node,
         db.agent_did(),
@@ -16,36 +11,10 @@ async fn legacy_fixture(name: &str) -> (TestDb, AgentRequest, String) {
         &RequestInput::default(),
     )
     .await;
-    let content = serde_json::to_string(&crate::llm::message::Message::User {
-        content: vec![crate::llm::message::UserContent::Text(
-            crate::llm::message::Text {
-                text: "legacy terminal output".into(),
-            },
-        )],
-    })
-    .unwrap();
-    let mutation = format!(
-        r#"mutation {{ create_AgentMessage(input: {{
-        message_key: "legacy-notification", agent_did: "{}", session_id: "{}",
-        sequence: 1, role: "user", content: "{}", timestamp: "2026-07-15T00:00:00Z"
-    }}) {{_docID}} }}"#,
-        escape_graphql_string(db.agent_did()),
-        escape_graphql_string(name),
-        escape_graphql_string(&content)
-    );
-    let response = crate::config_client::ConfigAccess::write_local_response(
-        &db.node,
-        "test.seed_legacy_input",
-        &mutation,
-    )
-    .await
-    .unwrap();
-    let doc =
-        extract_single_doc_id(&response, "create_AgentMessage").expect("legacy message doc ID");
-    (db, parent, doc)
+    (db, parent)
 }
 
-fn repair_hints(parent: &AgentRequest) -> RequestQueue {
+fn hints(parent: &AgentRequest) -> RequestQueue {
     RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -56,45 +25,42 @@ fn repair_hints(parent: &AgentRequest) -> RequestQueue {
     }
 }
 
-async fn durable_input(db: &TestDb) -> serde_json::Value {
-    let response = db.node.execute(
-        "{ AgentMessage { _docID message_key agent_did session_id request_id request_doc_id sequence role content timestamp } }",
-    ).await;
+async fn message_ids(db: &TestDb) -> Vec<String> {
+    let response = db.node.execute("{ AgentMessage { _docID } }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
-    response.data.unwrap()["AgentMessage"].clone()
+    response.data.unwrap()["AgentMessage"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["_docID"].as_str().unwrap().to_owned())
+        .collect()
 }
 
 #[tokio::test]
-async fn legacy_repair_rechecks_goal_after_waiting_for_existing_enqueue_gate() {
-    use std::future::Future;
-    let (db, parent, legacy_doc) = legacy_fixture("goal-before-legacy-repair").await;
-    let before = durable_input(&db).await;
-    let hints = repair_hints(&parent);
+async fn canonical_publication_rechecks_goal_after_waiting_for_enqueue_gate() {
+    let (db, parent) = fixture("goal-before-canonical-publication").await;
+    let queue = hints(&parent);
     let gate = super::super::atomic_inputs::background_completion_gate(
         &db.node,
         &parent.session_id,
         &parent.agent_did,
-        hints.key.as_deref().unwrap(),
+        queue.key.as_deref().unwrap(),
     );
     let held = gate.lock().await;
-    let mut repair = Box::pin(
+    let publish_node = db.node.clone();
+    let publish_parent = parent.clone();
+    let publication = tokio::spawn(async move {
         super::super::atomic_inputs::persist_background_completion_with_message(
-            &db.node,
-            &parent,
-            "legacy terminal output",
-            "background-completion-notification:legacy:tool",
+            &publish_node,
+            &publish_parent,
+            "terminal output",
+            "canonical-goal-notification",
             "review notifications",
-            repair_hints(&parent),
-            Some(&legacy_doc),
-        ),
-    );
-    // Poll the actual operation into its held existing gate, without a spawned
-    // unowned task or a timing assumption about scheduler progress.
-    std::future::poll_fn(|cx| {
-        assert!(repair.as_mut().poll(cx).is_pending());
-        std::task::Poll::Ready(())
-    })
-    .await;
+            hints(&publish_parent),
+            None,
+        )
+        .await
+    });
     let goal = crate::goal::set_goal(
         &db.node,
         db.agent_did(),
@@ -106,14 +72,10 @@ async fn legacy_repair_rechecks_goal_after_waiting_for_existing_enqueue_gate() {
     .await
     .unwrap();
     drop(held);
-    let result = repair.await.unwrap();
+    let result = publication.await.unwrap().unwrap();
     assert!(result.request.is_none());
     assert!(!result.created_request);
-    assert_eq!(
-        durable_input(&db).await,
-        before,
-        "legacy input is immutable"
-    );
+    assert_eq!(message_ids(&db).await.len(), 1);
     assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 1);
     let after = crate::goal::load_canonical_goal(&db.node, db.agent_did(), &parent.session_id)
         .await
@@ -126,40 +88,37 @@ async fn legacy_repair_rechecks_goal_after_waiting_for_existing_enqueue_gate() {
 }
 
 #[tokio::test]
-async fn ordinary_legacy_repair_and_replay_preserve_one_input_and_one_wake() {
-    let (db, parent, legacy_doc) = legacy_fixture("ordinary-legacy-repair").await;
-    let before = durable_input(&db).await;
+async fn canonical_publication_replay_preserves_one_input_and_one_wake() {
+    let (db, parent) = fixture("ordinary-canonical-publication").await;
     let mut first_wake = None;
+    let mut first_message = None;
     for first in [true, false] {
         let result = super::super::atomic_inputs::persist_background_completion_with_message(
             &db.node,
             &parent,
-            "legacy terminal output",
-            "background-completion-notification:legacy:tool",
+            "terminal output",
+            "canonical-ordinary-notification",
             "review notifications",
-            repair_hints(&parent),
-            Some(&legacy_doc),
+            hints(&parent),
+            None,
         )
         .await
         .unwrap();
         assert_eq!(result.created_request, first);
-        let returned_wake = result
+        let wake = result
             .request
-            .expect("ordinary legacy repair returns its wake")
+            .expect("ordinary publication returns wake")
             .doc_id;
         if first {
-            first_wake = Some(returned_wake.clone());
+            first_wake = Some(wake.clone());
         }
-        assert_eq!(Some(&returned_wake), first_wake.as_ref());
-        assert_eq!(
-            durable_input(&db).await,
-            before,
-            "repair cannot rewrite legacy input"
-        );
-        let requests = queue_rows(&db.node, &parent.session_id).await;
-        assert_eq!(requests.len(), 2);
-        assert!(requests
-            .iter()
-            .any(|request| Some(&request.doc_id) == first_wake.as_ref()));
+        assert_eq!(Some(&wake), first_wake.as_ref());
+        let messages = message_ids(&db).await;
+        assert_eq!(messages.len(), 1);
+        if first {
+            first_message = messages.first().cloned();
+        }
+        assert_eq!(messages.first(), first_message.as_ref());
+        assert_eq!(queue_rows(&db.node, &parent.session_id).await.len(), 2);
     }
 }

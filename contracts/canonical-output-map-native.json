@@ -1,0 +1,306 @@
+[
+    {
+      "id": "native.request-execution-lease",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/RequestExecutionLease/Transition.lean", "symbol": "RequestExecutionLease.Action" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/RequestExecutionLease.lean", "symbol": "Conformance.RequestExecutionLeaseContracts.leaseCases" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/RequestExecutionLease.lean", "symbol": "Conformance.RequestExecutionLeaseContracts.leaseTraceCases" }
+      ],
+      "constructors": [
+        "RequestExecutionLease.Action.claim",
+        "RequestExecutionLease.Action.begin",
+        "RequestExecutionLease.Action.appendOutput",
+        "RequestExecutionLease.Action.renew",
+        "RequestExecutionLease.Action.authorizeProducerDecision",
+        "RequestExecutionLease.Action.socketTraffic",
+        "RequestExecutionLease.Action.noOp",
+        "RequestExecutionLease.Action.advanceTime",
+        "RequestExecutionLease.Action.drop",
+        "RequestExecutionLease.Action.recoverExpired",
+        "RequestExecutionLease.Action.recoverDropped",
+        "RequestExecutionLease.Action.finalize",
+        "RequestExecutionLease.Action.policyRevoke",
+        "RequestExecutionLease.Action.recoverExpiredAndFail",
+        "RequestExecutionLease.Action.recoverExpiredTerminal",
+        "RequestExecutionLease.Action.recoverDroppedAndFail"
+      ],
+      "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": [
+        "crates/gents/src/lifecycle/execution_lease.rs",
+        "crates/gents/src/request_admission.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/lean_vocab_test/request_execution_lease.rs",
+        "crates/gents/src/lean_vocab_test/request_execution_lease_policy.rs",
+        "crates/gents/tests/conformance/streaming_compaction.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "fresh_claim_installs_generation_duration_and_deadline",
+        "claim_rejects_reused_generation",
+        "claim_rejects_zero_duration",
+        "observing_replica_cannot_claim",
+        "matching_owner_begins_processing",
+        "output_append_authorization_does_not_renew",
+        "socket_traffic_is_not_progress",
+        "no_op_is_not_progress",
+        "stale_generation_cannot_append",
+        "stale_generation_cannot_renew",
+        "stale_generation_cannot_finalize",
+        "deadline_boundary_rejects_raw_append",
+        "deadline_boundary_rejects_explicit_renewal",
+        "deadline_boundary_rejects_acceptance_publication_authorization",
+        "deadline_boundary_rejects_dispatch_authorization",
+        "deadline_boundary_rejects_terminalization",
+        "deadline_boundary_atomically_recovers_fresh_generation",
+        "observing_replica_cannot_recover_expired_work",
+        "observing_replica_cannot_append",
+        "explicit_owner_heartbeat_extends_at_due_time",
+        "early_renewal_is_rejected",
+        "stale_expected_deadline_cannot_renew",
+        "same_deadline_replay_after_renewal_is_rejected",
+        "one_tick_duration_cannot_advance_before_expiry",
+        "terminal_lifecycle_rejects_renewal_even_with_active_lease",
+        "input_required_wait_keeps_explicit_owner_heartbeat",
+        "close_or_retract_authorization_does_not_renew",
+        "accept_and_publish_authorization_does_not_renew",
+        "dispatch_authorization_does_not_renew",
+        "drop_relinquishes_for_distinct_recovery_path",
+        "dropped_recovery_takes_fresh_generation",
+        "dropped_recovery_rejects_zero_duration",
+        "dropped_recovery_rejects_wrong_expected_generation",
+        "dropped_recovery_rejects_aba_generation_reuse",
+        "expired_recovery_rejects_wrong_expected_generation",
+        "expired_recovery_rejects_aba_generation_reuse",
+        "expired_recovery_failure_atomically_elects_terminal_winner",
+        "dropped_recovery_failure_atomically_elects_terminal_winner",
+        "completion_atomically_terminalizes_request",
+        "provider_eof_fails_claimed_request_atomically",
+        "completion_rejects_claimed_request",
+        "policy_authority_can_supersede_live_generation",
+        "policy_revocation_rejects_wrong_expected_generation",
+        "policy_revocation_rejects_non_policy_outcome",
+        "clock_cannot_move_backwards",
+        "traffic_cannot_prevent_atomic_boundary_recovery",
+        "output_requires_separate_explicit_renewal",
+        "expired_expected_deadline_does_not_revive_generation",
+        "explicit_slow_heartbeat_renews_then_completes",
+        "duplicate_renewal_with_consumed_deadline_loses_cas",
+        "output_write_and_explicit_heartbeat_are_separate",
+        "atomically_recovered_owner_wins_and_stale_owner_cannot_finalize",
+        "producer_authorization_does_not_claim_canonical_source_effects",
+        "replace the retired response/progress authorization projection with native claim, explicit-renewal CAS, producer-decision, recovery and atomic terminal-effect adapters"
+      ],
+      "retired_bindings": [
+        "LeanRequestExecutionResponsePhase",
+        "LeanRequestExecutionProgressKind",
+        "LeanRequestExecutionAction.PersistProgress",
+        "LeanRequestExecutionAction.Expire",
+        "LeanRequestExecutionAction.Recover",
+        "LeanRequestExecutionAction.Revoke",
+        "LeanRequestExecutionAction.RecoverAndFail",
+        "generated_request_execution_lease_cases_fence_production_policy"
+      ]
+    },
+    {
+      "id": "native.external-projected-request-threshold",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.decideThreshold" }
+      ],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/provider_input.rs",
+        "crates/gents-loop/src/provider_input_budget.rs",
+        "crates/gents/src/compaction.rs",
+        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents-loop/src/loop_stream/request_assembly.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/provider_input/tests.rs",
+        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/tests/conformance/compaction_gate.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "IMPLEMENTATION-LAYER EXPERIMENT: reconstruct authorized canonical messages, build the real CompletionRequest through its existing owner, and project/serialize it through the configured ProviderInputCounter. Do not recreate provider serialization in a fixture or substitute payload-length sums.",
+        "Observe the real projected body and the estimate passed to ReductionAdmission::for_input. Include metadata, escaping, tool schemas and framing; respect the existing exclusion of output-limit fields and the configured effective-budget calculation.",
+        "Construct and measure complete requests at effective budget and one estimated token above it. Assert equality is NotNeeded and only a strictly greater estimate is reduction-eligible. Raw payload byte counts cannot stand in for these measured boundaries.",
+        "Exercise literal-expanded and head/tail presentations and missing dependencies; incomplete reconstruction must not become a smaller dispatchable request.",
+        "After reduction, rebuild and reproject the complete request and reject dispatch if its new estimate still exceeds the effective budget.",
+        "The formal join now binds canonical reconstruction, fallible projection/estimation, reduction and rebuilt admission. Its callbacks remain native premises: controlled conformance observations and payload fixtures do not establish that real provider serialization produced the estimate."
+      ],
+      "retired_bindings": []
+    },
+    {
+      "id": "native.external-atomic-commit-and-replay",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/config_client/txn.rs",
+        "crates/gents/src/defra_write/mod.rs",
+        "crates/gents/src/lifecycle/execution_lease.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/config_client/txn_owner_tests.rs",
+        "crates/gents/src/defra_write/tests.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "inject failure at every write in closure, header, tool-intent and recovery generation-swap/accounting batches and observe all-or-none facts",
+        "lose commit acknowledgement and replay exact identities without duplicate dispatch, continuation, token charge or terminal effects"
+      ],
+      "retired_bindings": []
+    },
+    {
+      "id": "native.external-local-gate-races",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/graphql.rs",
+        "crates/gents/src/streaming.rs",
+        "crates/gents/src/lifecycle/execution_lease.rs",
+        "crates/gents/src/request_admission.rs"
+      ],
+      "consumer_paths": ["crates/gents/src/agent/daemon/execution_lease_regression_tests.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "race renewal, recovery, publication and dispatch through one node's mutation gate and observe one serial winner with unchanged losers",
+        "test a second runtime and remote merge separately and explicitly exclude their serialization from the modeled local mutex guarantee",
+        "retain conflicting merged facts for diagnosis and policy revocation"
+      ],
+      "retired_bindings": []
+    },
+    {
+      "id": "native.external-clock-suspend-renewal",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": ["crates/gents/src/lifecycle/execution_lease.rs"],
+      "consumer_paths": ["crates/gents/src/lifecycle/execution_lease/tests.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "block provider and tool reads while an independent bounded-cadence timer renews",
+        "reject early, stale-deadline and expired renewal attempts",
+        "suspend past expiry and resume with the old owner fenced from publication and dispatch",
+        "exercise forward and backward native clock changes and document the mapping to Lean nondecreasing abstract time"
+      ],
+      "retired_bindings": ["PersistProgress renewal", "socket traffic renewal", "response progress sequence"]
+    },
+    {
+      "id": "native.external-genesis-identity-create",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/config_client/txn.rs",
+        "crates/gents/src/defra_write/mod.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/identity/tests.rs",
+        "crates/gents/tests/defradb_genesis_identity.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "concurrent identical creates resolve to one immutable identity",
+        "changed genesis content cannot overwrite the existing identity",
+        "distinct documents at one source ordinal or closure project as conflict rather than first-writer-wins",
+        "use pinned DefraDB behavior rather than a synthetic ID map"
+      ],
+      "retired_bindings": ["synthetic global ID map"]
+    },
+    {
+      "id": "native.external-acp-hydration",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/document_config/projection_acp.rs",
+        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/session/fork.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents/src/session/tests.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "DEFERRED BY PRODUCT SCOPE: canonical document-policy binding and per-dependency ACP enforcement are future work, not a desktop acceptance gate for this refactor. Existing ownership, enrollment and requester/agent scoping must remain intact; do not claim ACP-backed hydration is implemented.",
+        "NATIVE GAP: canonical hydration collections are installed without DefraDB schema @policy metadata, and the hydration owner does not select a ProjectionAcpBinding policy/resource mapping. Explicit per-dependency denial evidence is therefore unavailable; absence remains unresolved/loading and must not be inferred as denial.",
+        "supply real allowed, denied and missing observations for message roots and segment dependencies",
+        "follow an authorized fork reference across sessions without relaxing requester or agent scope",
+        "prevent foreign and denied dependencies from leaking payload",
+        "test reorder, denial and duplicate delivery independently from owner authorization"
+      ],
+      "retired_bindings": []
+    },
+    {
+      "id": "native.schema-sdl-registration",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents-schemas/src/lib.rs",
+        "crates/gents-protocol/src/schemas.rs"
+      ],
+      "consumer_paths": ["crates/gents/src/config_client/schema_install.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "fresh schema registration contains the segment collection and omits retired seal, response and spill collections",
+        "strict JSON and SDL decoding reject obsolete and unknown fields",
+        "runtime schema exports agree with gents-schemas and gents-protocol declarations"
+      ],
+      "retired_bindings": ["AgentResponse SDL", "AgentToolResult SDL", "response collection", "spill collection", "seal collection"]
+    },
+    {
+      "id": "native.catalog-root-pins",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": ["crates/gents-migration/src/registry.rs"],
+      "consumer_paths": ["crates/gents/src/config_client/schema_install.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "remove obsolete response and spill baselines from the catalog",
+        "add the fresh segment root pin and regenerate changed request, message and tool pins using DefraDB",
+        "retain catalog coverage and parity checks without fabricated pins or relaxed comparisons",
+        "resolve the client-authored transcript writer and OutputWriter before retaining segment in client-to-runtime collections; otherwise remove that route direction by explicit user decision"
+      ],
+      "retired_bindings": ["response baseline pin", "spill baseline pin"]
+    },
+    {
+      "id": "native.pairing-route-inventory",
+      "model_symbols": [],
+      "constructors": [],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/agent/p2p_reconcile/templates.rs",
+        "crates/gents/src/agent/p2p_reconcile/profiles.rs",
+        "crates/gents/src/agent/p2p_reconcile/policy.rs",
+        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs"
+      ],
+      "consumer_paths": ["crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "replace response and spill routes with segment while preserving requester and agent filters and every route direction",
+        "cover conversation, client in both directions, machine and operator route inventories; collection presence is not ACP authorization",
+        "host return leg includes segment with requester filters while coordinator leg remains addressed AgentToolCall only",
+        "deliver immutable argument-only delegated_input without granting parent output or header access",
+        "resolve authorized reference closure, twins and origin dependencies in a signed bounded exact hydration manifest",
+        "do not assume a client-to-runtime segment writer: retain or remove that direction only after the explicit writer decision"
+      ],
+      "retired_bindings": ["response pairing route", "spill pairing route", "session-only hydration completeness"]
+    }
+]

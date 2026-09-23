@@ -10,7 +10,6 @@ export type { MessageView } from "../generated/MessageView.js";
 export type { PendingTurnView } from "../generated/PendingTurnView.js";
 export type { RenderedTimelineItem } from "../generated/RenderedTimelineItem.js";
 export type { RenderedToolCallView } from "../generated/RenderedToolCallView.js";
-export type { ResponseView } from "../generated/ResponseView.js";
 export type { SessionCompactionView } from "../generated/SessionCompactionView.js";
 export type { SessionContextComponentsView } from "../generated/SessionContextComponentsView.js";
 export type { SessionContextView } from "../generated/SessionContextView.js";
@@ -18,7 +17,6 @@ export type { SessionRequestContextView } from "../generated/SessionRequestConte
 export type { ToolCallView } from "../generated/ToolCallView.js";
 export type { ToolDiffLineView } from "../generated/ToolDiffLineView.js";
 export type { ToolPresentationView } from "../generated/ToolPresentationView.js";
-export type { ToolResultView } from "../generated/ToolResultView.js";
 
 export type { RequestResendResultView as RequestResendResult } from "../generated/RequestResendResultView.js";
 

@@ -1,9 +1,21 @@
 use super::*;
 use crate::identity::AgentIdentity;
-use crate::lifecycle::{extract_single_doc_id, DEFAULT_REQUEST_MAX_RETRIES};
+use crate::lifecycle::{
+    extract_single_doc_id, ClaimOutcome, RequestLifecycle, DEFAULT_REQUEST_MAX_RETRIES,
+};
+use crate::streaming::DefraStreamWriter;
+use crate::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::{
+    message::{AssistantContent, Message, ToolCall, ToolFunction},
+    output::PresentationPart,
+};
 use std::sync::Arc;
+use std::time::Duration;
 use tempfile::TempDir;
+
+mod background_goal_repair;
+mod steering;
 
 const TEST_AGENT_DID: &str = "did:test:queue-test";
 const TEST_BEHAVIOR_ID: &str = "general";
@@ -76,7 +88,7 @@ fn parent_request(agent_did: &str, session_id: &str) -> AgentRequest {
         deadline: None,
         execution_generation: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
+        execution_lease_secs: None,
         subagent_depth: 2,
         caused_by_parent_request_id: Some("root-parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("root-parent-request-doc".to_string()),
@@ -227,6 +239,164 @@ async fn insert_raw_queue_request(
         .expect("raw queue create returns _docID")
 }
 
+/// A real accepted background tool and its closed `ToolExecution` source for
+/// queue-owner tests.  This deliberately goes through provider publication,
+/// accepted-tool adoption, running CAS, and terminal output closure: queue
+/// notification tests must not manufacture an `AgentToolCall` authority row.
+struct CanonicalBackgroundFixture {
+    node: Arc<EmbeddedNode>,
+    parent: AgentRequest,
+    lifecycle: RequestLifecycle,
+    writer: DefraStreamWriter,
+    next_turn: usize,
+}
+
+async fn canonical_background_fixture(db: &TestDb, session_id: &str) -> CanonicalBackgroundFixture {
+    let request_id = format!("background-parent-{}", uuid::Uuid::new_v4());
+    insert_raw_queue_request(
+        &db.node,
+        db.agent_did(),
+        &request_id,
+        session_id,
+        &RequestInput::default(),
+    )
+    .await;
+    let request = crate::request_binding::load_agent_request(&db.node, &request_id)
+        .await
+        .expect("load canonical fixture parent")
+        .expect("canonical fixture parent exists");
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        db.node.clone(),
+        TEST_BEHAVIOR_ID,
+        db.agent_did(),
+        request,
+        60,
+    );
+    assert_eq!(
+        lifecycle
+            .claim()
+            .await
+            .expect("claim canonical fixture parent"),
+        ClaimOutcome::Claimed
+    );
+    let writer = DefraStreamWriter::new(db.node.clone(), db.agent_did(), Duration::ZERO);
+    lifecycle
+        .begin_owned_execution(&writer)
+        .await
+        .expect("begin canonical fixture parent");
+    CanonicalBackgroundFixture {
+        node: db.node.clone(),
+        parent: lifecycle.request().clone(),
+        lifecycle,
+        writer,
+        next_turn: 0,
+    }
+}
+
+impl CanonicalBackgroundFixture {
+    async fn persist_notification(
+        &mut self,
+        notification_content: &str,
+        message_key: &str,
+        wake_content: &str,
+        queue: RequestQueue,
+        existing_notification_doc_id: Option<&str>,
+    ) -> anyhow::Result<EnqueuedBackgroundCompletionInput> {
+        anyhow::ensure!(
+            queue.source == QueueSource::BackgroundCompletion
+                && queue.policy == QueuePolicy::Coalesce
+                && queue
+                    .key
+                    .as_deref()
+                    .is_some_and(|key| !key.trim().is_empty()),
+            "fixture notification requires a keyed coalescing background queue"
+        );
+        let turn = self.next_turn;
+        self.next_turn += 1;
+        self.writer
+            .start_provider_attempt(
+                &self.parent.doc_id,
+                turn,
+                0,
+                format!("inference.{}", turn + 1).parse()?,
+            )
+            .await;
+        let native_id = format!("fixture-native-tool-{turn}");
+        let message = Message::Assistant {
+            id: Some(format!("fixture-provider-message-{turn}")),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: native_id.clone(),
+                call_id: Some(format!("fixture-provider-call-{turn}")),
+                function: ToolFunction::new(
+                    crate::toolset::SPAWN_PROCESS_TOOL_NAME.into(),
+                    serde_json::json!({"tool_name": "fixture", "args": {}}),
+                ),
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        let mut accepted = self
+            .writer
+            .publish_native_turn(&self.lifecycle, turn, 0, &message)
+            .await?
+            .accepted_tools;
+        anyhow::ensure!(accepted.len() == 1, "fixture expected one accepted tool");
+        let deadline = self
+            .lifecycle
+            .claimed_deadline_at()
+            .context("fixture parent claim has no deadline")?;
+        let mut tool = ToolCallLifecycle::from_accepted(
+            self.node.clone(),
+            self.parent.agent_did.clone(),
+            self.parent.requester_did.clone(),
+            accepted.pop().expect("one accepted tool"),
+            deadline,
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+        )?;
+        tool.start_running().await?;
+        let mut tool = tool
+            .admit_spawned_background(
+                crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
+                    tool_name: "fixture".to_owned(),
+                    deadline_at: deadline,
+                },
+                "background work started",
+            )
+            .await?;
+        tool.start_running().await?;
+        let binding = tool
+            .tool_output_binding()
+            .context("accepted fixture tool has output binding")?;
+        crate::tool_call_lifecycle::delivery::append_tool_output(&binding, notification_content)
+            .await?;
+        anyhow::ensure!(
+            tool.complete_owned(notification_content, None).await?,
+            "fixture tool terminal CAS lost"
+        );
+        let tool_call_doc_id = tool
+            .doc_id()
+            .context("fixture tool has physical document")?;
+        persist_background_completion_with_message_canonical(
+            &self.node,
+            &self.parent,
+            notification_content,
+            message_key,
+            wake_content,
+            queue,
+            existing_notification_doc_id,
+            &ToolNotificationPublication {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+                presentation: vec![PresentationPart::OutputRange {
+                    start_byte: 0,
+                    end_byte: notification_content.len() as u64,
+                }],
+            },
+        )
+        .await
+    }
+}
+
 #[tokio::test]
 async fn request_doc_lookup_rejects_duplicate_logical_request_ids() {
     let db = test_db("ambiguous-request-doc-lookup").await;
@@ -271,7 +441,6 @@ fn normalize_pin_fields(fields: &str) -> String {
 }
 
 mod background_completion;
-mod background_goal_repair;
 mod coalescing;
 mod input;
 

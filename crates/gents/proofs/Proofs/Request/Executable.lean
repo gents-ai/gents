@@ -8,7 +8,7 @@ inductive Action where
   | dedupLose
   | admissionReject
   | beginInference
-  | advance
+  | continueProcessing
   | finish
   | fail
   | failBeforeStream
@@ -44,9 +44,9 @@ def step? (pre : RequestContext) : Action → Option RequestContext
         some { pre with state := .processing, admission := .executing }
       else
         none
-  | .advance =>
+  | .continueProcessing =>
       if pre.state = .processing ∧ pre.admission = .executing then
-        some { pre with progressSeq := pre.progressSeq + 1 }
+        some pre
       else
         none
   | .finish =>
@@ -132,11 +132,11 @@ theorem step_sound
       rcases h_step with ⟨h_begin, h_post⟩
       rcases h_begin with ⟨h_state, h_admission⟩
       exact Transition.begin_inference h_state h_admission h_post.symm
-  | advance =>
+  | continueProcessing =>
       simp [step?] at h_step
-      rcases h_step with ⟨h_advance, h_post⟩
-      rcases h_advance with ⟨h_state, h_admission⟩
-      exact Transition.advance h_state h_admission h_post.symm
+      rcases h_step with ⟨h_continue, h_post⟩
+      rcases h_continue with ⟨h_state, h_admission⟩
+      exact Transition.continue_processing h_state h_admission h_post.symm
   | finish =>
       simp [step?] at h_step
       rcases h_step with ⟨h_finish, h_post⟩
@@ -192,8 +192,8 @@ theorem transition_complete
       exact ⟨.admissionReject, by simp [step?, h_state, h_admission, h_post]⟩
   | begin_inference h_state h_admission h_post =>
       exact ⟨.beginInference, by simp [step?, h_state, h_admission, h_post]⟩
-  | advance h_state h_admission h_post =>
-      exact ⟨.advance, by simp [step?, h_state, h_admission, h_post]⟩
+  | continue_processing h_state h_admission h_post =>
+      exact ⟨.continueProcessing, by simp [step?, h_state, h_admission, h_post]⟩
   | finish h_state h_admission h_post =>
       exact ⟨.finish, by simp [step?, h_state, h_admission, h_post]⟩
   | fail h_state h_admission h_post =>

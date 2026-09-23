@@ -107,7 +107,7 @@ mod tests {
             deadline: Some("2026-06-04T00:05:00Z".to_string()),
             execution_generation: None,
             execution_lease_expires_at: None,
-            execution_progress_seq: 0,
+            execution_lease_secs: None,
             subagent_depth: 1,
             caused_by_parent_request_id: Some("parent-req".to_string()),
             caused_by_parent_request_doc_id: Some("parent-req-doc".to_string()),

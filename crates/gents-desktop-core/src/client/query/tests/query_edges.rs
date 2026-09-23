@@ -14,7 +14,7 @@ async fn fetch_doc_patch_returns_empty_store_for_no_matches() {
     let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &["never-existed"])
         .await
         .expect("fetch_doc_patch");
-    assert_eq!(patch.messages.len(), 0);
+    assert_eq!(patch.transcript_messages.len(), 0);
 }
 
 #[tokio::test]

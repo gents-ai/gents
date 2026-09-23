@@ -262,7 +262,7 @@ Examples:
   gents task run --task-id host-check --graphql http://127.0.0.1:9191/api/v0/graphql";
 const TRACE_AFTER_HELP: &str = "\
 Exports one JSON object per persisted AgentToolCall row. The command reads
-AgentSession, AgentRequest, AgentResponse, AgentMessage, AgentBehavior, and
+AgentSession, AgentRequest, AgentMessage, AgentOutputSegment, and
 AgentToolCall rows, then infers Amy baseline fields without mutating runtime
 state.
 
@@ -294,6 +294,9 @@ Examples:
   gents request submit --content \"summarize this repo\"
   gents request show REQUEST_ID";
 const RESPONSE_AFTER_HELP: &str = "\
+Views the canonical terminal output of a request: the request row's
+lifecycle_state and terminal_output selection.
+
 Examples:
   gents response wait REQUEST_ID
   gents response show REQUEST_ID";
@@ -351,8 +354,7 @@ pub(crate) const SCHEMA_COLLECTION_CHECKS: &[(&str, &str)] = &[
     ("InferenceExecution", "execution_id"),
     ("InferenceRetryPolicy", "retry_policy_id"),
     ("AgentRequest", "request_id"),
-    ("AgentResponse", "request_id"),
-    ("AgentToolResult", "agent_did"),
+    ("AgentOutputSegment", "request_doc_id"),
     ("AgentSession", "session_id"),
     ("AgentMessage", "message_key"),
     ("AgentToolCall", "tool_call_key"),

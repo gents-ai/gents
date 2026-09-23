@@ -140,7 +140,44 @@ pub(crate) async fn cancel_background_tool_call_with_cause(
 mod tests {
     use super::*;
     use crate::ensure_runtime_schemas;
+    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::streaming::DefraStreamWriter;
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+    use std::time::Duration;
     use tokio_util::sync::CancellationToken;
+
+    /// Canonical claimed-request fixture, mirroring
+    /// `tool_call_lifecycle::delivery::claimed_request`.
+    async fn claimed_request(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        session_id: &str,
+        agent_did: &str,
+    ) -> RequestLifecycle {
+        let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let request_id = crate::graphql::escape_graphql_string(request_id);
+        let session_id = crate::graphql::escape_graphql_string(session_id);
+        let agent_did = crate::graphql::escape_graphql_string(agent_did);
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cancel fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+        assert!(!created.has_errors(), "{:#?}", created.errors);
+        let row = node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        )).await;
+        let row: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&row, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            "general",
+            &agent_did,
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+        lifecycle
+    }
 
     #[tokio::test]
     async fn cancel_background_tool_call_terminalizes_row_and_token() {
@@ -157,32 +194,64 @@ mod tests {
         );
         ensure_runtime_schemas(&node).await.unwrap();
 
+        let agent_did = "did:test:test";
+        let mut request = claimed_request(&node, "request-cancel", "session-1", agent_did).await;
+        let writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(1));
+        request.begin_owned_execution(&writer).await.unwrap();
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                0,
+                0,
+                "inference.1".parse().unwrap(),
+            )
+            .await;
+        let message = Message::Assistant {
+            id: Some("cancel-provider-message".into()),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: "cancel-native-tool".into(),
+                call_id: Some("cancel-provider-call".into()),
+                function: ToolFunction::new("bash_unrestricted".into(), serde_json::json!({})),
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        let mut published = writer
+            .publish_native_turn(&request, 0, 0, &message)
+            .await
+            .unwrap();
+        let accepted = published
+            .accepted_tools
+            .pop()
+            .expect("canonical publication accepted bash_unrestricted");
+        let deadline = request
+            .claimed_deadline_at()
+            .expect("claimed request deadline");
+        let mut lifecycle = ToolCallLifecycle::from_accepted(
+            node.clone(),
+            agent_did.to_string(),
+            None,
+            accepted,
+            deadline,
+            AwaitMode::Background,
+            crate::tool_call_lifecycle::CancelPolicy::Cascade,
+        )
+        .unwrap();
+        lifecycle.start_running().await.unwrap();
+
         let registry = BackgroundExecutionRegistry::default();
         let token = CancellationToken::new();
         registry
-            .reserve("tool-1".to_string(), token.clone())
+            .reserve("cancel-native-tool".to_string(), token.clone())
             .disarm();
-
-        let mut lifecycle = ToolCallLifecycle::new_background_tool(
-            node.clone(),
-            "request-1".to_string(),
-            "session-1".to_string(),
-            "did:test:test".to_string(),
-            "tool-1".to_string(),
-            1,
-            "bash_unrestricted".to_string(),
-            "{}".to_string(),
-            chrono::Utc::now() + chrono::Duration::minutes(5),
-        );
-        lifecycle.start_running().await.unwrap();
 
         let denied = cancel_session_background_process(
             node.clone(),
             &registry,
-            "did:test:test",
+            agent_did,
             Some("foreign"),
             "session-1",
-            "tool-1",
+            "cancel-native-tool",
         )
         .await
         .unwrap();
@@ -195,10 +264,10 @@ mod tests {
         let outcome = cancel_session_background_process(
             node.clone(),
             &registry,
-            "did:test:test",
+            agent_did,
             None,
             "session-1",
-            "tool-1",
+            "cancel-native-tool",
         )
         .await
         .unwrap();
@@ -211,7 +280,7 @@ mod tests {
         );
         assert!(token.is_cancelled());
 
-        let row = ToolCallLifecycle::load(node.clone(), "session-1", "tool-1")
+        let row = ToolCallLifecycle::load(node.clone(), "session-1", "cancel-native-tool")
             .await
             .unwrap()
             .expect("tool row");
@@ -220,57 +289,213 @@ mod tests {
         let _ = std::fs::remove_dir_all(&data_path);
     }
 
+    /// Owned cancel of a background tool must persist the operator-authored
+    /// completion reason, the cancellation cause, and leave the row in the
+    /// `completionPending:<reason>` cursor so background-completion recovery
+    /// can redrive the signed notification + wake side effects.
+    ///
+    /// Uses a real `KeyIdentity::load_or_create` registered as the node's
+    /// signing identity: the redrive's wake request is authored with
+    /// `RequestSigner::RegisteredTarget`, which resolves that registration at
+    /// signing time, so the persisted wake row must carry a real admission
+    /// signature rather than a fixture DID.
     #[tokio::test]
     async fn owned_cancel_persists_custom_completion_reason_for_redrive() {
+        use crate::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT;
+        use crate::identity::AgentIdentity;
+        use crate::SIGNED_REQUEST_FIELDS;
+
         let data_path = std::env::temp_dir().join(format!(
             "agent-tool-control-custom-cancel-{}",
             uuid::Uuid::new_v4()
         ));
+        std::fs::create_dir_all(&data_path).unwrap();
+        let identity = Arc::new(
+            crate::identity::KeyIdentity::load_or_create(data_path.join("agent.key"), None)
+                .unwrap(),
+        );
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
                 .data_path(&data_path)
+                .with_node_identity_did(identity.did())
                 .build()
                 .await
                 .unwrap(),
         );
         ensure_runtime_schemas(&node).await.unwrap();
+        crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
 
-        let mut lifecycle = ToolCallLifecycle::new_background_tool(
-            node.clone(),
-            "request-custom".to_string(),
-            "session-custom".to_string(),
-            "did:test:test".to_string(),
-            "tool-custom".to_string(),
-            1,
-            "bash_unrestricted".to_string(),
-            "{}".to_string(),
-            chrono::Utc::now() + chrono::Duration::minutes(5),
-        );
-        lifecycle.start_running().await.unwrap();
-        assert!(lifecycle
-            .cancel_during_run_owned(CancelCause::UserCancelled, "operator requested drain")
-            .await
-            .unwrap());
-
-        let response = node
-            .execute(
-                r#"{
-                    AgentToolCall(filter: { tool_call_id: { _eq: "tool-custom" } }, limit: 1) {
-                        status
-                    }
-                }"#,
+        let agent_did = identity.did().to_string();
+        let mut request =
+            claimed_request(&node, "request-custom", "session-custom", &agent_did).await;
+        let writer = DefraStreamWriter::new(node.clone(), &agent_did, Duration::from_millis(1));
+        request.begin_owned_execution(&writer).await.unwrap();
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                0,
+                0,
+                "inference.1".parse().unwrap(),
             )
             .await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
-        let status = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentToolCall"))
-            .and_then(serde_json::Value::as_array)
-            .and_then(|rows| rows.first())
-            .and_then(|row| row.get("status"))
-            .and_then(serde_json::Value::as_str);
-        assert_eq!(status, Some("completionPending:operator requested drain"));
+        let message = Message::Assistant {
+            id: Some("custom-provider-message".into()),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: "custom-native-tool".into(),
+                call_id: Some("custom-provider-call".into()),
+                function: ToolFunction::new("bash_unrestricted".into(), serde_json::json!({})),
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        let mut published = writer
+            .publish_native_turn(&request, 0, 0, &message)
+            .await
+            .unwrap();
+        let accepted = published
+            .accepted_tools
+            .pop()
+            .expect("canonical publication accepted bash_unrestricted");
+        let deadline = request
+            .claimed_deadline_at()
+            .expect("claimed request deadline");
+        let mut lifecycle = ToolCallLifecycle::from_accepted(
+            node.clone(),
+            agent_did.clone(),
+            None,
+            accepted,
+            deadline,
+            AwaitMode::Background,
+            crate::tool_call_lifecycle::CancelPolicy::Cascade,
+        )
+        .unwrap();
+        lifecycle.start_running().await.unwrap();
+
+        assert!(
+            lifecycle
+                .cancel_during_run_owned(CancelCause::UserCancelled, "operator requested drain")
+                .await
+                .unwrap(),
+            "owned cancel must win the durable running-state compare"
+        );
+
+        let row_response = node.execute(
+            r#"{ AgentToolCall(filter: { tool_call_id: { _eq: "custom-native-tool" } }, limit: 1) { _docID status lifecycle_state cancel_cause request_id request_doc_id session_id agent_did } }"#,
+        ).await;
+        assert!(!row_response.has_errors(), "{:#?}", row_response.errors);
+        let row = crate::graphql::first_row::<serde_json::Value>(&row_response, "AgentToolCall")
+            .unwrap()
+            .expect("cancelled background tool row");
+        assert_eq!(row["lifecycle_state"].as_str(), Some("cancelled"));
+        assert_eq!(
+            row["cancel_cause"].as_str(),
+            Some(CancelCause::UserCancelled.as_str())
+        );
+        assert_eq!(row["request_id"].as_str(), Some("request-custom"));
+        let tool_doc_id = row["_docID"].as_str().unwrap().to_owned();
+
+        // The operator-authored reason is the redrive cursor: recovery strips
+        // `completionPending:` and carries the remainder into the wake. This
+        // pins the required production behavior: cancel_during_run_owned must
+        // thread its completion reason into terminalize_with_delivery's
+        // terminal_persistence_status instead of discarding it.
+        assert_eq!(
+            row["status"].as_str(),
+            Some("completionPending:operator requested drain"),
+            "owned cancel must persist the custom completion reason as the redrive cursor"
+        );
+
+        // Redrive: recovery must converge the notification + wake side effects
+        // exactly once for this row.
+        let report =
+            ToolCallLifecycle::reconcile_background_completion_side_effects(&node, &agent_did)
+                .await
+                .unwrap();
+        assert_eq!(
+            report.side_effects_converged, 1,
+            "the cancelled background row must redrive its completion side effects"
+        );
+
+        // Exactly one canonical completion notification, keyed by the physical
+        // tool-call document (the ExistingNotification dedupe identity).
+        let message_key = format!("background-completion-notification:{tool_doc_id}:tool");
+        let message_key = crate::graphql::escape_graphql_string(&message_key);
+        let notification_response = node.execute(&format!(
+            r#"{{ AgentMessage(filter: {{ message_key: {{ _eq: "{message_key}" }} }}, limit: 2) {{ message_key session_id agent_did requester_did role }} }}"#
+        )).await;
+        assert!(
+            !notification_response.has_errors(),
+            "{:#?}",
+            notification_response.errors
+        );
+        let notifications =
+            crate::graphql::rows::<serde_json::Value>(&notification_response, "AgentMessage")
+                .unwrap();
+        assert_eq!(
+            notifications.len(),
+            1,
+            "completion notification dedupe must keep exactly one canonical row"
+        );
+        let notification = &notifications[0];
+        assert_eq!(notification["session_id"].as_str(), Some("session-custom"));
+        assert_eq!(notification["agent_did"].as_str(), Some(agent_did.as_str()));
+        assert!(notification["requester_did"].is_null());
+        assert_eq!(notification["role"].as_str(), Some("user"));
+
+        // The wake continuation is authored with RequestSigner::RegisteredTarget,
+        // so its persisted row must carry a real admission signature from the
+        // registered runtime principal, plus the runtime-source lineage back to
+        // the parent request.
+        let escaped_session = crate::graphql::escape_graphql_string("session-custom");
+        let escaped_agent = crate::graphql::escape_graphql_string(&agent_did);
+        let wake_response = node
+            .execute(&format!(
+                r#"{{
+                AgentRequest(
+                    filter: {{
+                        session_id: {{ _eq: "{escaped_session}" }},
+                        agent_did: {{ _eq: "{escaped_agent}" }},
+                        execution_origin: {{ _eq: "scheduled" }}
+                    }},
+                    limit: 2
+                ) {{ {SIGNED_REQUEST_FIELDS} }}
+            }}"#
+            ))
+            .await;
+        assert!(!wake_response.has_errors(), "{:#?}", wake_response.errors);
+        let wakes =
+            crate::graphql::rows::<serde_json::Value>(&wake_response, "AgentRequest").unwrap();
+        assert_eq!(
+            wakes.len(),
+            1,
+            "redrive must create exactly one scheduled background-completion wake request"
+        );
+        let wake = &wakes[0];
+        assert_eq!(
+            wake["admission_signer_did"].as_str(),
+            Some(agent_did.as_str())
+        );
+        assert!(
+            !wake["admission_signature"]
+                .as_str()
+                .unwrap_or_default()
+                .is_empty(),
+            "wake request must be signed by the registered runtime principal"
+        );
+        assert_eq!(
+            wake["runtime_issuer_did"].as_str(),
+            Some(agent_did.as_str())
+        );
+        assert_eq!(
+            wake["runtime_source_request_id"].as_str(),
+            Some("request-custom")
+        );
+        assert_eq!(wake["runtime_source_kind"].as_str(), Some("local-control"));
+        assert_eq!(wake["behavior_id"].as_str(), Some("general"));
+        assert_eq!(
+            wake["content"].as_str(),
+            Some(BACKGROUND_COMPLETION_WAKE_PROMPT)
+        );
 
         let _ = std::fs::remove_dir_all(&data_path);
     }

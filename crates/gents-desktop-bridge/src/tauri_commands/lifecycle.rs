@@ -453,8 +453,6 @@ pub struct DesktopObserverMetrics {
     pub drop_recoveries: u64,
     pub local_write_redundant_fetches: u64,
     pub fetch_failures: u64,
-    pub response_in_place_merges: u64,
-    pub response_copy_on_write_merges: u64,
     /// Transcript-content database changes that invalidated bounded session
     /// projections without copying their rows into the global observer.
     pub transcript_invalidations: u64,
@@ -478,8 +476,6 @@ pub async fn desktop_observer_metrics(
         drop_recoveries: snap.drop_recoveries,
         local_write_redundant_fetches: snap.local_write_redundant_fetches,
         fetch_failures: snap.fetch_failures,
-        response_in_place_merges: snap.response_in_place_merges,
-        response_copy_on_write_merges: snap.response_copy_on_write_merges,
         transcript_invalidations: snap.transcript_invalidations,
     }))
 }

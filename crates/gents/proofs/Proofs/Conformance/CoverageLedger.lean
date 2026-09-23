@@ -225,8 +225,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []
     }
-  , { feature := "streaming-response"
-    , required := [Surface.agentFacing, Surface.operatorUi]
+  , { feature := "canonical-output"
+    , required := [Surface.runtimeInternal, Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
   , { feature := "client-shell"
@@ -343,10 +343,10 @@ def vocabularyCoverage : List CoverageEntry :=
       "InferenceCallTerminalReason"
       "admission::tests::rust_inference_call_terminal_reason_vocabulary_matches_lean_model")
       "inference-call" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "vocabulary"
       "CompletionRetryFailureClass"
-      "conformance::completion_retry_lean_witness_cases_hold")
+      "The immutable-publication retry vocabulary has changed; the native owned loop must migrate before this is production vocabulary coverage.")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "vocabulary"
@@ -519,16 +519,15 @@ def caseCoverage : List CoverageEntry :=
       "ProviderEofCases"
       "lean_vocab_test::request_execution_lease_policy::generated_provider_eof_cases_fence_production_policy")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (followUpCoverage
       "request_execution_lease_cases"
       "RequestExecutionLeaseCases"
-      "lean_vocab_test::request_execution_lease_policy::generated_request_execution_lease_cases_fence_production_policy"
-      "Covers production begin/progress/finalize/revocation guards. Abstract claim freshness and recovery effects still require generated database consumer coverage.")
+      "#1571 explicit-renewal input/expected-state cases supersede the retired response/progress policy adapter. Bind the generated actions to native claim, due-only deadline CAS, producer admission and terminal/recovery owners; decoding fixtures is not native coverage.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage
       "request_execution_lease_trace_cases"
       "RequestExecutionLeaseTraceCases"
-      "Lean-first #1341 race contract. Runtime recovery tests must consume these generated expiry/drop, stale-owner, and single terminal-effect traces when the lease is implemented.")
+      "#1571 generated bounded-renewal, expiry/drop, stale-owner and terminal-effect traces require native execution, including independent timer polling and suspend/resume. No scheduler fairness or wall-clock continuity is proved.")
       "request-execution-lease" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "lifecycle_transition_cases"
@@ -592,25 +591,26 @@ def caseCoverage : List CoverageEntry :=
       "GoalContinuationMaterializationCases"
       "conformance::goals::generated_goal_continuation_materialization_cases_fence_restart_idempotency")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "session_hydration_cases"
       "SessionHydrationDecisionCases"
-      "conformance::session_hydration::generated_session_hydration_cases_match_decision_core")
+      "agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
+      "The native closure builder is exercised, but the adapter filters access observations itself and derives authorized_reference_closure from its result. Bind independent ACP observations through the production authorization owner before claiming end-to-end selection coverage.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_hydration_apply_cases"
       "SessionHydrationApplyCases"
       "conformance::session_hydration::generated_session_hydration_apply_cases_match_terminal_delivery_core")
       "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "session_hydration_progress_cases"
       "SessionHydrationProgressCases"
-      "conformance::session_hydration::generated_session_hydration_progress_cases_match_observe")
+      "The canonical-output observation cases are executable Lean witnesses; the native hydration observer has not migrated to the immutable records contract.")
       "session-hydration" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "session_hydration_durable_cases"
       "SessionHydrationDurableCases"
-      "conformance::session_hydration::generated_session_hydration_durable_cases_match_storage_projection")
+      "The durable canonical manifest cases are executable Lean witnesses; the native storage projection has not migrated to this contract.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "enrollment_cases"
@@ -738,11 +738,10 @@ def caseCoverage : List CoverageEntry :=
       "LogicalOutputObligationCases"
       "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
+  , tagged (followUpCoverage
       "completion_retry_cases"
       "completionRetry"
-      "conformance::completion_retry_lean_witness_cases_hold"
-      "Retry/failure/output-obligation cases drive production decisions. reissue_with_open_effects_illegal and rendered_never_two require owned-loop effect-closure and rendered-response traces, not assertions on expected fixture fields.")
+      "Retry policy and canonical-execution composition are executable Lean witnesses. The native owned loop must still implement retraction-before-retry and immutable acceptance before this is consumer coverage.")
       "completion-retry" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (boundaryCoverage
       "fleet_cases"
@@ -1012,13 +1011,80 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
-      "conformance::generated_restart_disposition_cases_drive_recover_all")
+      "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "tool_call_lifecycle::recovery_conformance::generated_linked_restart_dispositions_use_canonical_admission_owner")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "tool_call_lifecycle::background_hook_conformance::generated_absent_requester_process_control_uses_accepted_hook_calls"
+      "Three requester-scope cases use a persisted background process, the production authorization owner and canonical accepted hook calls. A forged nonempty requester fails at immutable header authorization; absent and empty requester calls exercise the native result envelopes. The metadata-only inventory test is not native behavior coverage for the other rows.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "tool_call_lifecycle::completion_owner_conformance::generated_r6_completion_owner_cases_use_accepted_native_output"
+      "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_native_missing_parent_restart_cases_defer")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_conformance::generated_native_recovery_cases_use_canonical_admission_owner")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_linked_recovery_cases_use_accepted_spawn")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_expired_child_liveness_cases_use_accepted_bridge")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_queued_descendant_case_releases_local_and_foreign_parent_children")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_orphan_background_recovery_cases_use_accepted_native_call")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_missing_parent_deferred_cases_keep_accepted_row_running")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_background_completion_recovery_uses_accepted_native_call")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_unclaimed_remote_spawn_uses_accepted_bridge")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
-      "conformance::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract")
-      "background-tools" [Surface.agentFacing]
+      "tool_call_lifecycle::completion_owner_conformance::generated_r6_notification_precedes_continuation_claim")
+      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r5_cross_principal_cases"
       "R5CrossPrincipalCases"
@@ -1037,8 +1103,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"
-      "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance"
-      "Covers persisted tool recovery/cancellation outcomes for four representative deadline/interrupt inputs. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
+      "tool_call_lifecycle::composed_conformance::generated_composed_invariants_use_canonical_admission_owner"
+      "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "cancel_propagation_cases"
@@ -1048,12 +1114,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
-      "conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant")
+      "hook::tests::background_budget::generated_background_budget_uses_accepted_dispatch")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "CascadeCancelsChildTheoremWitness"
-      "conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace")
+      "tool_call_lifecycle::cascade_source_conformance::canonical_source_cascade_interrupts_processing_child_trace")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "subagent_delegation_graph_cases"
@@ -1077,20 +1143,21 @@ def caseCoverage : List CoverageEntry :=
       "R4cBackgroundWorkCases"
       "gents_desktop_bridge::snapshot::operations_snapshot::tests::project_filters_to_background_await_mode_only")
       "background-tools" [Surface.operatorUi]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "r4c_background_work_cases"
       "R4cBackgroundWorkCases"
-      "conformance::generated_read_tool_output_witness_drives_hook_dispatch")
+      "#1571: replace the retired state/registry dispatch consumer with canonical_source_reconstruction over physical tool segments; migrate the generated witness schema. Generic paging coverage below is unchanged.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "tool_output_paging_cases"
       "ToolOutputPagingCases"
       "background_tools::tests::generated_tool_output_paging_cases_match_slice_function")
       "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "bridge_step_cases"
       "BridgeStepCases"
-      "conformance::generated_bridge_step_cases_drive_bridge_lifecycle")
+      "tool_call_lifecycle::background_hook_conformance::generated_bridge_steps_drive_real_background_projector_and_cascade"
+      "Nine committed-bridge cases drive canonical admission, the production background projector and cascade owner. The uncommitted-bridge rejection remains a model assertion, not a native owner invocation.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "codex_shim_projection_cases"
@@ -1170,10 +1237,10 @@ def caseCoverage : List CoverageEntry :=
       "CodexShimBindingCases"
       "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
-      "conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
+      "Native owners cover ordering, model-scripted parallel completion, pair closure, and abandonment. Full coverage needs transaction fault injection for lost-ack duplicate delivery replay and a permissive orphan-result publication owner.")
       "transcript" [Surface.agentFacing]
   , tagged (consumerCoverage
       "transcript_cases"
@@ -1201,33 +1268,57 @@ def caseCoverage : List CoverageEntry :=
       "IdentityContracts"
       "Route through the canonical principal-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
-  , tagged (consumerWithFollowUp
-      "streaming_response_cases"
-      "ResponseTransitionCases"
-      "conformance::generated_streaming_response_cases_pin_lifecycle_contract"
-      "Observes response status, live tail, token count, materialization marker and request lifecycle. Full durable-reasoning transfer and atomic response/request commit require the completion/materialization owner; this adapter only marks an externally supplied materialization sequence.")
-      "streaming-response" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "streaming_response_interrupt_flow_cases"
-      "ResponseInterruptFlowCases"
-      "conformance::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract")
-      "streaming-response" [Surface.agentFacing]
-  , tagged (consumerCoverage
-      "streaming_response_cases"
-      "ResponseTransitionCases"
-      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_streaming_response_overlay_consumes_generated_transition_cases")
-      "streaming-response" [Surface.operatorUi]
-  , tagged (consumerWithFollowUp
+  , tagged (followUpCoverage
+      "canonical_worker_capacity_cases"
+      "CanonicalWorkerCapacityCases"
+      "Bind modeled fresh admission, exact dependency parking, guarded resumption, overflow rejection and cleanup to the slot-owned Rust capacity scheduler. Native retained continuation, independent renewal and capacity-one child progress must be exercised before desktop acceptance.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "canonical_execution_gate_cases"
+      "CanonicalExecutionGateCases"
+      "Composed lease, publication, tool lifecycle, recovery, delivery and gate witnesses require native transactional owners. The application Trace separately proves sequence bounds, claim coherence, full tool coherence and closure uniqueness inductively; finite generated cases do not establish these universal invariants in Rust. Typed adapter fixtures and success summaries are not native consumer coverage.")
+      "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (followUpCoverage
+      "canonical_payload_presentation_cases"
+      "CanonicalPayloadPresentationCases"
+      "Stored and presented payload lengths are derived by reconstruction, not provider request sizing. Neither payload length bounds the other; missing dependencies yield no measurement. The compaction projection join has a separate fixture group. The real serialized-request/threshold experiment remains native.external-projected-request-threshold for implementation; this group is reconstruction-only, not compaction or native consumer coverage.")
+      "canonical-output" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "compaction_projection_join_cases"
+      "CompactionProjectionJoinCases"
+      "Model-derived projection/estimate/reduction and rebuilt-admission observations bind exact input identities, failure propagation and threshold/output-capacity boundaries. Provider projection and estimation are explicit fallible native premises, not modeled serializers. Native adapters and the real serialized-request experiment remain pending; controlled observations are not native consumer coverage.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "compaction_canonical_projection_cases"
+      "CompactionCanonicalProjectionCases"
+      "Concrete canonical records and selected identities exercise the composed reconstruction/projection/reduction entry. Compare full native messages at initial and checkpoint-rebuild callbacks, and reject missing or loading dependencies without shortened history. The native serializer and ACP-authorized snapshot remain external premises.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "repaired_projection_admission_cases"
+      "RepairedProjectionAdmissionCases"
+      "Fresh provider-view admission reprojects and re-estimates supplied repaired input; generated observations cover failures, equality, over-threshold and output-capacity checks. This does not model the repair transformation or establish native consumer coverage.")
+      "compaction" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "canonical_output_projection_cases"
+      "CanonicalOutputProjectionCases"
+      "Typed immutable projection, loading/conflict/denial, owner liveness and retained Partial diagnostics are executable Lean witnesses. Native projection plus ACP/genesis validation remains a bridge obligation.")
+      "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (followUpCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"
-      "conformance::generated_compaction_reducer_cases_pin_contract"
-      "Strip/provider-view cases exercise actual payload reduction and reapplication. Summarize cases exercise the production gate and splitter only; full checkpoint execution and same-operation idempotence need the compaction owner consumer.")
+      "Strip/provider-view and immutable publication-gate cases are executable Lean witnesses. The native compaction owner must migrate its reducer gate and checkpoint execution before this is consumer coverage.")
       "compaction" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "compaction_cursor_cases"
       "CompactionCursorCases"
-      "conformance::generated_compaction_reducer_cases_pin_contract")
+      "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
       "compaction" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "current_input_cases"
+      "CurrentInputCases"
+      "session::output::tests::current_input_selection_matches_lean_owner"
+      "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblySanitizeCases"
@@ -1372,7 +1463,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "CancelCause"
-      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_causes_from_request_and_tool")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "state_machine"
@@ -1436,8 +1527,8 @@ def caseCoverage : List CoverageEntry :=
 def followUpHookCoverage : List CoverageEntry :=
   [ tagged (followUpCoverage
       "follow_up_hook"
-      "Subagent.BridgedState.foreground_blocks_parent_advance"
-      "Subagent.BridgedState.foreground_blocks_parent_advance proves live foreground tools block parent progress/message advance; related aliases: Subagent.BridgedState.subagent_depth_bounded and Subagent.BridgedState.bridge_link_symmetric. Accepted Lean-only today because the invariant is a proof-layer bridge guard rather than an emitted runtime witness.")
+      "Subagent.BridgedState.foreground_blocks_processing_continuation_admission"
+      "Subagent.BridgedState.foreground_blocks_processing_continuation_admission proves the composed request-step guard rejects owned-loop continuation admission while a foreground tool is live. Generic identity preservation is stated separately by parent_transition_preserves_request_origin_and_message_sequence; neither theorem claims scheduler or output progress.")
       "background-tools" []
   , tagged (followUpCoverage
       "follow_up_hook"
@@ -1456,19 +1547,9 @@ def followUpHookCoverage : List CoverageEntry :=
       "background-tools" []
   , tagged (boundaryCoverage
       "follow_up_hook"
-      "StreamingResponse.Transition.streamIdleTimeout.deadlinePrecondition"
-      boundaryStreamingResponseIdleTimeoutDeadlineId)
-      "streaming-response" [Surface.runtimeInternal]
-  , tagged (boundaryCoverage
-      "follow_up_hook"
       "PromptAssembly.providerInput.sanitizeLoadedHistory"
       boundaryPromptAssemblyProviderInputSanitizationId)
       "prompt-assembly" [Surface.agentFacing]
-  , tagged (boundaryCoverage
-      "follow_up_hook"
-      "Compaction.safeToReduce.sessionScopeResolver"
-      boundaryCompactionSafeToReduceSessionScopeId)
-      "compaction" [Surface.agentFacing]
   , tagged (boundaryCoverage
       "follow_up_hook"
       "Compaction.providerViewAppend.uniqueCallIdsChecked"

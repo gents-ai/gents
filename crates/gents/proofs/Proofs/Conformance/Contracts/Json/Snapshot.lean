@@ -6,6 +6,7 @@ import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
 import Proofs.Conformance.ArtifactAuthority
+import Proofs.EventDelivery.SubagentSource
 import Proofs.Conformance.WorkspacePathCapability
 import Proofs.Conformance.Contracts.Json.Core
 import Proofs.Conformance.Contracts.Json.Runtime
@@ -35,6 +36,8 @@ import Proofs.Conformance.Contracts.Json.RequestInput
 import Proofs.Conformance.Contracts.Json.AggregateBudget
 import Proofs.Conformance.Contracts.Json.RollingCompaction
 import Proofs.Conformance.Contracts.Json.ReductionEngine
+import Proofs.Conformance.Contracts.Json.CompactionProjectionJoin
+import Proofs.Conformance.Contracts.Json.CompactionCanonicalProjection
 import Proofs.CompletionRetry.Contracts
 import Proofs.Conformance.Triggers.Contracts
 import Proofs.Conformance.EventGroups
@@ -53,8 +56,38 @@ import Proofs.Conformance.GraphLogicalInvocation
 import Proofs.Conformance.RequestExecutionLease
 import Proofs.Conformance.InferenceRegistry
 import Proofs.Conformance.RootAdmission
+import Proofs.Conformance.Contracts.Json.ExecutionGate
+import Proofs.Conformance.Contracts.Json.WorkerCapacity
+import Proofs.Conformance.Contracts.Json.PayloadPresentation
+import Proofs.Conformance.Contracts.Json.R5Scenarios
 
 namespace Conformance.Contracts
+
+def reservedChildDecisionString : EventDelivery.SubagentSource.MaterializationDecision → String
+  | .created => "created"
+  | .replayed => "replayed"
+  | .conflict => "conflict"
+
+def reservedChildBindingJson (binding : EventDelivery.SubagentSource.ReservedChildBinding) : String :=
+  let workspaceJson := match binding.workspace with | none => "null" | some value => toString value
+  "{" ++ "\"child\":" ++ toString binding.child ++ ","
+    ++ "\"agent\":" ++ toString binding.agent ++ ","
+    ++ "\"behavior\":" ++ toString binding.behavior ++ ","
+    ++ "\"parent_request\":" ++ toString binding.parentRequest ++ ","
+    ++ "\"parent_request_doc\":" ++ toString binding.parentRequestDoc ++ ","
+    ++ "\"parent_tool\":" ++ toString binding.parentTool ++ ","
+    ++ "\"parent_tool_doc\":" ++ toString binding.parentToolDoc ++ ","
+    ++ "\"payload\":" ++ toString binding.payload ++ ","
+    ++ "\"workspace\":" ++ workspaceJson ++ ","
+    ++ "\"admission\":" ++ toString binding.admission ++ "}"
+
+def reservedChildCaseJson (w : EventDelivery.SubagentSource.ReservedChildCase) : String :=
+  let actual := EventDelivery.SubagentSource.ensureReservedChild w.stored w.candidate
+  "{" ++ "\"name\":" ++ jsonString w.name ++ ","
+    ++ "\"stored\":" ++ jsonArray (w.stored.map reservedChildBindingJson) ++ ","
+    ++ "\"candidate\":" ++ reservedChildBindingJson w.candidate ++ ","
+    ++ "\"expected_decision\":" ++ jsonString (reservedChildDecisionString actual.1) ++ ","
+    ++ "\"expected_count\":" ++ toString actual.2.length ++ "}"
 
 open Conformance.ContractCases
 
@@ -97,6 +130,12 @@ def snapshotJson : String :=
       ++ Conformance.RequestExecutionLeaseContracts.leaseCasesJson ++ ","
     ++ "\"request_execution_lease_trace_cases\":"
       ++ Conformance.RequestExecutionLeaseContracts.leaseTraceCasesJson ++ ","
+    ++ "\"canonical_execution_gate_cases\":"
+      ++ Conformance.ExecutionGateContracts.casesJson ++ ","
+    ++ "\"canonical_worker_capacity_cases\":"
+      ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
+    ++ "\"canonical_payload_presentation_cases\":"
+      ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"
@@ -121,6 +160,8 @@ def snapshotJson : String :=
       ++ goalContinuationMaterializationCasesJson ++ ","
     ++ "\"session_hydration_decision_cases\":"
       ++ sessionHydrationDecisionCasesJson ++ ","
+    ++ "\"session_hydration_closure_cases\":"
+      ++ sessionHydrationClosureCasesJson ++ ","
     ++ "\"session_hydration_apply_cases\":"
       ++ sessionHydrationApplyCasesJson ++ ","
     ++ "\"session_hydration_progress_cases\":"
@@ -237,12 +278,19 @@ def snapshotJson : String :=
       ++ jsonArray (requestProgressCases.map requestProgressCaseJson) ++ ","
     ++ "\"pending_user_turn_cases\":"
       ++ jsonArray (pendingUserTurnCases.map pendingUserTurnCaseJson) ++ ","
+    ++ "\"queued_steering_trace_cases\":"
+      ++ jsonArray (QueuedSteering.traceObservations.map queuedSteeringTraceJson) ++ ","
+    ++ "\"queued_steering_guard_cases\":"
+      ++ jsonArray (QueuedSteering.guardObservations.map queuedSteeringGuardJson) ++ ","
     ++ "\"queue_deadline_conformance_cases\":"
       ++ jsonArray
         (queueDeadlineConformanceCases.map queueDeadlineConformanceCaseJson) ++ ","
     ++ "\"recovery_sweep_cases\":"
       ++ jsonArray
         (Recovery.recoverySweepCases.map recoverySweepCaseJson) ++ ","
+    ++ "\"reserved_child_materialization_cases\":"
+      ++ jsonArray
+        (EventDelivery.SubagentSource.reservedChildCases.map reservedChildCaseJson) ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","
@@ -292,6 +340,7 @@ def snapshotJson : String :=
     ++ "\"r5_cross_principal_cases\":"
       ++ jsonArray
         (r5CrossPrincipalCases.map r5CrossPrincipalCaseJson) ++ ","
+    ++ "\"r5_scenario_cases\":" ++ r5ScenarioCasesJson ++ ","
     ++ "\"composed_invariant_witnesses\":"
       ++ jsonArray
         (composedInvariantWitnesses.map composedInvariantWitnessJson) ++ ","
@@ -329,12 +378,10 @@ def snapshotJson : String :=
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","
-    ++ "\"streaming_response_cases\":"
+    ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
-        (StreamingResponse.responseTransitionCases.map responseTransitionCaseJson) ++ ","
-    ++ "\"streaming_response_interrupt_flow_cases\":"
-      ++ jsonArray
-        (StreamingResponse.responseInterruptFlowCases.map responseInterruptFlowCaseJson) ++ ","
+        (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
+    ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","
     ++ "\"prompt_assembly_layer_cases\":"
@@ -363,6 +410,12 @@ def snapshotJson : String :=
       ++ rollingCompactionCasesJson ++ ","
     ++ "\"reduction_engine_cases\":"
       ++ reductionEngineCasesJson ++ ","
+    ++ "\"compaction_projection_join_cases\":"
+      ++ compactionProjectionJoinCasesJson ++ ","
+    ++ "\"compaction_canonical_projection_cases\":"
+      ++ compactionCanonicalProjectionCasesJson ++ ","
+    ++ "\"repaired_projection_admission_cases\":"
+      ++ repairedProjectionAdmissionCasesJson ++ ","
     ++ "\"rendered_capture_key_cases\":"
       ++ renderedCaptureKeyCasesJson ++ ","
     ++ "\"capture_scope_cases\":"

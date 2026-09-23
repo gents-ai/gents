@@ -119,6 +119,7 @@ describe("transcript copy actions", () => {
         timelineItems={[
           {
             kind: "userMessage",
+            reconstruction: { state: "ready" },
             itemKey: "u1",
             content: "copy me please",
           },
@@ -139,6 +140,7 @@ describe("transcript copy actions", () => {
         timelineItems={[
           {
             kind: "assistantMessage",
+            reconstruction: { state: "ready" },
             itemKey: "a1",
             content: "```rust\nfn main() {}\n```",
           },
@@ -161,10 +163,11 @@ describe("error card retry", () => {
     latestRequestId: "req-failed",
     turnState: "failed",
     retryEligibility: { eligible: true, denialReason: null },
-    latestResponse: { status: "failed", errorMessage: "provider exploded" },
+    latestRequestOutcome: { failureReason: "provider exploded" },
     timelineItems: [
       {
         kind: "userMessage",
+        reconstruction: { state: "ready" },
         itemKey: "u1",
         content: "the failed ask",
       },
@@ -262,16 +265,14 @@ describe("error card retry", () => {
         session={{
           ...session,
           turnState: "interrupted",
-          latestResponse: {
-            status: "interrupted",
-            errorMessage: "agent stream interrupted",
-            interruptedAt: "2026-07-25T20:00:00Z",
+          latestRequestOutcome: {
+            failureReason: "agent stream interrupted",
             cancelCause: {
               cause: "interrupted",
-              source: "responseInterruptedAt",
+              source: "requestLifecycle",
               confidence: "direct",
               at: "2026-07-25T20:00:00Z",
-              evidence: ["AgentResponse.interrupted_at = 2026-07-25T20:00:00Z"],
+              evidence: ['AgentRequest.lifecycle_state = "interrupted"'],
             },
           },
         }}
@@ -292,9 +293,8 @@ describe("error card retry", () => {
         selectedSessionId="s1"
         session={{
           ...session,
-          latestResponse: {
-            status: "failed",
-            errorMessage: "completion cancelled",
+          latestRequestOutcome: {
+            failureReason: "completion cancelled",
             cancelCause: {
               cause: "userCancelled",
               source: "requestInterrupt",

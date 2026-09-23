@@ -224,7 +224,7 @@ async fn run_contract_with_streaming_cadence(
         core.shutdown().await?;
         drop(core);
         offline_gate.add_permits(1);
-        wait_for_complete_agent_response(&graphql, &request, TURN_BUDGET).await?;
+        wait_for_complete_agent_response(&graphql, &request, &session, TURN_BUDGET).await?;
 
         let reconnect_started = Instant::now();
         let core = ClientCore::start_with_paths_and_options(
@@ -315,7 +315,7 @@ async fn visible_turn(
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
-                wait_for_complete_agent_response(graphql, &request, TURN_BUDGET).await?;
+                wait_for_complete_agent_response(graphql, &request, session, TURN_BUDGET).await?;
                 Ok::<_, anyhow::Error>(started.elapsed())
             },
             async {
@@ -358,9 +358,8 @@ async fn visible_turn(
             "conversation phase timings",
         );
         let lifecycle = graphql_query(graphql, &format!(r#"{{
-            AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at claimed_at terminalized_at}}
-            AgentResponse(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at completed_at materialized_at}}
-        }}"#, escape_graphql_string(&request), escape_graphql_string(&request))).await?;
+            AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}) {{created_at claimed_at terminalized_at lifecycle_state terminal_output}}
+        }}"#, escape_graphql_string(&request))).await?;
         tracing::info!(timestamps = ?lifecycle, "runtime lifecycle timing evidence");
         anyhow::ensure!(
             client_visible.saturating_sub(runtime_completed) <= return_budget,
@@ -428,15 +427,16 @@ async fn wait_for_replicated_reply(
     );
     let query = format!(
         r#"{{
-        AgentRequest(filter: {{{filter}}}) {{_docID lifecycle_state}}
-        AgentResponse(filter: {{{filter}}}) {{_docID status content}}
-        AgentMessage(filter: {{{filter}}}) {{_docID role content}}
+        AgentRequest(filter: {{{filter}}}) {{
+            _docID request_id session_id agent_did requester_did
+            lifecycle_state terminal_output execution_generation failure_reason
+        }}
     }}"#
     );
     let visibility_started = Instant::now();
     let database_visibility = async {
         let mut stages_seen = [false; 3];
-        let mut response_ready_at = None;
+        let mut terminal_ready_at = None;
         loop {
             let result = core.node().execute(&query).await;
             anyhow::ensure!(
@@ -452,42 +452,77 @@ async fn wait_for_replicated_reply(
                     .unwrap_or_default()
             };
             let requests = rows("AgentRequest");
-            let responses = rows("AgentResponse");
-            let messages = rows("AgentMessage");
-            let completed = requests
+            let request_completed = requests
                 .iter()
-                .any(|row| row["lifecycle_state"] == "completed")
-                && responses.iter().any(|row| row["status"] == "complete");
-            let response_complete = responses.iter().any(|row| row["status"] == "complete");
-            if response_complete {
-                response_ready_at.get_or_insert_with(Instant::now);
+                .any(|row| row["lifecycle_state"] == "completed");
+            // Terminal selection lives on the request. A completed request
+            // without it is an incomplete replica state, not a success.
+            let terminal_selection = requests.iter().any(|row| !row["terminal_output"].is_null());
+            if terminal_selection {
+                terminal_ready_at.get_or_insert_with(Instant::now);
             }
-            let body = messages
-                .iter()
-                .filter(|row| row["role"] == "assistant")
-                .filter_map(|row| row["content"].as_str())
-                .map(|content| {
-                    gents_protocol::transcript::present_persisted_message("assistant", content)
-                        .body_markdown
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
+            // The exact physical request row: observe the selected terminal
+            // content through the canonical request-output owner against the
+            // phone-side node. No inline content reads, no header
+            // concatenation, no response document.
+            let mut terminal_request_row = None;
+            for row in &requests {
+                let typed: gents_protocol::row::AgentRequestRow =
+                    serde_json::from_value(row.clone())
+                        .with_context(|| format!("decoding canonical AgentRequest row: {row}"))?;
+                anyhow::ensure!(
+                    typed.session_id.as_deref() == Some(session)
+                        && typed.agent_did.as_deref() == Some(agent)
+                        && typed.requester_did.as_deref() == Some(core.principal().did()),
+                    "replica AgentRequest row lost tenancy lineage for {request}: {row}"
+                );
+                if typed.is_terminal()
+                    && typed.terminal_output.is_some()
+                    && terminal_request_row.is_none()
+                {
+                    terminal_request_row = Some(typed);
+                }
+            }
+            let mut body = String::new();
+            if let Some(row) = terminal_request_row {
+                match gents::session::observe_request_output(
+                    &gents::ConfigAccess::Local(core.node_arc()),
+                    &row,
+                )
+                .await
+                {
+                    Ok(gents::session::CanonicalRequestOutput::TerminalMessage {
+                        header,
+                        presentation,
+                        ..
+                    }) => {
+                        anyhow::ensure!(
+                            header.request_doc_id.as_deref() == row.doc_id.as_deref()
+                                && header.session_id == session
+                                && header.agent_did == agent
+                                && header.requester_did.as_deref()
+                                    == Some(core.principal().did()),
+                            "canonical terminal header lost tenancy lineage for {request}: header={header:?}"
+                        );
+                        body = presentation.body_markdown.clone();
+                    }
+                    Ok(_) => {}
+                    Err(error) => bail!(
+                        "canonical terminal reconstruction failed on the replica for {request}: {error:#}"
+                    ),
+                }
+            }
             for (index, (stage, ready)) in [
-                (
-                    "request_completed",
-                    requests
-                        .iter()
-                        .any(|row| row["lifecycle_state"] == "completed"),
-                ),
-                ("response_complete", response_complete),
-                ("transcript_materialized", body.contains(expected_reply)),
+                ("request_completed", request_completed),
+                ("terminal_selection", terminal_selection),
+                ("terminal_reconstruction", body.contains(expected_reply)),
             ]
             .into_iter()
             .enumerate()
             {
                 if ready && !stages_seen[index] {
                     stages_seen[index] = true;
-                    tracing::debug!(request, stage, documents = ?[&requests, &responses, &messages][index].iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
+                    tracing::debug!(request, stage, documents = ?requests.iter().filter_map(|row| row["_docID"].as_str()).collect::<Vec<_>>(), "replica stage document identities");
                     tracing::info!(
                         request,
                         stage,
@@ -497,13 +532,15 @@ async fn wait_for_replicated_reply(
                 }
             }
             anyhow::ensure!(
-                !responses.iter().any(|row| row["status"] == "error"),
-                "replicated error response: {responses:?}"
+                !requests
+                    .iter()
+                    .any(|row| row["lifecycle_state"] == "failed"),
+                "replicated failed request: {requests:?}"
             );
-            if completed && body.contains(expected_reply) {
+            if request_completed && terminal_selection && body.contains(expected_reply) {
                 return Ok::<_, anyhow::Error>((
                     Instant::now(),
-                    response_ready_at.expect("completed response timestamp"),
+                    terminal_ready_at.expect("terminal selection timestamp"),
                 ));
             }
             sleep(DATABASE_PROBE_INTERVAL).await;
@@ -512,12 +549,12 @@ async fn wait_for_replicated_reply(
     let observer_visibility = async {
         let mut store_updates = core.store_change_updates();
         loop {
-            if core
-                .store()
-                .snapshot()
-                .latest_response_for_request(request)
-                .is_some_and(|response| response.status.as_deref() == Some("complete"))
-            {
+            if core.store().snapshot().requests.iter().any(|row| {
+                row.request_id == request
+                    && row
+                        .lifecycle_state
+                        .is_some_and(|state| state.as_str() == "completed")
+            }) {
                 return Ok::<_, anyhow::Error>(Instant::now());
             }
             store_updates
@@ -527,20 +564,20 @@ async fn wait_for_replicated_reply(
         }
     };
 
-    let ((conversation_database_ready, response_database_ready), observer_ready) =
+    let ((conversation_database_ready, terminal_database_ready), observer_ready) =
         tokio::try_join!(database_visibility, observer_visibility)?;
-    let observer_minus_response_database_us = if observer_ready >= response_database_ready {
+    let observer_minus_terminal_database_us = if observer_ready >= terminal_database_ready {
         observer_ready
-            .duration_since(response_database_ready)
+            .duration_since(terminal_database_ready)
             .as_micros() as i128
     } else {
-        -(response_database_ready
+        -(terminal_database_ready
             .duration_since(observer_ready)
             .as_micros() as i128)
     };
     tracing::info!(
         request,
-        response_database_visible_ms = response_database_ready
+        terminal_database_visible_ms = terminal_database_ready
             .duration_since(visibility_started)
             .as_millis(),
         conversation_database_visible_ms = conversation_database_ready
@@ -549,19 +586,19 @@ async fn wait_for_replicated_reply(
         observer_visible_ms = observer_ready
             .duration_since(visibility_started)
             .as_millis(),
-        observer_minus_response_database_us,
+        observer_minus_terminal_database_us,
         database_probe_interval_ms = DATABASE_PROBE_INTERVAL.as_millis(),
         "independently observed local database and app projection visibility",
     );
     anyhow::ensure!(
-        observer_ready <= response_database_ready + Duration::from_millis(500),
-        "local DB had the completed response more than 500ms before the observer projected it"
+        observer_ready <= terminal_database_ready + Duration::from_millis(500),
+        "local DB had the terminal selection more than 500ms before the observer projected it"
     );
     Ok(())
 }
 
 async fn pairing_diagnostics(core: &ClientCore, graphql: &str) -> String {
-    let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } AgentBehaviorReadiness { agent_did updated_at } AgentRequest { _docID request_id agent_did requester_did lifecycle_state } AgentResponse { _docID request_id agent_did requester_did status content } }";
+    let query = "{ PeerPairingDesired { peer_id template source } PeerPairingApplied { peer_id } AgentBehaviorReadiness { agent_did updated_at } AgentRequest { _docID request_id agent_did requester_did lifecycle_state terminal_output } }";
     let client = core.node().execute(query).await;
     let runtime = graphql_query(graphql, query).await;
     let sync = core.sync_state();
@@ -620,12 +657,12 @@ async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) 
         )
         .await?;
         anyhow::ensure!(
-            page.store.messages.len() <= 1,
+            page.store.transcript_messages.len() <= 1,
             "local page exceeded requested message budget"
         );
-        for message in &page.store.messages {
-            let sequence = message.sequence.context("message sequence")?;
-            let key = message.message_key.clone();
+        for message in &page.store.transcript_messages {
+            let sequence = i64::from(message.message.sequence);
+            let key = message.message.message_key.clone();
             anyhow::ensure!(
                 sequence < last_sequence && seen.insert(key.clone()),
                 "local pagination repeated or reordered a message"
@@ -637,7 +674,7 @@ async fn assert_local_pagination(core: &ClientCore, session: &str, agent: &str) 
             break;
         }
         anyhow::ensure!(
-            !page.store.messages.is_empty(),
+            !page.store.transcript_messages.is_empty(),
             "local pagination made no progress"
         );
     }

@@ -77,8 +77,9 @@ fn parse_sources(argv: &[String]) -> Result<Vec<RequestedSource>> {
         anyhow::ensure!(
             !source_id.is_empty()
                 && source_id.len() <= 96
-                && source_id.bytes().all(|byte| byte.is_ascii_alphanumeric()
-                    || matches!(byte, b'.' | b'_' | b'-')),
+                && source_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')),
             "discovery source ID must contain only ASCII letters, digits, '.', '_', or '-' and be at most 96 bytes"
         );
         let kind = match argv[index + 2].as_str() {

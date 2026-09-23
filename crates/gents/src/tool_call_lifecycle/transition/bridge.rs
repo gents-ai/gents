@@ -5,73 +5,77 @@ impl ToolCallLifecycle {
     ///
     /// Lean parity: bridge_complete. Parent tool .running → .completed when
     /// the caller has verified the linked child request reached .completed.
-    /// Persists child_result as the row's `result` field; sets state,
-    /// completed_at, latency_ms following R1's complete() persistence pattern.
+    /// Closes the canonical output source and terminalizes lifecycle metadata
+    /// atomically. Foreground delivery publishes the invocation reply;
+    /// background completion retains its already-published receipt.
     ///
     /// Trust boundary: bridge_complete does NOT verify the child's terminal
     /// state internally (Lean's precondition is on the caller). R3's
     /// SubagentSource will be the natural place for that check.
     pub async fn bridge_complete(&mut self, child_result: String) -> Result<bool> {
-        self.ensure_state(&[ToolCallState::Running], "bridge_complete")?;
+        self.bridge_complete_inner(child_result, None).await
+    }
+
+    pub(crate) async fn bridge_complete_with_presentation(
+        &mut self,
+        child_result: String,
+        rendered: &str,
+        presentation: gents_protocol::output::PayloadPresentation,
+    ) -> Result<bool> {
+        self.bridge_complete_inner(child_result, Some((rendered, presentation)))
+            .await
+    }
+
+    async fn bridge_complete_inner(
+        &mut self,
+        child_result: String,
+        presented: Option<(&str, gents_protocol::output::PayloadPresentation)>,
+    ) -> Result<bool> {
+        // A second projector may load the already-committed terminal row while
+        // holding an older Running edge. It must still verify the exact
+        // canonical closure and result through the delivery replay path.
+        self.ensure_state(
+            &[ToolCallState::Running, ToolCallState::Completed],
+            "bridge_complete",
+        )?;
         if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeCompleteRequiresChildLink.into());
         }
 
-        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
-            anyhow!("bridge_complete called before start_running persisted a row")
-        })?;
-        let now = Utc::now();
-        let started_at = self
-            .started_at
-            .ok_or_else(|| anyhow!("bridge_complete called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_result = escape_graphql_string(&child_result);
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let now_str = now.to_rfc3339();
-        // DefraDB requires DateTime fields to be re-supplied on update to
-        // avoid a type-mismatch error when re-validating the document.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-        let terminal_status = self.terminal_persistence_status(None);
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "{terminal_status}",
-                        lifecycle_state: "completed",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "bridge_complete")
-            .await
-            .context("bridge_complete mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
+        let fields = super::super::delivery::TerminalFields {
+            state: ToolCallState::Completed,
+            failure: None,
+            cancel: None,
+            remote_cancel_intent_at: None,
+            completion_reason: None,
+        };
+        let updated = match presented {
+            Some((rendered, presentation)) => {
+                self.terminalize_raw_with_presentation(
+                    ToolCallState::Running,
+                    fields,
+                    &child_result,
+                    rendered,
+                    presentation,
+                    "tool_call.bridge_complete_delivery",
+                )
+                .await?
+            }
+            None => {
+                self.terminalize_bridge_with_delivery(
+                    ToolCallState::Running,
+                    fields,
+                    &child_result,
+                    "tool_call.bridge_complete_delivery",
+                )
+                .await?
+            }
+        };
+        if !updated {
             self.sync_after_lost_running_compare("bridge_complete")
                 .await?;
             return Ok(false);
         }
-
-        self.state = ToolCallState::Completed;
         Ok(true)
     }
 
@@ -91,8 +95,12 @@ impl ToolCallLifecycle {
             super::ChildTerminal::Interrupted => "explicit_cancel",
             super::ChildTerminal::Failed { .. } | super::ChildTerminal::Superseded => "tool_failed",
         };
-        self.bridge_failure_with_completion_reason(child_terminal, completion_reason)
-            .await
+        self.bridge_failure_with_completion_reason_and_presentation(
+            child_terminal,
+            completion_reason,
+            None,
+        )
+        .await
     }
 
     pub(crate) async fn bridge_failure_with_completion_reason(
@@ -100,12 +108,45 @@ impl ToolCallLifecycle {
         child_terminal: super::ChildTerminal,
         completion_reason: &str,
     ) -> Result<bool> {
-        self.ensure_state(&[ToolCallState::Running], "bridge_failure")?;
+        self.bridge_failure_with_completion_reason_and_presentation(
+            child_terminal,
+            completion_reason,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn bridge_failure_with_presentation(
+        &mut self,
+        child_terminal: super::ChildTerminal,
+        rendered: &str,
+        presentation: gents_protocol::output::PayloadPresentation,
+    ) -> Result<bool> {
+        let completion_reason = match &child_terminal {
+            super::ChildTerminal::Dead => "deadline_exceeded",
+            super::ChildTerminal::Interrupted => "explicit_cancel",
+            super::ChildTerminal::Failed { .. } | super::ChildTerminal::Superseded => "tool_failed",
+        };
+        self.bridge_failure_with_completion_reason_and_presentation(
+            child_terminal,
+            completion_reason,
+            Some((rendered, presentation)),
+        )
+        .await
+    }
+
+    async fn bridge_failure_with_completion_reason_and_presentation(
+        &mut self,
+        child_terminal: super::ChildTerminal,
+        completion_reason: &str,
+        presented: Option<(&str, gents_protocol::output::PayloadPresentation)>,
+    ) -> Result<bool> {
+        let projected = child_terminal.projected_state();
+        self.ensure_state(&[ToolCallState::Running, projected], "bridge_failure")?;
         if !self.is_bridge() {
             return Err(IllegalToolCallTransition::BridgeFailureRequiresChildLink.into());
         }
 
-        let projected = child_terminal.projected_state();
         let (failure_class_for_persist, reason_for_persist) = match &child_terminal {
             super::ChildTerminal::Failed {
                 reason,
@@ -114,86 +155,43 @@ impl ToolCallLifecycle {
             _ => (None, None),
         };
 
-        let doc_id = self
-            .doc_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("bridge_failure called before start_running persisted a row"))?;
-        let now = Utc::now();
-        let started_at = self
-            .started_at
-            .ok_or_else(|| anyhow!("bridge_failure called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let now_str = now.to_rfc3339();
-        // DefraDB requires DateTime fields to be re-supplied on update.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let lifecycle_state_str = projected.as_str();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-        let terminal_status = self.terminal_persistence_status(Some(completion_reason));
-        // If an upstream cascade already cancelled this bridge with a more
-        // specific cause, this running-state compare fails and preserves that
-        // earlier write. A successful cancelled projection here only observes
-        // the child terminal .interrupted evidence.
-        let cancel_cause_field = (projected == ToolCallState::Cancelled)
-            .then(|| format!(r#"cancel_cause: "{}","#, CancelCause::Interrupted.as_str()))
-            .unwrap_or_default();
-
-        // Build conditional fields: tool_failure_class and result are only
-        // set when the child reached .failed (mirrors R1's fail() pattern).
-        let optional_fields = match (failure_class_for_persist, reason_for_persist.as_deref()) {
-            (Some(fc), Some(reason)) => {
-                let escaped_reason = escape_graphql_string(reason);
-                let fc_str = fc.as_str();
-                format!(
-                    r#"result: "{escaped_reason}",
-                        tool_failure_class: "{fc_str}","#
-                )
-            }
-            _ => String::new(),
+        let result = reason_for_persist
+            .as_deref()
+            .unwrap_or("linked child did not produce a completed result");
+        let fields = super::super::delivery::TerminalFields {
+            state: projected,
+            failure: failure_class_for_persist,
+            cancel: (projected == ToolCallState::Cancelled).then_some(CancelCause::Interrupted),
+            remote_cancel_intent_at: None,
+            completion_reason: Some(completion_reason),
         };
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        {optional_fields}
-                        {cancel_cause_field}
-                        status: "{terminal_status}",
-                        lifecycle_state: "{lifecycle_state_str}",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "bridge_failure")
-            .await
-            .context("bridge_failure mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
+        let updated = match presented {
+            Some((rendered, presentation)) => {
+                self.terminalize_raw_with_presentation(
+                    ToolCallState::Running,
+                    fields,
+                    result,
+                    rendered,
+                    presentation,
+                    "tool_call.bridge_failure_delivery",
+                )
+                .await?
+            }
+            None => {
+                self.terminalize_bridge_with_delivery(
+                    ToolCallState::Running,
+                    fields,
+                    result,
+                    "tool_call.bridge_failure_delivery",
+                )
+                .await?
+            }
+        };
+        if !updated {
             self.sync_after_lost_running_compare("bridge_failure")
                 .await?;
             return Ok(false);
         }
-
-        self.state = projected;
-        self.failure_class = failure_class_for_persist;
-        self.cancel_cause =
-            (projected == ToolCallState::Cancelled).then_some(CancelCause::Interrupted);
         Ok(true)
     }
 
@@ -279,7 +277,7 @@ impl ToolCallLifecycle {
     /// startup recovery for interrupted parent requests.
     ///
     pub async fn cancel_during_run(&mut self, cause: CancelCause) -> Result<bool> {
-        self.cancel_during_run_inner(cause, None, None).await
+        self.cancel_during_run_inner(cause, None, None, None).await
     }
 
     /// Returns whether this caller won the durable running-state compare.
@@ -290,8 +288,28 @@ impl ToolCallLifecycle {
         cause: CancelCause,
         completion_reason: &str,
     ) -> Result<bool> {
-        self.cancel_during_run_inner(cause, None, Some(completion_reason))
+        self.cancel_during_run_inner(cause, None, Some(completion_reason), None)
             .await
+    }
+
+    pub(crate) async fn cancel_during_run_from_recovery(
+        &mut self,
+        cause: CancelCause,
+        remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
+        completion_reason: &str,
+    ) -> Result<bool> {
+        if remote_cancel_intent_at.is_some() {
+            self.child_request_id
+                .as_ref()
+                .context("remote recovery cancel intent requires child binding")?;
+        }
+        self.cancel_during_run_inner(
+            cause,
+            remote_cancel_intent_at,
+            Some(completion_reason),
+            None,
+        )
+        .await
     }
 
     /// Running -> Cancelled while dispatching a cascade cancel. For remote
@@ -303,17 +321,31 @@ impl ToolCallLifecycle {
         cause: CancelCause,
         local_did: &str,
     ) -> Result<Option<CascadeDispatch>> {
+        self.cancel_during_run_with_cascade_dispatch_and_presentation(cause, local_did, None)
+            .await
+    }
+
+    pub(crate) async fn cancel_during_run_with_cascade_dispatch_and_presentation(
+        &mut self,
+        cause: CancelCause,
+        local_did: &str,
+        presented: Option<(&str, gents_protocol::output::PayloadPresentation)>,
+    ) -> Result<Option<CascadeDispatch>> {
         self.ensure_state(
             &[ToolCallState::Running],
             "cancel_during_run_with_cascade_dispatch",
         )?;
 
         let Some(child_request_id) = self.child_request_id.clone() else {
-            let _ = self.cancel_during_run_inner(cause, None, None).await?;
+            let _ = self
+                .cancel_during_run_inner(cause, None, None, presented)
+                .await?;
             return Ok(None);
         };
         if self.cancel_policy != CancelPolicy::Cascade {
-            let _ = self.cancel_during_run_inner(cause, None, None).await?;
+            let _ = self
+                .cancel_during_run_inner(cause, None, None, presented)
+                .await?;
             return Ok(None);
         }
 
@@ -322,7 +354,9 @@ impl ToolCallLifecycle {
             at: chrono::Utc::now(),
         };
         if let Some(child) = self.locally_owned_bridge_child(local_did).await? {
-            let won = self.cancel_during_run_inner(cause, None, None).await?;
+            let won = self
+                .cancel_during_run_inner(cause, None, None, presented)
+                .await?;
             if won {
                 return Ok(Some(CascadeDispatch::Local { intent, child }));
             }
@@ -330,7 +364,7 @@ impl ToolCallLifecycle {
         }
 
         let won = self
-            .cancel_during_run_inner(cause, Some(intent.at), None)
+            .cancel_during_run_inner(cause, Some(intent.at), None, presented)
             .await?;
         if won {
             Ok(Some(CascadeDispatch::RemoteIntentWritten))
@@ -344,83 +378,52 @@ impl ToolCallLifecycle {
         cause: CancelCause,
         remote_cancel_intent_at: Option<chrono::DateTime<chrono::Utc>>,
         completion_reason_override: Option<&str>,
+        presented: Option<(&str, gents_protocol::output::PayloadPresentation)>,
     ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "cancel_during_run")?;
 
-        let doc_id = self.doc_id.as_ref().ok_or_else(|| {
-            anyhow!("cancel_during_run called before start_running persisted a row")
-        })?;
-        let now = Utc::now();
-        let started_at = self
-            .started_at
-            .ok_or_else(|| anyhow!("cancel_during_run called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let escaped_result = escape_graphql_string("tool call cancelled");
-        let now_str = now.to_rfc3339();
-        let cancel_cause = cause.as_str();
-        // DefraDB requires DateTime fields to be re-supplied on update.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
         let completion_reason = completion_reason_override.unwrap_or(match cause {
             CancelCause::Deadline => "deadline_exceeded",
             CancelCause::Interrupted => "parent_interrupted",
             CancelCause::UserCancelled => "explicit_cancel",
         });
-        let terminal_status =
-            escape_graphql_string(&self.terminal_persistence_status(Some(completion_reason)));
-        let remote_cancel_intent_fragment = remote_cancel_intent_at
-            .map(|at| {
-                let at = escape_graphql_string(&at.to_rfc3339());
-                format!(
-                    r#",
-                        cancel_cascade_intent_at: "{at}",
-                        cancel_pending_remote_ack: true"#
+        let fields = super::super::delivery::TerminalFields {
+            state: ToolCallState::Cancelled,
+            failure: None,
+            cancel: Some(cause),
+            remote_cancel_intent_at,
+            completion_reason: Some(completion_reason),
+        };
+        let raw = "tool call cancelled";
+        let updated = match presented {
+            Some((rendered, presentation)) => {
+                self.terminalize_raw_with_presentation(
+                    ToolCallState::Running,
+                    fields,
+                    raw,
+                    rendered,
+                    presentation,
+                    "tool_call.cancel_during_run_delivery",
                 )
-            })
-            .unwrap_or_default();
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "{terminal_status}",
-                        lifecycle_state: "cancelled",
-                        cancel_cause: "{cancel_cause}",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {remote_cancel_intent_fragment}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "cancel_during_run")
-            .await
-            .context("cancel_during_run mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
+                .await?
+            }
+            None => {
+                self.terminalize_raw_with_presentation(
+                    ToolCallState::Running,
+                    fields,
+                    raw,
+                    raw,
+                    gents_protocol::output::PayloadPresentation::Full,
+                    "tool_call.cancel_during_run_delivery",
+                )
+                .await?
+            }
+        };
+        if !updated {
             self.sync_after_lost_running_compare("cancel_during_run")
                 .await?;
             return Ok(false);
         }
-
-        self.state = ToolCallState::Cancelled;
-        self.cancel_cause = Some(cause);
         Ok(true)
     }
 }

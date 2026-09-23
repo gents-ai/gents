@@ -56,7 +56,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
         WorkspacePlacement { workspace_id owner_agent_did host_path observed_tree_hash }
         RepositoryPlacement { repository_id agent_did }
         AgentRequest { _docID }
-        AgentResponse { _docID }
+        AgentMessage { _docID }
+        AgentOutputSegment { _docID }
         WorkspaceReceipt { _docID kind }
         WorkspaceBinding { _docID }
     }"#).await;
@@ -95,7 +96,8 @@ async fn quickstart_freezes_base_without_fabricating_requests_or_writer_receipts
     assert_eq!(data["RepositoryPlacement"].as_array().unwrap().len(), 1);
     for collection in [
         "AgentRequest",
-        "AgentResponse",
+        "AgentMessage",
+        "AgentOutputSegment",
         "WorkspaceReceipt",
         "WorkspaceBinding",
     ] {

@@ -16,6 +16,7 @@ pub mod policy;
 pub mod profiles;
 pub mod registry;
 pub mod session_hydration;
+mod session_hydration_closure;
 pub mod session_hydration_reconcile;
 pub mod templates;
 pub mod trait_def;

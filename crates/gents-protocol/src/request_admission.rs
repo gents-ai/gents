@@ -88,6 +88,7 @@ pub struct AgentRequestAdmissionObservation {
     pub signer_matches_target: bool,
     pub signer_matches_issuer: bool,
     pub requester_matches_issuer: bool,
+    pub requester_matches_bridge_author: bool,
     pub current_approval: bool,
     pub exact_generation: bool,
     pub authorization_fresh: bool,
@@ -143,29 +144,34 @@ pub fn project_agent_request_admission(observation: AgentRequestAdmissionObserva
         AgentRequestAdmissionKind::RuntimeInternal => {
             let common = observation.runtime_evidence_present
                 && observation.signer_matches_issuer
-                && observation.requester_matches_issuer
                 && observation.signer_matches_target
-                && observation.requester_matches_target
                 && observation.target_runtime_attestation_valid
                 && observation.source_binding_current;
             common
                 && match observation.runtime_source_kind {
                     RuntimeInternalSourceKind::LocalChild => {
-                        observation.source_document_binding_current
+                        observation.requester_matches_issuer
+                            && observation.requester_matches_target
+                            && observation.source_document_binding_current
                             && observation.source_tool_call_binding_current
                             && observation.target_policy_allows
                     }
                     RuntimeInternalSourceKind::CrossPrincipalChild => {
-                        observation.source_tool_call_binding_current
+                        observation.requester_matches_bridge_author
+                            && observation.source_tool_call_binding_current
                             && observation.bridge_author_binding_current
                             && observation.bridge_author_authorization_fresh
                             && observation.target_cross_principal_policy_allows
                     }
                     RuntimeInternalSourceKind::LocalControl => {
-                        observation.source_document_binding_current
+                        observation.requester_matches_issuer
+                            && observation.requester_matches_target
+                            && observation.source_document_binding_current
                     }
                     RuntimeInternalSourceKind::AutomatedTrigger => {
-                        observation.trigger_config_document_binding_current
+                        observation.requester_matches_issuer
+                            && observation.requester_matches_target
+                            && observation.trigger_config_document_binding_current
                             && observation.target_policy_allows
                     }
                 }

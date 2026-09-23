@@ -7,10 +7,7 @@ use serde_json::{json, Value};
 use crate::adapter_projection::{
     validate_adapter_projection_contract, AdapterProjectionEnvelope, AdapterProjectionKind,
 };
-use crate::run_timeline::{
-    RunTimelineRows, TimelineMessageRow, TimelineRequestRow, TimelineResponseRow,
-    TimelineSessionRow, TimelineToolCallRow,
-};
+use crate::run_timeline::{TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExternalAdapterCapture {
@@ -103,10 +100,34 @@ pub struct ExternalToolEventMapping {
 #[derive(Debug, Clone)]
 pub struct ExternalAdapterImport {
     pub projection: AdapterProjectionKind,
-    pub rows: RunTimelineRows,
+    /// An external capture is a derived import view, never a set of canonical
+    /// DefraDB timeline rows.  In particular it has no AgentMessage header,
+    /// physical document identity, execution generation, or lease claim.
+    pub view: ExternalAdapterView,
     pub actor_did: Option<String>,
     pub source_system: String,
     pub scenario_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalAdapterView {
+    pub request: TimelineRequestRow,
+    pub session: Option<TimelineSessionRow>,
+    pub requests: Vec<TimelineRequestRow>,
+    pub messages: Vec<ExternalAdapterMessage>,
+    pub tool_calls: Vec<TimelineToolCallRow>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalAdapterMessage {
+    /// Stable only within this imported capture. It is a derived label, not a
+    /// DefraDB document identifier or an asserted framework physical ID.
+    pub capture_message_label: String,
+    pub session_id: String,
+    pub request_id: Option<String>,
+    pub sequence: i64,
+    pub message: gents_protocol::message::Message,
+    pub captured_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +137,12 @@ struct ImportedMessage {
     request_id: Option<String>,
 }
 
-pub fn import_external_adapter_capture_to_timeline_rows(
+/// Interpret an external capture as a derived export view.
+///
+/// This intentionally does not produce `RunTimelineRows`: an external
+/// framework capture has neither canonical message headers nor DefraDB
+/// physical-document provenance.
+pub fn import_external_adapter_capture_to_derived_view(
     capture: &ExternalAdapterCapture,
 ) -> Result<ExternalAdapterImport> {
     let mapping = capture.mapping.as_ref().ok_or_else(|| {
@@ -357,18 +383,16 @@ fn import_langgraph_capture(
     let messages = langgraph_messages(&capture.native)
         .into_iter()
         .enumerate()
-        .map(|(index, message)| TimelineMessageRow {
-            session_id: session_id.clone(),
-            request_id: Some(
-                message
+        .map(|(index, message)| {
+            imported_external_message(
+                &session_id,
+                &message
                     .request_id
                     .unwrap_or_else(|| mapping.request_id.clone()),
-            ),
-            sequence: (index as i64) + 1,
-            role: message.role,
-            content: message.content,
-            timestamp: Some(timestamp_for_index(index + 1)),
-            ..Default::default()
+                (index as i64) + 1,
+                &message.role,
+                &message.content,
+            )
         })
         .collect::<Vec<_>>();
     let tool_calls = child_request_id
@@ -386,7 +410,8 @@ fn import_langgraph_capture(
                 "child_request_id": child_request_id,
             })
             .to_string(),
-            result: "external LangGraph child boundary imported".to_string(),
+            // The capture records the boundary, not a native tool delivery.
+            result: None,
             status: status.clone(),
             started_at: Some(timestamp_for_index(messages.len().max(1))),
             completed_at: Some(timestamp_for_index(messages.len().max(1))),
@@ -395,27 +420,6 @@ fn import_langgraph_capture(
         })
         .into_iter()
         .collect::<Vec<_>>();
-    let responses = requests
-        .iter()
-        .map(|request| TimelineResponseRow {
-            request_id: request.request_id.clone(),
-            session_id: Some(session_id.clone()),
-            content: Some(
-                latest_values
-                    .and_then(|values| values.get("final_output"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("external LangGraph state imported")
-                    .to_string(),
-            ),
-            status: Some(status.clone()),
-            materialized_message_sequence: (request.request_id == mapping.request_id)
-                .then_some(messages.len() as i64),
-            created_at: Some(started_at.to_string()),
-            completed_at: Some(timestamp_for_index(messages.len() + 1)),
-            ..Default::default()
-        })
-        .collect::<Vec<_>>();
-
     let root = requests
         .iter()
         .find(|request| request.request_id == mapping.request_id)
@@ -430,7 +434,7 @@ fn import_langgraph_capture(
         actor_did: mapping.actor_did.clone(),
         source_system: capture.source.system.clone(),
         scenario_id,
-        rows: RunTimelineRows {
+        view: ExternalAdapterView {
             request: root,
             session: imported_session(
                 &session_id,
@@ -445,13 +449,6 @@ fn import_langgraph_capture(
             requests,
             messages,
             tool_calls,
-            goal_versions: Vec::new(),
-            inference_calls: Vec::new(),
-            compactions: Vec::new(),
-            provider_context_reductions: Vec::new(),
-            responses,
-            rendered_requests: Vec::new(),
-            rendered_request_refs: Vec::new(),
         },
     })
 }
@@ -886,18 +883,16 @@ fn import_multi_agent_capture(
     let messages = native_messages(&capture.source.system, &capture.native, mapping)
         .into_iter()
         .enumerate()
-        .map(|(index, message)| TimelineMessageRow {
-            session_id: session_id.clone(),
-            request_id: Some(
-                message
+        .map(|(index, message)| {
+            imported_external_message(
+                &session_id,
+                &message
                     .request_id
                     .unwrap_or_else(|| mapping.request_id.clone()),
-            ),
-            sequence: (index as i64) + 1,
-            role: message.role,
-            content: message.content,
-            timestamp: Some(timestamp_for_index(index + 1)),
-            ..Default::default()
+                (index as i64) + 1,
+                &message.role,
+                &message.content,
+            )
         })
         .collect::<Vec<_>>();
 
@@ -923,7 +918,9 @@ fn import_multi_agent_capture(
                 "child_request_id": delegation.child_request_id,
             })
             .to_string(),
-            result: "external framework delegation imported".to_string(),
+            // Mapping metadata establishes the delegation but supplies no
+            // delivered tool-result payload.
+            result: None,
             status: delegation
                 .status
                 .clone()
@@ -945,7 +942,8 @@ fn import_multi_agent_capture(
             tool_name: event.tool_name.clone(),
             tool_call_id: event.id.clone(),
             args: json!({ "source_system": capture.source.system }).to_string(),
-            result: "external framework tool event imported".to_string(),
+            // An event mapping is not evidence of a delivered result body.
+            result: None,
             status: event
                 .status
                 .clone()
@@ -953,33 +951,6 @@ fn import_multi_agent_capture(
             started_at: Some(timestamp_for_index(index + 1)),
             completed_at: Some(timestamp_for_index(index + 1)),
             child_request_id: event.child_request_id.clone(),
-            ..Default::default()
-        });
-    }
-
-    let mut responses = requests
-        .iter()
-        .map(|request| TimelineResponseRow {
-            request_id: request.request_id.clone(),
-            agent_did: request.agent_did.clone(),
-            behavior_id: request.behavior_id.clone(),
-            session_id: Some(session_id.clone()),
-            content: Some(response_content_for_request(request, &messages, mapping)),
-            status: Some(status.clone()),
-            materialized_message_sequence: (request.request_id == mapping.request_id)
-                .then_some(messages.len() as i64),
-            created_at: Some(started_at.to_string()),
-            completed_at: Some(timestamp_for_index(messages.len() + 1)),
-            ..Default::default()
-        })
-        .collect::<Vec<_>>();
-    if responses.is_empty() {
-        responses.push(TimelineResponseRow {
-            request_id: mapping.request_id.clone(),
-            session_id: Some(session_id.clone()),
-            status: Some(status.clone()),
-            created_at: Some(started_at.to_string()),
-            completed_at: Some(timestamp_for_index(messages.len() + 1)),
             ..Default::default()
         });
     }
@@ -998,7 +969,7 @@ fn import_multi_agent_capture(
         actor_did: mapping.actor_did.clone(),
         source_system: capture.source.system.clone(),
         scenario_id,
-        rows: RunTimelineRows {
+        view: ExternalAdapterView {
             request: root,
             session: imported_session(
                 &session_id,
@@ -1011,13 +982,6 @@ fn import_multi_agent_capture(
             requests,
             messages,
             tool_calls,
-            goal_versions: Vec::new(),
-            inference_calls: Vec::new(),
-            compactions: Vec::new(),
-            provider_context_reductions: Vec::new(),
-            responses,
-            rendered_requests: Vec::new(),
-            rendered_request_refs: Vec::new(),
         },
     })
 }
@@ -1299,32 +1263,32 @@ fn strip_final_answer_prefix(value: &str) -> &str {
     value.strip_prefix("Final Answer: ").unwrap_or(value)
 }
 
-fn response_content_for_request(
-    request: &TimelineRequestRow,
-    messages: &[TimelineMessageRow],
-    mapping: &ExternalAdapterMapping,
-) -> String {
-    let participant = mapping
-        .participants
-        .iter()
-        .find(|participant| participant.request_id.as_deref() == Some(request.request_id.as_str()));
-    if request.request_id != mapping.request_id && participant.is_none() {
-        return "external framework request imported".to_string();
-    }
-    let native_name = participant.and_then(|participant| participant.native_name.as_deref());
-    if let Some(native_name) = native_name {
-        if let Some(message) = messages
-            .iter()
-            .rev()
-            .find(|message| message.role == native_name)
-        {
-            return message.content.clone();
+/// External captures are converted into native message values for a derived
+/// view. This is an import fixture, not a persistence decoder: it never
+/// fabricates a canonical transcript header or physical document identity.
+fn imported_external_message(
+    session_id: &str,
+    request_id: &str,
+    sequence: i64,
+    role: &str,
+    content: &str,
+) -> ExternalAdapterMessage {
+    let message = match role.to_ascii_lowercase().as_str() {
+        "system" => gents_protocol::message::Message::system(content),
+        "assistant" | "agent" | "ai" | "model" => {
+            gents_protocol::message::Message::assistant(content)
         }
+        _ => gents_protocol::message::Message::user(content),
+    };
+    let created_at = timestamp_for_index(sequence.max(0) as usize);
+    ExternalAdapterMessage {
+        capture_message_label: format!("capture:{session_id}:{sequence}"),
+        session_id: session_id.to_string(),
+        request_id: Some(request_id.to_string()),
+        sequence,
+        captured_at: Some(created_at),
+        message,
     }
-    messages
-        .last()
-        .map(|message| message.content.clone())
-        .unwrap_or_else(|| "external framework request imported".to_string())
 }
 
 fn default_delegation_tool_call_id(delegation: &ExternalDelegationMapping) -> String {

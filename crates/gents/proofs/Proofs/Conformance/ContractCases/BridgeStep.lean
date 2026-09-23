@@ -48,7 +48,6 @@ def bridgeStepRequest
   , currentTime := 10
   , retryCount := 0
   , maxRetries := 3
-  , progressSeq := 0
   , messageSeq := 0
   , persistence := .committed
   , interruptRequestedAt := none

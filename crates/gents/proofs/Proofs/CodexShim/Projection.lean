@@ -5,7 +5,7 @@ import Proofs.InferenceCall.State
 namespace CodexShim
 
 def projectClientTurnState : ClientTurnState → TurnPhase
-  | .waitingForClaim | .streaming => .inProgress
+  | .waitingForClaim | .running => .inProgress
   | .completed => .completed
   | .failed => .failed
   | .superseded | .interrupted => .interrupted
@@ -137,7 +137,7 @@ def projectSubagentState : ClientHeadProjection → CollabAgentPhase
   | ⟨.failed, _⟩ => .errored
   | ⟨.superseded, _⟩ | ⟨.interrupted, _⟩ => .interrupted
   | ⟨.waitingForClaim, .pending⟩ => .pendingInit
-  | ⟨.waitingForClaim, _⟩ | ⟨.streaming, _⟩ => .running
+  | ⟨.waitingForClaim, _⟩ | ⟨.running, _⟩ => .running
 
 theorem subagent_status_terminal_precisely
     (head : ClientHeadProjection) :
@@ -444,7 +444,7 @@ session observation on index-only peers). It never invents a second conversation
 status vocabulary; choosing the exact latest identity belongs to the caller. -/
 def projectThreadStatus (head : Option ClientHeadProjection) : ThreadPresentationStatus :=
   match head with
-  | some ⟨.waitingForClaim, _⟩ | some ⟨.streaming, _⟩ => .active
+  | some ⟨.waitingForClaim, _⟩ | some ⟨.running, _⟩ => .active
   | some ⟨.failed, _⟩ => .systemError
   | some ⟨.completed, _⟩ | some ⟨.superseded, _⟩
   | some ⟨.interrupted, _⟩ => .idle
@@ -494,10 +494,7 @@ def projectedEventTimestampMs (persisted : Option Nat) (observed : Nat) : Nat :=
   persisted.getD observed
 
 theorem active_request_projects_active_thread :
-    projectThreadStatus (some ⟨.waitingForClaim, .processing⟩) = .active := rfl
-
-theorem terminal_response_projects_idle_thread_before_request_terminalizes :
-    projectThreadStatus (some ⟨.completed, .processing⟩) = .idle := rfl
+    projectThreadStatus (some ⟨.running, .processing⟩) = .active := rfl
 
 theorem failed_request_projects_system_error_thread :
     projectThreadStatus (some ⟨.failed, .failed⟩) = .systemError := rfl
@@ -655,18 +652,14 @@ theorem cancelled_compaction_never_claims_completed :
 
 structure ProjectionObservation where
   requestState : RequestState
-  responseStatus : Option ResponseStatus
+  isSuperseded : Bool
   localInterruptAcked : Bool
   deriving DecidableEq, Repr
 
 def clientAttemptObservation (obs : ProjectionObservation) : AttemptView :=
   { request :=
       { lifecycleState := obs.requestState
-      , isSuperseded := false
-      }
-  , response := obs.responseStatus.map fun status =>
-      { status := status
-      , tailEmpty := true
+      , isSuperseded := obs.isSuperseded
       }
   }
 

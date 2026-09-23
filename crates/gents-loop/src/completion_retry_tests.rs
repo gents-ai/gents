@@ -465,3 +465,17 @@ fn interactive_default_parse_400_goes_straight_to_repair() {
         PreStreamDirective::Repair
     );
 }
+
+#[test]
+fn observed_retry_wake_is_deadline_bounded_and_inclusive() {
+    let deadline = Utc::now();
+    assert!(retry_wake_fits_deadline(deadline, Some(deadline)));
+    assert!(!retry_wake_fits_deadline(
+        deadline + chrono::Duration::nanoseconds(1),
+        Some(deadline)
+    ));
+    assert!(retry_wake_fits_deadline(
+        deadline + chrono::Duration::days(1),
+        None
+    ));
+}

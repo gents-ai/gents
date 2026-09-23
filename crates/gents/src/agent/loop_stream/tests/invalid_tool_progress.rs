@@ -51,7 +51,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
     let cases = &crate::lean_vocab_test::lean_contract_snapshot().invalid_tool_progress_cases;
     assert_eq!(cases.len(), 11);
     for case in cases {
-        let (node, hook) = test_hook().await;
+        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
         let outcomes = case["outcomes"].as_array().unwrap();
         let mut turns = outcomes
             .iter()
@@ -70,27 +70,14 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
         let model = ScriptedModel::new_turns(turns);
         let stream = run_loop_stream(
             model.clone(),
-            Some(hook),
+            Some(hook.clone()),
             Message::user("exercise typed outcomes"),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
-            config(64),
+            owned_config(64),
         );
-        futures::pin_mut!(stream);
-        let mut error = None;
-        let mut yielded_results = 0;
-        while let Some(item) = stream.next().await {
-            match item {
-                Err(value) => {
-                    error = Some(value.to_string());
-                    break;
-                }
-                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                    StreamedUserContent::ToolResult { .. },
-                ))) => yielded_results += 1,
-                _ => {}
-            }
-        }
+        let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+        let error = collected.error.as_deref();
         let exhausted = case["expected_exhausted"].as_bool().unwrap();
         assert_eq!(error.is_some(), exhausted, "{}: {error:?}", case["name"]);
         if let Some(error) = error {
@@ -101,7 +88,8 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
         }
         let observed = case["expected_observed_outcomes"].as_u64().unwrap() as usize;
         assert_eq!(
-            yielded_results, observed,
+            collected.tool_results.len(),
+            observed,
             "{} must emit the last result before failing",
             case["name"]
         );
@@ -112,7 +100,7 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             case["name"]
         );
         let response = node
-            .execute("{ AgentToolCall { lifecycle_state tool_failure_class result } }")
+            .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
             .await;
         assert!(!response.has_errors(), "{:?}", response.errors);
         let data = response.data.unwrap();
@@ -137,75 +125,128 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
             "{} typed outcome mapping",
             case["name"]
         );
-        assert!(rows
-            .iter()
-            .all(|row| row["result"].as_str().is_some_and(|text| !text.is_empty())));
+        for index in 0..observed {
+            let row = rows
+                .iter()
+                .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
+                .unwrap_or_else(|| panic!("{}: missing durable row {index}", case["name"]));
+            let output = crate::background_tools::canonical_tool_output(
+                &node,
+                row["_docID"].as_str().unwrap(),
+                &lifecycle.request().doc_id,
+                &lifecycle.request().session_id,
+                "did:test:test",
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(
+                !output.is_empty(),
+                "{}: canonical output for {index} must not be empty",
+                case["name"]
+            );
+        }
         node.shutdown().await;
     }
 }
 
 #[tokio::test]
-async fn invalid_tool_budget_closes_eighth_result_before_stalling_or_batched_ninth() {
+async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
     for batched in [false, true] {
-        let (node, hook) = test_hook().await;
+        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
         let mut chunks = (0..8)
             .map(|index| invalid_progress_call(index, "policyDenied"))
             .collect::<Vec<_>>();
         if batched {
             chunks.push(invalid_progress_call(8, "success"));
         }
-        // No final usage/EOF: exhaustion must not wait for the provider to close.
-        let model = ScriptedModel::new_stalling(chunks);
+        // Canonical publication accepts the whole provider turn before any
+        // dispatch. Budget exhaustion must retain the eighth result and account
+        // for an accepted ninth call without executing it.
+        chunks.push(RawStreamingChoice::FinalResponse(()));
+        let model = ScriptedModel::new(chunks);
         let stream = run_loop_stream(
             model.clone(),
-            Some(hook),
+            Some(hook.clone()),
             Message::user("bound invalid batch"),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
-            config(500),
+            owned_config(500),
         );
-        futures::pin_mut!(stream);
-        let (count, error) = tokio::time::timeout(Duration::from_secs(10), async {
-            let mut count = 0;
-            while let Some(item) = stream.next().await {
-                match item {
-                    Err(error) => return (count, error.to_string()),
-                    Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                        StreamedUserContent::ToolResult { .. },
-                    ))) => count += 1,
-                    _ => {}
-                }
-            }
-            panic!("invalid batch unexpectedly completed")
-        })
+        let collected = tokio::time::timeout(
+            Duration::from_secs(10),
+            Box::pin(collect_owned_scripted_stream(
+                stream,
+                &hook,
+                &writer,
+                &mut lifecycle,
+            )),
+        )
         .await
-        .expect("must terminate without waiting for provider EOF");
-        assert_eq!(count, 8);
+        .expect("accepted batch must terminate at the invalid-tool budget");
+        assert_eq!(collected.tool_results.len(), 8);
+        let error = collected
+            .error
+            .expect("budget exhaustion must fail the loop");
         assert!(
             error.contains("invalid_tool_call_budget_exhausted:"),
             "{error}"
         );
         assert_eq!(model.seen_requests().await.len(), 1);
+        lifecycle
+            .terminalize_owned(
+                crate::lifecycle::RequestTerminalOutcome::Failed,
+                writer.terminal_output(&lifecycle.request().doc_id).await,
+                Some(&error),
+            )
+            .await
+            .expect("terminal owner settles every published undispatched call");
         let response = node
-            .execute("{ AgentToolCall { lifecycle_state result } }")
+            .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state } }")
             .await;
         assert!(!response.has_errors());
         let data = response.data.unwrap();
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(
             rows.len(),
-            8,
-            "no ninth effect, even within a provider batch"
+            if batched { 9 } else { 8 },
+            "all accepted intents remain durable, including the undispatched ninth"
         );
-        assert!(rows.iter().all(|row| row["lifecycle_state"] == "failed"
-            && row["result"].as_str().is_some_and(|s| !s.is_empty())));
+        if batched {
+            let ninth = rows
+                .iter()
+                .find(|row| row["tool_call_id"] == "invalid-progress-8")
+                .unwrap();
+            assert_eq!(ninth["lifecycle_state"], "cancelled");
+        }
+        for index in 0..8 {
+            let row = rows
+                .iter()
+                .find(|row| row["tool_call_id"] == format!("invalid-progress-{index}"))
+                .unwrap_or_else(|| panic!("missing durable row {index}"));
+            assert_eq!(row["lifecycle_state"], "failed");
+            let output = crate::background_tools::canonical_tool_output(
+                &node,
+                row["_docID"].as_str().unwrap(),
+                &lifecycle.request().doc_id,
+                &lifecycle.request().session_id,
+                "did:test:test",
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(
+                !output.is_empty(),
+                "canonical output {index} must be delivered"
+            );
+        }
         node.shutdown().await;
     }
 }
 
 #[tokio::test]
 async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeeds() {
-    let (node, hook) = test_hook().await;
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir(root.path().join("crates")).unwrap();
     std::fs::write(root.path().join("crates/visible-proof.txt"), "fixture").unwrap();
@@ -240,16 +281,14 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .unwrap();
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        Some(hook.clone()),
         Message::user("inspect crates"),
         Vec::new(),
         Arc::new(tools),
-        config(10),
+        owned_config(10),
     );
-    futures::pin_mut!(stream);
-    while let Some(item) = stream.next().await {
-        item.expect("corrected arguments must allow completion");
-    }
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
     let requests = model.seen_requests().await;
     assert_eq!(requests.len(), 3);
     let feedback = serde_json::to_string(
@@ -290,7 +329,7 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .unwrap()
         .contains("executable"));
     let response = node
-        .execute("{ AgentToolCall { tool_call_id lifecycle_state tool_failure_class result } }")
+        .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
         .await;
     assert!(!response.has_errors());
     let data = response.data.unwrap();
@@ -300,18 +339,32 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
         .iter()
         .any(|row| row["lifecycle_state"] == "failed"
             && row["tool_failure_class"] == "argumentInvalid"));
-    assert!(rows.iter().any(|row| row["lifecycle_state"] == "completed"
-        && row["result"]
-            .as_str()
-            .unwrap()
-            .contains("visible-proof.txt")));
+    let tool_doc_id = rows
+        .iter()
+        .find(|row| row["lifecycle_state"] == "completed")
+        .and_then(|row| row["_docID"].as_str())
+        .unwrap();
+    let output = crate::background_tools::canonical_tool_output(
+        &node,
+        tool_doc_id,
+        &lifecycle.request().doc_id,
+        &lifecycle.request().session_id,
+        "did:test:test",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        output.contains("visible-proof.txt"),
+        "canonical output must carry the successful bash listing: {output}"
+    );
     node.shutdown().await;
 }
 
 #[tokio::test]
 async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
     for arguments in [serde_json::json!({}), serde_json::json!("")] {
-        let (node, hook) = test_hook().await;
+        let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
         let root = tempfile::tempdir().unwrap();
         let mut turns = (0..9)
             .map(|index| {
@@ -338,34 +391,47 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
             .unwrap();
         let stream = run_loop_stream(
             model.clone(),
-            Some(hook),
+            Some(hook.clone()),
             Message::user("inspect source"),
             Vec::new(),
             Arc::new(tools),
-            config(500),
+            owned_config(500),
         );
-        futures::pin_mut!(stream);
-        let mut error = None;
-        while let Some(item) = stream.next().await {
-            if let Err(value) = item {
-                error = Some(value.to_string());
-                break;
-            }
-        }
-        assert!(error
-            .unwrap()
-            .contains("invalid_tool_call_budget_exhausted:"));
+        let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+        let error = collected
+            .error
+            .expect("budget exhaustion must fail the loop");
+        assert!(error.contains("invalid_tool_call_budget_exhausted:"));
         assert_eq!(model.seen_requests().await.len(), 8);
         let response = node
-            .execute("{ AgentToolCall { lifecycle_state tool_failure_class result } }")
+            .execute("{ AgentToolCall { _docID tool_call_id lifecycle_state tool_failure_class } }")
             .await;
         assert!(!response.has_errors());
         let data = response.data.unwrap();
         let rows = data["AgentToolCall"].as_array().unwrap();
         assert_eq!(rows.len(), 8);
         assert!(rows.iter().all(|row| row["lifecycle_state"] == "failed"
-            && row["tool_failure_class"] == "argumentInvalid"
-            && row["result"].as_str().is_some_and(|s| !s.is_empty())));
+            && row["tool_failure_class"] == "argumentInvalid"));
+        for index in 0..8 {
+            let row = rows
+                .iter()
+                .find(|row| row["tool_call_id"] == format!("empty-bash-{index}"))
+                .unwrap_or_else(|| panic!("missing durable row {index}"));
+            let output = crate::background_tools::canonical_tool_output(
+                &node,
+                row["_docID"].as_str().unwrap(),
+                &lifecycle.request().doc_id,
+                &lifecycle.request().session_id,
+                "did:test:test",
+                None,
+            )
+            .await
+            .unwrap();
+            assert!(
+                !output.is_empty(),
+                "canonical output {index} must be delivered"
+            );
+        }
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
         node.shutdown().await;
     }

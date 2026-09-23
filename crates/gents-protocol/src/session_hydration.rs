@@ -8,10 +8,32 @@ use crate::enrollment::canonical_domain_payload;
 pub const SESSION_HYDRATION_RECEIPT_VERSION: u8 = 1;
 const RECEIPT_SIGNATURE_DOMAIN: &str = "gents-session-hydration-receipt-v1";
 
+/// Closed collection vocabulary: retired response/spill documents cannot be
+/// claimed as transcript hydration. Origin dependencies retain their ACP;
+/// following a reference never grants access to the whole origin session.
+///
+/// Headers and segment records are immutable, so the manifest's exact document
+/// identities already bind the served content; the receipt does not restate
+/// payload extents. The manifest is the authorized reference closure of the
+/// served headers: every closing record a block or presentation references (including
+/// fork origins) and the segments within their extents. Terminal selections
+/// must resolve their exact headers;
+/// no latest-visible-message fallback. Client completion requires each header
+/// to reconstruct. Mutable request/tool lifecycle facts still require their
+/// existing owner checks; the manifest does not bind those documents' revisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SessionHydrationCollection {
+    AgentRequest,
+    AgentMessage,
+    AgentToolCall,
+    AgentOutputSegment,
+    CompactionEntry,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionHydrationDocumentKey {
-    pub collection: String,
+    pub collection: SessionHydrationCollection,
     pub doc_id: String,
 }
 
@@ -77,7 +99,7 @@ impl SessionHydrationReceipt {
         );
         for entry in &self.served_manifest {
             anyhow::ensure!(
-                !entry.collection.is_empty() && !entry.doc_id.is_empty(),
+                !entry.doc_id.is_empty(),
                 "session hydration manifest contains an empty document identity"
             );
         }
@@ -106,7 +128,7 @@ mod tests {
     #[test]
     fn duplicate_or_reordered_manifest_is_rejected() {
         let entry = SessionHydrationDocumentKey {
-            collection: "AgentMessage".into(),
+            collection: SessionHydrationCollection::AgentMessage,
             doc_id: "doc-1".into(),
         };
         let raw = serde_json::to_string(&vec![entry.clone(), entry]).unwrap();

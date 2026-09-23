@@ -4,11 +4,13 @@ use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
-use gents::tool_call_lifecycle::ToolCallLifecycle;
 use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
-use crate::support::{test_db, AGENT_DID};
+use super::r4c_private_support::{
+    accepted_call, assert_accepted_control_rows, bind_accepted_request,
+};
+use crate::support::test_db;
 
 struct StaticTool {
     name: &'static str,
@@ -64,38 +66,38 @@ async fn setup_hook(
     let db = test_db(test_name).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    crate::support::create_request(
-        db.node.as_ref(),
-        &request_id,
-        &session_id,
-        "processing",
-        "2026-05-14T00:00:00Z",
-    )
-    .await;
-    crate::support::create_agent_session(
+    let did = db.node_identity.did();
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         db.node.as_ref(),
         &session_id,
         "r4c-background-tools",
-        "2026-05-14T00:00:00Z",
+        did,
+        "r4c-background-tools",
+        Some(did),
     )
-    .await;
+    .await
+    .unwrap();
 
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         &session_id,
         "r4c-background-tools",
-        AGENT_DID,
-        None,
+        did,
+        Some(did),
         FailurePolicy::default(),
     )
     .await
     .unwrap()
     .with_background_tool_registry(registry);
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
-        .await;
+    bind_accepted_request(
+        &db,
+        &hook,
+        "r4c-background-tools",
+        &request_id,
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
     (db, hook, session_id, request_id)
 }
 
@@ -124,7 +126,8 @@ async fn background_tool_with_args(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        hook.on_tool_call(
+        accepted_call(
+            hook,
             "spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -136,7 +139,8 @@ async fn background_tool_with_args(
 
 async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
     skip_reason_json(
-        hook.on_tool_call(
+        accepted_call(
+            hook,
             "wait_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -152,7 +156,8 @@ async fn list_background_tools(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        hook.on_tool_call(
+        accepted_call(
+            hook,
             "list_processes",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -196,22 +201,17 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
         .map_or(0, Vec::len)
 }
 
-async fn create_foreground_tool_call(
-    db: &crate::support::TestDb,
-    request_id: &str,
-    session_id: &str,
-) {
-    let mut lifecycle = ToolCallLifecycle::new(
-        db.node.clone(),
-        request_id.to_string(),
-        session_id.to_string(),
-        "did:test:test".to_string(),
-        "foreground-call".to_string(),
-        99,
-        "foreground_tool".to_string(),
-        "{}".to_string(),
+async fn create_foreground_tool_call(hook: &DefraSessionHook) {
+    let mut lifecycle = super::accepted_hook_tool_lifecycle(
+        hook,
+        "foreground-call",
+        "foreground_tool",
+        "{}",
         chrono::Utc::now() + chrono::Duration::minutes(5),
-    );
+        gents::tool_call_lifecycle::AwaitMode::Foreground,
+        gents::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .await;
     lifecycle.start_running().await.unwrap();
     lifecycle.complete("foreground result").await.unwrap();
 }
@@ -324,48 +324,48 @@ async fn setup_hook_on_db(
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    crate::support::create_request(
-        db.node.as_ref(),
-        request_id,
-        session_id,
-        "processing",
-        "2026-05-14T00:00:00Z",
-    )
-    .await;
-    crate::support::create_agent_session(
+    let did = db.node_identity.did();
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         db.node.as_ref(),
         session_id,
         "r4c-background-tools",
-        "2026-05-14T00:00:00Z",
+        did,
+        "r4c-background-tools",
+        Some(did),
     )
-    .await;
+    .await
+    .unwrap();
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         session_id,
         "r4c-background-tools",
-        AGENT_DID,
-        None,
+        did,
+        Some(did),
         FailurePolicy::default(),
     )
     .await
     .unwrap()
     .with_background_tool_registry(registry);
-    hook.set_active_request_lineage(Some(request_id.to_string()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
-        .await;
+    bind_accepted_request(
+        db,
+        &hook,
+        "r4c-background-tools",
+        request_id,
+        session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 
 #[tokio::test]
 async fn list_background_tools_excludes_foreground_calls() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-list-bg-foreground",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
     )
     .await;
-    create_foreground_tool_call(&db, &request_id, &session_id).await;
+    create_foreground_tool_call(&hook).await;
     background_tool(&hook, "bg-visible", "slow_tool").await;
 
     let result = list_background_tools(&hook, "list-foreground", json!({})).await;
@@ -423,7 +423,7 @@ async fn list_background_tools_limit_truncates() {
 }
 
 #[tokio::test]
-async fn list_background_tools_no_parent_tool_call_row_written() {
+async fn list_background_tools_keeps_one_accepted_parent_control_row() {
     let (db, hook, session_id, _request_id) = setup_hook(
         "r4c-list-bg-no-row",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
@@ -434,6 +434,7 @@ async fn list_background_tools_no_parent_tool_call_row_written() {
 
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), &session_id, "list_processes").await,
-        0
+        1
     );
+    assert_accepted_control_rows(&hook, "list_processes", 1).await;
 }

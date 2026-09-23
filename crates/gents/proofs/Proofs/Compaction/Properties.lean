@@ -62,7 +62,7 @@ theorem reduction_idempotent_when_unsafe
     r (r v) = r v :=
   IsValidReducer.identityUnlessSafe (r := r) (r v) h_unsafe
 
-theorem reduction_implies_all_retained_tool_results_terminal
+theorem nontrivial_reduction_requires_stable_published_prefix
     {v : PromptView} (h_nontrivial : r v ≠ v) :
     PromptView.safeToReduce v := by
   by_contra h_unsafe

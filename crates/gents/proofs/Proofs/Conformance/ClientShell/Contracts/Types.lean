@@ -89,7 +89,7 @@ def jsonBoolOption : Option Bool → String
 
 def clientTurnStateName : ClientTurnState → String
   | .waitingForClaim => "waitingForClaim"
-  | .streaming       => "streaming"
+  | .running         => "running"
   | .completed       => "completed"
   | .failed          => "failed"
   | .superseded      => "superseded"

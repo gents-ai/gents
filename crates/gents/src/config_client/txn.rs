@@ -139,6 +139,13 @@ tokio::task_local! {
     static ACTIVE_EMBEDDED_TRANSACTION: &'static str;
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("embedded canonical write {waiting_operation} is nested inside transaction {owner_operation}; use the supplied transaction owner")]
+pub(crate) struct ReentrantEmbeddedWrite {
+    waiting_operation: &'static str,
+    owner_operation: &'static str,
+}
+
 fn ensure_not_reentrant_embedded_write(operation: WriteOperation) -> Result<()> {
     if let Ok(owner_operation) = ACTIVE_EMBEDDED_TRANSACTION.try_with(|owner| *owner) {
         tracing::error!(
@@ -146,11 +153,11 @@ fn ensure_not_reentrant_embedded_write(operation: WriteOperation) -> Result<()> 
             owner_operation,
             "re-entrant embedded canonical write rejected"
         );
-        anyhow::bail!(
-            "embedded canonical write {} is nested inside transaction {}; use the supplied transaction owner",
-            operation.as_str(),
+        return Err(ReentrantEmbeddedWrite {
+            waiting_operation: operation.as_str(),
             owner_operation,
-        );
+        }
+        .into());
     }
     Ok(())
 }

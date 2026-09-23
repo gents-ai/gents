@@ -159,8 +159,21 @@ def goalDecisionCasesJson : String :=
 structure GoalTransitionCase where
   name : String
   pre : Goals.State
-  actionName : String
   action : Goals.Action
+
+def goalActionName : Goals.Action → String
+  | .pause => "pause"
+  | .resume => "resume"
+  | .complete => "complete"
+  | .blockedAudit .sameRequest => "blocked_audit_same_request"
+  | .blockedAudit .sameCondition => "blocked_audit_same_condition"
+  | .blockedAudit .newCondition => "blocked_audit_new_condition"
+  | .operatorBlock => "operator_block"
+  | .usageLimit => "usage_limit"
+  | .budgetExhausted => "budget_exhausted"
+  | .wrapupFinished => "wrapup_finished"
+  | .wrapupAbandoned => "wrapup_abandoned"
+  | .cleanTurn => "clean_turn"
 
 def goalCaseState (status : Goals.Status) (audits : Nat := 0)
     (requested : Bool := false) (completed : Bool := false) : Goals.State :=
@@ -169,39 +182,39 @@ def goalCaseState (status : Goals.Status) (audits : Nat := 0)
 
 def goalTransitionCases : List GoalTransitionCase :=
   [ { name := "active_pause", pre := goalCaseState .active,
-      actionName := "pause", action := .pause }
+      action := .pause }
   , { name := "budget_pause_rejected", pre := goalCaseState .budgetLimited 0 true false,
-      actionName := "pause", action := .pause }
+      action := .pause }
   , { name := "blocked_resume_resets_audits", pre := goalCaseState .blocked 3,
-      actionName := "resume", action := .resume }
+      action := .resume }
   , { name := "complete_from_active", pre := goalCaseState .active,
-      actionName := "complete", action := .complete }
+      action := .complete }
   , { name := "complete_rewrite_rejected", pre := goalCaseState .complete,
-      actionName := "complete", action := .complete }
+      action := .complete }
   , { name := "same_request_dedupes", pre := goalCaseState .active 2,
-      actionName := "blocked_audit_same_request", action := .blockedAudit .sameRequest }
+      action := .blockedAudit .sameRequest }
   , { name := "same_condition_increments", pre := goalCaseState .active 1,
-      actionName := "blocked_audit_same_condition", action := .blockedAudit .sameCondition }
+      action := .blockedAudit .sameCondition }
   , { name := "third_same_condition_blocks", pre := goalCaseState .active 2,
-      actionName := "blocked_audit_same_condition", action := .blockedAudit .sameCondition }
+      action := .blockedAudit .sameCondition }
   , { name := "new_condition_resets", pre := goalCaseState .active 2,
-      actionName := "blocked_audit_new_condition", action := .blockedAudit .newCondition }
+      action := .blockedAudit .newCondition }
   , { name := "budget_blocked_audit_rejected", pre := goalCaseState .budgetLimited 2 true false,
-      actionName := "blocked_audit_same_condition", action := .blockedAudit .sameCondition }
+      action := .blockedAudit .sameCondition }
   , { name := "operator_blocks_active", pre := goalCaseState .active,
-      actionName := "operator_block", action := .operatorBlock }
+      action := .operatorBlock }
   , { name := "usage_limit_stops_active", pre := goalCaseState .active,
-      actionName := "usage_limit", action := .usageLimit }
+      action := .usageLimit }
   , { name := "budget_exhaustion_latches_wrapup", pre := goalCaseState .active,
-      actionName := "budget_exhausted", action := .budgetExhausted }
+      action := .budgetExhausted }
   , { name := "wrapup_finishes", pre := goalCaseState .budgetLimited 0 true false,
-      actionName := "wrapup_finished", action := .wrapupFinished }
+      action := .wrapupFinished }
   , { name := "wrapup_abandons_after_retry_bound", pre := goalCaseState .budgetLimited 0 true false,
-      actionName := "wrapup_abandoned", action := .wrapupAbandoned }
+      action := .wrapupAbandoned }
   , { name := "clean_turn_resets_audits", pre := goalCaseState .active 2,
-      actionName := "clean_turn", action := .cleanTurn }
+      action := .cleanTurn }
   , { name := "clean_turn_rejected_while_blocked", pre := goalCaseState .blocked 3,
-      actionName := "clean_turn", action := .cleanTurn }
+      action := .cleanTurn }
   ]
 
 def goalTransitionCaseJson (w : GoalTransitionCase) : String :=
@@ -213,7 +226,7 @@ def goalTransitionCaseJson (w : GoalTransitionCase) : String :=
     ++ "\"pre_blocked_audits\":" ++ toString w.pre.blockedAudits ++ ","
     ++ "\"pre_wrapup_requested\":" ++ boolString w.pre.wrapupRequested ++ ","
     ++ "\"pre_wrapup_completed\":" ++ boolString w.pre.wrapupCompleted ++ ","
-    ++ "\"action\":" ++ jsonString w.actionName ++ ","
+    ++ "\"action\":" ++ jsonString (goalActionName w.action) ++ ","
     ++ "\"accepted\":" ++ boolString result.isSome ++ ","
     ++ "\"expected_status\":" ++ jsonString post.status.toDefraDB ++ ","
     ++ "\"expected_blocked_audits\":" ++ toString post.blockedAudits ++ ","

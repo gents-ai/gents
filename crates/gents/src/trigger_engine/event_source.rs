@@ -42,6 +42,8 @@ use super::{FireIntent, TriggerKind, TriggerSource};
 /// next event); v1 doesn't target catalog-scale source collections, so a
 /// conservative limit is fine.
 const SEEN_DOCS_SEED_LIMIT: usize = 10_000;
+const SEEN_DOCS_SEED_MAX_ATTEMPTS: usize = 20;
+const SEEN_DOCS_SEED_RETRY_DELAY: Duration = Duration::from_millis(100);
 const EVENT_SOURCE_RESCAN_INTERVAL: Duration = Duration::from_secs(5);
 const GROUP_STARTUP_PAGE_BUDGET: usize = 1;
 const GROUP_DUE_RECONCILE_BUDGET: usize = 16;
@@ -450,19 +452,28 @@ impl EventSource {
             })
             .collect();
 
-        for added_collection in &added {
-            if let Err(err) = self
-                .seed_seen_docs_for_collection(added_collection, snapshot)
+        let mut collections_to_seed = added;
+        collections_to_seed.extend(self.subscription_seed_failures.keys().cloned());
+        collections_to_seed.sort();
+        collections_to_seed.dedup();
+        for collection in collections_to_seed {
+            match self
+                .seed_seen_docs_for_collection_with_retry(&collection, snapshot)
                 .await
             {
-                self.subscription_seed_failures
-                    .insert(added_collection.clone(), format!("{err:#}"));
-                tracing::warn!(
-                    source_collection = %added_collection,
-                    %err,
-                    "event source seed_seen_docs_for_collection failed; forward-only \
-                     semantics may be weaker for pre-existing docs in this collection",
-                );
+                Ok(()) => {
+                    self.subscription_seed_failures.remove(&collection);
+                }
+                Err(err) => {
+                    self.subscription_seed_failures
+                        .insert(collection.clone(), format!("{err:#}"));
+                    tracing::warn!(
+                        source_collection = %collection,
+                        %err,
+                        "event source seed_seen_docs_for_collection failed; withholding \
+                         readiness and delivery for this collection",
+                    );
+                }
             }
         }
 
@@ -492,7 +503,10 @@ impl EventSource {
                 .extend(intents);
         }
 
-        if self.subscription.is_none() && !self.desired_collections.is_empty() {
+        if self.subscription.is_none()
+            && !self.desired_collections.is_empty()
+            && self.subscription_seed_failures.is_empty()
+        {
             let subscription = self.subscription_source.subscribe_updates();
             tracing::info!(
                 collections = self.desired_collections.len(),
@@ -661,6 +675,27 @@ impl EventSource {
             .or_default()
             .extend(doc_ids);
         Ok(())
+    }
+
+    async fn seed_seen_docs_for_collection_with_retry(
+        &mut self,
+        collection: &str,
+        snapshot: &ActiveRuntimeSnapshot,
+    ) -> anyhow::Result<()> {
+        let mut last_error = None;
+        for attempt in 1..=SEEN_DOCS_SEED_MAX_ATTEMPTS {
+            match self
+                .seed_seen_docs_for_collection(collection, snapshot)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error) => last_error = Some(error),
+            }
+            if attempt < SEEN_DOCS_SEED_MAX_ATTEMPTS {
+                tokio::time::sleep(SEEN_DOCS_SEED_RETRY_DELAY).await;
+            }
+        }
+        Err(last_error.expect("seed retry loop always attempts at least once"))
     }
 
     async fn load_doc_ids_for_collection(&self, collection: &str) -> anyhow::Result<Vec<String>> {
@@ -1874,6 +1909,17 @@ impl TriggerSource for EventSource {
                 };
 
                 if !self.desired_collections.contains(&collection_name) {
+                    continue;
+                }
+                if self
+                    .subscription_seed_failures
+                    .contains_key(&collection_name)
+                {
+                    tracing::debug!(
+                        source_collection = %collection_name,
+                        doc_id = %doc_id,
+                        "event source withholding delivery until forward-only seed succeeds",
+                    );
                     continue;
                 }
 

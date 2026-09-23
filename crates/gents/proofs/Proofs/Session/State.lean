@@ -117,6 +117,7 @@ structure SessionQueueState where
   active : Option RequestId
   pending : List QueueEntry
   terminal : Finset RequestId
+  deriving DecidableEq
 
 /-- Queue execution belongs to the same exact session identity as durable sessions. -/
 def SessionQueueState.sessionId (s : SessionQueueState) : SessionId := s.scope.session
@@ -220,12 +221,6 @@ def drainAutomatedWakeups
     pending := pendingAfterDrain source queueKey s.pending
     terminal := s.terminal ∪ drainedRequestIds source queueKey s.pending
   }
-
-def createdOrdered (s : SessionQueueState) : Prop :=
-  CreatedOrdered s.pending
-
-def uniqueCoalescedQueueKeys (s : SessionQueueState) : Prop :=
-  UniqueCoalescedQueueKeys s.pending
 
 end SessionQueueState
 

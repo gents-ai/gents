@@ -31,6 +31,7 @@ export type {
   DesktopApiAdapter,
   ManagedServerAuthorityInput,
   ManagedServerStatus,
+  ManagedServerResetResult,
 } from "./api/types.js";
 export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
 export * from "./events.js";

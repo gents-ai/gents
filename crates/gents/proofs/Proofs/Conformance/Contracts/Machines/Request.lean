@@ -19,7 +19,7 @@ def requestActions : List (String × RequestContext.Action) :=
   , ("dedupLose", .dedupLose)
   , ("admissionReject", .admissionReject)
   , ("beginInference", .beginInference)
-  , ("advance", .advance)
+  , ("continueProcessing", .continueProcessing)
   , ("finish", .finish)
   , ("fail", .fail)
   , ("failBeforeStream", .failBeforeStream)
@@ -44,7 +44,6 @@ def requestContext
   , currentTime := currentTime
   , retryCount := 0
   , maxRetries := 3
-  , progressSeq := 0
   , messageSeq := 0
   , persistence := .uncommitted
   , interruptRequestedAt := if hasInterrupt then some currentTime else none

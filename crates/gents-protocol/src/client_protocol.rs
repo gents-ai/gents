@@ -1,24 +1,21 @@
-//! Client turn observation protocol.
+//! Client turn observation contract (#1571).
 //!
-//! Pure-function projection from agent document snapshots to client-visible
-//! turn states. Source of truth: `crates/gents/proofs/Proofs/Client.lean`.
+//! Execution status comes only from request lifecycle and supersession. Output
+//! visibility comes separately from shared output reconstruction: missing replicated
+//! dependencies do not demote a terminal request, and visible bytes do not complete
+//! an active one. `Running` does not assert that bytes are currently arriving.
 //!
-//! The derivation checks server terminal states first, then falls through to
-//! response status for non-terminal request states. This ordering prevents
-//! stale streaming responses from demoting a failed/completed request, and
-//! preserves the monotonicity property proven in the Lean model.
+//! Implements the request-only projection in `Proofs/Client/Types.lean`.
 
 use std::collections::HashSet;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 pub use crate::request_lifecycle::{InvalidRequestLifecycleState, RequestLifecycleState};
 
-/// The 6 client-visible turn states, mirroring `ClientTurnState` in Client.lean.
+/// Client execution indicators, independent of output availability.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientTurnState {
     WaitingForClaim,
-    Streaming,
+    Running,
     Completed,
     Failed,
     Superseded,
@@ -26,11 +23,11 @@ pub enum ClientTurnState {
 }
 
 impl ClientTurnState {
-    /// Monotonic rank for ordering. Terminal states share rank 2.
+    /// Terminal states share rank 2. Transition properties belong to Client.lean.
     pub fn rank(self) -> u32 {
         match self {
             Self::WaitingForClaim => 0,
-            Self::Streaming => 1,
+            Self::Running => 1,
             Self::Completed => 2,
             Self::Failed => 2,
             Self::Superseded => 2,
@@ -46,47 +43,6 @@ impl ClientTurnState {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResponseStatus {
-    Streaming,
-    Complete,
-    Error,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InvalidResponseStatus {
-    status: String,
-}
-
-impl InvalidResponseStatus {
-    pub fn value(&self) -> &str {
-        &self.status
-    }
-}
-
-impl Display for InvalidResponseStatus {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "invalid response status: {}", self.status)
-    }
-}
-
-impl Error for InvalidResponseStatus {}
-
-impl TryFrom<&str> for ResponseStatus {
-    type Error = InvalidResponseStatus;
-
-    fn try_from(value: &str) -> Result<Self, InvalidResponseStatus> {
-        match value {
-            "streaming" => Ok(Self::Streaming),
-            "complete" => Ok(Self::Complete),
-            "error" => Ok(Self::Error),
-            _ => Err(InvalidResponseStatus {
-                status: value.to_string(),
-            }),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RequestSnapshot {
     pub request_id: String,
@@ -96,21 +52,15 @@ pub struct RequestSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseSnapshot {
-    pub status: ResponseStatus,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AttemptView {
     pub request: RequestSnapshot,
-    pub response: Option<ResponseSnapshot>,
 }
 
-/// Response-aware state for the current request at the head of a client turn.
+/// Request-only state for the current request at the head of a client turn.
 ///
-/// `turn_state` is the durable outcome projection. `request_state` preserves
-/// the request-side detail that clients need for presentation distinctions
-/// such as pending versus running and waiting for user input.
+/// `turn_state` is the execution indicator. `request_state` preserves detail
+/// such as workspace binding and waiting for user input. Output readiness,
+/// live previews and message completeness are not execution states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientHeadProjection {
     pub turn_state: ClientTurnState,
@@ -131,93 +81,93 @@ impl ClientHeadProjection {
     }
 }
 
+pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
+    use RequestLifecycleState as Request;
+    if view.request.is_superseded {
+        return ClientTurnState::Superseded;
+    }
+    match view.request.lifecycle_state {
+        Request::WorkspaceBindingPending | Request::Pending => ClientTurnState::WaitingForClaim,
+        Request::Claimed | Request::Processing | Request::InputRequired => ClientTurnState::Running,
+        Request::Completed => ClientTurnState::Completed,
+        Request::Failed | Request::Dead => ClientTurnState::Failed,
+        Request::Superseded => ClientTurnState::Superseded,
+        Request::Interrupted => ClientTurnState::Interrupted,
+    }
+}
+
 pub fn project_attempt(view: &AttemptView) -> ClientHeadProjection {
     ClientHeadProjection {
-        turn_state: derive_observation(
-            view.request.lifecycle_state,
-            view.request.is_superseded,
-            view.response.as_ref().map(|response| response.status),
-        ),
+        turn_state: derive_attempt(view),
         request_state: view.request.lifecycle_state,
     }
 }
 
-pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
-    project_attempt(view).turn_state
-}
-
-pub fn project_persisted_attempt(
-    lifecycle_state: &str,
-    is_superseded: bool,
-    response_status: Option<&str>,
-) -> Option<ClientHeadProjection> {
-    let lifecycle_state = RequestLifecycleState::try_from(lifecycle_state.trim()).ok()?;
-    let response_status =
-        response_status.and_then(|status| ResponseStatus::try_from(status.trim()).ok());
-    Some(ClientHeadProjection {
-        turn_state: derive_observation(lifecycle_state, is_superseded, response_status),
-        request_state: lifecycle_state,
-    })
-}
-
+/// Request-only projection of one persisted attempt.
+///
+/// Two arguments only: the persisted lifecycle state and whether the request is
+/// superseded. Persisted responses carry no execution facts, so there is no
+/// response argument. Returns `None` when the persisted state is not a valid
+/// lifecycle value.
 pub fn derive_persisted_attempt(
     lifecycle_state: &str,
     is_superseded: bool,
-    response_status: Option<&str>,
 ) -> Option<ClientTurnState> {
-    project_persisted_attempt(lifecycle_state, is_superseded, response_status)
-        .map(|head| head.turn_state)
+    project_persisted_attempt(lifecycle_state, is_superseded).map(|view| view.turn_state)
 }
 
-fn derive_observation(
-    lifecycle_state: RequestLifecycleState,
+/// Request-only head projection of one persisted attempt.
+///
+/// Same two arguments as [`derive_persisted_attempt`]; see there for why there
+/// is no response argument. Returns `None` when the persisted state is not a
+/// valid lifecycle value.
+pub fn project_persisted_attempt(
+    lifecycle_state: &str,
     is_superseded: bool,
-    response_status: Option<ResponseStatus>,
-) -> ClientTurnState {
-    if is_superseded {
-        return ClientTurnState::Superseded;
-    }
-
-    match lifecycle_state {
-        RequestLifecycleState::Superseded => ClientTurnState::Superseded,
-        RequestLifecycleState::Completed => ClientTurnState::Completed,
-        RequestLifecycleState::Failed | RequestLifecycleState::Dead => ClientTurnState::Failed,
-        RequestLifecycleState::Interrupted => ClientTurnState::Interrupted,
-        RequestLifecycleState::WorkspaceBindingPending
-        | RequestLifecycleState::Pending
-        | RequestLifecycleState::Claimed
-        | RequestLifecycleState::Processing
-        | RequestLifecycleState::InputRequired => match response_status {
-            Some(status) => match status {
-                ResponseStatus::Complete => ClientTurnState::Completed,
-                ResponseStatus::Error => ClientTurnState::Failed,
-                ResponseStatus::Streaming => ClientTurnState::Streaming,
-            },
-            None => ClientTurnState::WaitingForClaim,
+) -> Option<ClientHeadProjection> {
+    let lifecycle_state = RequestLifecycleState::parse(lifecycle_state).ok()?;
+    Some(project_attempt(&AttemptView {
+        request: RequestSnapshot {
+            request_id: String::new(),
+            retry_parent_request: None,
+            lifecycle_state,
+            is_superseded,
         },
-    }
+    }))
 }
 
-fn resolve_tip(attempts: &[AttemptView]) -> Option<&AttemptView> {
-    if attempts.is_empty() {
-        return None;
+/// Unordered retry-tip resolution over already-authorized attempts.
+///
+/// The caller supplies the scoped candidate set (agent/session scoping is the
+/// caller's authorization decision, not re-derived here). The turn head is the
+/// exactly one candidate that no other candidate references as its retry
+/// parent. Duplicate request IDs and zero or multiple tips return `None`.
+/// Closed cycles have no tip; this is not complete graph validation.
+pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
+    let mut seen = HashSet::new();
+    for attempt in attempts {
+        if !seen.insert(attempt.request.request_id.as_str()) {
+            return None;
+        }
     }
 
-    let referenced_request_ids: HashSet<&str> = attempts
+    // Candidate tips are exactly the attempts whose ID is not named as a retry
+    // parent by another attempt (Proofs/Client/Types.lean `retryTips`).
+    let parents: HashSet<_> = attempts
         .iter()
         .filter_map(|attempt| attempt.request.retry_parent_request.as_deref())
-        .filter(|request_id| !request_id.is_empty())
         .collect();
-
     let mut tips = attempts
         .iter()
-        .filter(|attempt| !referenced_request_ids.contains(attempt.request.request_id.as_str()));
-    let tip = tips.next()?;
-    tips.next().is_none().then_some(tip)
-}
+        .filter(|attempt| !parents.contains(attempt.request.request_id.as_str()));
 
-pub fn derive_turn(attempts: &[AttemptView]) -> Option<ClientTurnState> {
-    resolve_tip(attempts).map(derive_attempt)
+    // Exactly one tip, or fail closed: zero tips (including a closed cycle,
+    // where every member is referenced as a parent) and multiple-tip ambiguity
+    // are both rejected. This is a projection, not complete graph validation.
+    match (tips.next(), tips.next()) {
+        (Some(tip), None) => Some(derive_attempt(tip)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

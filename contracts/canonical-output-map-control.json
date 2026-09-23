@@ -1,0 +1,255 @@
+[
+  {
+    "id": "control.completion-retry-policy",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Transition.lean", "symbol": "CompletionRetry.Action" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.stepPolicy" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.retry_budget_caps_preserved" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.scheduled_backoff_fits_deadline" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Properties.lean", "symbol": "CompletionRetry.successful_wake_uses_observed_time" }
+    ],
+    "constructors": [
+      "CompletionRetry.Action.issue",
+      "CompletionRetry.Action.observeFailure",
+      "CompletionRetry.Action.schedule",
+      "CompletionRetry.Action.wake",
+      "CompletionRetry.Action.acceptedToolFailure",
+      "CompletionRetry.Action.repairIssue",
+      "CompletionRetry.Action.recordUsage"
+    ],
+    "generated_groups": ["completion_retry_cases"],
+    "fixture_status": "summary_only",
+    "native_owner_paths": [
+      "crates/gents/src/retry.rs",
+      "crates/gents/src/agent/completion_retry.rs"
+    ],
+    "consumer_paths": ["crates/gents/src/retry/tests.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "enforce transport and resample retry budgets monotonically without exceeding configured caps",
+      "schedule backoff only after durable retraction and within the request deadline",
+      "observe wake at authoritative monotone time; reject early, backward and deadline-exceeding observations",
+      "account usage through the InferenceCall owner with complete replay-idempotent native accounting",
+      "do not count completion_retry_cases summaries as native owner execution"
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "CompletionRetry.CanonicalGate.stepPolicy",
+      "disposition": "admitted",
+      "reason": "These policy-only actions may advance retry metadata after request coherence, lease clock and action-clock checks; they cannot publish or retract canonical output."
+    }
+  },
+  {
+    "id": "control.completion-retry-canonical-routing",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/Transition.lean", "symbol": "CompletionRetry.Action" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.policyActionAllowed" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.commit" }
+    ],
+    "constructors": [
+      "CompletionRetry.Action.confirmRetraction",
+      "CompletionRetry.Action.accept"
+    ],
+    "generated_groups": ["completion_retry_cases"],
+    "fixture_status": "summary_only",
+    "native_owner_paths": [
+      "crates/gents/src/agent/completion_retry.rs",
+      "crates/gents/src/streaming.rs"
+    ],
+    "consumer_paths": ["crates/gents/src/retry/tests.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "reject accept and confirmRetraction at the policy-only subtype boundary",
+      "route acceptance through one canonical closure/header commit and route retraction through one durable Retracted closure commit",
+      "preserve exact replay while preventing retry metadata from impersonating canonical output",
+      "synchronize the retry clock with the held canonical gate commit"
+    ],
+    "retired_bindings": ["direct policy-only accept", "direct policy-only confirmRetraction"],
+    "admission": {
+      "boundary": "CompletionRetry.CanonicalGate.commit",
+      "disposition": "routed",
+      "reason": "policyActionAllowed excludes both constructors from stepPolicy; their effects are admitted only when routed through the composed canonical commit."
+    }
+  },
+  {
+    "id": "control.completion-retry-canonical-commit",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.Operation" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.commit" },
+      { "file": "crates/gents/proofs/Proofs/CompletionRetry/CanonicalGate.lean", "symbol": "CompletionRetry.CanonicalGate.successful_commit_is_actual_gate_commit" }
+    ],
+    "constructors": [
+      "CompletionRetry.CanonicalGate.Operation.retract",
+      "CompletionRetry.CanonicalGate.Operation.accept"
+    ],
+    "generated_groups": [],
+    "fixture_status": "not_exported",
+    "native_owner_paths": [
+      "crates/gents/src/agent/completion_retry.rs",
+      "crates/gents/src/streaming.rs"
+    ],
+    "consumer_paths": ["crates/gents/src/retry/tests.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "reject incoherent request identity, backward time, wrong source and policy-invalid phases before mutation",
+      "commit accepted publication or durable retraction through the actual execution gate",
+      "preserve sequence monotonicity and exact immutable replay"
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "CompletionRetry.CanonicalGate.commit",
+      "disposition": "admitted",
+      "reason": "Both closure decisions require the same composed retry-policy and canonical execution gate transaction."
+    }
+  },
+  {
+    "id": "control.session-queue-request-mutations",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.Action" },
+      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.scopedStep?" }
+    ],
+    "constructors": [
+      "SessionQueue.Action.appendPending",
+      "SessionQueue.Action.coalescePending",
+      "SessionQueue.Action.claimNext",
+      "SessionQueue.Action.finishActive"
+    ],
+    "generated_groups": ["queue_deadline_conformance_cases"],
+    "fixture_status": "summary_only",
+    "native_owner_paths": [
+      "crates/gents/src/lifecycle/queue/enqueue.rs",
+      "crates/gents/src/lifecycle/queue/coalescing.rs",
+      "crates/gents/src/lifecycle/queue/mutation.rs"
+    ],
+    "consumer_paths": ["crates/gents/src/lifecycle/queue/tests.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "reject foreign agent and foreign requester scopes before queue mutation",
+      "preserve request-id freshness, append ordering and coalesced-key uniqueness",
+      "claim only the pending head when no request is active",
+      "finish exactly the active request before admitting the next claim",
+      "retain queue deadline and stale-owner observations from queue_deadline_conformance_cases without claiming those summaries execute native mutations"
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "SessionQueue.scopedStep?",
+      "disposition": "admitted",
+      "reason": "These queue mutations share the exact agent/session/requester scope gate; a scope mismatch is rejected rather than treated as a wildcard."
+    }
+  },
+  {
+    "id": "control.session-queue-notification-drain",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.Action" },
+      { "file": "crates/gents/proofs/Proofs/Session/Executable.lean", "symbol": "SessionQueue.scopedStep?" },
+      { "file": "crates/gents/proofs/Proofs/Session/Properties/Coalescing.lean", "symbol": "SessionQueue.goal_queue_is_separate_from_background" },
+      { "file": "crates/gents/proofs/Proofs/Conformance/ContractCases/QueueDeadline.lean", "symbol": "Conformance.ContractCases.backgroundCompletionCreatesNoAgentRequestCase" }
+    ],
+    "constructors": ["SessionQueue.Action.drainAutomated"],
+    "generated_groups": ["queue_deadline_conformance_cases"],
+    "fixture_status": "summary_only",
+    "native_owner_paths": [
+      "crates/gents/src/lifecycle/queue/draining.rs",
+      "crates/gents/src/lifecycle/queue/goal_continuation.rs",
+      "crates/gents/src/background_completion/notification_delivery.rs"
+    ],
+    "consumer_paths": [
+      "crates/gents/src/lifecycle/queue/tests/background_completion.rs",
+      "crates/gents/src/lifecycle/queue/tests/background_goal_repair.rs"
+    ],
+    "native_status": "pending",
+    "required_cases": [
+      "route only automated wake sources through drainAutomated and reject user sources",
+      "keep background-completion and Goal queue keys disjoint",
+      "remove only matching source/key notifications inside the exact queue scope",
+      "remove pending queue entries without claiming notification acknowledgement or completed wake execution",
+      "preserve the generated case that background completion notification creates no AgentRequest"
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "SessionQueue.scopedStep?",
+      "disposition": "routed",
+      "reason": "Automated pending entries are removed through the scoped queue boundary; this operation does not acknowledge notifications. Physical claim completion owns acknowledgement separately."
+    }
+  },
+  {
+    "id": "control.physical-wake-claim-and-acknowledgement",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.canonicalWakeBindings" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.evidenceValid" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.claimAndActivate" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.successful_claim_has_exact_binding" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.finishAndAcknowledge" },
+      { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Handover.lean", "symbol": "CanonicalOutput.Execution.Handover.successful_finish_clears_claim_control" }
+    ],
+    "constructors": [],
+    "generated_groups": [],
+    "fixture_status": "not_exported",
+    "native_owner_paths": [
+      "crates/gents/src/lifecycle/claim.rs",
+      "crates/gents/src/lifecycle/queue/atomic_inputs.rs",
+      "crates/gents/src/lifecycle/execution_lease.rs",
+      "crates/gents/src/background_completion_diagnostics.rs"
+    ],
+    "consumer_paths": ["crates/gents/src/lifecycle/queue/tests/background_completion.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "derive nonempty wake bindings from canonical notification headers for the exact authenticated physical request, session and captured sequence boundary",
+      "atomically bind the pending queue head, physical request, lease and captured claim evidence; reject mismatched parent, logical alias or foreign scope",
+      "finish only the exact active physical claim under the held gate and a terminal outcome",
+      "acknowledge only the completed wake snapshot's attemptedBindings after valid terminal selection; failed and cancelled outcomes acknowledge none",
+      "ordinary and Goal claims acknowledge no background bindings; finishing clears active queue and claim control together",
+      "notifications arriving after the captured input boundary remain unacknowledged by this attempt"
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "CanonicalOutput.Execution.Handover.finishAndAcknowledge",
+      "disposition": "routed",
+      "reason": "Acknowledgement is derived from physical claim evidence and completed terminal outcome, never from drainAutomated or notification publication alone."
+    }
+  },
+  {
+    "id": "control.storage-write-gate-events",
+    "model_symbols": [
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.Event" },
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.step" },
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.elapsed_is_not_timeout_observation" },
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_cleanup_return_releases" },
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.observed_drop_return_releases" },
+      { "file": "crates/gents/proofs/Proofs/StorageWriteGate.lean", "symbol": "StorageWriteGate.suspended_forever_is_valid" },
+      { "file": "crates/gents/proofs/Proofs/Conformance/StorageWriteGate.lean", "symbol": "Conformance.StorageWriteGateContracts.cases" }
+    ],
+    "constructors": [
+      "StorageWriteGate.Event.siblingWait",
+      "StorageWriteGate.Event.elapsed",
+      "StorageWriteGate.Event.storageReturned",
+      "StorageWriteGate.Event.deadlineObserved",
+      "StorageWriteGate.Event.cleanupReturned",
+      "StorageWriteGate.Event.cleanupDeadlineObserved",
+      "StorageWriteGate.Event.dropReturned",
+      "StorageWriteGate.Event.release"
+    ],
+    "generated_groups": [],
+    "fixture_status": "not_exported",
+    "native_owner_paths": [
+      "crates/gents/src/streaming.rs",
+      "crates/gents/src/graphql.rs"
+    ],
+    "consumer_paths": ["crates/gents/tests/conformance/structure.rs"],
+    "native_status": "pending",
+    "required_cases": [
+      "schedule the storage finalizer independently from a sibling waiting on the same mutation gate",
+      "treat elapsed as passage of time only; deadlineObserved is the explicit timeout observation",
+      "hold the gate throughout cleanup and dropping until cleanupReturned or dropReturned makes release possible",
+      "exercise storage return, cleanup return and drop return paths before release",
+      "retain the suspended-forever counterexample: executor service and storage or cleanup return are external premises, not proved liveness",
+      "The sibling-wait boundary is exercised at operation level by suspended_same_task_holder_append_rejected in canonical_execution_gate_cases, and rejected commits release through storageReturned. The event vocabulary itself is still not exported as inputs, so this entry stays not_exported."
+    ],
+    "retired_bindings": [],
+    "admission": {
+      "boundary": "StorageWriteGate.step",
+      "disposition": "admitted",
+      "reason": "All events are observations at the write-gate scheduling model; non-pollable or phase-inapplicable events are inert and never imply completion."
+    }
+  }
+]

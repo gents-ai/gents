@@ -1,12 +1,20 @@
-use crate::support::*;
-
+use anyhow::{Context, Result};
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
-
-use anyhow::{Context, Result};
-use serde_json::Value;
 use uuid::Uuid;
+
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReasoningPart, SegmentRun,
+    SourceClose, StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
+};
+use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+use crate::support::graphql::graphql_mutation_with_variables;
+use crate::support::*;
 
 struct ResponseTestRuntime {
     _tempdir: tempfile::TempDir,
@@ -56,103 +64,233 @@ async fn start_response_runtime(label: &str) -> Result<ResponseTestRuntime> {
 struct MaterializedResponse<'a> {
     request_id: &'a str,
     session_id: &'a str,
-    response_content: &'a str,
-    response_reasoning: &'a str,
+    /// Text of the closed assistant Text stream; None means no text stream.
     message_content: Option<&'a str>,
-    message_role: &'a str,
+    /// Text of the closed assistant Reasoning stream; empty means none.
     message_reasoning: &'a str,
-    response_status: &'a str,
-    sequence: i64,
+    /// Request lifecycle state for the seeded terminal selection.
+    lifecycle_state: RequestLifecycleState,
+    /// `true` stamps the seeded header as the terminalization owner's
+    /// selection; `false` leaves the terminal request with no selection yet
+    /// (the canonical `Loading` observation).
+    stamp_terminal_selection: bool,
+}
+
+/// Create the canonical request row for a fixture. Lifecycle is the only
+/// request state; the terminal selection is stamped separately by the
+/// terminalization owner.
+async fn create_fixture_request(
+    runtime: &ResponseTestRuntime,
+    request_id: &str,
+    session_id: &str,
+    lifecycle_state: RequestLifecycleState,
+) -> Result<String> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let request = graphql_query(
+        &runtime.graphql,
+        &format!(
+            r#"mutation{{create_AgentRequest(input:{{request_id:"{}",agent_did:"{}",requester_did:null,session_id:"{}",behavior_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"{}"}}){{_docID}}}}"#,
+            escape_graphql_string(request_id),
+            escape_graphql_string(&runtime.agent_did),
+            escape_graphql_string(session_id),
+            escape_graphql_string(&now),
+            escape_graphql_string(lifecycle_state.as_str()),
+        ),
+    )
+    .await?;
+    gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")
+}
+
+/// Stamp the terminalization owner's selection onto a terminal request so
+/// `observe_request_output` resolves the referenced header and its segment
+/// dependencies. The JSON column travels as a typed GraphQL variable,
+/// preserving its object shape verbatim.
+async fn stamp_terminal_message(
+    runtime: &ResponseTestRuntime,
+    request_doc_id: &str,
+    message_doc_id: &str,
+    lifecycle_state: RequestLifecycleState,
+) -> Result<()> {
+    use gents::config_client::ConfigAccess;
+
+    let selection = serde_json::to_value(TerminalOutput::Message {
+        message_doc_id: message_doc_id.to_owned(),
+    })?;
+    let now = chrono::Utc::now().to_rfc3339();
+    graphql_mutation_with_variables(
+            &ConfigAccess::Graphql(runtime.graphql.clone()),
+            r#"mutation($request_doc_id: String!, $terminal_output: JSON, $lifecycle_state: String!, $now: String!) {
+                update_AgentRequest(
+                    filter: { _docID: { _eq: $request_doc_id } }
+                    input: { terminal_output: $terminal_output, lifecycle_state: $lifecycle_state, terminalized_at: $now }
+                ) { _docID }
+            }"#,
+            &serde_json::json!({
+                "request_doc_id": request_doc_id,
+                "terminal_output": selection,
+                "lifecycle_state": lifecycle_state.as_str(),
+                "now": now,
+            }),
+        )
+        .await?;
+    Ok(())
 }
 
 async fn insert_materialized_response(
     runtime: &ResponseTestRuntime,
     fixture: MaterializedResponse<'_>,
-) -> Result<()> {
+) -> Result<String> {
+    use gents::config_client::ConfigAccess;
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+
     let MaterializedResponse {
         request_id,
         session_id,
-        response_content,
-        response_reasoning,
         message_content,
-        message_role,
         message_reasoning,
-        response_status,
-        sequence,
+        lifecycle_state,
+        stamp_terminal_selection,
     } = fixture;
     let now = chrono::Utc::now().to_rfc3339();
-    let request = graphql_query(&runtime.graphql, &format!(r#"mutation{{create_AgentRequest(input:{{request_id:"{}",agent_did:"{}",requester_did:null,session_id:"{}",behavior_id:"response-test",content:"test request",created_at:"{}",lifecycle_state:"completed"}}){{_docID}}}}"#, escape_graphql_string(request_id), escape_graphql_string(&runtime.agent_did), escape_graphql_string(session_id), escape_graphql_string(&now))).await?;
+    let access = ConfigAccess::Graphql(runtime.graphql.clone());
+
+    // Canonical request row: lifecycle is the only request state; the terminal
+    // selection (`TerminalOutput`) is stamped by the terminalization owner.
     let request_doc_id =
-        gents_protocol::graphql::extract_mutation_doc_id(&request, "AgentRequest")?;
-    let response_key = format!("response-{request_id}");
-    let message_mutation = message_content.map_or_else(String::new, |content| {
-        let message_key = gents::session::sequence_message_key(
-            &runtime.agent_did,
-            session_id,
-            None,
-            u32::try_from(sequence).expect("fixture sequence fits u32"),
-        );
-        format!(
-            r#"create_AgentMessage(input: {{
-                message_key: "{message_key}",
-                session_id: "{session_id}",
-                agent_did: "{agent_did}",
-                request_id: "{request_id}",
-                request_doc_id: "{request_doc_id}",
-                requester_did: null,
-                sequence: {sequence},
-                role: "{message_role}",
-                content: "{content}",
-                reasoning: "{message_reasoning}",
-                timestamp: "{now}"
-            }}) {{ _docID }}"#,
-            message_key = escape_graphql_string(&message_key),
-            session_id = escape_graphql_string(session_id),
-            agent_did = escape_graphql_string(&runtime.agent_did),
-            request_id = escape_graphql_string(request_id),
-            request_doc_id = escape_graphql_string(&request_doc_id),
-            content = escape_graphql_string(content),
-            message_role = escape_graphql_string(message_role),
-            message_reasoning = escape_graphql_string(message_reasoning),
-            now = escape_graphql_string(&now),
-        )
-    });
-    let mutation = format!(
-        r#"mutation {{
-            {message_mutation}
-            create_AgentResponse(input: {{
-                response_key: "{response_key}",
-                request_id: "{request_id}",
-                request_doc_id: "{request_doc_id}",
-                requester_did: null,
-                agent_did: "{agent_did}",
-                behavior_id: "response-test",
-                session_id: "{session_id}",
-                content: "{response_content}",
-                reasoning: "{response_reasoning}",
-                status: "{response_status}",
-                error_message: "",
-                token_count: 1241,
-                progress_seq: 31,
-                reasoning_progress_seq: 17,
-                materialized_message_sequence: {sequence},
-                materialized_at: "{now}",
-                created_at: "{now}",
-                completed_at: "{now}"
-            }}) {{ _docID }}
-        }}"#,
-        response_key = escape_graphql_string(&response_key),
-        request_id = escape_graphql_string(request_id),
-        request_doc_id = escape_graphql_string(&request_doc_id),
-        agent_did = escape_graphql_string(&runtime.agent_did),
-        session_id = escape_graphql_string(session_id),
-        response_content = escape_graphql_string(response_content),
-        response_reasoning = escape_graphql_string(response_reasoning),
-        response_status = escape_graphql_string(response_status),
-        now = escape_graphql_string(&now),
-    );
-    graphql_query(&runtime.graphql, &mutation).await?;
-    Ok(())
+        create_fixture_request(runtime, request_id, session_id, lifecycle_state).await?;
+
+    // Canonical closed source: one provider turn whose closing record carries
+    // the text and reasoning streams. Payload bytes live only in the segment;
+    // nothing here writes a second durable copy.
+    let source = OutputSource::ProviderTurn {
+        scope: CaptureScope {
+            kind: CaptureScopeKind::Inference,
+            seq: 1,
+        },
+        turn_index: 0,
+        attempt: 0,
+    };
+    let text_stream = message_content.map(str::as_bytes);
+    let reasoning_stream = (!message_reasoning.is_empty()).then(|| message_reasoning.as_bytes());
+    let reasoning_stream_index = u32::from(text_stream.is_some());
+    // One flush covers both streams; runs cover the payload exactly in
+    // arrival order, with the opening run of each stream declaring it.
+    let mut payload = String::new();
+    let mut runs: Vec<SegmentRun> = Vec::new();
+    if let Some(bytes) = text_stream {
+        runs.push(SegmentRun {
+            stream: 0,
+            bytes: u32::try_from(bytes.len()).expect("fixture text stream fits u32"),
+            declaration: Some(StreamDeclaration {
+                block_index: u32::try_from(runs.len()).expect("fixture block index fits u32"),
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        });
+        payload.push_str(message_content.expect("text stream implies content"));
+    }
+    if let Some(bytes) = reasoning_stream {
+        runs.push(SegmentRun {
+            stream: reasoning_stream_index,
+            bytes: u32::try_from(bytes.len()).expect("fixture reasoning stream fits u32"),
+            declaration: Some(StreamDeclaration {
+                block_index: u32::try_from(runs.len()).expect("fixture block index fits u32"),
+                part_index: 0,
+                payload: StreamPayload::Reasoning,
+            }),
+        });
+        payload.push_str(message_reasoning);
+    }
+    let has_data = !runs.is_empty();
+    let stream_bytes = runs.iter().map(|run| u64::from(run.bytes)).collect();
+    let segment = OutputSegment {
+        agent_did: runtime.agent_did.clone(),
+        requester_did: None,
+        session_id: session_id.to_owned(),
+        request_doc_id: request_doc_id.clone(),
+        source,
+        writer: OutputWriter::RequestExecution {
+            execution_generation: "response-test-generation".into(),
+        },
+        ordinal: has_data.then_some(0),
+        runs,
+        payload,
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: u32::from(has_data),
+            stream_bytes,
+        }),
+        created_at: now.clone(),
+    };
+    let segment_response = graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &output_segment_create_variables(&segment)?,
+    )
+    .await?;
+    let close_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
+
+    // Canonical header: payloads are {close_doc_id, stream} references into the
+    // closed source above; small structure stays inline.
+    let mut blocks: Vec<MessageBlock> = Vec::new();
+    if message_content.is_some() {
+        blocks.push(MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id: close_doc_id.clone(),
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        });
+    }
+    if !message_reasoning.is_empty() {
+        blocks.push(MessageBlock::Reasoning {
+            id: None,
+            parts: vec![ReasoningPart::Text {
+                text: PayloadRef {
+                    close_doc_id: close_doc_id.clone(),
+                    stream: reasoning_stream_index,
+                },
+                signature: None,
+            }],
+        });
+    }
+    let header = TranscriptMessage {
+        message_key: gents::session::sequence_message_key(&runtime.agent_did, session_id, None, 1),
+        session_id: session_id.to_owned(),
+        agent_did: runtime.agent_did.clone(),
+        requester_did: None,
+        request_doc_id: Some(request_doc_id.clone()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "response-test-generation".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 1,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks,
+        created_at: now.clone(),
+    };
+    let header_response = graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&header)?,
+    )
+    .await?;
+    let message_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&header_response, "AgentMessage")?;
+
+    // Stamp the terminalization owner's selection onto the terminal request so
+    // `observe_request_output` resolves the exact header and its dependencies.
+    if stamp_terminal_selection {
+        stamp_terminal_message(runtime, &request_doc_id, &message_doc_id, lifecycle_state).await?;
+    }
+    Ok(message_doc_id)
 }
 
 fn response_show(runtime: &ResponseTestRuntime, request_id: &str) -> Result<Value> {
@@ -206,27 +344,31 @@ fn response_wait_failure(
     )
 }
 
-fn assert_materialization_failure(
+/// A terminal request with a selection the canonical reader rejects (header
+/// scope mismatch, wrong role, or unreadable dependencies) surfaces the
+/// `Invalid` observation: `show` prints the nonterminal `invalid` envelope and
+/// `wait` rejects that observation before terminal materialization, without
+/// timing out.
+async fn assert_invalid_terminal_selection(
     runtime: &ResponseTestRuntime,
     request_id: &str,
-    session_id: &str,
-    sequence: i64,
 ) -> Result<()> {
-    let stderr = run_cli_failure_stderr(
-        &runtime.home_dir,
-        &[
-            "response",
-            "show",
-            "--graphql",
-            &runtime.graphql,
-            request_id,
-        ],
-    )?;
-    assert!(stderr.contains("could not hydrate materialized AgentMessage"));
-    assert!(stderr.contains(&format!("request {request_id}")));
-    assert!(stderr.contains(&format!("session_id={session_id}")));
-    assert!(stderr.contains(&format!("sequence={sequence}")));
-    assert!(stderr.contains("missing or invalid"));
+    let shown = response_show(runtime, request_id)?;
+    assert_eq!(
+        shown.pointer("/output/kind").and_then(Value::as_str),
+        Some("invalid"),
+        "show must surface the invalid terminal selection as its own kind"
+    );
+
+    let wait_error = response_wait_failure(runtime, request_id, "5")?;
+    assert!(
+        wait_error.contains(&format!(
+            "canonical output for request {request_id} is invalid"
+        )),
+        "wait must report the invalid canonical observation: {wait_error}"
+    );
+    assert!(wait_error.contains(request_id));
+    assert!(!wait_error.contains("timed out"));
     Ok(())
 }
 
@@ -237,25 +379,16 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
     let session_id = format!("session-hydrate-{}", Uuid::new_v4().simple());
     let durable_content = format!("durable answer {}", Uuid::new_v4().simple());
     let durable_reasoning = format!("durable reasoning {}", Uuid::new_v4().simple());
-    let persisted_message = serde_json::json!({
-        "role": "assistant",
-        "id": null,
-        "content": [{ "text": durable_content }]
-    })
-    .to_string();
 
     insert_materialized_response(
         &runtime,
         MaterializedResponse {
             request_id: &request_id,
             session_id: &session_id,
-            response_content: "",
-            response_reasoning: "",
-            message_content: Some(&persisted_message),
-            message_role: "assistant",
+            message_content: Some(&durable_content),
             message_reasoning: &durable_reasoning,
-            response_status: "complete",
-            sequence: 409,
+            lifecycle_state: RequestLifecycleState::Completed,
+            stamp_terminal_selection: true,
         },
     )
     .await?;
@@ -275,77 +408,75 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
             &request_id,
         ],
     )?;
-    let shown_row = shown
-        .pointer("/data/AgentResponse/0")
-        .context("response show output missing GraphQL envelope row")?;
-
-    assert_eq!(shown_row.get("content"), waited.get("content"));
-    assert_eq!(shown_row.get("reasoning"), waited.get("reasoning"));
+    let shown_envelope = &shown["output"];
+    let waited_envelope = &waited["output"];
     assert_eq!(
-        shown_row.get("content").and_then(Value::as_str),
+        shown_envelope.get("kind").and_then(Value::as_str),
+        Some("terminal_message")
+    );
+    // `response show` and `response wait` hydrate the same canonical terminal
+    // message into an identical user-facing presentation.
+    assert_eq!(shown_envelope, waited_envelope);
+    let shown_presentation = &shown_envelope["presentation"];
+    assert_eq!(
+        shown_presentation
+            .get("body_markdown")
+            .and_then(Value::as_str),
         Some(durable_content.as_str())
     );
     assert_eq!(
-        shown_row.get("reasoning").and_then(Value::as_str),
+        shown_presentation
+            .get("reasoning_markdown")
+            .and_then(Value::as_str),
         Some(durable_reasoning.as_str())
     );
+
+    // The canonical request metadata travels in the same envelope.
+    let shown_request = &shown["request"];
     assert_eq!(
-        shown_row.get("status").and_then(Value::as_str),
+        shown_request.get("request_id").and_then(Value::as_str),
+        Some(request_id.as_str())
+    );
+    assert_eq!(
+        shown_request.get("session_id").and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    assert_eq!(
+        shown_request.get("lifecycle_state").and_then(Value::as_str),
+        Some(RequestLifecycleState::Completed.as_str())
+    );
+    // The terminal selection points back at the seeded header, whose own
+    // canonical identity matches the seeded request/session coordinates.
+    assert_eq!(
+        shown_envelope
+            .pointer("/header/request_doc_id")
+            .and_then(Value::as_str),
+        shown_request.get("request_doc_id").and_then(Value::as_str),
+        "header must be selected for the terminal request"
+    );
+    assert_eq!(
+        shown_envelope
+            .pointer("/header/session_id")
+            .and_then(Value::as_str),
+        Some(session_id.as_str())
+    );
+    assert_eq!(
+        shown_envelope
+            .pointer("/header/role")
+            .and_then(Value::as_str),
+        Some("assistant")
+    );
+    assert_eq!(
+        shown_envelope
+            .pointer("/header/outcome")
+            .and_then(Value::as_str),
         Some("complete")
     );
     assert_eq!(
-        shown_row.get("token_count").and_then(Value::as_i64),
-        Some(1241)
-    );
-    assert_eq!(
-        shown_row.get("progress_seq").and_then(Value::as_i64),
-        Some(31)
-    );
-    assert_eq!(
-        shown_row
-            .get("reasoning_progress_seq")
-            .and_then(Value::as_i64),
-        Some(17)
-    );
-    assert_eq!(
-        shown_row
-            .get("materialized_message_sequence")
-            .and_then(Value::as_i64),
-        Some(409)
-    );
-    assert!(shown_row
-        .get("materialized_at")
-        .is_some_and(Value::is_string));
-    assert!(shown_row.get("completed_at").is_some_and(Value::is_string));
-
-    let preserved_request_id = format!("response-preserved-{}", Uuid::new_v4().simple());
-    let preserved_session_id = format!("session-preserved-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &preserved_request_id,
-            session_id: &preserved_session_id,
-            response_content: "already present",
-            response_reasoning: "already reasoned",
-            message_content: Some("durable replacement that must not win"),
-            message_role: "assistant",
-            message_reasoning: "replacement reasoning that must not win",
-            response_status: "complete",
-            sequence: 7,
-        },
-    )
-    .await?;
-    let preserved = response_show(&runtime, &preserved_request_id)?;
-    let preserved_row = preserved
-        .pointer("/data/AgentResponse/0")
-        .context("preserved response show output missing GraphQL envelope row")?;
-    assert_eq!(
-        preserved_row.get("content").and_then(Value::as_str),
-        Some("already present")
-    );
-    assert_eq!(
-        preserved_row.get("reasoning").and_then(Value::as_str),
-        Some("already reasoned")
+        shown_envelope
+            .pointer("/message/role")
+            .and_then(Value::as_str),
+        Some("assistant")
     );
 
     Ok(())
@@ -354,59 +485,81 @@ async fn response_show_hydrates_materialized_content_like_response_wait() -> Res
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
     let runtime = start_response_runtime("missing").await?;
-    let request_id = format!("response-missing-{}", Uuid::new_v4().simple());
-    let session_id = format!("session-missing-{}", Uuid::new_v4().simple());
+
+    // A terminal request with no selection yet is the canonical `Loading`
+    // observation: `show` prints the nonterminal envelope and `wait` reports
+    // the materialization timeout with the diagnostic hint. The seeded header
+    // carries an empty text stream (an opening run of zero bytes); it is never
+    // selected, so presentation never reads it.
+    let loading_request_id = format!("response-loading-{}", Uuid::new_v4().simple());
+    let loading_session_id = format!("session-loading-{}", Uuid::new_v4().simple());
     insert_materialized_response(
         &runtime,
         MaterializedResponse {
-            request_id: &request_id,
-            session_id: &session_id,
-            response_content: "",
-            response_reasoning: "",
-            message_content: None,
-            message_role: "assistant",
+            request_id: &loading_request_id,
+            session_id: &loading_session_id,
+            message_content: Some(""),
             message_reasoning: "",
-            response_status: "complete",
-            sequence: 73,
+            lifecycle_state: RequestLifecycleState::Completed,
+            stamp_terminal_selection: false,
         },
     )
     .await?;
-
-    assert_materialization_failure(&runtime, &request_id, &session_id, 73)?;
-    let missing_wait_error = response_wait_failure(&runtime, &request_id, "1")?;
-    assert!(missing_wait_error.contains("timed out waiting for materialized AgentMessage"));
-    assert!(missing_wait_error.contains(&request_id));
-
-    let partial_request_id = format!("response-partial-{}", Uuid::new_v4().simple());
-    let partial_session_id = format!("session-partial-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
-        &runtime,
-        MaterializedResponse {
-            request_id: &partial_request_id,
-            session_id: &partial_session_id,
-            response_content: "preserve this partial output",
-            response_reasoning: "",
-            message_content: None,
-            message_role: "assistant",
-            message_reasoning: "",
-            response_status: "complete",
-            sequence: 74,
-        },
-    )
-    .await?;
-    let partial = response_show(&runtime, &partial_request_id)?;
-    let partial_row = partial
-        .pointer("/data/AgentResponse/0")
-        .context("partial response show output missing GraphQL envelope row")?;
+    let loading = response_show(&runtime, &loading_request_id)?;
     assert_eq!(
-        partial_row.get("content").and_then(Value::as_str),
+        loading.pointer("/output/kind").and_then(Value::as_str),
+        Some("loading"),
+        "terminal request without a selection must observe loading"
+    );
+    assert_eq!(
+        loading
+            .pointer("/request/lifecycle_state")
+            .and_then(Value::as_str),
+        Some(RequestLifecycleState::Completed.as_str())
+    );
+    let loading_wait_error = response_wait_failure(&runtime, &loading_request_id, "1")?;
+    assert!(
+        loading_wait_error.contains("timed out waiting for materialized AgentMessage"),
+        "wait must report the materialization timeout, got: {loading_wait_error}"
+    );
+    assert!(loading_wait_error.contains(&loading_request_id));
+
+    // A text-only terminal header presents the text and leaves reasoning
+    // absent (not empty).
+    let text_request_id = format!("response-text-only-{}", Uuid::new_v4().simple());
+    let text_session_id = format!("session-text-only-{}", Uuid::new_v4().simple());
+    insert_materialized_response(
+        &runtime,
+        MaterializedResponse {
+            request_id: &text_request_id,
+            session_id: &text_session_id,
+            message_content: Some("preserve this partial output"),
+            message_reasoning: "",
+            lifecycle_state: RequestLifecycleState::Completed,
+            stamp_terminal_selection: true,
+        },
+    )
+    .await?;
+    let text_shown = response_show(&runtime, &text_request_id)?;
+    assert_eq!(
+        text_shown.pointer("/output/kind").and_then(Value::as_str),
+        Some("terminal_message")
+    );
+    assert_eq!(
+        text_shown
+            .pointer("/output/presentation/body_markdown")
+            .and_then(Value::as_str),
         Some("preserve this partial output")
     );
-    assert_eq!(
-        partial_row.get("reasoning").and_then(Value::as_str),
-        Some("")
+    assert!(
+        text_shown
+            .pointer("/output/presentation/reasoning_markdown")
+            .is_none_or(Value::is_null),
+        "text-only terminal output must not fabricate empty reasoning"
     );
 
+    // A reasoning-only terminal header keeps the reasoning and presents an
+    // empty body without inventing an unused text stream.
     let reasoning_request_id = format!("response-reasoning-{}", Uuid::new_v4().simple());
     let reasoning_session_id = format!("session-reasoning-{}", Uuid::new_v4().simple());
     insert_materialized_response(
@@ -414,94 +567,65 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
         MaterializedResponse {
             request_id: &reasoning_request_id,
             session_id: &reasoning_session_id,
-            response_content: "",
-            response_reasoning: "preserve this reasoning-only output",
             message_content: None,
-            message_role: "assistant",
-            message_reasoning: "",
-            response_status: "complete",
-            sequence: 741,
+            message_reasoning: "preserve this reasoning-only output",
+            lifecycle_state: RequestLifecycleState::Completed,
+            stamp_terminal_selection: true,
         },
     )
     .await?;
     let reasoning_wait = response_wait(&runtime, &reasoning_request_id)?;
     assert_eq!(
-        reasoning_wait.get("content").and_then(Value::as_str),
+        reasoning_wait
+            .pointer("/output/presentation/body_markdown")
+            .and_then(Value::as_str),
         Some("")
     );
     assert_eq!(
-        reasoning_wait.get("reasoning").and_then(Value::as_str),
+        reasoning_wait
+            .pointer("/output/presentation/reasoning_markdown")
+            .and_then(Value::as_str),
         Some("preserve this reasoning-only output")
     );
 
-    let wrong_role_request_id = format!("response-wrong-role-{}", Uuid::new_v4().simple());
-    let wrong_role_session_id = format!("session-wrong-role-{}", Uuid::new_v4().simple());
-    let assistant_text = serde_json::json!({
-        "role": "assistant",
-        "id": null,
-        "content": [{ "text": "must not hydrate from a user row" }]
-    })
-    .to_string();
-    insert_materialized_response(
+    // A terminal request whose selection points at a header scoped to a
+    // different request is rejected by the canonical reader (`Invalid`), never
+    // presented as this request's answer.
+    let scoped_request_id = format!("response-scoped-{}", Uuid::new_v4().simple());
+    let scoped_session_id = format!("session-scoped-{}", Uuid::new_v4().simple());
+    let scoped_message_doc_id = insert_materialized_response(
         &runtime,
         MaterializedResponse {
-            request_id: &wrong_role_request_id,
-            session_id: &wrong_role_session_id,
-            response_content: "",
-            response_reasoning: "",
-            message_content: Some(&assistant_text),
-            message_role: "user",
+            request_id: &scoped_request_id,
+            session_id: &scoped_session_id,
+            message_content: Some("belongs to the scoped request only"),
             message_reasoning: "",
-            response_status: "complete",
-            sequence: 75,
+            lifecycle_state: RequestLifecycleState::Completed,
+            stamp_terminal_selection: true,
         },
     )
     .await?;
-    assert_materialization_failure(&runtime, &wrong_role_request_id, &wrong_role_session_id, 75)?;
-    let wrong_role_wait_error = response_wait_failure(&runtime, &wrong_role_request_id, "5")?;
-    assert!(wrong_role_wait_error.contains("could not hydrate materialized AgentMessage"));
-    assert!(wrong_role_wait_error.contains(&format!("request {wrong_role_request_id}")));
-    assert!(wrong_role_wait_error.contains(&format!("session_id={wrong_role_session_id}")));
-    assert!(wrong_role_wait_error.contains("sequence=75"));
-    assert!(!wrong_role_wait_error.contains("timed out"));
-
-    let tool_only = serde_json::json!({
-        "role": "assistant",
-        "id": null,
-        "content": [{
-            "id": "call-1",
-            "call_id": "call-1",
-            "function": { "name": "echo", "arguments": {} },
-            "signature": null,
-            "additional_params": null
-        }]
-    })
-    .to_string();
-    let tool_only_request_id = format!("response-tool-only-{}", Uuid::new_v4().simple());
-    let tool_only_session_id = format!("session-tool-only-{}", Uuid::new_v4().simple());
-    insert_materialized_response(
+    let mismatched_request_id = format!("response-mismatched-{}", Uuid::new_v4().simple());
+    let mismatched_session_id = format!("session-mismatched-{}", Uuid::new_v4().simple());
+    let mismatched_doc_id = create_fixture_request(
         &runtime,
-        MaterializedResponse {
-            request_id: &tool_only_request_id,
-            session_id: &tool_only_session_id,
-            response_content: "",
-            response_reasoning: "",
-            message_content: Some(&tool_only),
-            message_role: "assistant",
-            message_reasoning: "",
-            response_status: "complete",
-            sequence: 76,
-        },
+        &mismatched_request_id,
+        &mismatched_session_id,
+        RequestLifecycleState::Completed,
     )
     .await?;
-    assert_materialization_failure(&runtime, &tool_only_request_id, &tool_only_session_id, 76)?;
-    let tool_only_wait_error = response_wait_failure(&runtime, &tool_only_request_id, "5")?;
-    assert!(tool_only_wait_error.contains("could not hydrate materialized AgentMessage"));
-    assert!(tool_only_wait_error.contains(&format!("request {tool_only_request_id}")));
-    assert!(tool_only_wait_error.contains(&format!("session_id={tool_only_session_id}")));
-    assert!(tool_only_wait_error.contains("sequence=76"));
-    assert!(!tool_only_wait_error.contains("timed out"));
+    stamp_terminal_message(
+        &runtime,
+        &mismatched_doc_id,
+        &scoped_message_doc_id,
+        RequestLifecycleState::Completed,
+    )
+    .await?;
+    assert_invalid_terminal_selection(&runtime, &mismatched_request_id).await?;
 
+    // An interrupted terminal request keeps its lifecycle; with a completed
+    // header the terminal selection still presents, while the request row
+    // carries the interrupted lifecycle.
     let interrupted_request_id = format!("response-interrupted-{}", Uuid::new_v4().simple());
     let interrupted_session_id = format!("session-interrupted-{}", Uuid::new_v4().simple());
     insert_materialized_response(
@@ -509,45 +633,43 @@ async fn response_show_diagnoses_missing_materialized_message() -> Result<()> {
         MaterializedResponse {
             request_id: &interrupted_request_id,
             session_id: &interrupted_session_id,
-            response_content: "",
-            response_reasoning: "",
-            message_content: Some(&tool_only),
-            message_role: "assistant",
+            message_content: Some(""),
             message_reasoning: "",
-            response_status: "interrupted",
-            sequence: 77,
+            lifecycle_state: RequestLifecycleState::Interrupted,
+            stamp_terminal_selection: true,
         },
     )
     .await?;
-    let interrupted = response_show(&runtime, &interrupted_request_id)?;
-    let interrupted_row = interrupted
-        .pointer("/data/AgentResponse/0")
-        .context("interrupted response show output missing GraphQL envelope row")?;
+    let interrupted_show = response_show(&runtime, &interrupted_request_id)?;
     assert_eq!(
-        interrupted_row.get("status").and_then(Value::as_str),
-        Some("interrupted")
+        interrupted_show
+            .pointer("/request/lifecycle_state")
+            .and_then(Value::as_str),
+        Some(RequestLifecycleState::Interrupted.as_str())
     );
-    assert!(interrupted_row
-        .get("content")
-        .and_then(Value::as_str)
-        .is_some_and(str::is_empty));
-    assert!(interrupted_row
-        .get("reasoning")
+    assert_eq!(
+        interrupted_show
+            .pointer("/output/kind")
+            .and_then(Value::as_str),
+        Some("terminal_message")
+    );
+    assert!(interrupted_show
+        .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
         .is_some_and(str::is_empty));
     let interrupted_wait = response_wait(&runtime, &interrupted_request_id)?;
     assert_eq!(
-        interrupted_wait.get("status").and_then(Value::as_str),
-        Some("interrupted")
+        interrupted_wait
+            .pointer("/request/lifecycle_state")
+            .and_then(Value::as_str),
+        Some(RequestLifecycleState::Interrupted.as_str())
     );
-    assert!(interrupted_wait
-        .get("content")
-        .and_then(Value::as_str)
-        .is_some_and(str::is_empty));
-    assert!(interrupted_wait
-        .get("reasoning")
-        .and_then(Value::as_str)
-        .is_some_and(str::is_empty));
+    assert_eq!(
+        interrupted_wait
+            .pointer("/output/presentation/body_markdown")
+            .and_then(Value::as_str),
+        Some("")
+    );
 
     Ok(())
 }

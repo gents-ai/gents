@@ -37,7 +37,7 @@ theorem phase_change_decreases_measure
     rw [h_post]
     simp [terminationMeasure, h_pre]
     omega
-  | advance h_pre _ h_post =>
+  | continue_processing h_pre _ h_post =>
     rw [h_post] at h_phase_change
     exact (h_phase_change rfl).elim
   | finish h_pre _ h_post =>

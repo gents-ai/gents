@@ -4,14 +4,16 @@ import Proofs.SessionHydration.State
 # Receiver-side hydration progress
 
 The server commits the exact identities of the transcript documents it served.
-The client may complete only when every identity in that manifest exists in its
-locally merged set. Counts remain a UI projection; equal counts are not proof of
-document identity. An empty served manifest completes immediately.
+The client may complete only when every signed identity is locally merged AND
+recomputing the typed canonical closure reconstructs every message and matches
+that manifest. Counts remain transport progress, not output validity.
 -/
 
 namespace SessionHydration
 
-abbrev DocumentKey := String
+/-! Collection-qualified identities prevent an equal raw `_docID` from another
+collection from satisfying the signed manifest. -/
+abbrev DocumentKey := Document
 
 inductive ClientPhase where
   | idle
@@ -48,11 +50,77 @@ theorem coveredCount_le_servedCount (progress : ClientProgress)
   simp only [ClientProgress.coveredCount, hserved]
   exact Finset.card_le_card (Finset.inter_subset_right)
 
+inductive ValidationResult where
+  | loading
+  | valid
+  | invalid
+  deriving DecidableEq, Repr
+
+def hydrationErrorIsLoading : CanonicalOutput.Hydration.Error → Bool
+  | .headerUnavailable | .provenanceMissing _ => true
+  | .reference (.lookup .unavailable) => true
+  | .reference (.extent (.missingOrdinal _)) => true
+  | .terminal .missingHeader => true
+  | _ => false
+
+def canonicalKey (key : CanonicalOutput.Hydration.DocumentKey) : DocumentKey :=
+  ⟨key.collection, key.id⟩
+
+/-- The signed receipt remains the ACP/transport premise. Local closure
+recomputation is an independent exact-content check before completion. -/
+def validateSnapshot (scope : CanonicalOutput.Hydration.AuthorizationScope)
+    (rootSession : SessionId)
+    (signed : Finset DocumentKey)
+    (bases : List CanonicalOutput.Hydration.AuthorizedBase)
+    (roots : List CanonicalOutput.DocId)
+    (requirements : List CanonicalOutput.Hydration.TerminalRequirement)
+    (messages : List CanonicalOutput.MessageEnvelope)
+    (segments : List CanonicalOutput.Segment)
+    (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
+    (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
+    (dependencyDenials : List CanonicalOutput.DependencyDenial := []) : ValidationResult :=
+  match CanonicalOutput.Hydration.buildManifest scope rootSession bases roots requirements messages segments
+      provenance deniedHeaders deniedSegments dependencyDenials with
+  | .ok manifest =>
+      if (manifest.map canonicalKey).toFinset = signed then .valid else .invalid
+  | .error error => if hydrationErrorIsLoading error then .loading else .invalid
+
+namespace ValidationExamples
+
+open CanonicalOutput.Hydration
+
+def signedClosure : Finset DocumentKey :=
+  [⟨.agentRequest, 10⟩, ⟨.agentMessage, 200⟩, ⟨.agentMessage, 201⟩,
+    ⟨.agentOutputSegment, 100⟩].toFinset
+
+example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
+    [Examples.originMessage, Examples.childMessage] [Examples.closing]
+    Examples.access [] [] = .valid := by native_decide
+
+/-- All IDs may be present while the signed manifest still disagrees with the
+typed reference closure. Identity coverage alone cannot complete. -/
+example : validateSnapshot Examples.scope 2 (signedClosure.erase ⟨.agentRequest, 10⟩) [] [201] []
+    [Examples.originMessage, Examples.childMessage] [Examples.closing]
+    Examples.access [] [] = .invalid := by native_decide
+
+example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
+    [Examples.childMessage] [Examples.closing] Examples.access [] [] = .loading := by
+  native_decide
+
+example : validateSnapshot Examples.scope 2 signedClosure [] [201] []
+    [Examples.originMessage, Examples.childMessage] [Examples.closing]
+    [⟨Examples.scope, ⟨.agentMessage, 200⟩, .authorized⟩,
+     ⟨Examples.scope, ⟨.agentMessage, 201⟩, .authorized⟩,
+     ⟨Examples.scope, ⟨.agentOutputSegment, 100⟩, .authorized⟩,
+     ⟨Examples.scope, ⟨.agentRequest, 10⟩, .denied⟩] [] [] = .invalid := by native_decide
+
+end ValidationExamples
+
 def canComplete (merged : Finset DocumentKey)
-    (served : Option (Finset DocumentKey)) : Bool :=
-  match served with
-  | some expected => decide (expected ⊆ merged)
-  | none => false
+    (served : Option (Finset DocumentKey)) (validation : ValidationResult) : Bool :=
+  match served, validation with
+  | some expected, .valid => decide (expected ⊆ merged)
+  | _, _ => false
 
 def mergeServed (prev next : Option (Finset DocumentKey)) : Option (Finset DocumentKey) :=
   match next with
@@ -90,10 +158,11 @@ theorem canRetry_iff (prev : ClientProgress) (session agent : String) :
   simp [canRetry]
 
 def observeCore (prev : ClientProgress) (merged : Finset DocumentKey)
-    (served : Option (Finset DocumentKey)) (failed : Bool) : ClientProgress :=
-  if failed || decide (prev.phase = .failed) then
+    (served : Option (Finset DocumentKey)) (validation : ValidationResult)
+    (failed : Bool) : ClientProgress :=
+  if failed || validation == .invalid || decide (prev.phase = .failed) then
     { phase := .failed, mergedDocuments := merged, servedDocuments := served }
-  else if canComplete merged served then
+  else if canComplete merged served validation then
     { phase := .complete, mergedDocuments := merged, servedDocuments := served }
   else if served.isSome || decide (prev.phase = .serving) ||
       (decide (prev.phase = .requested) && decide (merged.card > 0)) then
@@ -104,13 +173,14 @@ def observeCore (prev : ClientProgress) (merged : Finset DocumentKey)
     { phase := .idle, mergedDocuments := merged, servedDocuments := served }
 
 def observe (prev : ClientProgress) (mergedDocuments : Finset DocumentKey)
-    (servedDocuments : Option (Finset DocumentKey)) (failed : Bool)
+    (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult)
+    (failed : Bool)
     (session agent : String) : ClientProgress :=
   let base := progressFor prev session agent
   { observeCore base
       (base.mergedDocuments ∪ mergedDocuments)
       (mergeServed base.servedDocuments servedDocuments)
-      failed with session, agent }
+      validation failed with session, agent }
 
 /-- Durable control-row state for one exact session/agent target. -/
 inductive DurableRequest where
@@ -123,58 +193,111 @@ inductive DurableRequest where
 /-- Projecting a snapshot is a pure query over one durable control row plus
 the locally merged set. It retains no process-wide receiver state. -/
 def projectDurable (request : DurableRequest) (mergedDocuments : Finset DocumentKey)
-    (session agent : String) : ClientProgress :=
+    (validation : ValidationResult) (session agent : String) : ClientProgress :=
   match request with
-  | .missing => observe { session, agent } mergedDocuments none false session agent
-  | .pending => observe (beginRequest session agent) mergedDocuments none false session agent
+  | .missing => observe { session, agent } mergedDocuments none .loading false session agent
+  | .pending => observe (beginRequest session agent) mergedDocuments none .loading false session agent
   | .served documents =>
-      observe (beginRequest session agent) mergedDocuments (some documents) false session agent
+      observe (beginRequest session agent) mergedDocuments (some documents) validation false session agent
   | .rejected documents =>
-      observe (beginRequest session agent) mergedDocuments documents true session agent
+      observe (beginRequest session agent) mergedDocuments documents validation true session agent
+
+/-- Public receiver boundary: a served receipt cannot supply its own validation
+enum. The projection recomputes canonical closure and native reconstruction from
+the local snapshot, then applies the lower state projection. -/
+def projectCanonicalSnapshot (request : DurableRequest)
+    (mergedDocuments : Finset DocumentKey)
+    (scope : CanonicalOutput.Hydration.AuthorizationScope)
+    (rootSession : SessionId)
+    (bases : List CanonicalOutput.Hydration.AuthorizedBase)
+    (roots : List CanonicalOutput.DocId)
+    (requirements : List CanonicalOutput.Hydration.TerminalRequirement)
+    (messages : List CanonicalOutput.MessageEnvelope)
+    (segments : List CanonicalOutput.Segment)
+    (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
+    (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
+    (session agent : String)
+    (dependencyDenials : List CanonicalOutput.DependencyDenial := []) : ClientProgress :=
+  let validation := match request with
+    | .served signed => validateSnapshot scope rootSession signed bases roots requirements messages segments
+        provenance deniedHeaders deniedSegments dependencyDenials
+    | _ => .loading
+  projectDurable request mergedDocuments validation session agent
+
+theorem canonical_completion_requires_valid_reconstruction
+    (signed merged : Finset DocumentKey)
+    (scope : CanonicalOutput.Hydration.AuthorizationScope)
+    (rootSession : SessionId)
+    (bases : List CanonicalOutput.Hydration.AuthorizedBase)
+    (roots : List CanonicalOutput.DocId)
+    (requirements : List CanonicalOutput.Hydration.TerminalRequirement)
+    (messages : List CanonicalOutput.MessageEnvelope)
+    (segments : List CanonicalOutput.Segment)
+    (provenance : List CanonicalOutput.Hydration.ProvenanceAccess)
+    (deniedHeaders deniedSegments : List CanonicalOutput.DocId)
+    (session agent : String) (dependencyDenials : List CanonicalOutput.DependencyDenial)
+    (hcomplete : (projectCanonicalSnapshot (.served signed) merged scope rootSession bases roots requirements
+      messages segments provenance deniedHeaders deniedSegments session agent
+      dependencyDenials).phase = .complete) :
+    validateSnapshot scope rootSession signed bases roots requirements messages segments provenance
+      deniedHeaders deniedSegments dependencyDenials = .valid := by
+  cases hvalidation : validateSnapshot scope rootSession signed bases roots requirements messages segments
+      provenance deniedHeaders deniedSegments dependencyDenials with
+  | loading =>
+      simp [projectCanonicalSnapshot, projectDurable, hvalidation, observe, observeCore,
+        canComplete, progressFor, beginRequest, mergeServed] at hcomplete
+  | valid => rfl
+  | invalid =>
+      simp [projectCanonicalSnapshot, projectDurable, hvalidation, observe, observeCore,
+        canComplete, progressFor, beginRequest, mergeServed] at hcomplete
 
 theorem projectDurable_exact_target (request : DurableRequest)
-    (mergedDocuments : Finset DocumentKey) (session agent : String) :
-    (projectDurable request mergedDocuments session agent).session = session ∧
-      (projectDurable request mergedDocuments session agent).agent = agent := by
+    (mergedDocuments : Finset DocumentKey) (validation : ValidationResult)
+    (session agent : String) :
+    (projectDurable request mergedDocuments validation session agent).session = session ∧
+      (projectDurable request mergedDocuments validation session agent).agent = agent := by
   cases request <;> simp [projectDurable, observe]
 
 theorem projectDurable_rejected_failed (documents : Option (Finset DocumentKey))
-    (mergedDocuments : Finset DocumentKey) (session agent : String) :
-    (projectDurable (.rejected documents) mergedDocuments session agent).phase = .failed := by
+    (mergedDocuments : Finset DocumentKey) (validation : ValidationResult)
+    (session agent : String) :
+    (projectDurable (.rejected documents) mergedDocuments validation session agent).phase = .failed := by
   simp [projectDurable, observe, observeCore]
 
 theorem observeCore_mergedDocuments (prev : ClientProgress)
-    (merged : Finset DocumentKey) (served : Option (Finset DocumentKey)) (failed : Bool) :
-    (observeCore prev merged served failed).mergedDocuments = merged := by
+    (merged : Finset DocumentKey) (served : Option (Finset DocumentKey))
+    (validation : ValidationResult) (failed : Bool) :
+    (observeCore prev merged served validation failed).mergedDocuments = merged := by
   unfold observeCore
   split_ifs <;> rfl
 
 theorem observe_mergedDocuments (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
-    (servedDocuments : Option (Finset DocumentKey)) (failed : Bool)
+    (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult) (failed : Bool)
     (session agent : String) :
-    (observe prev mergedDocuments servedDocuments failed session agent).mergedDocuments =
+    (observe prev mergedDocuments servedDocuments validation failed session agent).mergedDocuments =
       (progressFor prev session agent).mergedDocuments ∪ mergedDocuments := by
   unfold observe
-  exact observeCore_mergedDocuments _ _ _ _
+  exact observeCore_mergedDocuments _ _ _ _ _
 
 theorem observe_merged_monotone (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
-    (servedDocuments : Option (Finset DocumentKey)) (failed : Bool)
+    (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult) (failed : Bool)
     (session agent : String) (hsession : prev.session = session)
     (hagent : prev.agent = agent) :
     prev.mergedDocuments ⊆
-      (observe prev mergedDocuments servedDocuments failed session agent).mergedDocuments := by
+      (observe prev mergedDocuments servedDocuments validation failed session agent).mergedDocuments := by
   rw [observe_mergedDocuments]
   simp [progressFor, hsession, hagent]
 
-theorem observe_complete_iff (prev : ClientProgress)
+theorem observe_complete_iff_valid (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
     (servedDocuments : Option (Finset DocumentKey)) (session agent : String)
     (hprev : (progressFor prev session agent).phase ≠ .failed) :
-    (observe prev mergedDocuments servedDocuments false session agent).phase = .complete ↔
+    (observe prev mergedDocuments servedDocuments .valid false session agent).phase = .complete ↔
       canComplete ((progressFor prev session agent).mergedDocuments ∪ mergedDocuments)
-        (mergeServed (progressFor prev session agent).servedDocuments servedDocuments) = true := by
+        (mergeServed (progressFor prev session agent).servedDocuments servedDocuments)
+        .valid = true := by
   unfold observe observeCore
   have hnf : decide ((progressFor prev session agent).phase = .failed) = false :=
     decide_eq_false_iff_not.mpr hprev
@@ -185,18 +308,18 @@ theorem observe_cannot_complete_without_server (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey) (session agent : String)
     (hprev : (progressFor prev session agent).phase ≠ .failed)
     (hserved : mergeServed (progressFor prev session agent).servedDocuments none = none) :
-    (observe prev mergedDocuments none false session agent).phase ≠ .complete := by
-  intro hcomplete
-  have hiff :=
-    (observe_complete_iff prev mergedDocuments none session agent hprev).mp hcomplete
-  unfold canComplete at hiff
-  simp [hserved] at hiff
+    (observe prev mergedDocuments none .loading false session agent).phase ≠ .complete := by
+  unfold observe observeCore
+  have hnf : decide ((progressFor prev session agent).phase = .failed) = false :=
+    decide_eq_false_iff_not.mpr hprev
+  simp [hnf, hserved, canComplete]
+  split_ifs <;> simp
 
 /-- Equal cardinality cannot substitute for exact document identity. -/
 theorem equal_count_substitution_fails_closed
     (merged served : Finset DocumentKey) (_ : merged.card = served.card)
     (hmissing : ¬ served ⊆ merged) :
-    canComplete merged (some served) = false := by
+    canComplete merged (some served) .valid = false := by
   simp [canComplete, hmissing]
 
 /-- Locally present transcript rows are not evidence that a hydration request
@@ -206,7 +329,7 @@ theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey) (session agent : String)
     (hidle : (progressFor prev session agent).phase = .idle)
     (hserved : (progressFor prev session agent).servedDocuments = none) :
-    (observe prev mergedDocuments none false session agent).phase = .idle := by
+    (observe prev mergedDocuments none .loading false session agent).phase = .idle := by
   unfold observe observeCore
   simp [hidle, hserved, mergeServed, canComplete]
 
@@ -214,9 +337,10 @@ theorem observe_idle_without_server_stays_idle (prev : ClientProgress)
 same target requires the explicit `beginRequest` transition. -/
 theorem observe_failed_without_begin_stays_failed (prev : ClientProgress)
     (mergedDocuments : Finset DocumentKey)
-    (servedDocuments : Option (Finset DocumentKey)) (session agent : String)
+    (servedDocuments : Option (Finset DocumentKey)) (validation : ValidationResult)
+    (session agent : String)
     (hfailed : (progressFor prev session agent).phase = .failed) :
-    (observe prev mergedDocuments servedDocuments false session agent).phase = .failed := by
+    (observe prev mergedDocuments servedDocuments validation false session agent).phase = .failed := by
   unfold observe observeCore
   simp [hfailed]
 

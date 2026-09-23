@@ -544,7 +544,6 @@ mod tests {
                 client_projection: gents_protocol::client_protocol::project_persisted_attempt(
                     "processing",
                     false,
-                    None,
                 ),
                 failure_reason: None,
                 created_at: None,
@@ -599,7 +598,6 @@ mod tests {
             client_projection: gents_protocol::client_protocol::project_persisted_attempt(
                 "processing",
                 false,
-                None,
             ),
             failure_reason: None,
             created_at: None,

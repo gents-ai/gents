@@ -137,12 +137,23 @@ function session(
     turnState: "completed",
     latestRequestId: "req-1",
     retryEligibility: { eligible: false, denialReason: "notFailed" },
-    latestResponse: null,
-    activeResponseOverlay: null,
+    latestRequestOutcome: null,
     pendingTurn: null,
-    messages: [],
-    toolCalls: [],
-    toolResults: [],
+    goal: null,
+    timelineItems: [],
+    context: {
+      estimatedDurableTokens: 0,
+      estimatedConversationTokens: 0,
+      contextWindow: 1,
+      compactionThreshold: 0.8,
+      compactionThresholdTokens: 1,
+      compactionStrategy: "summary",
+      durableMessageCount: 0,
+      providerMessageCount: 0,
+      totalCompactedMessages: 0,
+      compactions: [],
+      lastRequest: null,
+    },
     ...overrides,
   };
 }
@@ -473,7 +484,7 @@ describe("projectChatShell", () => {
       draft: "follow up",
       sending: false,
       selectedSessionSummary: null,
-      session: session({ turnState: "streaming", latestRequestId: "req-1" }),
+      session: session({ turnState: "running", latestRequestId: "req-1" }),
       localWorkflow: { kind: "ready" },
     });
 
@@ -481,7 +492,7 @@ describe("projectChatShell", () => {
     expect(projection.sendStatus).toEqual({
       kind: "disabled",
       reason: "awaitingTurnTerminality",
-      hint: "Turn still streaming",
+      hint: "Turn still running",
     });
     expect(projection.activityStatus).toEqual({
       kind: "working",
@@ -534,7 +545,7 @@ describe("projectChatShell", () => {
       selectedSessionSummary: null,
       session: session({
         latestRequestId: "req-new",
-        turnState: "streaming",
+        turnState: "running",
         pendingTurn: {
           requestId: "req-new",
           content: "follow up",
@@ -561,7 +572,7 @@ describe("projectChatShell", () => {
       agentDid: "did:test:amy",
       sessionId: "session-1",
       requestId: "req-user",
-      turnState: "streaming",
+      turnState: "running",
     };
     const terminalProjection = projectChatShell({
       clientAvailable: true,
@@ -593,7 +604,7 @@ describe("projectChatShell", () => {
       selectedSessionSummary: null,
       session: session({
         latestRequestId: "req-wake",
-        turnState: "streaming",
+        turnState: "running",
       }),
       localWorkflow: reconciled,
     });
@@ -604,7 +615,7 @@ describe("projectChatShell", () => {
       agentDid: "did:test:amy",
       sessionId: "session-1",
       requestId: "req-wake",
-      turnState: "streaming",
+      turnState: "running",
     });
   });
 
@@ -663,7 +674,7 @@ describe("projectChatShell", () => {
         agentDid: "did:test:amy",
         sessionId: "session-1",
         requestId: "req-1",
-        turnState: "streaming",
+        turnState: "running",
       },
     });
 

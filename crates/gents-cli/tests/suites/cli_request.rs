@@ -76,11 +76,13 @@ async fn request_submit_waits_for_response_by_default() -> Result<()> {
         "request submit output omitted request_id: {parsed}"
     );
     assert_eq!(
-        parsed.pointer("/response/status").and_then(Value::as_str),
-        Some("complete")
+        parsed.pointer("/output/kind").and_then(Value::as_str),
+        Some("terminal_message")
     );
     assert_eq!(
-        parsed.pointer("/response/content").and_then(Value::as_str),
+        parsed
+            .pointer("/output/presentation/body_markdown")
+            .and_then(Value::as_str),
         Some(expected_content.as_str())
     );
 
@@ -161,7 +163,7 @@ async fn request_submit_supports_content_file_and_output_file() -> Result<()> {
     assert_eq!(stdout_json, file_json);
     assert_eq!(
         stdout_json
-            .pointer("/response/content")
+            .pointer("/output/presentation/body_markdown")
             .and_then(Value::as_str),
         Some(expected_content.as_str())
     );
@@ -352,7 +354,7 @@ async fn request_interrupt_does_not_latch_completed_request() -> Result<()> {
         .to_string();
     assert_eq!(
         submitted
-            .pointer("/response/content")
+            .pointer("/output/presentation/body_markdown")
             .and_then(Value::as_str),
         Some(final_text.as_str())
     );
@@ -492,8 +494,6 @@ async fn request_show_expanded_view_surfaces_background_tools_and_child_lineage(
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
                     tool_call_id: "{tool_call_id}",
-                    args: "{{\"behavior_id\":\"child-behavior\"}}",
-                    result: "",
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "2026-05-20T10:00:02Z",

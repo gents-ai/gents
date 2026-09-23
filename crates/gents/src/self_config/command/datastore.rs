@@ -151,7 +151,8 @@ impl ConfigCommandTool {
                             .filter(|row| row["tools_id"] == context["tools_id"])
                         {
                             anyhow::ensure!(
-                                !tools["datastore"]["datastore_tool_surface_ids"].as_array()
+                                !tools["datastore"]["datastore_tool_surface_ids"]
+                                    .as_array()
                                     .is_some_and(|ids| ids.iter().any(|id| id == &surface_id)),
                                 "surface is referenced by protected Setup; create a separate surface for the working behavior"
                             );

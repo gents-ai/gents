@@ -361,7 +361,7 @@ describe.skipIf(process.platform === "win32")(
 );
 
 function requestDiagnosticsBundle({
-  desktopTurnState = "streaming",
+  desktopTurnState = "running",
   remoteTurnState = "completed",
 }: {
   desktopTurnState?: string | null;
@@ -375,7 +375,6 @@ function requestDiagnosticsBundle({
     latestRequestId: "request-1",
     sessionUpdatedAt: "2026-04-22T00:00:02Z",
     request: {
-      status: turnState === "completed" ? "complete" : "processing",
       lifecycleState: turnState === "completed" ? "completed" : "claimed",
       failureReason: null,
       createdAt: "2026-04-22T00:00:00Z",
@@ -384,7 +383,7 @@ function requestDiagnosticsBundle({
       validUntil: null,
     },
     response: {
-      status: turnState === "completed" ? "complete" : "streaming",
+      status: turnState === "completed" ? "complete" : null,
       errorMessage: null,
       progressSeq: turnState === "completed" ? 15 : 14,
       materializedMessageSequence: turnState === "completed" ? 62 : 61,
@@ -415,7 +414,7 @@ function requestDiagnosticsBundle({
 }
 
 describe("live bridge runner stall observer", () => {
-  it("starts tracking when the remote is terminal but desktop is still streaming", () => {
+  it("starts tracking when the remote is terminal but desktop is still running", () => {
     const observation = observeRemoteTerminalDesktopStall({
       diagnostics: requestDiagnosticsBundle(),
       previousStartedAt: null,
@@ -473,8 +472,8 @@ describe("live bridge runner stall observer", () => {
   it("clears the stall timer when the remote is not terminal", () => {
     const observation = observeRemoteTerminalDesktopStall({
       diagnostics: requestDiagnosticsBundle({
-        desktopTurnState: "streaming",
-        remoteTurnState: "streaming",
+        desktopTurnState: "running",
+        remoteTurnState: "running",
       }),
       previousStartedAt: 10_000,
       now: 40_250,
@@ -549,8 +548,8 @@ describe("live bridge runner progress lag observer", () => {
   it("clears the lag timer when the remote is no longer ahead", () => {
     const observation = observeRemoteAheadDesktopLag({
       diagnostics: requestDiagnosticsBundle({
-        desktopTurnState: "streaming",
-        remoteTurnState: "streaming",
+        desktopTurnState: "running",
+        remoteTurnState: "running",
       }),
       desktopProgressed: false,
       previousStartedAt: 10_000,

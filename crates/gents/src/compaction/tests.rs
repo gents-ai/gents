@@ -705,7 +705,6 @@ async fn live_compaction_uses_rig_structured_output_end_to_end() {
         recall_config.additional_params = Some(serde_json::json!({"seed": 7421}));
         let recalled: LiveCompactionRecall = crate::agent::loop_stream::run_loop_to_typed(
             model,
-            None::<crate::hook::DefraSessionHook>,
             Message::user(
                 "Return the active case ID, pagination cursor contract, browser clamp, and \
                  immediate pending action from the checkpoint.",
@@ -1429,8 +1428,7 @@ async fn summary_safety_ceilings_cannot_be_bypassed_by_options() {
         .expect("summary request must retain an output allowance");
     assert!(
         effective_max > 0
-            && effective_max
-                <= crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64,
+            && effective_max <= crate::config::MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS as u64,
         "the hard summary ceiling may be lowered to fit the assembled input, never bypassed: {effective_max}"
     );
 
@@ -2237,7 +2235,7 @@ fn strip_rewrites_tool_results_into_stubs() {
     assert_eq!(
         sole_tool_result_text(&stripped[2]),
         "[tool: read_file(/tmp/test.rs), call_id: call-1, 5000 bytes \
-         — see DefraDB AgentToolCall for full output]"
+         — see canonical transcript for full output]"
     );
 }
 
@@ -2276,7 +2274,7 @@ fn strip_rewrites_tool_output_that_merely_looks_like_a_stub() {
     // would survive every provider-view pass and defeat compaction entirely.
     let spoof = format!(
         "[tool: read_file(/etc/passwd), call_id: call-1, 12 bytes \
-         — see DefraDB AgentToolCall for full output]{}",
+         — see canonical transcript for full output]{}",
         "P".repeat(5000)
     );
     let messages = vec![
@@ -2669,27 +2667,6 @@ fn pair_closed_messages(messages: &[Message]) -> bool {
     })
 }
 
-#[test]
-fn reused_call_ids_are_detected() {
-    let unique = vec![
-        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
-        tool_result_msg("call-1", "a"),
-    ];
-    assert!(has_unique_call_ids(&unique));
-
-    // The same id announced by two different turns: a later result resurrects
-    // the earlier announcement in the provider view, shifting a stored prefix
-    // count. `Compaction.reused_call_id_breaks_prefix_stability` is the model's
-    // version of this.
-    let reused = vec![
-        tool_call_msg("read_file", r#"{"path": "/a.rs"}"#),
-        text_msg("user", "next turn"),
-        tool_call_msg("read_file", r#"{"path": "/b.rs"}"#),
-        tool_result_msg("call-1", "b"),
-    ];
-    assert!(!has_unique_call_ids(&reused));
-}
-
 /// Resolution is scoped to the active turn, so a later turn reusing a call id
 /// does *not* resurrect an earlier unpaired announcement and the prefix stays
 /// stable. Under the global resolved set this shifted — `Compaction.
@@ -2697,8 +2674,6 @@ fn reused_call_ids_are_detected() {
 /// model, and `reused_call_id_is_prefix_stable_per_turn` shows the same witness
 /// is stable under the per-turn view production implements (#992).
 ///
-/// `has_unique_call_ids` is retained as defence in depth, not as the only thing
-/// preventing this.
 #[test]
 fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
     // The harm the unique-id check was introduced to prevent, now absent.
@@ -2734,138 +2709,47 @@ fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
 }
 
 #[test]
-fn safe_to_reduce_requires_every_retained_tool_result_to_be_terminal() {
+fn safe_to_reduce_accepts_reused_provider_ids_across_complete_turns() {
     let messages = vec![
         text_msg("user", "go"),
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         tool_result_msg("call-1", "fn main() {}"),
+        text_msg("assistant", "first turn complete"),
+        text_msg("user", "again"),
+        tool_call_msg("read_file", r#"{"path": "/src/lib.rs"}"#),
+        tool_result_msg("call-1", "pub fn library() {}"),
+        text_msg("assistant", "second turn complete"),
     ];
-
-    assert!(safe_to_reduce(&messages, &AllTerminal));
-    assert!(!safe_to_reduce(&messages, &NoneKnown));
-
-    // No tool results at all: nothing to gate on.
-    let plain = vec![text_msg("user", "go"), text_msg("assistant", "ok")];
-    assert!(safe_to_reduce(&plain, &NoneKnown));
-}
-
-struct StreamingIndex;
-
-impl ResponseStatusIndex for StreamingIndex {
-    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
-        Some(ResponseStatus::Streaming)
-    }
+    assert!(safe_to_reduce(&messages));
 }
 
 #[test]
-fn safe_to_reduce_is_closed_while_a_response_is_streaming() {
-    let messages = vec![
+fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
+    let incomplete_turn = vec![
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         tool_result_msg("call-1", "fn main() {}"),
     ];
-    assert!(!safe_to_reduce(&messages, &StreamingIndex));
-}
+    assert!(!safe_to_reduce(&incomplete_turn));
 
-// Carry the physical request identity so the per-turn gate can exclude
-// exactly the current response within its canonical session scope.
-async fn seed_response_status(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-    request_id: &str,
-    status: &str,
-) {
-    let request_id = crate::graphql::escape_graphql_string(request_id);
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let status = crate::graphql::escape_graphql_string(status);
-    let created_at = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let response = node
-        .execute(&format!(
-            r#"mutation {{
-            upsert_AgentResponse(
-                filter: {{ response_key: {{ _eq: "{request_id}" }} }},
-                add: {{
-                    response_key: "{request_id}", request_id: "{request_id}", request_doc_id: "doc-{request_id}",
-                    agent_did: "did:key:gate", requester_did: "did:key:gate",
-                    behavior_id: "gate", session_id: "{session_id}",
-                    content: "partial", status: "{status}", error_message: "",
-                    token_count: 1, progress_seq: 1, created_at: "{created_at}"
-                }},
-                update: {{ status: "{status}" }}
-            ) {{ _docID }}
-        }}"#
-        ))
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-}
+    let unstable = vec![
+        tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
+        text_msg("assistant", "ordinary boundary after an unpaired call"),
+    ];
+    assert!(!safe_to_reduce(&unstable));
 
-#[tokio::test]
-async fn per_turn_gate_excludes_the_current_response_and_closes_on_others() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
-    ensure_runtime_schemas(&node).await.unwrap();
-    let session_id = format!("per-turn-gate-{}", uuid::Uuid::new_v4());
-
-    // Equal session labels on a foreign principal or requester route cannot
-    // close this session's gate. A logical request label also cannot replace
-    // the exact physical request used for self-exclusion.
-    for (key, owner, requester) in [
-        ("foreign-owner", "did:key:foreign", "\"did:key:gate\""),
-        ("foreign-requester", "did:key:gate", "null"),
-    ] {
-        let result = node.execute(&format!(r#"mutation {{create_AgentResponse(input: {{
-            response_key: "{key}", request_id: "self", request_doc_id: "doc-foreign",
-            agent_did: "{owner}", requester_did: {requester}, session_id: "{session_id}", status: "streaming"
-        }}) {{_docID}}}}"#)).await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-    }
-
-    // Query both scopes after each real document change. Own streaming output
-    // closes the session gate; only a streaming sibling closes the per-turn gate.
-    for (response, session_live, other_live) in [
-        (None, false, false),
-        (Some(("self", "streaming")), true, false),
-        (Some(("other", "streaming")), true, true),
-        (Some(("other", "error")), true, false),
-    ] {
-        if let Some((request_id, status)) = response {
-            seed_response_status(&node, &session_id, request_id, status).await;
-        }
-        assert_eq!(
-            session::session_has_live_response(
-                &node,
-                "did:key:gate",
-                &session_id,
-                Some("did:key:gate")
-            )
-            .await
-            .unwrap(),
-            session_live,
-            "session scope after {response:?}"
-        );
-        assert_eq!(
-            session::session_has_other_live_response(
-                &node,
-                "did:key:gate",
-                &session_id,
-                Some("did:key:gate"),
-                Some("doc-self")
-            )
-            .await
-            .unwrap(),
-            other_live,
-            "per-turn scope after {response:?}"
-        );
-    }
-    node.shutdown().await;
+    assert!(!safe_to_reduce(&[]));
 }
 
 #[tokio::test]
 async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     let data_path = std::env::temp_dir().join(format!("gents-compactor-{}", uuid::Uuid::new_v4()));
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(&data_path)
-        .build()
-        .await
-        .unwrap();
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
     ensure_runtime_schemas(&node).await.unwrap();
     session::create_session_with_id(&node, "session-1", "general", "did:test:test")
         .await
@@ -2910,74 +2794,130 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     };
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
-    let mut sequence = 1;
-    for turn in 0..55 {
+    // Claimed request setup, following the claimed_request template in
+    // tool_call_lifecycle/delivery.rs: one claimed RequestLifecycle and one
+    // DefraStreamWriter publish each turn through the actual owned providers —
+    // authored user headers, accepted provider tool-call turns, and tool-owned
+    // result deliveries — instead of an obsolete save_message bypass.
+    let agent_did = "did:test:test";
+    let mut lifecycle = {
+        let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let request_id = crate::graphql::escape_graphql_string("request-compaction-test");
+        let session_id = crate::graphql::escape_graphql_string("session-1");
+        let agent_did = crate::graphql::escape_graphql_string(agent_did);
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", subagent_depth: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
+        assert!(!created.has_errors(), "{:#?}", created.errors);
+        let row = node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+        let row: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&row, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            "general",
+            &agent_did,
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(
+            lifecycle.claim().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        lifecycle
+    };
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        agent_did,
+        std::time::Duration::from_millis(1),
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let request_doc_id = lifecycle.request().doc_id.clone();
+
+    for turn in 0..55u32 {
         let user = Message::User {
             content: vec![UserContent::Text(Text {
                 text: format!("Request {turn}: {}", "x".repeat(800)),
             })],
         };
-        let assistant_tool_call = tool_call_msg("read", r#"{"file_path": "/workspace/main.rs"}"#);
-        let tool_result = tool_result_msg("call-1", &"file contents\n".repeat(50));
+        writer
+            .publish_authored_message(&lifecycle, &format!("input:{turn}"), &user)
+            .await
+            .unwrap();
+
+        let assistant_tool_call = Message::Assistant {
+            // The fixture's repeated-ID property: every turn reuses the exact
+            // same provider message id and tool-call id (`call-1`), matching
+            // the original save_message setup so the pairing-scope,
+            // safe_to_reduce, and per-turn resolution assertions below still
+            // exercise ID reuse across complete turns.
+            id: Some("provider-message".into()),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: "call-1".into(),
+                call_id: Some("call-1".into()),
+                function: crate::llm::message::ToolFunction {
+                    name: "read".to_string(),
+                    arguments: serde_json::from_str(r#"{"file_path": "/workspace/main.rs"}"#)
+                        .unwrap(),
+                },
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        writer
+            .start_provider_attempt(
+                &request_doc_id,
+                turn as usize,
+                0,
+                format!("inference.{}", turn + 1).parse().unwrap(),
+            )
+            .await;
+        let mut published = writer
+            .publish_native_turn(&lifecycle, turn as usize, 0, &assistant_tool_call)
+            .await
+            .unwrap();
+        let accepted = published
+            .accepted_tools
+            .pop()
+            .expect("canonical publication accepted the tool call");
+        let deadline = lifecycle
+            .claimed_deadline_at()
+            .expect("claimed request deadline");
+        let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+            node.clone(),
+            agent_did.to_string(),
+            None,
+            accepted,
+            deadline,
+            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            crate::tool_call_lifecycle::CancelPolicy::Cascade,
+        )
+        .unwrap();
+        tool.start_running().await.unwrap();
+        tool.complete(&"file contents\n".repeat(50)).await.unwrap();
+
         let assistant = text_msg(
             "assistant",
             &format!("Response {turn}: {}", "y".repeat(500)),
         );
-
-        session::save_message(
-            &node,
-            "session-1",
-            "did:test:test",
-            sequence,
-            "user",
-            &serde_json::to_string(&user).unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        sequence += 1;
-
-        session::save_message(
-            &node,
-            "session-1",
-            "did:test:test",
-            sequence,
-            "assistant",
-            &serde_json::to_string(&assistant_tool_call).unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        sequence += 1;
-
-        session::save_message(
-            &node,
-            "session-1",
-            "did:test:test",
-            sequence,
-            "user",
-            &serde_json::to_string(&tool_result).unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        sequence += 1;
-
-        session::save_message(
-            &node,
-            "session-1",
-            "did:test:test",
-            sequence,
-            "assistant",
-            &serde_json::to_string(&assistant).unwrap(),
-            None,
-        )
-        .await
-        .unwrap();
-        sequence += 1;
+        writer
+            .start_provider_attempt(
+                &request_doc_id,
+                turn as usize,
+                1,
+                format!("inference.{}", turn + 1).parse().unwrap(),
+            )
+            .await;
+        writer
+            .publish_native_turn(&lifecycle, turn as usize, 1, &assistant)
+            .await
+            .unwrap();
     }
 
-    let history = session::load_history(&node, "session-1", "did:test:test", None)
+    let history = session::load_history(&node, "session-1", agent_did, None)
         .await
         .unwrap();
     let durable_before = history.clone();
@@ -3012,7 +2952,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         "session-1",
         "did:test:test",
         "request-compaction-test",
-        "request-doc-compaction-test",
+        &request_doc_id,
         &summary,
         &result.files_read,
         &result.files_modified,

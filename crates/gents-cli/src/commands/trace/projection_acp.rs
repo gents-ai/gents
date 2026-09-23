@@ -357,21 +357,6 @@ pub(super) async fn apply_projection_acp_read_filter(
         .filter(|version| allowed_goal_doc_ids.contains(version.goal_doc_id.as_str()))
         .collect();
 
-    let mut filtered_responses = Vec::new();
-    for response in rows.responses {
-        let doc_id = required_doc_id(
-            "AgentResponse",
-            response.request_id.as_str(),
-            &response.doc_id,
-        )?;
-        if decider
-            .read_allowed(scope.resource_name("AgentResponse"), doc_id)
-            .await?
-        {
-            filtered_responses.push(response);
-        }
-    }
-
     let mut filtered_inference_calls = Vec::new();
     for call in rows.inference_calls {
         let label = format!("{}:{}", call.request_id, call.call_seq);
@@ -476,7 +461,6 @@ pub(super) async fn apply_projection_acp_read_filter(
         inference_calls: filtered_inference_calls,
         compactions: filtered_compactions,
         provider_context_reductions: filtered_provider_context_reductions,
-        responses: filtered_responses,
         rendered_requests: filtered_rendered_requests,
         rendered_request_refs: filtered_rendered_request_refs,
     })
@@ -706,7 +690,6 @@ pub(super) fn should_keep_scoped_timeline_event(
                     [Some(goal.session_id.as_str())],
                 )
         }
-        RunTimelineEvent::Response(response) => allowed_request_ids.contains(&response.request_id),
     }
 }
 
@@ -758,7 +741,7 @@ mod tests {
     use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
     use gents::run_timeline::{
         TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
-        TimelineRenderedRequestRef, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+        TimelineRenderedRequestRef, TimelineSessionRow, TimelineToolCallRow,
     };
     use serde::Deserialize;
     use serde_json::{json, Value};
@@ -1003,7 +986,6 @@ mod tests {
             ("AgentMessage", "doc-message-allowed"),
             ("AgentToolCall", "doc-tool-allowed"),
             ("Goal", "doc-goal-allowed"),
-            ("AgentResponse", "doc-response-allowed"),
             ("InferenceCall", "doc-inference-allowed"),
             ("RenderedRequest", "doc-rendered-allowed"),
         ] {
@@ -1041,14 +1023,6 @@ mod tests {
         assert_eq!(filtered.goal_versions[0].goal_id, "goal-allowed");
         assert_eq!(
             filtered
-                .responses
-                .iter()
-                .map(|response| response.request_id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["req-root"]
-        );
-        assert_eq!(
-            filtered
                 .inference_calls
                 .iter()
                 .map(|call| call.call_id.as_str())
@@ -1075,7 +1049,6 @@ mod tests {
             ("runtime_message", "doc-message-allowed"),
             ("runtime_tool_call", "doc-tool-allowed"),
             ("runtime_goal", "doc-goal-allowed"),
-            ("runtime_response", "doc-response-allowed"),
             ("runtime_inference_call", "doc-inference-allowed"),
             ("runtime_rendered_request", "doc-rendered-allowed"),
         ] {
@@ -1087,7 +1060,6 @@ mod tests {
             ("AgentMessage".to_string(), "runtime_message".to_string()),
             ("AgentToolCall".to_string(), "runtime_tool_call".to_string()),
             ("Goal".to_string(), "runtime_goal".to_string()),
-            ("AgentResponse".to_string(), "runtime_response".to_string()),
             (
                 "InferenceCall".to_string(),
                 "runtime_inference_call".to_string(),
@@ -1105,7 +1077,6 @@ mod tests {
         assert_eq!(filtered.tool_calls.len(), 1);
         assert_eq!(filtered.goal_versions.len(), 1);
         assert_eq!(filtered.inference_calls.len(), 1);
-        assert_eq!(filtered.responses.len(), 1);
         assert_eq!(filtered.rendered_request_refs.len(), 1);
         assert!(filtered.session.is_none());
         Ok(())
@@ -1166,28 +1137,22 @@ mod tests {
                 },
             ],
             messages: vec![
-                TimelineMessageRow {
-                    doc_id: Some("doc-message-allowed".to_string()),
-                    session_id: "session-acp".to_string(),
-                    request_id: Some("req-root".to_string()),
-                    request_doc_id: Some("doc-request-root".to_string()),
-                    sequence: 1,
-                    role: "user".to_string(),
-                    content: "allowed".to_string(),
-                    reasoning: None,
-                    timestamp: None,
-                },
-                TimelineMessageRow {
-                    doc_id: Some("doc-message-denied".to_string()),
-                    session_id: "session-acp".to_string(),
-                    request_id: Some("req-child".to_string()),
-                    request_doc_id: Some("doc-request-child".to_string()),
-                    sequence: 2,
-                    role: "assistant".to_string(),
-                    content: "denied".to_string(),
-                    reasoning: None,
-                    timestamp: None,
-                },
+                canonical_message_row(
+                    "doc-message-allowed",
+                    "doc-request-root",
+                    "session-acp",
+                    1,
+                    gents_protocol::output::MessageRole::User,
+                    "allowed",
+                ),
+                canonical_message_row(
+                    "doc-message-denied",
+                    "doc-request-child",
+                    "session-acp",
+                    2,
+                    gents_protocol::output::MessageRole::Assistant,
+                    "denied",
+                ),
             ],
             tool_calls: vec![
                 TimelineToolCallRow {
@@ -1229,22 +1194,6 @@ mod tests {
                     ..TimelineGoalVersionRow::default()
                 },
             ],
-            responses: vec![
-                TimelineResponseRow {
-                    doc_id: Some("doc-response-allowed".to_string()),
-                    request_id: "req-root".to_string(),
-                    session_id: Some("session-acp".to_string()),
-                    status: Some("completed".to_string()),
-                    ..TimelineResponseRow::default()
-                },
-                TimelineResponseRow {
-                    doc_id: Some("doc-response-denied".to_string()),
-                    request_id: "req-child".to_string(),
-                    session_id: Some("session-acp".to_string()),
-                    status: Some("completed".to_string()),
-                    ..TimelineResponseRow::default()
-                },
-            ],
             inference_calls: vec![
                 TimelineInferenceCallRow {
                     doc_id: Some("doc-inference-allowed".to_string()),
@@ -1283,6 +1232,52 @@ mod tests {
                     request_commit_cid: "bafy-denied".to_string(),
                 },
             ],
+        }
+    }
+
+    fn canonical_message_row(
+        doc_id: &str,
+        request_doc_id: &str,
+        session_id: &str,
+        sequence: u32,
+        role: gents_protocol::output::MessageRole,
+        content: &str,
+    ) -> TimelineMessageRow {
+        let session_id = session_id.to_string();
+        TimelineMessageRow {
+            doc_id: Some(doc_id.to_string()),
+            session_id: session_id.clone(),
+            request_doc_id: Some(request_doc_id.to_string()),
+            sequence: i64::from(sequence),
+            timestamp: None,
+            agent_did: None,
+            header: gents_protocol::output::TranscriptMessage {
+                message_key: format!("{session_id}:{sequence}"),
+                session_id,
+                agent_did: "did:test:agent".to_string(),
+                requester_did: None,
+                request_doc_id: Some(request_doc_id.to_string()),
+                publication: gents_protocol::output::MessagePublication::RequestExecution {
+                    execution_generation: "gen-1".to_string(),
+                },
+                outcome: gents_protocol::output::OutputOutcome::Complete,
+                sequence,
+                role,
+                native_id: None,
+                blocks: Vec::new(),
+                created_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+            message: match role {
+                gents_protocol::output::MessageRole::User => {
+                    gents_protocol::message::Message::user(content)
+                }
+                gents_protocol::output::MessageRole::Assistant => {
+                    gents_protocol::message::Message::assistant(content)
+                }
+                gents_protocol::output::MessageRole::System => {
+                    gents_protocol::message::Message::system(content)
+                }
+            },
         }
     }
 

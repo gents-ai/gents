@@ -1,17 +1,6 @@
 use super::*;
 
 #[derive(Deserialize)]
-pub(super) struct AgentMessageRow {
-    pub(super) sequence: u32,
-    pub(super) role: String,
-    pub(super) content: String,
-    #[serde(default)]
-    pub(super) request_id: Option<String>,
-    #[serde(default)]
-    pub(super) message_key: String,
-}
-
-#[derive(Deserialize)]
 pub(super) struct CompactionEntryRow {
     pub(super) session_id: String,
     pub(super) sequence: u32,

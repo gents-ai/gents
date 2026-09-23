@@ -164,6 +164,7 @@ def agentRequestAdmissionCaseJson (c : AgentRequestAdmissionCase) : String :=
     ++ "\"signer_matches_target\":" ++ boolJson c.signerMatchesTarget ++ ","
     ++ "\"signer_matches_issuer\":" ++ boolJson c.signerMatchesIssuer ++ ","
     ++ "\"requester_matches_issuer\":" ++ boolJson c.requesterMatchesIssuer ++ ","
+    ++ "\"requester_matches_bridge_author\":" ++ boolJson c.requesterMatchesBridgeAuthor ++ ","
     ++ "\"current_approval\":" ++ boolJson c.currentApproval ++ ","
     ++ "\"exact_generation\":" ++ boolJson c.exactGeneration ++ ","
     ++ "\"authorization_fresh\":" ++ boolJson c.authorizationFresh ++ ","

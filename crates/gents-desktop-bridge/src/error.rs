@@ -26,6 +26,8 @@ pub enum BridgeErrorCode {
     PathEscapesRoot,
     /// Underlying store / GraphQL / runtime I/O failed.
     Backend,
+    /// The exact managed runtime data directory uses an incompatible store.
+    IncompatibleLocalStore,
     /// Enrollment-owned peer pairing and route-actuation failures.
     Pairing,
     /// Catch-all for failures whose producer has not assigned a typed code.
@@ -45,6 +47,7 @@ impl BridgeErrorCode {
             Self::CascadeDepthExceeded => "cascadeDepthExceeded",
             Self::PathEscapesRoot => "pathEscapesRoot",
             Self::Backend => "backend",
+            Self::IncompatibleLocalStore => "incompatibleLocalStore",
             Self::Pairing => "pairing",
             Self::Unknown => "unknown",
         }

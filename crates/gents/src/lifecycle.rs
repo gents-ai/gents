@@ -12,18 +12,33 @@ mod background_wake_recovery;
 pub use background_wake_recovery::{background_wake_next_retry_at, background_wake_retry_delay};
 mod claim;
 mod execution_lease;
-pub(crate) use execution_lease::{
-    recover_execution_generation, revoke_execution_generation, ExecutionWriteFence,
-    ExecutionWriteKind, RequestExecutionLease,
-};
+mod execution_renewal;
+#[cfg(test)]
+pub(crate) use execution_renewal::renew_once_at as renew_execution_lease_once_at;
+#[cfg(test)]
+pub(crate) use execution_renewal::RenewalAttemptOutcome;
+mod terminal_binding;
+pub(crate) use terminal_binding::is_exact_invocation_reply;
+mod terminal_tools;
+#[cfg(test)]
+pub(crate) use execution_lease::revoke_execution_preserving_output_at;
+#[cfg(test)]
+pub(crate) use execution_lease::terminalize_owned_at;
+pub(crate) use execution_lease::{revoke_execution_preserving_output, RequestExecutionLease};
 pub use execution_lease::{RequestTerminalOutcome, TerminalizeResult};
 pub(crate) use gents_loop::execution_policy;
-mod lookup;
+#[cfg(test)]
+pub(crate) use terminal_tools::ToolAccountingRejection;
 pub mod manual;
 pub(crate) mod materialize;
 mod query;
 pub(crate) mod queue;
 mod recovery;
+#[cfg(test)]
+pub(crate) use recovery::{
+    recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,
+    RecoverySelectionRejected,
+};
 mod rows;
 mod task_title;
 #[cfg(test)]
@@ -96,20 +111,21 @@ pub fn is_background_completion_request(
     queue::is_automated_wakeup(input)
 }
 
-/// Whether `AgentRequest.content` itself owns the pending user bubble. Steering
-/// uses a separately persisted keyed message; goal and completion requests are
-/// controller turns. Requests without queue input retain the ordinary user default.
+/// Whether `AgentRequest.content` itself owns the pending user bubble. User and
+/// steering admission remain request-owned until exact authored publication;
+/// goal and completion requests are controller turns.
 pub fn request_content_owns_user_projection(
     input: &gents_protocol::request_input::RequestInput,
 ) -> bool {
-    input
-        .queue
-        .as_ref()
-        .is_none_or(|hints| hints.source == queue::QueueSource::User)
+    input.queue.as_ref().is_none_or(|hints| {
+        matches!(
+            hints.source,
+            queue::QueueSource::User | queue::QueueSource::Steering
+        )
+    })
 }
 
-/// Whether the request represents a logical user turn, regardless of whether
-/// its bubble is projected from the request or from a keyed steering message.
+/// Whether the request represents a logical user turn.
 pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInput) -> bool {
     input.queue.as_ref().is_none_or(|hints| {
         matches!(
@@ -119,20 +135,11 @@ pub fn request_owns_user_turn(input: &gents_protocol::request_input::RequestInpu
     })
 }
 
-pub fn is_steering_input_message_key(message_key: &str) -> bool {
-    queue::is_steering_input_message_key(message_key)
-}
-
-/// Classify a transcript row with the sibling-message context needed to read
-/// both current and pre-key steering transcripts. Current runtimes persist one
-/// keyed user input plus a non-keyed control prompt. Older runtimes persisted
-/// only the non-keyed user input, which must remain visible after upgrade.
 /// Background-completion notifications and durable-goal controller prompts
-/// are entirely internal.
+/// are internal. User and steering authored prompts are canonical user turns.
 pub fn is_runtime_control_message(
     input: &gents_protocol::request_input::RequestInput,
     message_key: &str,
-    request_has_keyed_steering_input: bool,
 ) -> bool {
     if crate::background_completion::is_background_completion_notification_message_key(message_key)
     {
@@ -143,11 +150,7 @@ pub fn is_runtime_control_message(
         .as_ref()
         .is_some_and(|hints| match hints.source {
             queue::QueueSource::BackgroundCompletion | queue::QueueSource::Goal => true,
-            queue::QueueSource::Steering => {
-                request_has_keyed_steering_input
-                    && !queue::is_steering_input_message_key(message_key)
-            }
-            queue::QueueSource::User => false,
+            queue::QueueSource::Steering | queue::QueueSource::User => false,
         })
 }
 
@@ -413,8 +416,6 @@ pub struct RequestLifecycle {
     failure_reason: Option<String>,
     request: AgentRequest,
     request_commit_cid: Option<String>,
-    response_doc_id: Option<String>,
-    progress_seq: u32,
     deadline_duration_secs: u64,
     configured_max_total_tokens: Option<u64>,
     claimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -423,6 +424,7 @@ pub struct RequestLifecycle {
     valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
     execution_lease: Option<RequestExecutionLease>,
     execution_lease_duration_secs: u64,
+    renewal_task: Option<execution_renewal::RenewalTask>,
 }
 
 impl RequestLifecycle {
@@ -518,10 +520,6 @@ impl TerminalRedriveReport {
 impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle {
     async fn validate_owned_execution(&self) -> anyhow::Result<()> {
         RequestLifecycle::validate_owned_execution(self).await
-    }
-
-    async fn advance(&mut self) -> anyhow::Result<()> {
-        RequestLifecycle::advance(self).await
     }
 }
 
@@ -800,22 +798,30 @@ mod tests {
             "did:test:test",
             std::time::Duration::ZERO,
         );
-        let response_doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let request_doc_id = lifecycle.request().doc_id.clone();
         lifecycle
-            .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, Some("setup failed"))
+            .terminalize_owned(
+                RequestTerminalOutcome::Failed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                Some("setup failed"),
+            )
             .await
             .unwrap();
 
-        let response_doc_id = escape_graphql_string(&response_doc_id);
+        let request_doc_id = escape_graphql_string(&request_doc_id);
         let persisted = node
             .execute(&format!(
-                r#"{{ AgentResponse(filter: {{ _docID: {{ _eq: "{response_doc_id}" }} }}) {{ status content error_message }} }}"#
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}) {{ lifecycle_state terminal_output failure_reason }} }}"#
             ))
             .await;
         assert!(!persisted.has_errors(), "{:?}", persisted.errors);
-        let response = &persisted.data.as_ref().unwrap()["AgentResponse"][0];
-        assert_eq!(response["status"], "error");
-        assert_eq!(response["content"], "");
-        assert_eq!(response["error_message"], "setup failed");
+        let request = &persisted.data.as_ref().unwrap()["AgentRequest"][0];
+        assert_eq!(request["lifecycle_state"], "failed");
+        assert_eq!(
+            request["terminal_output"],
+            serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap()
+        );
+        assert_eq!(request["failure_reason"], "setup failed");
     }
 }

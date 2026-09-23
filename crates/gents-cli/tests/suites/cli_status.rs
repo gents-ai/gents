@@ -400,7 +400,6 @@ async fn status_liveness_surfaces_expired_processing_request_and_running_tool() 
                     message_sequence: 1,
                     tool_name: "glob",
                     tool_call_id: "{tool_call_id}",
-                    args: "{{}}",
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "2024-01-01T11:00:05Z",

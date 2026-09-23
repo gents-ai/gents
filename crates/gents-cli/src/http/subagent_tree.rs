@@ -297,6 +297,8 @@ mod tests {
         parent_agent_did: &str,
         tool_call_id: &str,
         child_request_id: &str,
+        spawn_behavior_id: &str,
+        message_sequence: u32,
         await_mode: &str,
         lifecycle_state: &str,
     ) -> Value {
@@ -308,9 +310,9 @@ mod tests {
             "agent_did": parent_agent_did,
             "requester_did": null,
             "tool_call_id": tool_call_id,
-            "args": format!(r#"{{"name":"{child_request_id}"}}"#),
-            "result": if lifecycle_state == "completed" { "done" } else { "" },
-            "status": lifecycle_state,
+            "tool_name": "spawn_subagent",
+            "message_sequence": message_sequence,
+            "spawn_behavior_id": spawn_behavior_id,
             "lifecycle_state": lifecycle_state,
             "started_at": "2026-08-01T00:00:00Z",
             "completed_at": if lifecycle_state == "completed" {
@@ -366,8 +368,113 @@ mod tests {
         json!({ "data": { "AgentMessage": [] } })
     }
 
-    fn canonical_standard_walk_responses() -> Vec<Value> {
+    fn canonical_output_segments(rows: Vec<Value>) -> Value {
+        json!({ "data": { "AgentOutputSegment": rows } })
+    }
+
+    /// Responses to the real accepted-header and argument-source reads. The
+    /// bridge row has lifecycle/provenance only; native spawn arguments come
+    /// from its exact accepted ToolCall block and Complete output source.
+    #[allow(clippy::too_many_arguments)]
+    fn canonical_bridge_evidence(
+        parent_doc_id: &str,
+        parent_session_id: &str,
+        parent_agent_did: &str,
+        tool_doc_id: &str,
+        tool_call_id: &str,
+        child_request_id: &str,
+        message_sequence: u32,
+    ) -> Vec<Value> {
+        use gents_protocol::output::{
+            MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment,
+            OutputSource, OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration,
+            StreamPayload, TranscriptMessage,
+        };
+        let header_doc_id = format!("header-{tool_doc_id}");
+        let close_doc_id = format!("args-{tool_doc_id}");
+        let arguments = format!(r#"{{"name":"{child_request_id}"}}"#);
+        let byte_len = arguments.len();
+        let header = TranscriptMessage {
+            message_key: format!("{parent_doc_id}:accepted:{message_sequence}"),
+            session_id: parent_session_id.into(),
+            agent_did: parent_agent_did.into(),
+            requester_did: None,
+            request_doc_id: Some(parent_doc_id.into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "gen-1".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: message_sequence,
+            role: MessageRole::Assistant,
+            native_id: None,
+            blocks: vec![MessageBlock::ToolCall {
+                tool_call_doc_id: tool_doc_id.into(),
+                id: tool_call_id.into(),
+                call_id: None,
+                name: "spawn_subagent".into(),
+                arguments: PayloadRef {
+                    close_doc_id: close_doc_id.clone(),
+                    stream: 0,
+                },
+                signature: None,
+                additional_params: None,
+            }],
+            created_at: "2026-08-01T00:00:00Z".into(),
+        };
+        let segment = OutputSegment {
+            agent_did: parent_agent_did.into(),
+            requester_did: None,
+            session_id: parent_session_id.into(),
+            request_doc_id: parent_doc_id.into(),
+            source: OutputSource::ProviderTurn {
+                scope: format!("inference.{message_sequence}").parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "gen-1".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: byte_len.try_into().unwrap(),
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolArguments {
+                        id: tool_call_id.into(),
+                        call_id: None,
+                        name: "spawn_subagent".into(),
+                    },
+                }),
+            }],
+            payload: arguments,
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![byte_len as u64],
+            }),
+            created_at: "2026-08-01T00:00:00Z".into(),
+        };
+        let mut header = serde_json::to_value(header).unwrap();
+        header["_docID"] = json!(header_doc_id);
+        let mut segment = serde_json::to_value(segment).unwrap();
+        segment["_docID"] = json!(close_doc_id);
         vec![
+            canonical_messages(vec![header.clone()]),
+            canonical_messages(vec![header.clone()]),
+            canonical_messages(vec![header]),
+            canonical_output_segments(vec![segment.clone()]),
+            canonical_output_segments(vec![segment]),
+        ]
+    }
+
+    fn canonical_messages(rows: Vec<Value>) -> Value {
+        json!({ "data": { "AgentMessage": rows } })
+    }
+
+    fn canonical_standard_walk_responses() -> Vec<Value> {
+        let mut responses = vec![
             root_response(),
             canonical_root_response(
                 "req-root",
@@ -385,9 +492,22 @@ mod tests {
                 "deployment-a",
                 "tc-bridge",
                 "req-child",
+                "amy-code",
+                7,
                 "background",
                 "running",
             )]),
+        ];
+        responses.extend(canonical_bridge_evidence(
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "doc-tc-bridge",
+            "tc-bridge",
+            "req-child",
+            7,
+        ));
+        responses.extend([
             canonical_children_response(vec![canonical_child_row(
                 "doc-child",
                 "req-child",
@@ -402,13 +522,14 @@ mod tests {
             )]),
             canonical_bridges_response(Vec::new()),
             canonical_messages_empty(),
-        ]
+        ]);
+        responses
     }
 
     #[tokio::test]
     async fn tree_walks_cross_deployment_bridge_and_carries_await_mode_metadata(
     ) -> anyhow::Result<()> {
-        let (graphql, _queries) = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
+        let (graphql, queries) = spawn_mock_graphql(canonical_standard_walk_responses()).await?;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
 
         assert_eq!(snapshot.root_request_id, "req-root");
@@ -446,6 +567,17 @@ mod tests {
         assert_eq!(edge.await_mode.as_deref(), Some("background"));
         assert_eq!(edge.cancel_policy.as_deref(), Some("cascade"));
         assert_eq!(edge.lifecycle_state.as_deref(), Some("running"));
+        let queries = queries.lock().unwrap();
+        assert!(
+            queries
+                .iter()
+                .any(|query| query.contains("AgentOutputSegment")),
+            "bridge arguments must be read from their canonical output source"
+        );
+        assert!(
+            queries.iter().any(|query| query.contains("AgentMessage")),
+            "bridge arguments must be bound to an accepted canonical header"
+        );
 
         Ok(())
     }
@@ -480,6 +612,8 @@ mod tests {
             "deployment-a",
             "tc-a",
             "req-a",
+            "amy-code",
+            7,
             "background",
             "running",
         )]);
@@ -503,6 +637,8 @@ mod tests {
             "deployment-a",
             "tc-b",
             "req-b",
+            "amy-review",
+            7,
             "foreground",
             "running",
         )]);
@@ -518,17 +654,32 @@ mod tests {
             "tc-b",
             "doc-tc-b",
         )]);
-        let (graphql, _queries) = spawn_mock_graphql(vec![
-            root,
-            canonical_root,
-            canonical_level_one,
-            canonical_child_a,
-            canonical_level_two,
+        let mut responses = vec![root, canonical_root, canonical_level_one];
+        responses.extend(canonical_bridge_evidence(
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "doc-tc-a",
+            "tc-a",
+            "req-a",
+            7,
+        ));
+        responses.extend([canonical_child_a, canonical_level_two]);
+        responses.extend(canonical_bridge_evidence(
+            "doc-a",
+            "sess-a",
+            "deployment-a",
+            "doc-tc-b",
+            "tc-b",
+            "req-b",
+            7,
+        ));
+        responses.extend([
             canonical_child_b,
             canonical_bridges_response(Vec::new()),
             canonical_messages_empty(),
-        ])
-        .await?;
+        ]);
+        let (graphql, _queries) = spawn_mock_graphql(responses).await?;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", true, 1).await?;
         assert!(snapshot.truncated, "max_depth=1 should set truncated");
         assert_eq!(snapshot.nodes.len(), 2);
@@ -604,6 +755,8 @@ mod tests {
                 "deployment-a",
                 "tc-live",
                 "req-live",
+                "amy-code",
+                7,
                 "background",
                 "running",
             ),
@@ -615,6 +768,8 @@ mod tests {
                 "deployment-a",
                 "tc-dead",
                 "req-dead",
+                "amy-code",
+                8,
                 "foreground",
                 "completed",
             ),
@@ -645,15 +800,32 @@ mod tests {
                 "doc-tc-dead",
             ),
         ]);
-        let (graphql, _queries) = spawn_mock_graphql(vec![
-            root,
-            canonical_root,
-            bridges,
+        let mut responses = vec![root, canonical_root, bridges];
+        responses.extend(canonical_bridge_evidence(
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "doc-tc-live",
+            "tc-live",
+            "req-live",
+            7,
+        ));
+        responses.extend(canonical_bridge_evidence(
+            "doc-root",
+            "sess-root",
+            "deployment-a",
+            "doc-tc-dead",
+            "tc-dead",
+            "req-dead",
+            8,
+        ));
+        responses.push(canonical_output_segments(Vec::new()));
+        responses.extend([
             children,
             canonical_bridges_response(Vec::new()),
             canonical_messages_empty(),
-        ])
-        .await?;
+        ]);
+        let (graphql, _queries) = spawn_mock_graphql(responses).await?;
         let snapshot = load_subagent_tree_snapshot(&graphql, "req-root", false, 4).await?;
         let request_ids = snapshot
             .nodes

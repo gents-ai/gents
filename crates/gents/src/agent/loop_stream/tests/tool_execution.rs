@@ -1,6 +1,6 @@
 #[tokio::test]
 async fn tool_call_turn_executes_threads_result_and_completes() {
-    let (node, hook) = test_hook().await;
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("use the echo tool");
 
     // Turn 1: the model calls `echo`. Turn 2: it answers with text.
@@ -25,39 +25,19 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
 
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        Some(hook.clone()),
         prompt,
         Vec::new(),
         Arc::new(tools),
-        config(4),
+        owned_config(4),
     );
-    futures::pin_mut!(stream);
-
-    let mut tool_results = Vec::new();
-    let mut final_text = None;
-    while let Some(item) = stream.next().await {
-        match item.expect("loop item should be Ok") {
-            LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-                StreamedUserContent::ToolResult { tool_result, .. },
-            )) => {
-                tool_results.push(
-                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
-                        &tool_result.content.first(),
-                    ))
-                    .to_string(),
-                );
-            }
-            LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(final_response)) => {
-                final_text = Some(final_response.response().to_string());
-            }
-            _ => {}
-        }
-    }
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
 
     // The tool ran, its (bounded) result was threaded/yielded, and the loop
     // reached a text response on the next turn.
-    assert_eq!(tool_results, vec!["ECHOED".to_string()]);
-    assert_eq!(final_text.as_deref(), Some("done"));
+    assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
+    assert_eq!(collected.final_text.as_deref(), Some("done"));
 
     // The generator drove the tool-call lifecycle directly: on_tool_call started
     // it and on_tool_result completed it with the result. (The tool-result
@@ -65,7 +45,7 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     // generator is wired into the consumer in step 3 — so it is not asserted
     // here against the standalone generator.)
     let resp = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state result } }")
+        .execute("query { AgentToolCall { _docID tool_name lifecycle_state } }")
         .await;
     assert!(
         !resp.has_errors(),
@@ -83,27 +63,32 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
         rows.iter().any(|row| {
             row.get("tool_name").and_then(|value| value.as_str()) == Some("echo")
                 && row.get("lifecycle_state").and_then(|value| value.as_str()) == Some("completed")
-                && row
-                    .get("result")
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|result| result.contains("ECHOED"))
         }),
-        "expected a completed echo tool call recording the result; rows: {rows:?}"
+        "expected a completed echo tool call; rows: {rows:?}"
     );
+    let tool_doc_id = rows
+        .iter()
+        .find(|row| row["tool_name"] == "echo")
+        .and_then(|row| row["_docID"].as_str())
+        .unwrap();
+    let output = crate::background_tools::canonical_tool_output(
+        &node,
+        tool_doc_id,
+        &lifecycle.request().doc_id,
+        &lifecycle.request().session_id,
+        "did:test:test",
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(output.contains("ECHOED"));
 }
 
-#[tokio::test]
-async fn tool_executes_before_provider_stalls_mid_stream() {
-    // P2 regression: a provider that emits a tool call then stalls before EOF
-    // must still have its tool executed. Rig runs each tool inline as its
-    // ToolCall arrives, so the lifecycle / AgentToolCall row exists before the
-    // stall; the daemon liveness timeout then has something to cancel. The old
-    // design collected tool calls and dispatched only after the stream drained,
-    // so a mid-stream stall left the tool unrun with nothing to mark.
-    let (node, hook) = test_hook().await;
-    let prompt = Message::user("use the echo tool then stall");
-
-    // One turn: emit a tool call, then hang (no FinalResponse, no EOF).
+#[tokio::test(start_paused = true)]
+async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
+    // A streamed call is retained intent, not accepted execution authority.
+    // Provider EOF/Complete acceptance must precede any host side effect.
+    let calls = Arc::new(AtomicUsize::new(0));
     let model = ScriptedModel::new_stalling(vec![RawStreamingChoice::ToolCall(
         RawStreamingToolCall::new(
             "call-1".to_string(),
@@ -111,25 +96,21 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
             serde_json::json!({}),
         ),
     )]);
-    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(EchoTool {
+    let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CountingTool {
         name: "echo".to_string(),
         output: "ECHOED".to_string(),
+        calls: calls.clone(),
     })];
-
     let stream = run_loop_stream(
         model,
-        Some(hook),
-        prompt,
+        None::<gents_loop::session_hook::NoopSessionHook>,
+        Message::user("use the echo tool then stall"),
         Vec::new(),
         Arc::new(tools),
         config(4),
     );
     futures::pin_mut!(stream);
-
-    // Item 1 is the tool call. Resuming the stream then runs the tool inline and
-    // afterwards blocks forever on the stalled provider — so the second poll
-    // never returns, but the tool executes before that block. Bound it.
-    let first = stream.next().await.expect("should yield the tool call");
+    let first = stream.next().await.expect("should observe tool intent");
     assert!(
         matches!(
             first,
@@ -137,43 +118,21 @@ async fn tool_executes_before_provider_stalls_mid_stream() {
                 MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall { .. })
             ))
         ),
-        "first item should be the tool call; got {first:?}"
+        "first item should be streamed intent: {first:?}"
     );
-    let _ = tokio::time::timeout(tokio::time::Duration::from_secs(3), stream.next()).await;
-
-    // Despite the stall, the tool ran to completion (its row exists, recorded).
-    let resp = node
-        .execute("query { AgentToolCall { tool_name lifecycle_state result } }")
-        .await;
     assert!(
-        !resp.has_errors(),
-        "AgentToolCall query failed: {:?}",
-        resp.errors
+        tokio::time::timeout(Duration::from_secs(3), stream.next())
+            .await
+            .is_err(),
+        "a stalled provider must neither accept its turn nor dispatch a tool"
     );
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        rows.iter().any(|row| {
-            row.get("tool_name").and_then(|value| value.as_str()) == Some("echo")
-                && row
-                    .get("result")
-                    .and_then(|value| value.as_str())
-                    .is_some_and(|result| result.contains("ECHOED"))
-        }),
-        "tool must execute inline before the provider stall; rows: {rows:?}"
-    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
 async fn tool_definition_receives_prompt_rag_text() {
     // P3/compat: tool definitions must be built with the prompt's rag text (rig
     // parity), not String::new(), so prompt-aware tools keep the task context.
-    let (_node, hook) = test_hook().await;
     let seen = Arc::new(Mutex::new(None));
     let tool: Box<dyn ToolDyn> = Box::new(RecordingDefinitionTool {
         seen_prompt: seen.clone(),
@@ -187,7 +146,7 @@ async fn tool_definition_receives_prompt_rag_text() {
     ]);
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("teach me rust"),
         Vec::new(),
         Arc::new(vec![tool]),
@@ -209,8 +168,6 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     // list on every turn; the owned loop must too. The follow-up request after a
     // tool result is folded in (turn 2) must still advertise the toolset, or the
     // provider sees a tool-result conversation with no tools.
-    let (_node, hook) = test_hook().await;
-
     // Turn 1: the model calls `echo`. Turn 2: it answers with text.
     let model = ScriptedModel::new_turns(vec![
         echo_tool_turn(),
@@ -221,7 +178,7 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     ]);
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -247,12 +204,14 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
 
 #[tokio::test]
 async fn oversized_tool_result_is_bounded_before_threading() {
-    let (_node, hook) = test_hook().await;
     let prompt = Message::user("read the big thing");
+
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     // A tool returning far more than the default limits: the model-facing
     // (threaded/yielded) result must be bounded, while on_tool_result still
-    // receives the full output for spill (#401 closed natively).
+    // receives the full output for canonical full-output persistence
+    // (#401 closed natively).
     let big_line = "x".repeat(200);
     let big_output = std::iter::repeat(big_line)
         .take(10_000)
@@ -272,35 +231,29 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     ]);
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        Some(hook.clone()),
         prompt,
         Vec::new(),
         Arc::new(tools),
-        config(4),
+        owned_config(4),
     );
-    futures::pin_mut!(stream);
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
 
-    let mut bounded_len = None;
-    while let Some(item) = stream.next().await {
-        if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-            StreamedUserContent::ToolResult { tool_result, .. },
-        )) = item.expect("loop item should be Ok")
-        {
-            bounded_len = Some(
-                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
-                    &tool_result.content.first(),
-                ))
-                .len(),
-            );
-        }
-    }
-
-    let bounded_len = bounded_len.expect("a tool result should have been yielded");
+    let tool_results = collected.tool_results;
+    assert_eq!(
+        tool_results.len(),
+        1,
+        "exactly one threaded tool result expected; got: {tool_results:?}"
+    );
+    let bounded_len = tool_results[0].len();
     assert!(
         bounded_len < full_len,
         "expected the threaded result to be bounded: bounded={bounded_len} full={full_len}"
     );
     assert!(bounded_len > 0, "bounded result should be non-empty");
+    assert_eq!(collected.final_text.as_deref(), Some("ok"));
+    node.shutdown().await;
 }
 
 #[test]
@@ -451,7 +404,7 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
         }
     }
 
-    let (node, hook) = test_hook().await;
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     // Valid JSON missing the required `findings` field is classified precisely
     // so the model can repair the call without being told its JSON was malformed.
@@ -473,30 +426,17 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
 
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        Some(hook.clone()),
         Message::user("post a status report"),
         Vec::new(),
         Arc::new(tools),
-        config(4),
+        owned_config(4),
     );
-    futures::pin_mut!(stream);
-
     // The model is notified via a tool result (no error ends the stream); it sees
     // the actionable missing-field notice and answers on the next turn.
-    let mut tool_results = Vec::new();
-    while let Some(item) = stream.next().await {
-        if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-            StreamedUserContent::ToolResult { tool_result, .. },
-        )) = item.expect("loop must not fail; unparseable args are notified, not raised")
-        {
-            tool_results.push(
-                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
-                    &tool_result.content.first(),
-                ))
-                .to_string(),
-            );
-        }
-    }
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
+    let tool_results = collected.tool_results;
     assert!(
         tool_results
             .iter()

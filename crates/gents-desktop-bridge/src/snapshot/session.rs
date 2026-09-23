@@ -1,26 +1,24 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
-use gents_desktop_core::client::{ClientCore, ClientStore, SessionTranscriptQueryPage};
+use gents::session::canonical_rows::TranscriptMessageRow;
+use gents_desktop_core::client::{
+    CanonicalTranscriptDependencies, ClientCore, ClientStore, SessionTranscriptQueryPage,
+};
 use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::row::{AgentMessageRow, AgentRequestRow, AgentToolCallRow};
-use gents_protocol::transcript::{
-    normalize_markdown_text, present_message, present_persisted_message,
-};
+use gents_protocol::row::{AgentRequestRow, AgentToolCallRow};
+use gents_protocol::transcript::{normalize_markdown_text, present_message};
 
-use super::super::cause_derivation::{
-    derive_response_cause, derive_tool_call_cause, RequestEvidence, ResponseEvidence,
-    ToolCallEvidence,
-};
+use super::super::cause_derivation::{derive_tool_call_cause, RequestEvidence, ToolCallEvidence};
 use super::super::types::{
     is_live_turn_state, normalize_optional, turn_state_label, CommandDenialView,
-    DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageView, PendingTurnView,
-    ResponseView, RetryEligibilityView, SessionCompactionView, SessionContextView,
-    SessionHydrationView, SessionLiveDeltaView, SessionLiveTextPatchView,
-    SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView, ToolResultView,
+    DerivedCancelCauseView, DesktopSessionSnapshot, GoalView, MessageReconstructionView,
+    MessageView, PendingTurnView, ReconstructionState, RequestOutcomeView, RetryEligibilityView,
+    SessionCompactionView, SessionContextView, SessionHydrationView, SessionLiveDeltaView,
+    SessionLiveTextPatchView, SessionProjectionRevisionView, SessionTimelinePageView, ToolCallView,
 };
-use super::timeline::{build_rendered_timeline, has_materialized_user_owner};
+use super::timeline::build_rendered_timeline;
 use super::{request_matches_agent, source_matches_agent};
 
 #[path = "session/command_denial.rs"]
@@ -52,36 +50,18 @@ use request_context::load_latest_session_request_context;
 pub use timeline_page::{apply_session_timeline_page, apply_session_timeline_page_with_query};
 
 pub(super) fn message_is_runtime_control(
-    message: &AgentMessageRow,
+    message: &TranscriptMessageRow,
     requests_by_id: &HashMap<&str, &AgentRequestRow>,
-    keyed_steering_request_ids: &std::collections::BTreeSet<String>,
 ) -> bool {
     let request_input = message
-        .request_id
+        .message
+        .request_doc_id
         .as_deref()
         .and_then(|request_id| requests_by_id.get(request_id))
         .and_then(|request| request.input.as_ref())
         .cloned()
         .unwrap_or_default();
-    let has_keyed_input = message
-        .request_id
-        .as_deref()
-        .is_some_and(|request_id| keyed_steering_request_ids.contains(request_id));
-    gents::lifecycle::is_runtime_control_message(
-        &request_input,
-        &message.message_key,
-        has_keyed_input,
-    )
-}
-
-pub(super) fn keyed_steering_request_ids(
-    messages: &[&AgentMessageRow],
-) -> std::collections::BTreeSet<String> {
-    messages
-        .iter()
-        .filter(|message| gents::lifecycle::is_steering_input_message_key(&message.message_key))
-        .filter_map(|message| normalize_optional(message.request_id.as_deref()))
-        .collect()
+    gents::lifecycle::is_runtime_control_message(&request_input, &message.message.message_key)
 }
 
 pub(super) fn request_is_background_completion(request: &AgentRequestRow) -> bool {
@@ -118,6 +98,7 @@ pub fn build_session_snapshot_from_store_for_agent(
         store,
         store,
         store,
+        None,
         false,
         true,
         true,
@@ -145,6 +126,7 @@ pub async fn build_session_snapshot_for_agent(
         preferred_request_id,
         None,
         None,
+        None,
         true,
         true,
     )
@@ -157,6 +139,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
     session_id: &str,
     preferred_request_id: Option<&str>,
     transcript_store: Option<&ClientStore>,
+    canonical_dependencies: Option<&CanonicalTranscriptDependencies>,
     context_store: Option<&ClientStore>,
     context_totals_exact: bool,
     include_live_tail: bool,
@@ -207,6 +190,7 @@ pub async fn build_session_snapshot_for_agent_with_transcript(
         store.as_ref(),
         transcript_store.unwrap_or(store.as_ref()),
         context_store.or(transcript_store).unwrap_or(store.as_ref()),
+        canonical_dependencies,
         transcript_store.is_some(),
         context_totals_exact,
         include_live_tail,
@@ -266,8 +250,7 @@ fn build_hydration_only_session_snapshot(
         turn_state: None,
         latest_request_id: None,
         retry_eligibility: project_retry_eligibility(None),
-        latest_response: None,
-        active_response_overlay: None,
+        latest_request_outcome: None,
         pending_turn: None,
         context: build_session_context_from_stores(
             store,
@@ -283,7 +266,6 @@ fn build_hydration_only_session_snapshot(
         projection_revision: None,
         messages: Vec::new(),
         tool_calls: Vec::new(),
-        tool_results: Vec::new(),
     }
 }
 

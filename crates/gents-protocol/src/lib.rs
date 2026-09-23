@@ -7,6 +7,7 @@ pub mod event_delivery;
 pub mod graphql;
 pub mod message;
 pub mod network_token;
+pub mod output;
 pub mod persona;
 pub mod rendered_request;
 pub mod request_admission;

@@ -7,9 +7,10 @@
 //! custom container; the compile-time non-empty invariant is documented at
 //! use sites instead.
 //!
-//! BYTE COMPATIBILITY IS THE CONTRACT: persisted `AgentMessage.content` is
-//! `serde_json::to_string(&Message)`, and these types must produce exactly
-//! the bytes rig produced so existing transcripts reload without migration.
+//! BYTE COMPATIBILITY IS THE PROVIDER CONTRACT: these native types preserve
+//! Rig's message serialization. Canonical transcript headers and output
+//! segments reconstruct this message family; they do not store a serialized
+//! message in an `AgentMessage.content` column.
 //! The golden tests at the bottom serialize each persisted shape through BOTH
 //! families and assert byte equality, plus deserialize recorded rig-era
 //! literals. When Layer A lands and rig leaves the tree, the live-rig halves

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
@@ -11,7 +12,7 @@ use serde_json::Value;
 use tokio::sync::watch;
 
 use super::progress::{
-    decode_gents_tool_call_progress, gents_tool_progress_query, tool_completed_at_ms,
+    gents_tool_progress_query, hydrate_gents_tool_call_progress, tool_completed_at_ms,
 };
 use super::projection_state::ChildStatus;
 use super::protocol::{
@@ -226,16 +227,28 @@ async fn project_child_lifecycle_update(
         &gents_tool_progress_query(&link.parent_request_doc_id, &link.parent_session_id),
     )
     .await?;
-    let Some(mut tool) = response
+    let Some(row) = response
         .pointer("/data/AgentToolCall")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
-        .filter_map(decode_gents_tool_call_progress)
-        .find(|tool| {
-            tool.tool_name == "spawn_subagent"
-                && tool.child_request_id.as_deref() == Some(link.request_id.as_str())
+        .find(|row| {
+            row.get("tool_name").and_then(Value::as_str) == Some("spawn_subagent")
+                && row.get("child_request_id").and_then(Value::as_str)
+                    == Some(link.request_id.as_str())
         })
+    else {
+        return Ok(());
+    };
+    let Some(mut tool) = hydrate_gents_tool_call_progress(
+        &ConfigAccess::Local(state.node.clone()),
+        row,
+        &link.parent_agent_did,
+        &link.parent_session_id,
+        link.parent_requester_did.as_deref(),
+        &link.parent_request_doc_id,
+    )
+    .await?
     else {
         return Ok(());
     };

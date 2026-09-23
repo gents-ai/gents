@@ -17,6 +17,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("Background", Module("conformance/background.rs")),
         ("BackendHealth", Module("conformance/backend_health.rs")),
         ("Callback", Module("conformance/callback_lifecycle.rs")),
+        ("CanonicalOutput", WorkspaceTest("crates/gents/src/lean_vocab_test/canonical_execution/native_adapter.rs")),
         ("Client", Module("conformance/client_runtime.rs")),
         (
             "ClientShell",
@@ -47,12 +48,8 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             ),
         ),
         (
-            "CancelPropagation",
-            Module("conformance/cancel_propagation.rs"),
-        ),
-        (
             "CrossMachineComposed",
-            Module("conformance/composed_invariants.rs"),
+            WorkspaceTest("crates/gents/src/tool_call_lifecycle/composed_conformance.rs"),
         ),
         ("DurableLineage", Module("conformance/background.rs")),
         ("DescendantGraph", Module("misc/descendant_graph.rs")),
@@ -92,6 +89,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ),
         ("Process", WorkspaceTest("crates/gents/src/runtime_status/tests.rs")),
         ("PromptAssembly", Module("conformance/prompt_assembly.rs")),
+        ("QueuedSteering", Module("conformance/live_overlay.rs")),
         ("Recovery", Module("conformance/recovery_sweeps.rs")),
         (
             "RenderedCapture",
@@ -137,10 +135,13 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
                  contract output; admission/phase/recovery need the shared runtime hook owner",
             ),
         ),
-        ("ToolExecution", Module("conformance/tool_execution.rs")),
+        (
+            "ToolExecution",
+            WorkspaceTest("crates/gents/src/tool_call_lifecycle/admission_fixture.rs"),
+        ),
         ("ToolPolicy", Module("conformance/tool_policy.rs")),
         ("Lsp", Module("conformance/lsp.rs")),
-        ("Transcript", Module("conformance/transcript.rs")),
+        ("Transcript", Gap("Native owner coverage exists for ordering, model-scripted parallel completion, pair closure, and ownership abandonment. Full generated coverage still needs transaction fault injection for lost-ack duplicate delivery replay and a native permissive orphan-result publication owner.")),
         (
             "Triggers",
             WorkspaceTest("crates/gents/src/trigger_engine/tests/dispatch_contract.rs"),

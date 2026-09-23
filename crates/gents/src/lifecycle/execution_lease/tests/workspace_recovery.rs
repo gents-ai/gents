@@ -105,9 +105,16 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
     let mut owner = RequestLifecycle::new_with_agent_did(node.clone(), "general", did, parent, 60);
     owner.claim().await.unwrap();
     let writer = crate::streaming::DefraStreamWriter::new(node.clone(), did, Duration::ZERO);
-    let response_id = owner.begin_owned_execution(&writer).await.unwrap();
+    owner.begin_owned_execution(&writer).await.unwrap();
+    let response_id = owner.request().doc_id.clone();
     writer
-        .write_tokens(&response_id, "partial durable response")
+        .start_provider_attempt(&response_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    writer
+        .flush_native_partial(
+            &owner,
+            &gents_protocol::message::Message::assistant("partial durable response"),
+        )
         .await
         .unwrap();
     let parent = owner.request().clone();
@@ -147,11 +154,10 @@ async fn expired_execution_recovers_one_goal_successor_that_reopens_existing_wor
         request_row(&node, &parent.doc_id).await.lifecycle_state,
         Some(RequestLifecycleState::Failed)
     );
-    let recovered_response = terminal_response_snapshot(&node, &parent.doc_id).await;
-    assert!(recovered_response["content"]
-        .as_str()
-        .unwrap()
-        .starts_with("partial durable response"));
+    let recovered_output = output_segment_snapshot(&node, &parent.doc_id).await;
+    assert!(recovered_output
+        .to_string()
+        .contains("partial durable response"));
     let snapshot = Arc::new(crate::ActiveRuntimeSnapshot {
         generation: 1,
         principal: None,

@@ -18,7 +18,7 @@ function makeSession(
   return {
     sessionId: "s1",
     agentDid: "did:test:operator",
-    turnState: "streaming",
+    turnState: "running",
     timelineItems: [],
     ...overrides,
   };
@@ -152,6 +152,7 @@ describe("assistant reasoning order", () => {
             itemKey: "assistant-1",
             content: "Final answer",
             reasoning: "First I thought about it",
+            reconstruction: { state: "ready" },
           },
         ]}
       />,
@@ -185,6 +186,7 @@ describe("assistant reasoning order", () => {
         kind: "assistantMessage",
         itemKey: "assistant-history",
         content: "This historical answer is immediately readable.",
+        reconstruction: { state: "ready" },
       },
     ];
     const { rerender } = render(
@@ -206,6 +208,7 @@ describe("assistant reasoning order", () => {
               kind: "assistantMessage",
               itemKey: "assistant-new",
               content: "This newly synchronized answer arrived as one database update.",
+              reconstruction: { state: "ready" },
             },
           ]}
         />
@@ -301,6 +304,7 @@ describe("assistant reasoning order", () => {
             itemKey: "message-7",
             content: answer,
             reasoning: null,
+            reconstruction: { state: "ready" },
           },
         ]}
       />,
@@ -318,6 +322,7 @@ describe("assistant reasoning order", () => {
             kind: "assistantMessage",
             itemKey: "message-1",
             content: "First session history",
+            reconstruction: { state: "ready" },
           },
         ]}
       />,
@@ -331,6 +336,7 @@ describe("assistant reasoning order", () => {
             kind: "assistantMessage",
             itemKey: "message-2",
             content: "Second session history is immediately readable.",
+            reconstruction: { state: "ready" },
           },
         ]}
       />,
@@ -417,6 +423,7 @@ describe("ChatTranscriptPanel states", () => {
               itemKey: "user_2",
               requestId: "req_2",
               content: "check the upgrade",
+              reconstruction: { state: "ready" },
             },
           ],
         })}
@@ -473,6 +480,23 @@ describe("ChatTranscriptPanel states", () => {
     expect(screen.queryByTestId("assistant-thinking")).not.toBeInTheDocument();
   });
 
+  it("hides the thinking indicator for an interrupted turn that retains its live overlay", () => {
+    render(
+      <ChatTranscriptPanel
+        selectedSessionId="s1"
+        session={makeSession({
+          turnState: "interrupted",
+          timelineItems: [
+            pendingTurn,
+            { kind: "liveAssistant", itemKey: "l1", content: "partial output" },
+          ],
+        })}
+      />,
+    );
+    expect(screen.queryByTestId("assistant-thinking")).not.toBeInTheDocument();
+    expect(screen.getByText("partial output")).toBeInTheDocument();
+  });
+
   it("follows the transcript with instant (not smooth) scrolling on a fresh send", () => {
     render(
       <ChatTranscriptPanel
@@ -503,6 +527,7 @@ describe("ChatTranscriptPanel states", () => {
             input: null,
             output: null,
           },
+          reconstruction: { state: "ready" },
         },
       ],
     };
@@ -557,6 +582,7 @@ describe("ChatTranscriptPanel states", () => {
             input: null,
             output,
           },
+          reconstruction: { state: "ready" },
         },
       ],
     });
@@ -590,6 +616,7 @@ describe("ChatTranscriptPanel states", () => {
         kind: "userMessage",
         itemKey: `loaded-user-${index}`,
         content: `loaded-message-${index}`,
+        reconstruction: { state: "ready" },
       }),
     );
     const { rerender } = render(
@@ -630,6 +657,7 @@ describe("ChatTranscriptPanel states", () => {
               kind: "userMessage",
               itemKey: "user_1",
               content: "do the thing",
+              reconstruction: { state: "ready" },
             },
           ],
         })}
@@ -654,11 +682,13 @@ describe("ChatTranscriptPanel states", () => {
               kind: "userMessage",
               itemKey: "user_1",
               content: "do the thing",
+              reconstruction: { state: "ready" },
             },
             {
               kind: "userMessage",
               itemKey: "user_2",
               content: "do the thing",
+              reconstruction: { state: "ready" },
             },
           ],
         })}
@@ -679,6 +709,7 @@ describe("ChatTranscriptPanel states", () => {
           itemKey: "user_old",
           requestId: "req_old",
           content: "earlier",
+          reconstruction: { state: "ready" },
         },
       ],
     });
@@ -721,6 +752,7 @@ describe("ChatTranscriptPanel states", () => {
         kind: "userMessage",
         itemKey: `user-${index}`,
         content: `message-${index}`,
+        reconstruction: { state: "ready" },
       }),
     );
     const { rerender } = render(
@@ -759,6 +791,7 @@ describe("ChatTranscriptPanel states", () => {
         kind: "assistantMessage",
         itemKey: "assistant-90",
         content: "message-90",
+        reconstruction: { state: "ready" },
       },
     ];
     rerender(
@@ -785,6 +818,7 @@ describe("ChatTranscriptPanel states", () => {
       kind: "userMessage",
       itemKey: `remote-${index}`,
       content: `remote-message-${index}`,
+      reconstruction: { state: "ready" },
     }));
     const onLoad = vi.fn();
 

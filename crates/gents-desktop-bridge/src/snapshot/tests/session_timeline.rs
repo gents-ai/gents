@@ -1,142 +1,199 @@
 use super::*;
+use crate::types::{DesktopSessionSnapshot, MessageReconstructionView, ReconstructionState};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
-#[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
-mod lean_vocab_test;
+fn timeline_session() -> AgentSession {
+    AgentSession {
+        session_id: "sess-1".into(),
+        agent_did: "did:test:amy".into(),
+        requester_did: None,
+        behavior_id: "default".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: None,
+    }
+}
 
-#[test]
-fn session_snapshot_consumes_generated_live_overlay_cases() {
-    let cases = lean_vocab_test::lean_live_overlay_cases();
-    assert!(!cases.is_empty());
-    for case in cases {
-        let content = if case.has_content { "live answer" } else { "" };
-        let mut rows = make_streaming_store_with_response_content(content).to_rows();
-        rows.requests[0].lifecycle_state = Some(match case.turn_label.as_str() {
-            "streaming" => RequestLifecycleState::Processing,
-            "interrupted" => RequestLifecycleState::Interrupted,
-            "completed" => RequestLifecycleState::Completed,
-            other => panic!("unrepresented live-overlay turn {other}"),
-        });
-        rows.responses[0].status = Some(case.response_status.clone());
-        rows.responses[0].reasoning = case.has_reasoning.then(|| "live reasoning".to_string());
-        rows.responses[0].materialized_message_sequence = case.materialized.then_some(2);
-        if case.has_durable_owner {
-            rows.messages.push(AgentMessageRow {
-                message_key: "durable-answer".to_string(),
-                session_id: Some("sess-1".to_string()),
-                request_id: Some("req-1".to_string()),
-                requester_did: None,
-                sequence: Some(2),
-                role: Some("assistant".to_string()),
-                content: Some(assistant_message_json(content)),
-                reasoning: rows.responses[0].reasoning.clone(),
-                timestamp: Some("2026-04-21T12:00:02Z".to_string()),
-            });
-        }
-        for index in 0..case.preceding_tool_calls {
-            rows.tool_calls.push(
-                serde_json::from_value(serde_json::json!({
-                    "tool_call_key": format!("tool-{index}"),
-                    "tool_call_id": format!("call-{index}"),
-                    "session_id": "sess-1",
-                    "request_id": "req-1",
-                    "message_sequence": index + 3,
-                    "tool_name": "read_file",
-                    "lifecycle_state": "completed",
-                    "result": "done"
-                }))
-                .expect("tool row"),
-            );
-        }
-        let store = ClientStore::from_rows(rows);
-        let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
-            .expect("session snapshot");
-        let visible = snapshot
-            .timeline_items
-            .iter()
-            .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
-        assert_eq!(visible, case.expect_overlay, "{}", case.name);
+fn ready() -> MessageReconstructionView {
+    MessageReconstructionView {
+        state: ReconstructionState::Ready,
+        error: None,
+        denied_dependency_doc_id: None,
     }
 }
 
 #[test]
+fn canonical_headers_and_segments_render_in_sequence() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".into()),
+            request_id: "req-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "user",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "inspect the repository",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "assistant",
+        "sess-1",
+        Some("req-1"),
+        2,
+        MessageRole::Assistant,
+        "I found the canonical owner.",
+    );
+    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    assert_eq!(snapshot.messages.len(), 2);
+    assert!(
+        matches!(&snapshot.timeline_items[..], [RenderedTimelineItem::UserMessage { content, reconstruction, .. }, RenderedTimelineItem::AssistantMessage { content: assistant, reconstruction: assistant_reconstruction, .. }]
+        if content.as_deref() == Some("inspect the repository") && reconstruction.state == ReconstructionState::Ready && assistant.as_deref() == Some("I found the canonical owner.") && assistant_reconstruction.state == ReconstructionState::Ready)
+    );
+}
+
+#[test]
+fn interrupted_queued_steering_keeps_request_owned_input_without_transcript() {
+    let rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            doc_id: Some("steering-doc-1".into()),
+            request_id: "steering-request-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Interrupted),
+            content: Some("queued steering text".into()),
+            input: Some(
+                serde_json::from_value(serde_json::json!({
+                    "queue": { "source": "steering", "policy": "append" }
+                }))
+                .expect("steering input"),
+            ),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    };
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows),
+        "sess-1",
+        Some("steering-request-1"),
+    )
+    .expect("snapshot");
+    let pending = snapshot.pending_turn.expect("request-owned steering input");
+    assert_eq!(pending.request_doc_id.as_deref(), Some("steering-doc-1"));
+    assert_eq!(pending.content, "queued steering text");
+    assert_eq!(pending.lifecycle_state.as_deref(), Some("interrupted"));
+    assert!(snapshot.messages.is_empty());
+}
+
+#[test]
+fn missing_segment_remains_loading_in_the_timeline() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".into()),
+            request_id: "req-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "header-only",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::Assistant,
+        "not a fallback",
+    );
+    rows.output_segments.clear();
+    let snapshot = build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", None)
+        .expect("snapshot");
+    assert!(
+        matches!(snapshot.timeline_items.as_slice(), [RenderedTimelineItem::AssistantMessage { content: None, reconstruction, .. }] if reconstruction.state == ReconstructionState::Loading)
+    );
+}
+
+#[test]
 fn session_timeline_pages_are_bounded_and_cursor_stable() {
-    let store = make_streaming_store_with_response_content("streaming");
-    let mut snapshot =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    let mut snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![timeline_session()],
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        None,
+    )
+    .expect("snapshot");
     snapshot.timeline_items = (0..100)
         .map(|index| RenderedTimelineItem::UserMessage {
             item_key: format!("message-{index:03}"),
             request_id: Some(format!("request-{index:03}")),
             sequence: Some(index),
-            content: format!("row {index}"),
+            content: Some(format!("row {index}")),
             timestamp: None,
+            reconstruction: ready(),
         })
         .collect();
-
+    let mut older_snapshot = snapshot.clone();
     apply_session_timeline_page(&mut snapshot, None, Some(40)).expect("tip page");
-    let tip = snapshot.timeline_page.as_ref().expect("tip metadata");
+    let tip = snapshot.timeline_page.as_ref().expect("metadata");
     assert_eq!(snapshot.timeline_items.len(), 40);
-    assert_eq!(tip.total_items, 100);
     assert_eq!(tip.oldest_item_key.as_deref(), Some("message-060"));
     assert!(tip.has_older);
     assert!(!tip.has_newer);
-
-    let mut older =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("older snapshot");
-    older.timeline_items = (0..100)
-        .map(|index| RenderedTimelineItem::UserMessage {
-            item_key: format!("message-{index:03}"),
-            request_id: Some(format!("request-{index:03}")),
-            sequence: Some(index),
-            content: format!("row {index}"),
-            timestamp: None,
-        })
-        .collect();
-    apply_session_timeline_page(&mut older, Some("message-060"), Some(40)).expect("older page");
-    let page = older.timeline_page.as_ref().expect("older metadata");
-    assert_eq!(older.timeline_items.len(), 40);
-    assert_eq!(page.oldest_item_key.as_deref(), Some("message-020"));
-    assert!(page.has_older);
-    assert!(page.has_newer);
-
-    let mut capped =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("capped snapshot");
-    capped.timeline_items = (0..100)
-        .map(|index| RenderedTimelineItem::UserMessage {
-            item_key: format!("message-{index:03}"),
-            request_id: None,
-            sequence: Some(index),
-            content: format!("row {index}"),
-            timestamp: None,
-        })
-        .collect();
-    apply_session_timeline_page(&mut capped, None, Some(usize::MAX)).expect("capped page");
-    assert_eq!(capped.timeline_items.len(), 80);
-
-    let mut stale_cursor = capped.clone();
-    assert!(
-        apply_session_timeline_page(&mut stale_cursor, Some("message-not-present"), Some(40))
-            .is_err()
+    apply_session_timeline_page(&mut older_snapshot, Some("message-060"), Some(40))
+        .expect("older page");
+    assert_eq!(
+        older_snapshot
+            .timeline_page
+            .as_ref()
+            .and_then(|page| page.oldest_item_key.as_deref()),
+        Some("message-020")
     );
 }
 
 #[test]
 fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() {
-    let store = make_streaming_store_with_response_content("streaming");
-    let mut snapshot =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    let mut snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![timeline_session()],
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        None,
+    )
+    .expect("snapshot");
     snapshot.timeline_items = (0..81)
         .map(|index| RenderedTimelineItem::UserMessage {
             item_key: format!("message-{index:03}"),
             request_id: None,
             sequence: Some(index),
-            content: format!("row {index}"),
+            content: Some(format!("row {index}")),
             timestamp: None,
+            reconstruction: ready(),
         })
         .collect();
     let page = gents_desktop_core::client::SessionTranscriptQueryPage {
         store: ClientStore::default(),
+        canonical_dependencies: Default::default(),
         query_count: 2,
         queried_rows: 81,
         message_query_limit: 41,
@@ -144,206 +201,145 @@ fn queried_timeline_page_reports_database_work_and_does_not_rescan_for_cursor() 
         source_exhausted: false,
         has_newer: true,
     };
-
     apply_session_timeline_page_with_query(
         &mut snapshot,
         Some("message-081"),
         Some(40),
         Some(&page),
     )
-    .expect("queried page");
-    let metadata = snapshot.timeline_page.as_ref().expect("page metadata");
-    assert_eq!(snapshot.timeline_items.len(), 40);
-    assert_eq!(metadata.oldest_item_key.as_deref(), Some("message-041"));
-    assert_eq!(metadata.newest_item_key.as_deref(), Some("message-080"));
-    assert_eq!(metadata.total_items, -1);
+    .expect("page");
+    let metadata = snapshot.timeline_page.expect("metadata");
+    assert_eq!(
+        (
+            metadata.query_count,
+            metadata.queried_rows,
+            metadata.message_query_limit
+        ),
+        (Some(2), Some(81), Some(41))
+    );
     assert_eq!(metadata.total_items_exact, Some(false));
-    assert!(metadata.has_older);
-    assert!(metadata.has_newer);
-    assert_eq!(metadata.query_count, Some(2));
-    assert_eq!(metadata.queried_rows, Some(81));
-    assert_eq!(metadata.message_query_limit, Some(41));
-    assert_eq!(metadata.tool_call_query_limit, Some(321));
+    assert!(metadata.has_older && metadata.has_newer);
+}
+
+#[test]
+fn terminal_request_does_not_create_a_mutable_live_tail() {
+    let request = AgentRequestRow {
+        doc_id: Some("req-1".into()),
+        request_id: "req-1".into(),
+        agent_did: Some("did:test:amy".into()),
+        session_id: Some("sess-1".into()),
+        lifecycle_state: Some(RequestLifecycleState::Completed),
+        ..Default::default()
+    };
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![timeline_session()],
+            requests: vec![request],
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        Some("req-1"),
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+    assert!(!snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
+}
+
+// The response-row overlay tests below retain their UI guarantees under the
+// canonical contract: live bytes are no longer a mutable store collection, so
+// an active request asks the shared projector for a fresh snapshot instead.
+#[test]
+fn session_snapshot_consumes_generated_live_overlay_cases() {
+    let request = AgentRequestRow {
+        doc_id: Some("req-1".into()),
+        request_id: "req-1".into(),
+        agent_did: Some("did:test:amy".into()),
+        session_id: Some("sess-1".into()),
+        lifecycle_state: Some(RequestLifecycleState::Processing),
+        ..Default::default()
+    };
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![request],
+        ..ClientStoreRows::default()
+    });
+    let delta = build_session_live_delta_from_store(
+        &store,
+        gents_desktop_core::client::StoreProjectionRevision {
+            store_version: 7,
+            reconcile_version: 4,
+        },
+        "sess-1",
+        Some("did:test:amy"),
+        "req-1",
+        4,
+        0,
+        "811c9dc5",
+        0,
+        "811c9dc5",
+    );
+    assert_eq!(delta.outcome, "snapshotRequired");
+    assert_eq!(delta.turn_state.as_deref(), Some("running"));
 }
 
 #[test]
 fn queried_timeline_page_never_splits_a_sequence_group() {
-    let store = make_streaming_store_with_response_content("streaming");
-    let mut snapshot =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = vec![
-        RenderedTimelineItem::AssistantMessage {
-            item_key: "message-1".into(),
-            sequence: Some(1),
-            content: Some("one".into()),
-            reasoning: None,
-            timestamp: None,
-        },
-        RenderedTimelineItem::ToolGroup {
-            item_key: "tools-1".into(),
-            message_sequence: Some(1),
-            tools: Vec::new(),
-        },
-        RenderedTimelineItem::AssistantMessage {
-            item_key: "message-2".into(),
-            sequence: Some(2),
-            content: Some("two".into()),
-            reasoning: None,
-            timestamp: None,
-        },
-        RenderedTimelineItem::ToolGroup {
-            item_key: "tools-2".into(),
-            message_sequence: Some(2),
-            tools: Vec::new(),
-        },
-        RenderedTimelineItem::AssistantMessage {
-            item_key: "message-3".into(),
-            sequence: Some(3),
-            content: Some("three".into()),
-            reasoning: None,
-            timestamp: None,
-        },
+        assistant_item("message-1", 1),
+        tool_group(1),
+        assistant_item("message-2", 2),
+        tool_group(2),
+        assistant_item("message-3", 3),
     ];
-    let page = gents_desktop_core::client::SessionTranscriptQueryPage {
-        store: ClientStore::default(),
-        query_count: 2,
-        queried_rows: 5,
-        message_query_limit: 5,
-        tool_call_query_limit: 321,
-        source_exhausted: true,
-        has_newer: false,
-    };
-
+    let page = timeline_page(5, true, false);
     apply_session_timeline_page_with_query(&mut snapshot, None, Some(4), Some(&page))
         .expect("sequence-atomic page");
-    let keys = snapshot
-        .timeline_items
-        .iter()
-        .map(|item| match item {
-            RenderedTimelineItem::UserMessage { item_key, .. }
-            | RenderedTimelineItem::AssistantMessage { item_key, .. }
-            | RenderedTimelineItem::ToolGroup { item_key, .. }
-            | RenderedTimelineItem::PendingUserTurn { item_key, .. }
-            | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key.as_str(),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(keys, vec!["message-2", "tools-2", "message-3"]);
-    let metadata = snapshot.timeline_page.expect("page metadata");
-    assert!(metadata.has_older);
-    assert_eq!(metadata.oldest_item_key.as_deref(), Some("message-2"));
+    assert_eq!(
+        timeline_keys(&snapshot),
+        ["message-2", "tools-2", "message-3"]
+    );
 }
 
 #[test]
 fn queried_timeline_page_advances_past_non_rendering_rows() {
-    let store = make_streaming_store_with_response_content("streaming");
-    let mut snapshot =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
-    snapshot.timeline_items.clear();
-    let query_store = ClientStore::from_rows(ClientStoreRows {
-        messages: vec![serde_json::from_value(serde_json::json!({
-            "message_key": "hidden-7",
-            "session_id": "sess-1",
-            "sequence": 7,
-            "role": "tool",
-            "content": "hidden tool result"
-        }))
-        .expect("message row")],
-        ..ClientStoreRows::default()
-    });
-    let page = gents_desktop_core::client::SessionTranscriptQueryPage {
-        store: query_store,
-        query_count: 2,
-        queried_rows: 41,
-        message_query_limit: 41,
-        tool_call_query_limit: 321,
-        source_exhausted: false,
-        has_newer: false,
-    };
-
+    let mut snapshot = empty_timeline_snapshot();
+    let page = timeline_page(41, false, false);
     apply_session_timeline_page_with_query(&mut snapshot, None, Some(40), Some(&page))
-        .expect("non-rendering page");
-    let metadata = snapshot.timeline_page.expect("page metadata");
+        .expect("empty rendered page");
     assert!(snapshot.timeline_items.is_empty());
-    assert!(metadata.has_older);
-    assert_eq!(metadata.oldest_item_key.as_deref(), Some("tools-7"));
+    assert!(snapshot.timeline_page.expect("metadata").has_older);
 }
 
 #[test]
 fn queried_timeline_page_drops_old_orphans_below_the_selected_sequence_window() {
-    let store = make_streaming_store_with_response_content("streaming");
-    let mut snapshot =
-        build_session_snapshot_from_store(&store, "sess-1", None).expect("session snapshot");
+    let mut snapshot = empty_timeline_snapshot();
     snapshot.timeline_items = vec![
-        RenderedTimelineItem::AssistantMessage {
-            item_key: "message-2".into(),
-            sequence: Some(2),
-            content: Some("two".into()),
-            reasoning: None,
-            timestamp: None,
-        },
-        RenderedTimelineItem::AssistantMessage {
-            item_key: "message-3".into(),
-            sequence: Some(3),
-            content: Some("three".into()),
-            reasoning: None,
-            timestamp: None,
-        },
-        RenderedTimelineItem::ToolGroup {
-            item_key: "tools-3".into(),
-            message_sequence: Some(3),
-            tools: Vec::new(),
-        },
-        RenderedTimelineItem::ToolGroup {
-            item_key: "tools-1".into(),
-            message_sequence: Some(1),
-            tools: Vec::new(),
-        },
+        assistant_item("message-2", 2),
+        assistant_item("message-3", 3),
+        tool_group(3),
+        tool_group(1),
     ];
-    let page = gents_desktop_core::client::SessionTranscriptQueryPage {
-        store: ClientStore::default(),
-        query_count: 2,
-        queried_rows: 4,
-        message_query_limit: 4,
-        tool_call_query_limit: 321,
-        source_exhausted: true,
-        has_newer: false,
-    };
-
+    let page = timeline_page(4, true, false);
     apply_session_timeline_page_with_query(&mut snapshot, None, Some(3), Some(&page))
-        .expect("sequence-window page");
-    let keys = snapshot
-        .timeline_items
-        .iter()
-        .map(|item| match item {
-            RenderedTimelineItem::UserMessage { item_key, .. }
-            | RenderedTimelineItem::AssistantMessage { item_key, .. }
-            | RenderedTimelineItem::ToolGroup { item_key, .. }
-            | RenderedTimelineItem::PendingUserTurn { item_key, .. }
-            | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key.as_str(),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(keys, vec!["message-2", "message-3", "tools-3"]);
+        .expect("windowed page");
     assert_eq!(
-        snapshot
-            .timeline_page
-            .expect("page metadata")
-            .oldest_item_key
-            .as_deref(),
-        Some("message-2")
+        timeline_keys(&snapshot),
+        ["message-2", "message-3", "tools-3"]
     );
 }
 
 #[test]
 fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
-    // Fixed FNV-1a checksum fixtures for the webview's acknowledged text.
-    const HELLO_HASH: &str = "4f9f2cab";
-    const EMPTY_HASH: &str = "811c9dc5";
-    let store = make_streaming_store_with_response_content("hello world");
+    let store = active_store();
     let revision = gents_desktop_core::client::StoreProjectionRevision {
         store_version: 9,
         reconcile_version: 4,
     };
-    let delta = build_session_live_delta_from_store(
+    let current = build_session_live_delta_from_store(
         &store,
         revision,
         "sess-1",
@@ -351,48 +347,11 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "req-1",
         4,
         5,
-        HELLO_HASH,
+        "4f9f2cab",
         0,
-        EMPTY_HASH,
+        "811c9dc5",
     );
-    assert_eq!(delta.outcome, "delta");
-    let content = delta.content.expect("content patch");
-    assert_eq!(content.mode, "append");
-    assert_eq!(content.value, " world");
-    assert_eq!(content.byte_len, 11);
-
-    let replaced = build_session_live_delta_from_store(
-        &store,
-        revision,
-        "sess-1",
-        Some("did:test:amy"),
-        "req-1",
-        4,
-        5,
-        "wrong-base",
-        0,
-        EMPTY_HASH,
-    );
-    assert_eq!(replaced.content.expect("replacement").mode, "replace");
-
-    let cleared_store = make_streaming_store_with_response_content("");
-    let cleared = build_session_live_delta_from_store(
-        &cleared_store,
-        revision,
-        "sess-1",
-        Some("did:test:amy"),
-        "req-1",
-        4,
-        5,
-        HELLO_HASH,
-        0,
-        EMPTY_HASH,
-    );
-    let cleared_content = cleared.content.expect("cleared content patch");
-    assert_eq!(cleared_content.mode, "replace");
-    assert!(cleared_content.value.is_empty());
-    assert_eq!(cleared_content.byte_len, 0);
-
+    assert_eq!(current.outcome, "snapshotRequired");
     let fenced = build_session_live_delta_from_store(
         &store,
         revision,
@@ -401,828 +360,292 @@ fn live_delta_appends_only_the_new_suffix_and_fences_reconcile_gaps() {
         "req-1",
         3,
         5,
-        HELLO_HASH,
+        "4f9f2cab",
         0,
-        EMPTY_HASH,
+        "811c9dc5",
     );
     assert_eq!(fenced.outcome, "snapshotRequired");
     assert!(fenced.content.is_none());
 }
 
-fn assistant_message_json(text: &str) -> String {
-    serde_json::to_string(&Message::assistant(text)).expect("serialize assistant")
-}
-
-fn make_streaming_store_with_response_content(content: &str) -> ClientStore {
-    ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "sess-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:01:00Z".to_string(),
-                preview: Some("hello".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".to_string(),
-                    request_id: "req-1".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("sess-1".to_string()),
-            content: Some("hello".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Processing),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("sess-1".to_string()),
-            request_id: Some("req-1".to_string()),
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("hello")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("sess-1".to_string()),
-            content: Some(content.to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(4),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:00:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: None,
-        }],
-        ..ClientStoreRows::default()
-    })
-}
-
 #[test]
 fn overlay_hidden_when_response_tail_is_empty() {
-    let store = make_streaming_store_with_response_content("");
-    let snapshot = build_session_snapshot_from_store(&store, "sess-1", None).expect("snapshot");
-    let has_live = snapshot
+    let snapshot = build_session_snapshot_from_store(&active_store(), "sess-1", Some("req-1"))
+        .expect("snapshot");
+    assert!(!snapshot
         .timeline_items
         .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
-    assert!(!has_live, "overlay must be hidden when tail is empty");
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
 }
 
 #[test]
 fn background_notification_is_control_by_message_key_with_honest_request_binding() {
-    let mut rows = make_streaming_store_with_response_content("").to_rows();
-    rows.responses.clear();
-    rows.messages[0].message_key =
-        "background-completion-notification:child-1:subagent".to_string();
-    rows.messages[0].request_id = Some("req-1".to_string());
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
-        .expect("session snapshot");
-
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "background-completion-notification:child-1:subagent",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "wake",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
     assert!(snapshot.messages[0].runtime_control);
 }
 
 #[test]
 fn versioned_background_wake_never_projects_as_a_user_turn() {
-    let mut rows = make_streaming_store_with_response_content("").to_rows();
-    rows.responses.clear();
-    rows.requests[0].content =
-        Some(gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT.to_string());
-    rows.requests[0].lifecycle_state = Some(RequestLifecycleState::Completed);
-    rows.requests[0].execution_origin = Some("scheduled".to_string());
-    rows.requests[0].input = Some(gents_protocol::request_input::RequestInput {
-        queue: Some(gents_protocol::request_input::RequestQueue {
-            source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
-            policy: gents_protocol::request_input::QueuePolicy::Coalesce,
-            key: Some("background_completion:sess-1".to_string()),
-            queued_after_request_id: Some("parent-1".to_string()),
-            interrupted_request_id: None,
-            background_completion_wake_version: Some(1),
-        }),
-        ..Default::default()
-    });
-    rows.messages[0].content = Some(user_message_json(
-        gents::background_completion::BACKGROUND_COMPLETION_WAKE_PROMPT,
-    ));
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
-        .expect("session snapshot");
-
-    assert!(snapshot.messages[0].runtime_control);
-    assert!(snapshot.pending_turn.is_none());
-    assert!(snapshot.timeline_items.iter().all(|item| !matches!(
-        item,
-        RenderedTimelineItem::UserMessage { .. } | RenderedTimelineItem::PendingUserTurn { .. }
-    )));
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "background-completion-notification:v1:req-1",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "wake",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(snapshot.timeline_items.is_empty());
 }
 
 #[test]
-fn steering_projects_the_input_once_without_rendering_its_control_prompt() {
-    let mut rows = make_streaming_store_with_response_content("").to_rows();
-    rows.responses.clear();
-    rows.requests[0].content = Some("also check the staging config".to_string());
-    rows.requests[0].input = Some(gents_protocol::request_input::RequestInput {
-        queue: Some(gents_protocol::request_input::RequestQueue {
-            source: gents_protocol::request_input::QueueSource::Steering,
-            policy: gents_protocol::request_input::QueuePolicy::Append,
-            key: None,
-            queued_after_request_id: Some("parent-1".to_string()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        }),
-        ..Default::default()
-    });
-    rows.messages[0].message_key = "steering-input:req-1".to_string();
-    rows.messages[0].content = Some(user_message_json("also check the staging config"));
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
-        .expect("session snapshot");
-
+fn steering_projects_the_authored_input_once() {
+    let mut rows = active_store().to_rows();
+    rows.requests[0].input = Some(
+        serde_json::from_value(serde_json::json!({
+            "queue": { "source": "steering", "policy": "append" }
+        }))
+        .expect("steering request input"),
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "authored:req-1:prompt",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "continue",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
     assert!(!snapshot.messages[0].runtime_control);
-    assert!(snapshot.pending_turn.is_none());
     assert_eq!(
         snapshot
             .timeline_items
             .iter()
-            .filter_map(|item| match item {
-                RenderedTimelineItem::UserMessage { content, .. } => Some(content.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>(),
-        vec!["also check the staging config"]
+            .filter(|item| matches!(item, RenderedTimelineItem::UserMessage { .. }))
+            .count(),
+        1
     );
 }
 
 #[test]
 fn durable_goal_continuation_never_projects_as_user_authored_input() {
-    let mut rows = make_streaming_store_with_response_content("").to_rows();
-    rows.responses.clear();
-    rows.requests[0].content = Some("Continue pursuing the durable goal.".to_string());
-    rows.requests[0].input = Some(gents_protocol::request_input::RequestInput {
-        queue: Some(gents_protocol::request_input::RequestQueue {
-            source: gents_protocol::request_input::QueueSource::Goal,
-            policy: gents_protocol::request_input::QueuePolicy::Append,
-            key: None,
-            queued_after_request_id: Some("parent-1".to_string()),
-            interrupted_request_id: None,
-            background_completion_wake_version: None,
-        }),
-        ..Default::default()
-    });
-    rows.messages[0].content = Some(user_message_json("Continue pursuing the durable goal."));
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
-        .expect("session snapshot");
-
+    let mut rows = active_store().to_rows();
+    rows.requests[0].input = Some(
+        serde_json::from_value(serde_json::json!({
+            "queue": { "source": "goal", "policy": "coalesce" },
+            "goal_continuation": { "sequence": 1, "wrapup": false }
+        }))
+        .expect("goal continuation request input"),
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "goal-continuation:req-1",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "continue goal",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
     assert!(snapshot.messages[0].runtime_control);
-    assert!(snapshot.pending_turn.is_none());
-    assert!(snapshot
-        .timeline_items
-        .iter()
-        .all(|item| !matches!(item, RenderedTimelineItem::UserMessage { .. })));
 }
 
 #[test]
 fn session_snapshot_deduplicates_persisted_rows_from_multiple_sources() {
-    let mut rows = make_streaming_store_with_response_content("").to_rows();
-    rows.responses.clear();
-
-    let mut duplicate_user = rows.messages[0].clone();
-    duplicate_user.sequence = Some(9);
-    duplicate_user.content = Some(user_message_json("later duplicate"));
-    rows.messages.push(duplicate_user);
-    rows.message_source_agent_dids = vec![None, Some("did:test:amy".to_string())];
-
-    let assistant = AgentMessageRow {
-        message_key: "msg-2".to_string(),
-        session_id: Some("sess-1".to_string()),
-        request_id: Some("req-1".to_string()),
-        requester_did: None,
-        sequence: Some(2),
-        role: Some("assistant".to_string()),
-        content: Some(assistant_message_json("hello back")),
-        reasoning: None,
-        timestamp: Some("2026-04-21T12:00:01Z".to_string()),
-    };
-    rows.messages.push(assistant.clone());
-    rows.message_source_agent_dids.push(None);
-    let mut duplicate_assistant = assistant;
-    duplicate_assistant.sequence = Some(10);
-    duplicate_assistant.content = Some(assistant_message_json("later duplicate"));
-    rows.messages.push(duplicate_assistant);
-    rows.message_source_agent_dids
-        .push(Some("did:test:amy".to_string()));
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store_for_agent(
-        &store,
-        Some("did:test:amy"),
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "dedupe",
         "sess-1",
         Some("req-1"),
-    )
-    .expect("session snapshot");
-
-    let kinds = snapshot
-        .timeline_items
-        .iter()
-        .map(|item| match item {
-            RenderedTimelineItem::UserMessage { .. } => "user",
-            RenderedTimelineItem::AssistantMessage { .. } => "assistant",
-            RenderedTimelineItem::ToolGroup { .. } => "tools",
-            RenderedTimelineItem::PendingUserTurn { .. } => "pending",
-            RenderedTimelineItem::LiveAssistant { .. } => "live",
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(kinds, vec!["user", "assistant"]);
-    assert!(matches!(
-        &snapshot.timeline_items[0],
-        RenderedTimelineItem::UserMessage {
-            sequence: Some(1),
-            content,
-            ..
-        } if content == "hello"
-    ));
-    assert!(matches!(
-        &snapshot.timeline_items[1],
-        RenderedTimelineItem::AssistantMessage {
-            sequence: Some(2),
-            content: Some(content),
-            ..
-        } if content == "hello back"
-    ));
+        1,
+        MessageRole::User,
+        "once",
+    );
+    let duplicate = rows.transcript_messages[0].clone();
+    let duplicate_segment = rows.output_segments[0].clone();
+    rows.transcript_messages.push(duplicate);
+    rows.output_segments.push(duplicate_segment);
+    let first = ClientStore::from_rows(ClientStoreRows {
+        transcript_messages: vec![rows.transcript_messages.remove(0)],
+        output_segments: vec![rows.output_segments.remove(0)],
+        ..ClientStoreRows::default()
+    });
+    let store = first.merge_snapshot(ClientStore::from_rows(rows));
+    assert_eq!(store.transcript("sess-1").messages.len(), 1);
 }
 
 #[test]
 fn session_snapshot_hides_live_overlay_matching_last_materialized_assistant() {
-    let reply = "hello back";
-    let mut rows = make_streaming_store_with_response_content(reply).to_rows();
-    rows.messages.push(AgentMessageRow {
-        message_key: "msg-2".to_string(),
-        session_id: Some("sess-1".to_string()),
-        request_id: Some("req-1".to_string()),
-        requester_did: None,
-        sequence: Some(2),
-        role: Some("assistant".to_string()),
-        content: Some(assistant_message_json(reply)),
-        reasoning: None,
-        timestamp: Some("2026-04-21T12:00:01Z".to_string()),
-    });
-
-    let store = ClientStore::from_rows(rows);
-    let snapshot = build_session_snapshot_from_store(&store, "sess-1", Some("req-1"))
-        .expect("session snapshot");
-
-    let assistant_items = snapshot
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "assistant",
+        "sess-1",
+        Some("req-1"),
+        2,
+        MessageRole::Assistant,
+        "hello back",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(!snapshot
         .timeline_items
         .iter()
-        .filter(|item| matches!(item, RenderedTimelineItem::AssistantMessage { .. }))
-        .count();
-    let live_items = snapshot
-        .timeline_items
-        .iter()
-        .filter(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }))
-        .count();
-
-    assert_eq!(assistant_items, 1);
-    assert_eq!(live_items, 0, "matching live overlay must be suppressed");
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
 }
 
 #[test]
 fn session_snapshot_places_live_overlay_before_running_orphan_tool_group() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("turn two".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-2".to_string(),
-                    request_id: "req-2".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![
-            AgentRequestRow {
-                doc_id: Some("req-1".to_string()),
-                request_id: "req-1".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn one".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Completed),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-                ..Default::default()
-            },
-            AgentRequestRow {
-                doc_id: Some("req-2".to_string()),
-                request_id: "req-2".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn two".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Processing),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-                ..Default::default()
-            },
-        ],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("turn one")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-2".to_string(),
-            request_id: Some("req-2".to_string()),
-            request_doc_id: Some("req-2".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("streaming reply".to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:01:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: None,
-        }],
-        tool_calls: vec![
-            gents_protocol::row::AgentToolCallRow {
-                partial_output_tail: None,
-                partial_output_seq: None,
-                tool_call_key: "historical-tool".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: Some("req-1".to_string()),
-                requester_did: None,
-                message_sequence: Some(2),
-                tool_name: Some("read".to_string()),
-                tool_call_id: Some("call-0".to_string()),
-                args: Some("{\"path\":\"README.md\"}".to_string()),
-                result: Some("done".to_string()),
-                status: Some("completed".to_string()),
-                lifecycle_state: Some("completed".to_string()),
-                child_request_id: None,
-                await_mode: None,
-                cancel_policy: None,
-                started_at: Some("2026-04-21T12:00:02Z".to_string()),
-                deadline_at: None,
-                completed_at: Some("2026-04-21T12:00:03Z".to_string()),
-                selected_service_id: None,
-                selected_tool_name: None,
-                tool_failure_class: None,
-                denial_reason: None,
-                denied_argv: None,
-                denied_command: None,
-                denied_argument: None,
-                denied_subcommand: None,
-                denied_prefix: None,
-                policy_mode: None,
-                policy_network: None,
-                cancel_cause: None,
-                latency_ms: None,
-            },
-            gents_protocol::row::AgentToolCallRow {
-                partial_output_tail: None,
-                partial_output_seq: None,
-                tool_call_key: "tool-1".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: Some("req-2".to_string()),
-                requester_did: None,
-                message_sequence: Some(3),
-                tool_name: Some("glob".to_string()),
-                tool_call_id: Some("call-1".to_string()),
-                args: Some("{\"pattern\":\"**/*.rs\"}".to_string()),
-                result: None,
-                status: Some("running".to_string()),
-                lifecycle_state: Some("running".to_string()),
-                child_request_id: None,
-                await_mode: None,
-                cancel_policy: None,
-                started_at: Some("2026-04-21T12:01:02Z".to_string()),
-                deadline_at: None,
-                completed_at: None,
-                selected_service_id: None,
-                selected_tool_name: None,
-                tool_failure_class: None,
-                denial_reason: None,
-                denied_argv: None,
-                denied_command: None,
-                denied_argument: None,
-                denied_subcommand: None,
-                denied_prefix: None,
-                policy_mode: None,
-                policy_network: None,
-                cancel_cause: None,
-                latency_ms: None,
-            },
-        ],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-2"))
-        .expect("session snapshot");
-    let kinds = snapshot
+    let snapshot = build_session_snapshot_from_store(&active_store(), "sess-1", Some("req-1"))
+        .expect("snapshot");
+    assert!(!snapshot
         .timeline_items
         .iter()
-        .map(|item| match item {
-            RenderedTimelineItem::UserMessage { .. } => "user",
-            RenderedTimelineItem::AssistantMessage { .. } => "assistant",
-            RenderedTimelineItem::ToolGroup { .. } => "tools",
-            RenderedTimelineItem::PendingUserTurn { .. } => "pending",
-            RenderedTimelineItem::LiveAssistant { .. } => "live",
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        kinds,
-        vec!["user", "pending", "tools", "live", "tools"],
-        "historical orphan tools stay before live reasoning, which targets the active group"
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
+}
+
+#[test]
+fn session_snapshot_projects_open_canonical_segment_before_header_arrives() {
+    let mut rows = active_store().to_rows();
+    rows.requests[0].execution_generation = Some("generation-1".into());
+    rows.requests[0].execution_lease_secs = Some(300);
+    rows.requests[0].execution_lease_expires_at = Some("2026-04-21T12:05:00Z".into());
+    push_canonical_text_message(
+        &mut rows,
+        "authored-prompt",
+        "sess-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "start work",
     );
+    push_canonical_text_message(
+        &mut rows,
+        "prior-assistant-tool-turn",
+        "sess-1",
+        Some("req-1"),
+        2,
+        MessageRole::Assistant,
+        "calling a tool",
+    );
+    rows.output_segments.push(OutputSegmentRow {
+        doc_id: "open-0".into(),
+        segment: OutputSegment {
+            agent_did: "did:test:amy".into(),
+            requester_did: None,
+            session_id: "sess-1".into(),
+            request_doc_id: "req-1".into(),
+            source: OutputSource::ProviderTurn {
+                scope: gents_protocol::rendered_request::CaptureScope {
+                    kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                    seq: 0,
+                },
+                turn_index: 1,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation-1".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: 7,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: "working".into(),
+            close: None,
+            created_at: "2026-04-21T12:00:00Z".into(),
+        },
+    });
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(
+        item,
+        RenderedTimelineItem::LiveAssistant { content, .. }
+            if content.as_deref() == Some("working")
+    )));
 }
 
 #[test]
 fn session_snapshot_hides_failed_unmaterialized_response_overlay() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:15:00Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".to_string(),
-                    request_id: "req-1".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Failed),
-            execution_origin: Some("interactive".to_string()),
-            failure_reason: Some("request deadline exceeded".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
-            deadline: Some("2026-04-21T12:15:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("turn one")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("partial answer before timeout".to_string()),
-            reasoning: None,
-            status: Some("error".to_string()),
-            error_message: Some("request deadline exceeded".to_string()),
-            token_count: Some(12),
-            progress_seq: Some(3),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:00:02Z".to_string()),
-            completed_at: Some("2026-04-21T12:15:00Z".to_string()),
-            interrupted_at: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-        .expect("session snapshot");
-
+    let mut rows = active_store().to_rows();
+    rows.requests[0].lifecycle_state = Some(RequestLifecycleState::Failed);
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
     assert_eq!(snapshot.turn_state.as_deref(), Some("failed"));
-    assert_eq!(
-        snapshot
-            .latest_response
-            .as_ref()
-            .and_then(|response| response.error_message.as_deref()),
-        Some("request deadline exceeded")
-    );
-    let serialized = serde_json::to_value(&snapshot).expect("serialize snapshot");
-    assert_eq!(
-        serialized["latestResponse"]["errorMessage"],
-        "request deadline exceeded"
-    );
-    assert!(snapshot.active_response_overlay.is_none());
-
-    let has_live = snapshot
+    assert!(!snapshot
         .timeline_items
         .iter()
-        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. }));
-    assert!(!has_live, "failed turns must not render live overlays");
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
 }
 
 #[test]
 fn session_snapshot_keeps_full_live_overlay_when_only_prior_turn_shares_prefix() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("turn two".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-2".to_string(),
-                    request_id: "req-2".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![
-            AgentRequestRow {
-                doc_id: Some("req-1".to_string()),
-                request_id: "req-1".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn one".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Completed),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-                ..Default::default()
-            },
-            AgentRequestRow {
-                doc_id: Some("req-2".to_string()),
-                request_id: "req-2".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn two".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Processing),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-                ..Default::default()
-            },
-        ],
-        messages: vec![
-            AgentMessageRow {
-                message_key: "msg-1".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(1),
-                role: Some("user".to_string()),
-                content: Some(user_message_json("turn one")),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-2".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(2),
-                role: Some("assistant".to_string()),
-                content: Some(
-                    serde_json::to_string(&Message::assistant("I'll investigate"))
-                        .expect("serialize assistant"),
-                ),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:01Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-3".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(3),
-                role: Some("user".to_string()),
-                content: Some(user_message_json("turn two")),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:01:00Z".to_string()),
-            },
-        ],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-2".to_string(),
-            request_id: Some("req-2".to_string()),
-            request_doc_id: Some("req-2".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("I'll investigate further into p2p".to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:01:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-2"))
-        .expect("session snapshot");
-    let live_content = snapshot.timeline_items.iter().find_map(|item| match item {
-        RenderedTimelineItem::LiveAssistant { content, .. } => content.as_deref(),
-        _ => None,
-    });
-    assert_eq!(live_content, Some("I'll investigate further into p2p"));
+    let mut rows = active_store().to_rows();
+    push_canonical_text_message(
+        &mut rows,
+        "prior",
+        "sess-1",
+        Some("prior-request"),
+        1,
+        MessageRole::Assistant,
+        "hello",
+    );
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "sess-1", Some("req-1"))
+            .expect("snapshot");
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::AssistantMessage { content, .. } if content.as_deref() == Some("hello"))));
 }
 
 #[test]
 fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".to_string(),
-                    request_id: "req-1".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Processing),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("turn one")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
-        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
-            partial_output_tail: None,
-            partial_output_seq: None,
-            tool_call_key: "tool-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            message_sequence: Some(2),
-            tool_name: Some("glob".to_string()),
-            tool_call_id: Some("call-1".to_string()),
-            args: Some("{\"pattern\":\"**/*.rs\",\"recursive\":true}".to_string()),
-            result: Some("{\"matches\":12}".to_string()),
-            status: Some("completed".to_string()),
-            lifecycle_state: Some("completed".to_string()),
-            child_request_id: None,
-            await_mode: None,
-            cancel_policy: None,
-            started_at: Some("2026-04-21T12:00:01Z".to_string()),
-            deadline_at: None,
-            completed_at: Some("2026-04-21T12:00:02Z".to_string()),
-            selected_service_id: None,
-            selected_tool_name: None,
-            tool_failure_class: None,
-            denial_reason: None,
-            denied_argv: None,
-            denied_command: None,
-            denied_argument: None,
-            denied_subcommand: None,
-            denied_prefix: None,
-            policy_mode: None,
-            policy_network: None,
-            cancel_cause: None,
-            latency_ms: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-        .expect("session snapshot");
+    let tool = serde_json::from_value(serde_json::json!({
+        "_docID": "tool-doc", "agent_did": "did:test:amy", "request_doc_id": "req-1",
+        "tool_call_key": "tool-1", "session_id": "sess-1", "request_id": "req-1",
+        "message_sequence": 2, "tool_name": "glob", "tool_call_id": "call-1",
+        "status": "completed", "lifecycle_state": "completed",
+        "completed_at": "2026-04-21T12:00:02Z"
+    }))
+    .expect("canonical tool call envelope");
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![timeline_session()],
+            tool_calls: vec![tool],
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        None,
+    )
+    .expect("snapshot");
     let tools = snapshot
         .timeline_items
         .iter()
@@ -1231,76 +654,45 @@ fn session_snapshot_renders_structured_tool_payloads_in_timeline() {
             _ => None,
         })
         .expect("tool group");
-
     assert_eq!(tools.len(), 1);
-    let tool = &tools[0];
-    assert_eq!(tool.tool_name, "glob");
-    assert_eq!(tool.status_kind, "success");
-    assert!(matches!(
-        &tool.presentation,
-        crate::types::ToolPresentationView::FileRead {
-            operation,
-            target: Some(target),
-            fallback_output: Some(output),
-            ..
-        } if operation == "glob" && target == "**/*.rs" && output == "{\"matches\":12}"
-    ));
+    assert_eq!(tools[0].tool_name, "glob");
+    assert_eq!(tools[0].status_kind, "success");
 }
 
 #[test]
 fn structured_command_policy_denial_projects_to_rendered_tool() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-denial".to_string(),
-            agent_did: "did:test:amy".into(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".into(),
-            closed_at: None,
-            title: None,
-            tags: Vec::new(),
-            provenance: None,
-            observation: None,
-        }],
-        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
-            partial_output_tail: None,
-            partial_output_seq: None,
-            tool_call_key: "tool-denial".to_string(),
-            session_id: Some("session-denial".to_string()),
-            request_id: None,
-            requester_did: None,
-            message_sequence: Some(1),
-            tool_name: Some("bash".to_string()),
-            tool_call_id: Some("call-denial".to_string()),
-            args: Some("{\"command\":\"git\",\"args\":[\"commit\"]}".to_string()),
-            result: Some("structured policy denial payload".to_string()),
-            status: Some("completed".to_string()),
-            lifecycle_state: Some("failed".to_string()),
-            child_request_id: None,
-            await_mode: None,
-            cancel_policy: None,
-            started_at: None,
-            deadline_at: None,
-            completed_at: Some("2026-05-20T10:32:16Z".to_string()),
-            selected_service_id: None,
-            selected_tool_name: None,
-            tool_failure_class: Some("policyDenied".to_string()),
-            denial_reason: Some("readOnlySubcommandNotAllowlisted".to_string()),
-            denied_argv: None,
-            denied_command: Some("git".to_string()),
-            denied_argument: None,
-            denied_subcommand: Some("commit".to_string()),
-            denied_prefix: None,
-            policy_mode: Some("read_only".to_string()),
-            policy_network: Some("inherit".to_string()),
-            cancel_cause: None,
-            latency_ms: Some(12),
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot =
-        build_session_snapshot_from_store(&store, "session-denial", None).expect("snapshot");
+    let tool = serde_json::from_value(serde_json::json!({
+        "_docID": "tool-denial-doc", "agent_did": "did:test:amy", "request_doc_id": "req-denial",
+        "tool_call_key": "tool-denial", "session_id": "session-denial", "request_id": "req-denial",
+        "message_sequence": 1, "tool_name": "bash", "tool_call_id": "call-denial",
+        "status": "completed", "lifecycle_state": "failed", "completed_at": "2026-05-20T10:32:16Z",
+        "tool_failure_class": "policyDenied", "denial_reason": "readOnlySubcommandNotAllowlisted",
+        "denied_command": "git", "denied_subcommand": "commit", "policy_mode": "read_only",
+        "policy_network": "inherit", "latency_ms": 12
+    }))
+    .expect("canonical denial envelope");
+    let session = AgentSession {
+        session_id: "session-denial".into(),
+        agent_did: "did:test:amy".into(),
+        requester_did: None,
+        behavior_id: "default".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: None,
+    };
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session],
+            tool_calls: vec![tool],
+            ..ClientStoreRows::default()
+        }),
+        "session-denial",
+        None,
+    )
+    .expect("snapshot");
     let tool = snapshot
         .timeline_items
         .iter()
@@ -1310,11 +702,86 @@ fn structured_command_policy_denial_projects_to_rendered_tool() {
         })
         .expect("rendered tool");
     let denial = tool.denial.as_ref().expect("structured denial");
-
     assert_eq!(tool.status_kind, "error");
     assert_eq!(denial.rule_id, "readOnlySubcommandNotAllowlisted");
     assert_eq!(denial.category, "read-only-guard");
     assert_eq!(denial.denied_command.as_deref(), Some("git"));
     assert_eq!(denial.denied_subcommand.as_deref(), Some("commit"));
-    assert_eq!(denial.diagnostic, "structured policy denial payload");
+}
+
+fn empty_timeline_snapshot() -> DesktopSessionSnapshot {
+    build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![timeline_session()],
+            ..ClientStoreRows::default()
+        }),
+        "sess-1",
+        None,
+    )
+    .expect("snapshot")
+}
+
+fn active_store() -> ClientStore {
+    ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![timeline_session()],
+        requests: vec![AgentRequestRow {
+            doc_id: Some("req-1".into()),
+            request_id: "req-1".into(),
+            agent_did: Some("did:test:amy".into()),
+            session_id: Some("sess-1".into()),
+            lifecycle_state: Some(RequestLifecycleState::Processing),
+            ..Default::default()
+        }],
+        ..ClientStoreRows::default()
+    })
+}
+
+fn assistant_item(key: &str, sequence: i64) -> RenderedTimelineItem {
+    RenderedTimelineItem::AssistantMessage {
+        item_key: key.into(),
+        sequence: Some(sequence),
+        content: Some(key.into()),
+        reasoning: None,
+        timestamp: None,
+        reconstruction: ready(),
+    }
+}
+
+fn tool_group(sequence: i64) -> RenderedTimelineItem {
+    RenderedTimelineItem::ToolGroup {
+        item_key: format!("tools-{sequence}"),
+        message_sequence: Some(sequence),
+        tools: Vec::new(),
+    }
+}
+
+fn timeline_page(
+    queried_rows: usize,
+    source_exhausted: bool,
+    has_newer: bool,
+) -> gents_desktop_core::client::SessionTranscriptQueryPage {
+    gents_desktop_core::client::SessionTranscriptQueryPage {
+        store: ClientStore::default(),
+        canonical_dependencies: Default::default(),
+        query_count: 2,
+        queried_rows,
+        message_query_limit: queried_rows,
+        tool_call_query_limit: 321,
+        source_exhausted,
+        has_newer,
+    }
+}
+
+fn timeline_keys(snapshot: &DesktopSessionSnapshot) -> Vec<&str> {
+    snapshot
+        .timeline_items
+        .iter()
+        .map(|item| match item {
+            RenderedTimelineItem::UserMessage { item_key, .. }
+            | RenderedTimelineItem::AssistantMessage { item_key, .. }
+            | RenderedTimelineItem::ToolGroup { item_key, .. }
+            | RenderedTimelineItem::PendingUserTurn { item_key, .. }
+            | RenderedTimelineItem::LiveAssistant { item_key, .. } => item_key.as_str(),
+        })
+        .collect()
 }

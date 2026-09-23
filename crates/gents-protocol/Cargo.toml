@@ -19,6 +19,7 @@ typescript = ["dep:ts-rs"]
 [dependencies]
 ts-rs = { version = "10.1", optional = true, default-features = false, features = ["serde-compat", "no-serde-warnings"] }
 anyhow = { workspace = true }
+base64.workspace = true
 bs58 = "0.5"
 chrono = { workspace = true }
 ciborium = "0.2"

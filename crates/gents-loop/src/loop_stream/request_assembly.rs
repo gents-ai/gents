@@ -379,7 +379,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         TurnCompactionOutcome::CannotFit => {
             return Err(StreamingError::Completion(CompletionError::RequestError(
                 Box::new(crate::compaction::ReductionError::CannotFit),
-            )))
+            )));
         }
     };
     let compacted_prompt = compacted.pop().ok_or_else(|| {

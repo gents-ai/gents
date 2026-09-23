@@ -1,5 +1,12 @@
 //! Read-only queries for tool-call lifecycle reconstruction.
 
+mod accepted;
+mod result;
+pub use result::{
+    load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
+    render_tool_result, CanonicalToolCallPresentation,
+};
+
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
@@ -12,11 +19,6 @@ use super::{
     AwaitMode, CancelCause, CancelPolicy, FailureClass, SelectedToolIdentity, ToolCallLifecycle,
     ToolCallState,
 };
-
-#[derive(Debug, Clone, Deserialize)]
-struct ToolCallResultRow {
-    result: String,
-}
 
 fn decode_selected_tool_identity(
     service_id: Option<String>,
@@ -39,55 +41,6 @@ fn decode_selected_tool_identity(
     }
 }
 
-/// Load the persisted result string for a tool call identified by
-/// `session_id` + `tool_call_id`. Returns an error if the row is absent.
-pub async fn load_tool_call_result(
-    node: &EmbeddedNode,
-    session_id: &str,
-    tool_call_id: &str,
-) -> Result<String> {
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_tool_call_id = escape_graphql_string(tool_call_id);
-    let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    tool_call_key: {{ _eq: "{tool_call_key}" }}
-                }},
-                limit: 1
-            ) {{
-                result
-            }}
-        }}"#
-    );
-
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading tool call result for session_id={} tool_call_id={}: {:?}",
-            session_id,
-            tool_call_id,
-            resp.errors
-        );
-    }
-
-    let mut rows: Vec<ToolCallResultRow> = match resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-    {
-        Some(value) => serde_json::from_value(value.clone())?,
-        None => Vec::new(),
-    };
-
-    rows.pop().map(|row| row.result).ok_or_else(|| {
-        anyhow::anyhow!(
-            "loading tool call result: no AgentToolCall for session_id={session_id} tool_call_id={tool_call_id}"
-        )
-    })
-}
-
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
     #[serde(rename = "_docID")]
@@ -104,7 +57,6 @@ struct ToolCallRow {
     requester_did: Option<String>,
     message_sequence: u32,
     tool_name: String,
-    args: String,
     lifecycle_state: Option<String>,
     started_at: Option<String>,
     #[serde(default)]
@@ -117,7 +69,10 @@ struct ToolCallRow {
     await_mode: Option<String>,
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
+    #[serde(default)]
+    spawned_by_tool_call_doc_id: Option<String>,
     spawn_target_did: Option<String>,
+    spawn_behavior_id: Option<String>,
     unclaimed_deadline_at: Option<String>,
 }
 
@@ -159,7 +114,6 @@ impl ToolCallLifecycle {
                     requester_did
                     message_sequence
                     tool_name
-                    args
                     lifecycle_state
                     started_at
                     deadline_at
@@ -170,7 +124,9 @@ impl ToolCallLifecycle {
                     await_mode
                     cancel_policy
                     child_request_id
+                    spawned_by_tool_call_doc_id
                     spawn_target_did
+                    spawn_behavior_id
                     unclaimed_deadline_at
         }}}}"#
         );
@@ -195,6 +151,47 @@ impl ToolCallLifecycle {
         let Some(row) = rows.pop() else {
             return Ok(None);
         };
+
+        let owner = row
+            .agent_did
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("AgentToolCall is missing agent_did"))?;
+        let spawned_by_tool_call_doc_id = row
+            .spawned_by_tool_call_doc_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned);
+        let admission_doc_id = spawned_by_tool_call_doc_id
+            .as_deref()
+            .unwrap_or(&row.doc_id);
+        let accepted = Self::load_direct_binding(
+            node.as_ref(),
+            admission_doc_id,
+            owner,
+            &row.session_id,
+            row.requester_did.as_deref(),
+            false,
+        )
+        .await?;
+
+        if let Some(parent_doc_id) = spawned_by_tool_call_doc_id.as_deref() {
+            anyhow::ensure!(
+                parent_doc_id != row.doc_id
+                    && row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
+                    && row.message_sequence == accepted.message_sequence
+                    && accepted.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+                "spawned lifecycle has incoherent accepted-parent provenance"
+            );
+        } else {
+            anyhow::ensure!(
+                row.request_doc_id.as_deref() == Some(accepted.request_doc_id.as_str())
+                    && row.message_sequence == accepted.message_sequence
+                    && row.tool_call_id == accepted.id
+                    && row.tool_name == accepted.tool_name,
+                "tool lifecycle changed while resolving its publication; retry the scoped read"
+            );
+        }
 
         let state = row
             .lifecycle_state
@@ -238,7 +235,14 @@ impl ToolCallLifecycle {
             .ok_or_else(|| anyhow!("AgentToolCall is missing a valid cancel_policy"))?;
 
         let child_request_id = row.child_request_id.filter(|s| !s.is_empty());
+        if spawned_by_tool_call_doc_id.is_some() {
+            anyhow::ensure!(
+                await_mode == AwaitMode::Background && child_request_id.is_none(),
+                "spawned lifecycle must be childless background work"
+            );
+        }
         let spawn_target_did = row.spawn_target_did.filter(|s| !s.is_empty());
+        let spawn_behavior_id = row.spawn_behavior_id.filter(|s| !s.is_empty());
         let unclaimed_deadline_at = row
             .unclaimed_deadline_at
             .as_deref()
@@ -247,10 +251,41 @@ impl ToolCallLifecycle {
         let selected_tool_identity =
             decode_selected_tool_identity(row.selected_service_id, row.selected_tool_name)?;
 
-        let request_id = row
-            .request_id
+        // The publication binds a physical request, not a session-relative
+        // logical ID. Resolve that exact request for existing lifecycle APIs.
+        let scope = crate::session::session_scope_filter(
+            owner,
+            &row.session_id,
+            row.requester_did.as_deref(),
+        );
+        let request_doc = escape_graphql_string(&accepted.request_doc_id);
+        let request_response = node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ {scope}, _docID: {{ _eq: "{request_doc}" }} }}, limit: 2) {{ request_id }} }}"#
+        )).await;
+        anyhow::ensure!(
+            !request_response.has_errors(),
+            "tool owner request lookup failed: {:?}",
+            request_response.errors
+        );
+        let requests = request_response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| anyhow!("tool owner request lookup omitted rows"))?;
+        anyhow::ensure!(
+            requests.len() == 1,
+            "tool owner request is missing or ambiguous"
+        );
+        let request_id = requests[0]["request_id"]
+            .as_str()
             .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| anyhow!("AgentToolCall is missing request_id"))?;
+            .ok_or_else(|| anyhow!("tool owner request is missing logical request_id"))?
+            .to_owned();
+        anyhow::ensure!(
+            row.request_id.as_deref().is_none_or(|id| id == request_id),
+            "tool logical request ID conflicts with physical owner"
+        );
         let agent_did = row
             .agent_did
             .filter(|value| !value.trim().is_empty())
@@ -267,9 +302,21 @@ impl ToolCallLifecycle {
             // silently rehydrate the lifecycle as unrouted.
             requester_did: row.requester_did,
             tool_call_id: row.tool_call_id,
+            call_id: if spawned_by_tool_call_doc_id.is_none() {
+                accepted.call_id.clone()
+            } else {
+                None
+            },
             message_sequence: row.message_sequence,
             tool_name: row.tool_name,
-            args: row.args,
+            accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
+            arguments: if spawned_by_tool_call_doc_id.is_none() {
+                Some(accepted.arguments.clone())
+            } else {
+                None
+            },
+            execution_generation: Some(accepted.execution_generation),
+            spawned_by_tool_call_doc_id,
             doc_id: Some(row.doc_id),
             deadline_at,
             state,
@@ -281,6 +328,7 @@ impl ToolCallLifecycle {
             cancel_policy,
             child_request_id,
             spawn_target_did,
+            spawn_behavior_id,
             unclaimed_deadline_at,
         }))
     }
@@ -289,6 +337,10 @@ impl ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+    use crate::streaming::DefraStreamWriter;
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+    use std::time::Duration;
 
     #[test]
     fn selected_tool_identity_is_an_atomic_pair() {
@@ -315,10 +367,51 @@ mod tests {
         }
     }
 
+    /// Canonical claimed-request fixture, mirroring
+    /// `tool_call_lifecycle::delivery::claimed_request`, with the coordinator
+    /// route key this load test exercises.
+    async fn claimed_request(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+        session_id: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+    ) -> RequestLifecycle {
+        let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let request_id = crate::graphql::escape_graphql_string(request_id);
+        let session_id = crate::graphql::escape_graphql_string(session_id);
+        let agent_did = crate::graphql::escape_graphql_string(agent_did);
+        let requester_did_field = crate::session::requester_did_create_field(requester_did);
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "query fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0, {requester_did_field} }}) {{ _docID }} }}"#)).await;
+        assert!(!created.has_errors(), "{:#?}", created.errors);
+        let row = node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        )).await;
+        let row: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&row, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            "general",
+            &agent_did,
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+        lifecycle
+    }
+
     #[tokio::test]
     async fn load_preserves_requester_route_and_selected_tool_identity() {
+        let data_path = std::env::temp_dir().join(format!(
+            "agent-tool-call-query-route-{}",
+            uuid::Uuid::new_v4()
+        ));
         let node = Arc::new(
             defra_node::EmbeddedNode::builder()
+                .data_path(&data_path)
                 .build()
                 .await
                 .expect("embedded node"),
@@ -326,23 +419,72 @@ mod tests {
         crate::ensure_runtime_schemas(node.as_ref())
             .await
             .expect("runtime schemas");
-        let mut lifecycle = ToolCallLifecycle::new(
-            node.clone(),
-            "request-routed".to_string(),
-            "session-routed".to_string(),
-            "did:test:host".to_string(),
-            "tool-call-routed".to_string(),
-            1,
-            "test_tool".to_string(),
-            "{}".to_string(),
-            chrono::Utc::now() + chrono::Duration::minutes(5),
+
+        let agent_did = "did:test:host";
+        let mut request = claimed_request(
+            &node,
+            "request-routed",
+            "session-routed",
+            agent_did,
+            Some("did:test:coordinator"),
         )
-        .with_requester_did(Some("did:test:coordinator".to_string()))
-        .with_selected_tool_identity(Some((
-            "metrics-prod".to_string(),
-            "query_metrics".to_string(),
-        )));
-        lifecycle.start_running().await.expect("persist tool call");
+        .await;
+        let writer = DefraStreamWriter::new(node.clone(), agent_did, Duration::from_millis(1));
+        request
+            .begin_owned_execution(&writer)
+            .await
+            .expect("owned execution");
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                0,
+                0,
+                "inference.1".parse().unwrap(),
+            )
+            .await;
+        let arguments = serde_json::json!({
+            "service_id": "metrics-prod",
+            "tool_name": "query_metrics",
+            "arguments": {},
+        });
+        let message = Message::Assistant {
+            id: Some("routed-provider-message".into()),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: "tool-call-routed".into(),
+                call_id: Some("routed-provider-call".into()),
+                function: ToolFunction::new("call_tool".into(), arguments.clone()),
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        let mut published = writer
+            .publish_native_turn(&request, 0, 0, &message)
+            .await
+            .expect("canonical publication accepted call_tool");
+        let accepted = published
+            .accepted_tools
+            .pop()
+            .expect("accepted native tool call");
+        let deadline = request
+            .claimed_deadline_at()
+            .expect("claimed request deadline");
+        let selected = crate::meta_tools::selected_tool_identity(
+            "call_tool",
+            &serde_json::to_string(&arguments).expect("arguments text"),
+        )
+        .expect("call_tool carries a selected tool identity");
+        let mut lifecycle = ToolCallLifecycle::from_accepted(
+            node.clone(),
+            agent_did.to_string(),
+            Some("did:test:coordinator".to_string()),
+            accepted,
+            deadline,
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+        )
+        .expect("accepted lifecycle")
+        .with_selected_tool_identity(Some(selected));
+        lifecycle.start_running().await.expect("dispatch tool call");
 
         let loaded = ToolCallLifecycle::load(node.clone(), "session-routed", "tool-call-routed")
             .await
@@ -357,6 +499,7 @@ mod tests {
         assert_eq!(selected.service_id, "metrics-prod");
         assert_eq!(selected.tool_name, "query_metrics");
         node.shutdown().await;
+        let _ = std::fs::remove_dir_all(&data_path);
     }
 }
 

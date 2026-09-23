@@ -85,6 +85,7 @@ fn base_admission_observation(
         signer_matches_target: false,
         signer_matches_issuer: false,
         requester_matches_issuer: false,
+        requester_matches_bridge_author: false,
         current_approval: false,
         exact_generation: false,
         authorization_fresh: false,
@@ -408,16 +409,27 @@ impl AgentRequestAdmissionVerifier {
                     issuer.is_some() && source.is_some() && admission.runtime_source_kind.is_some();
                 observation.signer_matches_issuer = issuer == Some(&admission.signer_did);
                 observation.requester_matches_issuer = row.requester_did.as_deref() == issuer;
+                observation.requester_matches_bridge_author = admission
+                    .runtime_bridge_author_did
+                    .as_deref()
+                    .filter(|did| !did.trim().is_empty())
+                    .is_some_and(|did| row.requester_did.as_deref() == Some(did));
                 observation.signer_matches_target =
                     row.agent_did.as_deref() == Some(admission.signer_did.as_str());
                 observation.requester_matches_target =
                     row.requester_did.as_deref() == row.agent_did.as_deref();
                 observation.target_runtime_attestation_valid = issuer == row.agent_did.as_deref();
+                let requester_matches_source = if observation.runtime_source_kind
+                    == RuntimeInternalSourceKind::CrossPrincipalChild
+                {
+                    observation.requester_matches_bridge_author
+                } else {
+                    observation.requester_matches_issuer && observation.requester_matches_target
+                };
                 if !observation.runtime_evidence_present
                     || !observation.signer_matches_issuer
-                    || !observation.requester_matches_issuer
                     || !observation.signer_matches_target
-                    || !observation.requester_matches_target
+                    || !requester_matches_source
                     || !observation.target_runtime_attestation_valid
                 {
                     require_admitted_observation(observation, None)?;
@@ -425,7 +437,7 @@ impl AgentRequestAdmissionVerifier {
                 }
                 if let (Some(source), Some(source_kind)) = (source, admission.runtime_source_kind) {
                     match verify_runtime_source_binding(
-                        self.node.as_ref(),
+                        self.node.clone(),
                         self.peer_admission.as_ref(),
                         &row,
                         source,
@@ -460,7 +472,7 @@ impl AgentRequestAdmissionVerifier {
                         }
                         Err(AgentRequestAdmissionError::Denied(error)) => denied = Some(error),
                         Err(error @ AgentRequestAdmissionError::Unavailable(_)) => {
-                            return Err(error)
+                            return Err(error);
                         }
                     }
                 }
@@ -552,19 +564,26 @@ fn request_workspace(row: &AgentRequestRow) -> crate::lifecycle::WorkspaceLineag
     }
 }
 
-fn verify_bridge_workspace(row: &AgentRequestRow, args: &str) -> AdmissionResult<()> {
-    // The caller has authenticated the exact physical bridge and author. Decode
-    // the existing tuple without introducing an unsigned owner lookup fallback.
-    let source: crate::lifecycle::WorkspaceLineage = serde_json::from_str(args)
-        .context("decode authenticated bridge workspace")
-        .map_err(AgentRequestAdmissionError::denied)?;
-    request_workspace(row)
+fn verify_delegated_workspace(
+    child: &AgentRequestRow,
+    source: Option<&gents_protocol::output::DelegatedWorkspace>,
+) -> AdmissionResult<()> {
+    let source = match source {
+        Some(source) => crate::lifecycle::WorkspaceLineage {
+            workspace_id: Some(source.workspace_id.clone()),
+            workspace_owner_agent_did: Some(source.workspace_owner_agent_did.clone()),
+            workspace_authority: Some(source.workspace_authority.clone()),
+            workspace_seal_hash: source.workspace_seal_hash.clone(),
+        },
+        None => crate::lifecycle::WorkspaceLineage::default(),
+    };
+    request_workspace(child)
         .validate_source(&source, true)
         .map_err(AgentRequestAdmissionError::denied)
 }
 
 async fn verify_runtime_source_binding(
-    node: &EmbeddedNode,
+    node: Arc<EmbeddedNode>,
     peer_admission: &dyn PeerAdmissionAuthority,
     row: &AgentRequestRow,
     source: &str,
@@ -587,7 +606,7 @@ async fn verify_runtime_source_binding(
                             "runtime-internal parent request document binding is absent"
                         ))
                     })?;
-            let parent = load_exact_parent_request(node, parent_doc_id).await?;
+            let parent = load_exact_parent_request(node.as_ref(), parent_doc_id).await?;
             deny_if(
                 parent.request_id == source && parent.agent_did == row.agent_did,
                 "runtime-internal parent document does not match local source request",
@@ -609,19 +628,20 @@ async fn verify_runtime_source_binding(
                     ))
                 })?;
             let target_name = verify_exact_parent_tool_call(
-                node,
+                node.clone(),
                 tool_doc_id,
                 tool_call_id,
                 parent_doc_id,
                 source,
+                required_row_string(parent.session_id.as_deref(), "session_id")?,
+                parent.requester_did.as_deref(),
                 required_row_string(parent.agent_did.as_deref(), "agent_did")?,
                 required_row_string(row.agent_did.as_deref(), "agent_did")?,
-                target_behavior_id,
                 row,
             )
             .await?;
             verify_exact_parent_subagent_policy(
-                node,
+                node.as_ref(),
                 parent.behavior_id.as_deref(),
                 &target_name,
                 target_behavior_id,
@@ -636,7 +656,7 @@ async fn verify_runtime_source_binding(
                 ))
             })?;
             verify_cross_principal_child_source(
-                node,
+                node.as_ref(),
                 peer_admission,
                 row,
                 source,
@@ -661,7 +681,7 @@ async fn verify_runtime_source_binding(
                             "local-control parent document binding is absent"
                         ))
                     })?;
-            let parent = load_exact_parent_request(node, parent_doc_id).await?;
+            let parent = load_exact_parent_request(node.as_ref(), parent_doc_id).await?;
             deny_if(
                 parent.request_id == source && parent.agent_did == row.agent_did,
                 "local-control parent document does not exactly own the source",
@@ -681,7 +701,7 @@ async fn verify_runtime_source_binding(
                 "automated-trigger runtime source branch is mixed or incoherent",
             )?;
             verify_automated_trigger_source(
-                node,
+                node.as_ref(),
                 row.caused_by_trigger_kind.as_deref().unwrap_or_default(),
                 source,
                 row.caused_by_trigger_doc_id.as_deref(),
@@ -749,13 +769,14 @@ async fn verify_cross_principal_child_source(
         request_doc_id: Option<String>,
         agent_did: Option<String>,
         spawn_target_did: Option<String>,
+        spawn_behavior_id: Option<String>,
         child_request_id: Option<String>,
-        args: Option<String>,
+        delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     }
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-                tool_call_id request_id request_doc_id agent_did spawn_target_did child_request_id args
+                tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id child_request_id delegated_workspace
             }} }}"#,
             escape_graphql_string(tool_doc_id),
         ))
@@ -779,21 +800,9 @@ async fn verify_cross_principal_child_source(
             && bridge.request_doc_id.as_deref() == Some(parent_doc_id)
             && bridge.agent_did.as_deref() == Some(bridge_author_did)
             && bridge.spawn_target_did.as_deref() == row.agent_did.as_deref()
+            && bridge.spawn_behavior_id.as_deref() == Some(target_behavior_id)
             && bridge.child_request_id.as_deref() == Some(row.request_id.as_str()),
         "cross-principal source bridge does not exactly own this child",
-    )?;
-    #[derive(Deserialize)]
-    struct SpawnTargetArgs {
-        behavior_id: String,
-    }
-    let args: SpawnTargetArgs = serde_json::from_str(bridge.args.as_deref().unwrap_or_default())
-        .context("parse cross-principal source bridge arguments")
-        .map_err(AgentRequestAdmissionError::denied)?;
-    deny_if(
-        args.behavior_id == target_behavior_id
-            && args.behavior_id == args.behavior_id.trim()
-            && !args.behavior_id.is_empty(),
-        "cross-principal source bridge targets another behavior",
     )?;
     let authorized = peer_admission
         .fresh_member_authorized_for_agent(
@@ -807,7 +816,7 @@ async fn verify_cross_principal_child_source(
         authorized,
         "cross-principal bridge author is no longer authorized for the target",
     )?;
-    verify_bridge_workspace(row, bridge.args.as_deref().unwrap_or_default())?;
+    verify_delegated_workspace(row, bridge.delegated_workspace.as_ref())?;
     verify_target_cross_principal_policy(
         node,
         required_row_string(row.agent_did.as_deref(), "agent_did")?,
@@ -912,14 +921,15 @@ async fn verify_target_cross_principal_policy(
 
 #[allow(clippy::too_many_arguments)]
 async fn verify_exact_parent_tool_call(
-    node: &EmbeddedNode,
+    node: Arc<EmbeddedNode>,
     tool_doc_id: &str,
     tool_call_id: &str,
     parent_doc_id: &str,
     parent_request_id: &str,
+    parent_session_id: &str,
+    parent_requester_did: Option<&str>,
     parent_agent_did: &str,
     target_agent_did: &str,
-    target_behavior_id: &str,
     child: &AgentRequestRow,
 ) -> AdmissionResult<String> {
     #[derive(Deserialize)]
@@ -929,12 +939,13 @@ async fn verify_exact_parent_tool_call(
         request_doc_id: Option<String>,
         agent_did: Option<String>,
         spawn_target_did: Option<String>,
-        args: Option<String>,
+        spawn_behavior_id: Option<String>,
+        delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     }
     let response = node
         .execute(&format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
-            tool_call_id request_id request_doc_id agent_did spawn_target_did args
+            tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id delegated_workspace
         }} }}"#,
             escape_graphql_string(tool_doc_id),
         ))
@@ -957,26 +968,50 @@ async fn verify_exact_parent_tool_call(
             && tool.request_id.as_deref() == Some(parent_request_id)
             && tool.request_doc_id.as_deref() == Some(parent_doc_id)
             && tool.agent_did.as_deref() == Some(parent_agent_did)
-            && tool.spawn_target_did.as_deref() == Some(target_agent_did),
+            && tool.spawn_target_did.as_deref() == Some(target_agent_did)
+            && tool.spawn_behavior_id.as_deref() == child.behavior_id.as_deref(),
         "runtime source tool-call document does not exactly own this child",
     )?;
+    verify_delegated_workspace(child, tool.delegated_workspace.as_ref())?;
     #[derive(Deserialize)]
     struct SpawnTargetArgs {
         #[serde(default)]
         name: Option<String>,
-        behavior_id: String,
     }
-    let args: SpawnTargetArgs = serde_json::from_str(tool.args.as_deref().unwrap_or_default())
-        .context("parse exact runtime source tool-call arguments")
-        .map_err(AgentRequestAdmissionError::denied)?;
-    let target_name = args.name.unwrap_or_else(|| args.behavior_id.clone());
+    let access = crate::config_client::ConfigAccess::Local(node.clone());
+    let matching = crate::run_timeline_fetch::load_session_tool_calls(
+        &access,
+        parent_agent_did,
+        parent_session_id,
+        parent_requester_did,
+    )
+    .await
+    .context("load canonical runtime source tool-call arguments")
+    .map_err(AgentRequestAdmissionError::unavailable)?
+    .into_iter()
+    .filter(|candidate| candidate.doc_id.as_deref() == Some(tool_doc_id))
+    .collect::<Vec<_>>();
     deny_if(
-        args.behavior_id == target_behavior_id
-            && target_name == target_name.trim()
-            && !target_name.is_empty(),
-        "runtime source tool-call target does not match child behavior",
+        matching.len() == 1,
+        "canonical runtime source tool-call binding is missing or ambiguous",
     )?;
-    verify_bridge_workspace(child, tool.args.as_deref().unwrap_or_default())?;
+    let args_json = matching[0].args.as_str();
+    deny_if(
+        !args_json.trim().is_empty(),
+        "canonical runtime source tool-call has no arguments",
+    )?;
+    let args: SpawnTargetArgs = serde_json::from_str(args_json)
+        .context("parse canonical runtime source tool-call arguments")
+        .map_err(AgentRequestAdmissionError::denied)?;
+    let target_name = args.name.ok_or_else(|| {
+        AgentRequestAdmissionError::denied(anyhow::anyhow!(
+            "canonical runtime source subagent args have no target name"
+        ))
+    })?;
+    deny_if(
+        target_name == target_name.trim() && !target_name.is_empty(),
+        "canonical runtime source tool-call target name is malformed",
+    )?;
     Ok(target_name)
 }
 
@@ -1237,7 +1272,7 @@ _docID lifecycle_state request_id agent_did requester_did behavior_id session_id
                 content input max_total_tokens
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
                 caused_by_trigger_context caused_by_source_doc_id caused_by_trigger_doc_id
-                created_at deadline execution_generation execution_lease_expires_at execution_progress_seq retry_count
+                created_at deadline execution_generation execution_lease_expires_at retry_count
                 max_retries valid_until subagent_depth caused_by_parent_request_id
                 caused_by_parent_request_doc_id caused_by_parent_tool_call_id
                 caused_by_parent_tool_call_doc_id workspace_id workspace_owner_agent_did workspace_authority

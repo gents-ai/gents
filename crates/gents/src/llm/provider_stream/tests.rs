@@ -13,18 +13,39 @@ fn response(chunks: Vec<http_client::Result<Bytes>>, status: u16) -> StreamingRe
 #[tokio::test]
 async fn provider_stream_requires_explicit_terminal_across_all_chunk_boundaries() {
     for (protocol, payload) in [
-        (ProviderStreamProtocol::ChatCompletions, "data: {\"choices\":[{\"delta\":{\"content\":\"héllo\"},\"finish_reason\":null}]}\r\n\r\ndata: [DONE]\r\n\r\n"),
-        (ProviderStreamProtocol::ChatCompletions, "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n"),
-        (ProviderStreamProtocol::ChatCompletions, "data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\n"),
-        (ProviderStreamProtocol::Responses, "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n"),
-        (ProviderStreamProtocol::Anthropic, "event: message_stop\rdata: {\"type\":\"message_stop\"}\r\r"),
+        (
+            ProviderStreamProtocol::ChatCompletions,
+            "data: {\"choices\":[{\"delta\":{\"content\":\"héllo\"},\"finish_reason\":null}]}\r\n\r\ndata: [DONE]\r\n\r\n",
+        ),
+        (
+            ProviderStreamProtocol::ChatCompletions,
+            "data: {\"choices\":[{\"finish_reason\":\"stop\"}]}\n\n",
+        ),
+        (
+            ProviderStreamProtocol::ChatCompletions,
+            "data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\n",
+        ),
+        (
+            ProviderStreamProtocol::Responses,
+            "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n",
+        ),
+        (
+            ProviderStreamProtocol::Anthropic,
+            "event: message_stop\rdata: {\"type\":\"message_stop\"}\r\r",
+        ),
     ] {
         for split in 0..=payload.len() {
-            let chunks = vec![Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])), Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..]))];
+            let chunks = vec![
+                Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
+                Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
+            ];
             let guarded = guard_response(response(chunks, 200), Some(protocol));
             assert_eq!(guarded.headers()["x-test"], "preserved");
             let result = guarded.into_body().collect::<Vec<_>>().await;
-            let actual: Vec<u8> = result.into_iter().flat_map(|item| item.expect("explicit terminal accepted")).collect();
+            let actual: Vec<u8> = result
+                .into_iter()
+                .flat_map(|item| item.expect("explicit terminal accepted"))
+                .collect();
             assert_eq!(actual, payload.as_bytes(), "split {split}");
         }
     }

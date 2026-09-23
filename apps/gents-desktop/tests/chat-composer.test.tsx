@@ -63,7 +63,7 @@ describe("ChatComposer chrome", () => {
 
   it("shows when the agent is working and why sending is blocked", () => {
     renderComposer({
-      turnState: "streaming",
+      turnState: "running",
       activityStatus: {
         kind: "working",
         label: "Agent is working…",

@@ -19,7 +19,6 @@ export type ChatTranscriptPanelProps = {
 
 export const TRANSCRIPT_PAGE_SIZE = 40;
 const TRANSCRIPT_RETAINED_ITEMS = TRANSCRIPT_PAGE_SIZE * 2;
-
 const RESPONSE_ERROR_SUMMARY = "The assistant couldn't complete this turn.";
 
 function timelineChangeSignal(items: RenderedTimelineItem[]) {
@@ -35,7 +34,7 @@ function timelineChangeSignal(items: RenderedTimelineItem[]) {
             item.reasoning?.length ?? 0,
           ];
         case "userMessage":
-          return [item.kind, item.itemKey, item.content.length];
+          return [item.kind, item.itemKey, item.content?.length ?? 0];
         case "pendingUserTurn":
           return [
             item.kind,
@@ -226,8 +225,6 @@ export function ChatTranscriptPanel({
     transcriptChange,
     timelineItems.length,
     session?.turnState,
-    session?.latestResponse?.status,
-    session?.latestResponse?.errorMessage,
   ]);
 
   useLayoutEffect(() => {
@@ -268,6 +265,23 @@ export function ChatTranscriptPanel({
     }
   }
 
+  async function handleRetry(requestId: string) {
+    if (!onRetryMessage || retryingRequestId) return;
+    setRetryingRequestId(requestId);
+    try {
+      await onRetryMessage(requestId);
+    } finally {
+      setRetryingRequestId(null);
+    }
+  }
+
+  const requestOutcome = session?.latestRequestOutcome;
+  const responseError = requestOutcome?.failureReason?.trim() ?? "";
+  const responseWasCancelled = Boolean(requestOutcome?.cancelCause);
+  const showResponseError = Boolean(responseError) && !responseWasCancelled;
+  const retryRequestId = session?.latestRequestId ?? null;
+  const retryEligible = session?.retryEligibility?.eligible ?? false;
+
   function handleTranscriptScroll() {
     const panel = transcriptPanelRef.current;
     if (!panel) {
@@ -304,29 +318,6 @@ export function ChatTranscriptPanel({
     // layout restores the reading position (observed in the mobile browser
     // harness as 199 mounted turns after one request).
   }
-
-  async function handleRetry(requestId: string) {
-    if (!onRetryMessage || retryingRequestId) {
-      return;
-    }
-    setRetryingRequestId(requestId);
-    try {
-      await onRetryMessage(requestId);
-    } finally {
-      setRetryingRequestId(null);
-    }
-  }
-
-  const latestResponse = session?.latestResponse;
-  const responseError = latestResponse?.errorMessage?.trim() ?? "";
-  const responseWasInterrupted =
-    session?.turnState === "interrupted" ||
-    Boolean(latestResponse?.interruptedAt) ||
-    latestResponse?.cancelCause?.cause === "interrupted" ||
-    latestResponse?.cancelCause?.cause === "userCancelled";
-  const showResponseError = Boolean(responseError) && !responseWasInterrupted;
-  const retryRequestId = session?.latestRequestId ?? null;
-  const retryEligible = session?.retryEligibility?.eligible ?? false;
 
   // Animated placeholder between send and the assistant's first visible
   // output — without it the transcript sits inert while the turn runs.
@@ -382,10 +373,7 @@ export function ChatTranscriptPanel({
           <MessageList
             timelineItems={visibleTimelineItems}
             timelineIdentity={selectedSessionId}
-            responseCancelCause={session?.latestResponse?.cancelCause}
-            responseMaterializedSequence={
-              session?.latestResponse?.materializedMessageSequence
-            }
+            requestCancelCause={requestOutcome?.cancelCause}
           />
           {showThinking ? (
             <div className="turn-block">

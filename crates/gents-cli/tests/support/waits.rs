@@ -304,44 +304,6 @@ pub async fn wait_for_request_lifecycle_state(
     }
 }
 
-pub async fn insert_terminal_response(
-    graphql: &str,
-    request_id: &str,
-    agent_did: &str,
-    behavior_id: &str,
-    session_id: &str,
-    content: &str,
-) -> Result<()> {
-    let response_key = format!("response-{request_id}");
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{response_key}",
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                content: "{content}",
-                status: "complete",
-                token_count: 0,
-                progress_seq: 0,
-                created_at: "{now}",
-                completed_at: "{now}"
-            }}) {{ _docID }}
-        }}"#,
-        response_key = escape_graphql_string(&response_key),
-        request_id = escape_graphql_string(request_id),
-        agent_did = escape_graphql_string(agent_did),
-        behavior_id = escape_graphql_string(behavior_id),
-        session_id = escape_graphql_string(session_id),
-        content = escape_graphql_string(content),
-        now = escape_graphql_string(&now),
-    );
-    graphql_query(graphql, &mutation).await?;
-    Ok(())
-}
-
 pub async fn wait_for_connected_peer(
     home_dir: &std::path::Path,
     peer_id: &str,
@@ -398,9 +360,12 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
                         order: {{ started_at: DESC }},
                         limit: 1
                     ) {{
+                        _docID
+                        agent_did
+                        requester_did
+                        request_doc_id
+                        session_id
                         tool_name
-                        args
-                        result
                         status
                     }}
                 }}"#,
@@ -445,9 +410,12 @@ pub async fn wait_for_completed_tool_calls(
                         }},
                         order: {{ started_at: ASC }}
                     ) {{
+                        _docID
+                        agent_did
+                        requester_did
+                        request_doc_id
+                        session_id
                         tool_name
-                        args
-                        result
                         status
                     }}
                 }}"#,
@@ -477,6 +445,39 @@ pub async fn wait_for_completed_tool_calls(
             );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Read the exact invocation reply through the runtime's canonical
+/// physical-tool-document owner. A completed tool can precede replicated
+/// delivery briefly, so wait for the addressed reply to become visible.
+pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<String> {
+    use gents::config_client::ConfigAccess;
+    use gents::tool_call_lifecycle::{load_tool_call_result, render_tool_result};
+
+    let required = |field: &str| -> Result<&str> {
+        call.get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("completed tool row missing {field}: {call}"))
+    };
+    let tool_doc_id = required("_docID")?;
+    let agent_did = required("agent_did")?;
+    let session_id = required("session_id")?;
+    required("request_doc_id")?;
+    let requester_did = call.get("requester_did").and_then(Value::as_str);
+    let access = ConfigAccess::Graphql(graphql.to_owned());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match load_tool_call_result(&access, tool_doc_id, agent_did, session_id, requester_did)
+            .await
+        {
+            Ok(message) => return render_tool_result(&message),
+            Err(error) if Instant::now() < deadline => {
+                let _ = error;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 

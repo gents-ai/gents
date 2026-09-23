@@ -198,17 +198,7 @@ async fn publish_graph_root_request(
             Box::pin(async move {
                 crate::graph_pipeline::fence_graph_root_request_in_txn(&txn, create).await?;
                 let response = txn.execute(&mutation).await?;
-                let child = response
-                    .pointer("/data/create_AgentRequest")
-                    .or_else(|| response.pointer("/data/add_AgentRequest"))
-                    .context("graph root create omitted result")?;
-                let doc_id = child
-                    .get("_docID")
-                    .or_else(|| child.get(0).and_then(|row| row.get("_docID")))
-                    .and_then(serde_json::Value::as_str)
-                    .context("graph root create omitted document ID")?
-                    .to_owned();
-                Ok::<_, anyhow::Error>(doc_id)
+                crate::graphql::created_doc_id(&response, "AgentRequest")
             })
         },
     )
@@ -643,8 +633,6 @@ impl RequestLifecycle {
             failure_reason: None,
             request,
             request_commit_cid: None,
-            response_doc_id: None,
-            progress_seq: 0,
             deadline_duration_secs,
             configured_max_total_tokens: None,
             claimed_deadline_at: None,
@@ -652,6 +640,7 @@ impl RequestLifecycle {
             state: LocalLifecycleState::Pending,
             valid_until_at_claim: None,
             execution_lease: None,
+            renewal_task: None,
             execution_lease_duration_secs: crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         }
     }
@@ -754,7 +743,7 @@ impl RequestLifecycle {
             deadline: None,
             execution_generation: None,
             execution_lease_expires_at: None,
-            execution_progress_seq: 0,
+            execution_lease_secs: None,
             subagent_depth: 0,
             caused_by_parent_request_id: None,
             caused_by_parent_request_doc_id: None,
@@ -791,10 +780,6 @@ impl RequestLifecycle {
 
     pub fn request(&self) -> &AgentRequest {
         &self.request
-    }
-
-    pub fn response_doc_id(&self) -> Option<&str> {
-        self.response_doc_id.as_deref()
     }
 
     pub(crate) fn execution_generation(&self) -> anyhow::Result<&str> {

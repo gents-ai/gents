@@ -4,6 +4,7 @@ export type RunnerReadyMessage = {
   deploymentLabel: string;
   agentDid: string;
   toolRoot: string;
+  dataRoot?: string;
 };
 
 export type VersionResponse = {

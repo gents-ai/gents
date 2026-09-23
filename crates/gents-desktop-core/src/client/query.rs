@@ -8,14 +8,15 @@ use gents::document_config::{
     TriggerObservation,
 };
 use gents_protocol::graphql::escape_graphql_string;
+use gents_protocol::output::reconstruction::DependencyDenial;
 use gents_protocol::row::{
-    AgentBehaviorReadinessRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow,
-    AgentToolCallRow, AgentToolResultRow, CompactionEntryRow, GoalRow, MailboxItemRow,
+    AgentBehaviorReadinessRow, AgentRequestRow, AgentRuntimeRow, AgentToolCallRow,
+    CompactionEntryRow, GoalRow, MailboxItemRow,
 };
 use gents_protocol::schemas::{
-    AGENT_BEHAVIOR_NAME, AGENT_BEHAVIOR_READINESS_NAME, AGENT_MESSAGE_NAME, AGENT_PRINCIPAL_NAME,
-    AGENT_REQUEST_NAME, AGENT_RESPONSE_NAME, AGENT_RUNTIME_NAME, AGENT_SESSION_NAME,
-    AGENT_TOOL_CALL_NAME, AGENT_TOOL_RESULT_NAME, COMPACTION_ENTRY_NAME, GOAL_NAME,
+    AGENT_BEHAVIOR_NAME, AGENT_BEHAVIOR_READINESS_NAME, AGENT_MESSAGE_NAME,
+    AGENT_OUTPUT_SEGMENT_NAME, AGENT_PRINCIPAL_NAME, AGENT_REQUEST_NAME, AGENT_RUNTIME_NAME,
+    AGENT_SESSION_NAME, AGENT_TOOL_CALL_NAME, COMPACTION_ENTRY_NAME, GOAL_NAME,
     INFERENCE_BACKEND_NAME, INFERENCE_PROFILE_NAME, MAILBOX_ITEM_NAME, SCHEDULE_NAME, SKILL_NAME,
     TASK_NAME, TOOLS_NAME, TOOL_SERVICE_REGISTRY_NAME, TRIGGER_NAME,
 };
@@ -52,12 +53,31 @@ pub(super) const SESSION_TRANSCRIPT_TOOL_CALL_ROW_BUDGET: usize = 320;
 #[derive(Debug)]
 pub struct SessionTranscriptQueryPage {
     pub store: ClientStore,
+    /// Immutable dependencies that are not themselves members of the selected
+    /// session page.  In particular fork origins can belong to a parent
+    /// session.  They are deliberately separate from `store`: putting them in
+    /// the page's transcript rows would make a parent message render as a child
+    /// message.
+    pub canonical_dependencies: CanonicalTranscriptDependencies,
     pub query_count: u64,
     pub queried_rows: usize,
     pub message_query_limit: usize,
     pub tool_call_query_limit: usize,
     pub source_exhausted: bool,
     pub has_newer: bool,
+}
+
+/// Facts received while resolving the selected page's canonical dependencies.
+///
+/// Empty denial lists mean *no denial was received*.  They must not be filled
+/// from an absent GraphQL row: absence is a replication/loading condition.
+#[derive(Debug, Default)]
+pub struct CanonicalTranscriptDependencies {
+    pub origin_headers: Vec<gents::session::canonical_rows::TranscriptMessageRow>,
+    pub output_segments: Vec<gents::session::canonical_rows::OutputSegmentRow>,
+    pub denied_header_doc_ids: Vec<String>,
+    pub denied_segment_doc_ids: Vec<String>,
+    pub dependency_denials: Vec<DependencyDenial>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -70,14 +90,10 @@ pub(super) const AGENT_PRINCIPAL_FIELDS: &str =
 pub(super) const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const AGENT_RUNTIME_FIELDS: &str = "agent_did reconcile_phase behavior_executor_capacity behavior_executor_queue_depth behavior_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const AGENT_BEHAVIOR_READINESS_FIELDS: &str = "agent_did snapshot_json updated_at";
-pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content max_total_tokens input lifecycle_state backend_id execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash";
-pub(super) const AGENT_RESPONSE_FIELDS: &str = "response_key request_id request_doc_id agent_did requester_did behavior_id session_id content reasoning status error_message token_count progress_seq reasoning_progress_seq materialized_message_sequence materialized_at created_at completed_at interrupted_at";
-pub(super) const AGENT_MESSAGE_FIELDS: &str =
-    "message_key session_id request_id requester_did sequence role content reasoning timestamp";
+pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_output terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash";
 pub(super) const AGENT_SESSION_FIELDS: &str = "session_id agent_did requester_did behavior_id created_at closed_at title tags provenance observation";
 pub(super) const GOAL_FIELDS: &str = "goal_id session_id agent_did creation_key objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
-pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "tool_call_key session_id request_id requester_did message_sequence tool_name tool_call_id args result status lifecycle_state child_request_id await_mode cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms partial_output_tail partial_output_seq";
-pub(super) const AGENT_TOOL_RESULT_FIELDS: &str = "_docID agent_did requester_did session_id tool_name tool_input output_text truncated truncation_metadata tool_call_doc_id created_at discarded_because_interrupted";
+pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key agent_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state child_request_id await_mode cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms";
 pub(super) const COMPACTION_ENTRY_FIELDS: &str = "compaction_key session_id requester_did sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at";
 pub(super) const TASK_FIELDS: &str = "task_id agent_did display_name description behavior_id prompt_template goal_objective_template goal_token_budget hooks enabled output_schema_ref created_at updated_at tags";
 pub(super) const SKILL_FIELDS: &str = "skill_id agent_did name description instructions source_directory tool_refs display_name interface_json enabled created_at tags";
@@ -128,7 +144,6 @@ pub async fn load_chat_patch(node: &EmbeddedNode, request_id: &str) -> Result<Cl
     else {
         return Ok(ClientStore::from_rows(ClientStoreRows {
             requests: request_rows,
-            responses: parse_query_rows(&lookup_data, "AgentResponse")?,
             ..ClientStoreRows::default()
         }));
     };
@@ -159,7 +174,6 @@ pub async fn load_chat_patch_on(
     else {
         return Ok(ClientStore::from_rows(ClientStoreRows {
             requests: request_rows,
-            responses: parse_query_rows(&lookup_data, "AgentResponse")?,
             ..ClientStoreRows::default()
         }));
     };
@@ -172,7 +186,6 @@ pub async fn load_chat_patch_on(
 fn chat_patch_from_data(data: &Value) -> Result<ClientStore> {
     Ok(ClientStore::from_rows(ClientStoreRows {
         requests: parse_query_rows(&data, "AgentRequest")?,
-        responses: parse_query_rows(&data, "AgentResponse")?,
         sessions: parse_query_rows(&data, "AgentSession")?,
         goals: parse_query_rows(&data, "Goal")?,
         ..ClientStoreRows::default()
@@ -244,6 +257,21 @@ where
     parse_row_array(rows, root)
 }
 
+/// Canonical transcript envelopes are strict protocol decodes. Unlike generic
+/// control-plane rows, a malformed immutable fact is an integrity observation
+/// and must not be silently skipped.
+pub(super) fn parse_canonical_rows<T>(
+    data: &Value,
+    root: &str,
+    decode: impl Fn(&Value) -> Result<T>,
+) -> Result<Vec<T>> {
+    let rows = data
+        .get(root)
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("query result missing canonical row array {root}"))?;
+    rows.iter().map(decode).collect()
+}
+
 pub(super) fn parse_row_array<T>(rows: &Value, root: &str) -> Result<Vec<T>>
 where
     T: DeserializeOwned,
@@ -277,7 +305,6 @@ fn local_request_lookup_query(request_id: &str) -> String {
         r#"
 query DesktopLocalRequestLookup {{
   AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ {AGENT_REQUEST_FIELDS} }}
-  AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
 }}
 "#
     )
@@ -289,14 +316,12 @@ fn remote_chat_patch_query(session_id: &str) -> String {
         r#"
 query DesktopRemoteChatPatch {{
   AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_REQUEST_FIELDS} }}
-  AgentResponse(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_RESPONSE_FIELDS} }}
   AgentSession(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {AGENT_SESSION_FIELDS} }}
   Goal(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ {GOAL_FIELDS} }}
 }}
 "#
     )
 }
-
 #[cfg(test)]
 mod tests {
     mod projection_and_patches;

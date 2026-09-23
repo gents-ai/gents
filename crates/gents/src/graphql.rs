@@ -202,6 +202,29 @@ pub fn single_mutation_document<'a>(
     }
 }
 
+/// Extract the exact identity of a single create from a transaction envelope.
+/// Use the same mutation normalization as other storage adapters: the pinned
+/// DefraDB accepts `create_` but returns `add_` unless explicitly aliased.
+pub(crate) fn created_doc_id(response: &Value, collection: &str) -> Result<String> {
+    anyhow::ensure!(
+        response
+            .get("errors")
+            .is_none_or(|errors| errors.is_null() || errors.as_array().is_some_and(Vec::is_empty)),
+        "create {collection} returned GraphQL errors"
+    );
+    let data = response
+        .get("data")
+        .context("create omitted response data")?;
+    let response = QueryResponse::success(data.clone());
+    let field = format!("create_{collection}");
+    single_mutation_document(&response, &field)?
+        .and_then(|row| row.get("_docID"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+        .with_context(|| format!("create {collection} omitted its physical identity"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct CompositeCommit {
     pub cid: String,

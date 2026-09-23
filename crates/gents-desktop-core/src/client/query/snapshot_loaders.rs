@@ -8,7 +8,6 @@ pub async fn load_full_snapshot(node: &EmbeddedNode) -> Result<ClientStore> {
         behavior_readiness: load_agent_behavior_readiness(node).await?,
         requests: load_agent_requests(node).await?,
         mailbox_items: load_mailbox_items(node).await?,
-        responses: load_agent_responses(node).await?,
         sessions: load_agent_sessions(node).await?,
         goals: load_goals(node).await?,
         tasks: load_tasks(node).await?,
@@ -256,14 +255,6 @@ async fn load_operator_config(
             ),
         )
         .await?,
-        responses: load_rows_from_access(
-            access,
-            AGENT_RESPONSE_NAME,
-            &format!(
-                "query {{ {AGENT_RESPONSE_NAME}({did_filter}) {{ {AGENT_RESPONSE_FIELDS} }} }}"
-            ),
-        )
-        .await?,
         ..ClientStoreRows::default()
     }))
 }
@@ -357,15 +348,6 @@ pub async fn load_mailbox_items(node: &EmbeddedNode) -> Result<Vec<MailboxItemRo
         node,
         MAILBOX_ITEM_NAME,
         &format!("query {{ {MAILBOX_ITEM_NAME} {{ {MAILBOX_ITEM_FIELDS} }} }}"),
-    )
-    .await
-}
-
-pub async fn load_agent_responses(node: &EmbeddedNode) -> Result<Vec<AgentResponseRow>> {
-    load_rows(
-        node,
-        AGENT_RESPONSE_NAME,
-        &format!("query {{ {AGENT_RESPONSE_NAME} {{ {AGENT_RESPONSE_FIELDS} }} }}"),
     )
     .await
 }

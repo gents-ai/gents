@@ -31,7 +31,6 @@ end RecoveryImplementationStatus
 
 inductive PersistedRecoveryCollection where
   | agentRequest
-  | agentResponse
   | agentToolCall
   | inferenceCall
   deriving DecidableEq, Repr
@@ -40,13 +39,11 @@ namespace PersistedRecoveryCollection
 
 def toContract : PersistedRecoveryCollection → String
   | .agentRequest => "AgentRequest"
-  | .agentResponse => "AgentResponse"
   | .agentToolCall => "AgentToolCall"
   | .inferenceCall => "InferenceCall"
 
 def all : List PersistedRecoveryCollection :=
   [ .agentRequest
-  , .agentResponse
   , .agentToolCall
   , .inferenceCall
   ]

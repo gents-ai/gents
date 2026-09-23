@@ -1,148 +1,145 @@
 use super::*;
+use crate::types::ReconstructionState;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+fn stale_session(state: RequestLifecycleState) -> AgentSession {
+    AgentSession {
+        session_id: "session-1".into(),
+        agent_did: "did:test:amy".into(),
+        requester_did: None,
+        behavior_id: "amy-default".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        title: None,
+        tags: Vec::new(),
+        provenance: None,
+        observation: Some(SessionObservation {
+            last_activity_at: "2026-04-21T12:02:00Z".into(),
+            preview: Some("done".into()),
+            latest_request: Some(SessionRequestObservation {
+                request_doc_id: "req-1".into(),
+                request_id: "req-1".into(),
+                lifecycle_state: state,
+            }),
+        }),
+    }
+}
+
+fn stale_request(state: RequestLifecycleState) -> AgentRequestRow {
+    AgentRequestRow {
+        doc_id: Some("req-1".into()),
+        request_id: "req-1".into(),
+        agent_did: Some("did:test:amy".into()),
+        behavior_id: Some("amy-default".into()),
+        session_id: Some("session-1".into()),
+        content: Some("do the work".into()),
+        lifecycle_state: Some(state),
+        execution_origin: Some("interactive".into()),
+        created_at: Some("2026-04-21T12:00:00Z".into()),
+        ..Default::default()
+    }
+}
 
 #[test]
 fn session_observation_advances_an_exact_stale_request_to_terminal() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: None,
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("done".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".to_string(),
-                    request_id: "req-1".to_string(),
-                    lifecycle_state: RequestLifecycleState::Completed,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("do the work".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Processing),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
+        sessions: vec![stale_session(RequestLifecycleState::Completed)],
+        requests: vec![stale_request(RequestLifecycleState::Processing)],
         ..ClientStoreRows::default()
     });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-        .expect("session snapshot");
-
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-1", Some("req-1")).expect("snapshot");
     assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
 }
 
 #[test]
-fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is_stale() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".to_string(),
-                    request_id: "req-1".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Completed),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        messages: vec![
-            AgentMessageRow {
-                message_key: "msg-1".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(1),
-                role: Some("user".to_string()),
-                content: Some(user_message_json("turn one")),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-2".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(2),
-                role: Some("assistant".to_string()),
-                content: Some(
-                    serde_json::to_string(&Message::assistant("final answer"))
-                        .expect("serialize assistant"),
-                ),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:01Z".to_string()),
-            },
-        ],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("final answer".to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:00:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: None,
-        }],
+fn terminal_request_has_no_live_overlay_and_keeps_canonical_transcript() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![stale_session(RequestLifecycleState::Completed)],
+        requests: vec![stale_request(RequestLifecycleState::Completed)],
         ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-        .expect("session snapshot");
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "user",
+        "session-1",
+        Some("req-1"),
+        1,
+        MessageRole::User,
+        "turn one",
+    );
+    push_canonical_text_message(
+        &mut rows,
+        "assistant",
+        "session-1",
+        Some("req-1"),
+        2,
+        MessageRole::Assistant,
+        "final answer",
+    );
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows),
+        "session-1",
+        Some("req-1"),
+    )
+    .expect("snapshot");
     assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-    assert!(snapshot.active_response_overlay.is_none());
+    assert!(!snapshot
+        .timeline_items
+        .iter()
+        .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })));
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::AssistantMessage { content, .. } if content.as_deref() == Some("final answer"))));
+}
+
+#[test]
+fn missing_canonical_dependency_is_rendered_as_loading_not_empty_message() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![stale_session(RequestLifecycleState::Processing)],
+        requests: vec![stale_request(RequestLifecycleState::Processing)],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "partial",
+        "session-1",
+        Some("req-1"),
+        1,
+        MessageRole::Assistant,
+        "not available yet",
+    );
+    rows.output_segments.clear();
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows),
+        "session-1",
+        Some("req-1"),
+    )
+    .expect("snapshot");
+    assert!(snapshot.timeline_items.iter().any(|item| matches!(item, RenderedTimelineItem::AssistantMessage { reconstruction, content, .. } if reconstruction.state == ReconstructionState::Loading && content.is_none())));
+}
+
+#[test]
+fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is_stale() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![stale_session(RequestLifecycleState::Completed)],
+        requests: vec![stale_request(RequestLifecycleState::Completed)],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "final",
+        "session-1",
+        Some("req-1"),
+        2,
+        MessageRole::Assistant,
+        "final answer",
+    );
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows),
+        "session-1",
+        Some("req-1"),
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
     assert!(!snapshot
         .timeline_items
         .iter()
@@ -152,78 +149,13 @@ fn session_snapshot_hides_live_overlay_once_turn_is_terminal_even_if_response_is
 #[test]
 fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
     let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".to_string(),
-                    request_id: "req-1".to_string(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Processing),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            claimed_at: Some("2026-04-21T12:00:01Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            interrupt_requested_at: Some("2026-04-21T12:00:02Z".to_string()),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("partial answer before interrupt".to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(2),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:00:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: Some("2026-04-21T12:00:02Z".to_string()),
-        }],
+        sessions: vec![stale_session(RequestLifecycleState::Interrupted)],
+        requests: vec![stale_request(RequestLifecycleState::Interrupted)],
         ..ClientStoreRows::default()
     });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-        .expect("session snapshot");
-    assert_eq!(snapshot.turn_state.as_deref(), Some("streaming"));
-    assert!(snapshot
-        .latest_response
-        .as_ref()
-        .and_then(|response| response.interrupted_at.as_deref())
-        .is_some());
-    assert!(snapshot.active_response_overlay.is_none());
+    let snapshot =
+        build_session_snapshot_from_store(&store, "session-1", Some("req-1")).expect("snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("interrupted"));
     assert!(!snapshot
         .timeline_items
         .iter()
@@ -232,171 +164,64 @@ fn session_snapshot_hides_live_overlay_once_response_is_interrupted() {
 
 #[test]
 fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_rows() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {session_id: "session-1".to_string(), agent_did: "did:test:amy".to_string(), requester_did: None, behavior_id: "amy-default".to_string(), created_at: "2026-04-21T12:00:00Z".to_string(), closed_at: None, title: Some(SessionTitle {text: "conversation".to_string(), source: SessionTitleSource::Generated}), tags: Vec::new(), provenance: None, observation: Some(SessionObservation {last_activity_at: "2026-04-21T12:03:00Z".to_string(), preview: Some("turn three".to_string()), latest_request: Some(SessionRequestObservation {request_doc_id: "req-2".to_string(), request_id: "req-2".to_string(), lifecycle_state: RequestLifecycleState::Processing})})}],
+    let mut rows = ClientStoreRows {
+        sessions: vec![stale_session(RequestLifecycleState::Processing)],
         requests: vec![
+            stale_request(RequestLifecycleState::Completed),
             AgentRequestRow {
-                doc_id: Some("req-1".to_string()),
-                request_id: "req-1".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn one".to_string()),
+                doc_id: Some("req-2".into()),
+                request_id: "req-2".into(),
+                agent_did: Some("did:test:amy".into()),
+                behavior_id: Some("amy-default".into()),
+                session_id: Some("session-1".into()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-            ..Default::default()
+                ..Default::default()
             },
             AgentRequestRow {
-                doc_id: Some("req-2".to_string()),
-                request_id: "req-2".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn two".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Completed),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-            ..Default::default()
-            },
-            AgentRequestRow {
-                doc_id: Some("req-3".to_string()),
-                request_id: "req-3".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn three".to_string()),
+                doc_id: Some("req-3".into()),
+                request_id: "req-3".into(),
+                agent_did: Some("did:test:amy".into()),
+                behavior_id: Some("amy-default".into()),
+                session_id: Some("session-1".into()),
+                content: Some("turn three".into()),
                 lifecycle_state: Some(RequestLifecycleState::Processing),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:02:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-            ..Default::default()
-            },
-        ],
-        responses: vec![
-            AgentResponseRow {
-                response_key: "resp-1".to_string(),
-                request_id: Some("req-1".to_string()),
-                request_doc_id: Some("req-1".to_string()),
-                agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("answer one".to_string()),
-                reasoning: None,
-                status: Some("complete".to_string()),
-                error_message: None,
-                token_count: Some(10),
-                progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-                materialized_message_sequence: Some(2),
-                materialized_at: Some("2026-04-21T12:00:05Z".to_string()),
-                created_at: Some("2026-04-21T12:00:01Z".to_string()),
-                completed_at: Some("2026-04-21T12:00:05Z".to_string()),
-            interrupted_at: None,
-            },
-            AgentResponseRow {
-                response_key: "resp-2".to_string(),
-                request_id: Some("req-2".to_string()),
-                request_doc_id: Some("req-2".to_string()),
-                agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("answer two".to_string()),
-                reasoning: None,
-                status: Some("complete".to_string()),
-                error_message: None,
-                token_count: Some(10),
-                progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-                materialized_message_sequence: Some(4),
-                materialized_at: Some("2026-04-21T12:01:05Z".to_string()),
-                created_at: Some("2026-04-21T12:01:01Z".to_string()),
-                completed_at: Some("2026-04-21T12:01:05Z".to_string()),
-            interrupted_at: None,
-            },
-            AgentResponseRow {
-                response_key: "resp-3".to_string(),
-                request_id: Some("req-3".to_string()),
-                request_doc_id: Some("req-3".to_string()),
-                agent_did: Some("did:test:amy".to_string()),
-                requester_did: None,
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("answer three in progress".to_string()),
-                reasoning: None,
-                status: Some("streaming".to_string()),
-                error_message: None,
-                token_count: Some(10),
-                progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-                materialized_message_sequence: None,
-                materialized_at: None,
-                created_at: Some("2026-04-21T12:02:01Z".to_string()),
-                completed_at: None,
-            interrupted_at: None,
-            },
-        ],
-        messages: vec![
-            AgentMessageRow {
-                message_key: "msg-1".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(1),
-                role: Some("user".to_string()),
-                content: Some(user_message_json("turn one")),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-2".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(2),
-                role: Some("assistant".to_string()),
-                content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer one\"}]}".to_string()),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:05Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-3".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(3),
-                role: Some("user".to_string()),
-                content: Some(user_message_json("turn two")),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:01:00Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-4".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: None,
-                requester_did: None,
-                sequence: Some(4),
-                role: Some("assistant".to_string()),
-                content: Some("{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"answer two\"}]}".to_string()),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:01:05Z".to_string()),
+                ..Default::default()
             },
         ],
         ..ClientStoreRows::default()
+    };
+    rows.sessions[0]
+        .observation
+        .as_mut()
+        .expect("observation")
+        .latest_request = Some(SessionRequestObservation {
+        request_doc_id: "req-3".into(),
+        request_id: "req-3".into(),
+        lifecycle_state: RequestLifecycleState::Processing,
     });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-3"))
-        .expect("session snapshot");
-
+    for (sequence, request_id, role, text) in [
+        (1, "req-1", MessageRole::User, "turn one"),
+        (2, "req-1", MessageRole::Assistant, "answer one"),
+        (3, "req-2", MessageRole::User, "turn two"),
+        (4, "req-2", MessageRole::Assistant, "answer two"),
+    ] {
+        push_canonical_text_message(
+            &mut rows,
+            &format!("message-{sequence}"),
+            "session-1",
+            Some(request_id),
+            sequence,
+            role,
+            text,
+        );
+    }
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(rows),
+        "session-1",
+        Some("req-3"),
+    )
+    .expect("snapshot");
     assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-3"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("streaming"));
     assert_eq!(snapshot.messages.len(), 4);
     assert_eq!(
         snapshot
@@ -404,12 +229,5 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
             .as_ref()
             .map(|turn| turn.request_id.as_str()),
         Some("req-3")
-    );
-    assert_eq!(
-        snapshot
-            .active_response_overlay
-            .as_ref()
-            .and_then(|response| response.content.as_deref()),
-        Some("answer three in progress")
     );
 }

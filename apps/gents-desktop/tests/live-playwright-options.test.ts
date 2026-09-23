@@ -22,7 +22,7 @@ describe("live Playwright option resolution", () => {
     });
     expect(env.GENTS_TAURI_LIVE_INFERENCE_URL).toBe("http://127.0.0.1:1234/v1");
     expect(env.GENTS_TAURI_LIVE_MODEL_NAME).toBe("mock-model");
-    expect(env.GENTS_TAURI_LIVE_PROVIDER).toBe("openai-compatible");
+    expect(env.GENTS_TAURI_LIVE_PROVIDER).toBe("OpenAiCompatible");
     expect(env.GENTS_TAURI_LIVE_API_KEY).toBe("desktop-live-browser-test-key");
   });
 
@@ -48,7 +48,7 @@ describe("live Playwright option resolution", () => {
         "--api-key-env-var",
         "OPENAI_API_KEY",
         "--provider",
-        "openai-compatible",
+        "OpenAiCompatible",
         "--grep",
         "desktop live browser smoke",
       ],
@@ -64,7 +64,7 @@ describe("live Playwright option resolution", () => {
       "https://api.example.test/v1",
     );
     expect(options.env.GENTS_TAURI_LIVE_MODEL_NAME).toBe("provider-model");
-    expect(options.env.GENTS_TAURI_LIVE_PROVIDER).toBe("openai-compatible");
+    expect(options.env.GENTS_TAURI_LIVE_PROVIDER).toBe("OpenAiCompatible");
     expect(options.env.GENTS_TAURI_LIVE_API_KEY_ENV_VAR).toBe("OPENAI_API_KEY");
   });
 

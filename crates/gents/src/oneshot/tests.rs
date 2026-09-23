@@ -76,7 +76,9 @@ impl CompletionModel for PartialThenEmptyProvider {
                 async move {
                     let text = if started {
                         tokio::time::sleep(Duration::from_millis(10)).await;
-                        observations.fetch_add(1, Ordering::SeqCst);
+                        if observations.fetch_add(1, Ordering::SeqCst) >= 300 {
+                            return None;
+                        }
                         String::new()
                     } else {
                         "durable one-shot partial".to_string()
@@ -89,7 +91,7 @@ impl CompletionModel for PartialThenEmptyProvider {
 }
 
 #[tokio::test]
-async fn oneshot_honors_short_semantic_lease_and_recovers_partial_empty_stream_before_return() {
+async fn oneshot_renews_while_silent_then_preserves_partial_output_on_eof() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(
         EmbeddedNode::builder()
@@ -127,26 +129,57 @@ async fn oneshot_honors_short_semantic_lease_and_recovers_partial_empty_stream_b
         crate::rendered_request::CaptureScopeKind::OneShot,
     );
     let observations = Arc::new(AtomicUsize::new(0));
-    let result = tokio::time::timeout(
-        Duration::from_secs(10),
-        run_oneshot_owned(
-            node.clone(),
-            &behavior,
-            &prompt,
-            PartialThenEmptyProvider(observations.clone()),
-            "exercise semantic timeout",
-            Arc::new(Vec::new()),
-            config,
-            &[],
-            BackgroundToolRegistry::default(),
-            crate::toolset::lsp::LspPool::new(),
-        ),
-    )
+    let observe_renewal = async {
+        let mut initial = None;
+        loop {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let snapshot = node.execute("{ AgentRequest { lifecycle_state execution_generation execution_lease_expires_at } }").await;
+            assert!(!snapshot.has_errors(), "{:?}", snapshot.errors);
+            let rows = snapshot.data.as_ref().unwrap()["AgentRequest"]
+                .as_array()
+                .unwrap();
+            let Some(row) = rows.first() else { continue };
+            if row["lifecycle_state"] != "processing" {
+                continue;
+            }
+            let generation = row["execution_generation"].as_str().unwrap();
+            let expiry = chrono::DateTime::parse_from_rfc3339(
+                row["execution_lease_expires_at"].as_str().unwrap(),
+            )
+            .unwrap();
+            let (first_generation, first_expiry) =
+                initial.get_or_insert_with(|| (generation.to_owned(), expiry));
+            if chrono::Utc::now() <= *first_expiry {
+                continue;
+            }
+            assert_eq!(generation, first_generation);
+            assert!(expiry > *first_expiry && expiry > chrono::Utc::now());
+            break;
+        }
+    };
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let (result, ()) = tokio::join!(
+            run_oneshot_owned(
+                node.clone(),
+                &behavior,
+                &prompt,
+                PartialThenEmptyProvider(observations.clone()),
+                "exercise explicit renewal during silence",
+                Arc::new(Vec::new()),
+                config,
+                &[],
+                BackgroundToolRegistry::default(),
+                crate::toolset::lsp::LspPool::new(),
+            ),
+            observe_renewal
+        );
+        result
+    })
     .await
-    .expect("one-shot must use its 1s semantic lease rather than the default 30-minute lease");
+    .expect("one-shot must renew its short lease and converge after provider EOF");
     assert!(
         result.is_err(),
-        "an endless stream cannot complete successfully"
+        "a stream ending without an explicit terminal response cannot succeed"
     );
     assert!(
         observations.load(Ordering::SeqCst) > 0,
@@ -156,10 +189,8 @@ async fn oneshot_honors_short_semantic_lease_and_recovers_partial_empty_stream_b
     let result = node
         .execute(
             r#"{
-        AgentRequest { lifecycle_state execution_progress_seq }
-        AgentResponse { status content }
+        AgentRequest { _docID requester_did session_id lifecycle_state terminal_output }
         RenderedRequest { _docID }
-        AgentMessage(filter: { role: { _eq: "assistant" } }) { content }
     }"#,
         )
         .await;
@@ -172,23 +203,35 @@ async fn oneshot_honors_short_semantic_lease_and_recovers_partial_empty_stream_b
     );
     assert_eq!(data["AgentRequest"].as_array().unwrap().len(), 1);
     assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "failed");
-    assert_eq!(data["AgentResponse"].as_array().unwrap().len(), 1);
-    assert_eq!(data["AgentResponse"][0]["status"], "error");
-    assert!(
-        data["AgentResponse"][0]["content"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("durable one-shot partial")
-            || data["AgentMessage"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|row| row["content"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .contains("durable one-shot partial")),
-        "partial progress must survive convergence: {data}"
+    use gents_protocol::output::TerminalOutput;
+    let request = &data["AgentRequest"][0];
+    let doc_id = request["_docID"].as_str().unwrap();
+    let selection: TerminalOutput =
+        serde_json::from_value(request["terminal_output"].clone()).unwrap();
+    let TerminalOutput::Message { message_doc_id } = selection else {
+        panic!("durable text partial must be the request's exact terminal selection")
+    };
+    let requester_did = request["requester_did"].as_str();
+    let (header, native) = crate::session::load_canonical_message_from_node(
+        &node,
+        &message_doc_id,
+        behavior.agent_did(),
+        requester_did,
+    )
+    .await
+    .unwrap();
+    assert_eq!(header.request_doc_id.as_deref(), Some(doc_id));
+    assert_eq!(
+        header.outcome,
+        gents_protocol::output::OutputOutcome::Partial
     );
+    assert!(matches!(
+        header.publication,
+        gents_protocol::output::MessagePublication::RequestRecovery { .. }
+    ));
+    assert!(gents_protocol::transcript::present_message(&native)
+        .body_markdown
+        .contains("durable one-shot partial"));
     let repeated = RequestLifecycle::recover_all(&node, behavior.agent_did())
         .await
         .unwrap();

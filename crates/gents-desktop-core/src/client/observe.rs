@@ -263,24 +263,7 @@ pub fn spawn_observer_with_selection(
                             }
                         } else {
                             let rows = patch.to_rows();
-                            let response_only = collection_name == "AgentResponse";
-                            let outcome = store.merge_observer_patch_with_outcome(
-                                ClientStore::from_rows(rows),
-                                response_only,
-                            );
-                            if outcome.response_only {
-                                let counter = if outcome.copied_snapshot {
-                                    &metrics_for_task.response_copy_on_write_merges
-                                } else {
-                                    &metrics_for_task.response_in_place_merges
-                                };
-                                counter.fetch_add(1, Ordering::Relaxed);
-                                tracing::trace!(
-                                    store_version = outcome.store_version,
-                                    copied_snapshot = outcome.copied_snapshot,
-                                    "merged response-only desktop observer patch"
-                                );
-                            }
+                            store.merge_observer_patch_with_outcome(ClientStore::from_rows(rows));
                         }
                         metrics_for_task
                             .docs_fetched
@@ -367,6 +350,5 @@ async fn accumulate_dirty(
         }
     }
 }
-
 #[cfg(test)]
 mod tests;

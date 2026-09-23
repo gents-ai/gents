@@ -10,14 +10,47 @@ pub struct MessageView {
     pub request_id: Option<String>,
     pub sequence: Option<i64>,
     pub role: Option<String>,
-    pub content: Option<String>,
     pub display_role: Option<String>,
     pub display_content: Option<String>,
     pub reasoning: Option<String>,
     pub has_tool_calls: bool,
     pub has_tool_results: bool,
+    /// Explicit canonical reconstruction outcome.  A header is durable even
+    /// while one of its immutable dependencies is still replicating, so the
+    /// UI must not mistake absent presentation text for an empty message.
+    pub reconstruction_state: ReconstructionState,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub reconstruction_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub denied_dependency_doc_id: Option<String>,
     pub runtime_control: bool,
     pub timestamp: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum ReconstructionState {
+    Ready,
+    Loading,
+    Denied,
+    Invalid,
+}
+
+/// Immutable canonical-output reconstruction state.  This is carried through
+/// the rendered timeline so consumers render a received loading/denied/invalid
+/// fact rather than inferring one from blank text.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct MessageReconstructionView {
+    pub state: ReconstructionState,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub denied_dependency_doc_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -32,6 +65,9 @@ pub struct ToolCallView {
     pub partial_output_tail: Option<String>,
     pub partial_output_seq: Option<i64>,
     pub result: Option<String>,
+    /// Availability of the immutable canonical arguments and result payloads.
+    /// Tool execution status remains in `lifecycle_state`.
+    pub reconstruction: MessageReconstructionView,
     pub status: Option<String>,
     pub lifecycle_state: Option<String>,
     pub child_request_id: Option<String>,
@@ -165,6 +201,7 @@ pub struct RenderedToolCallView {
     #[ts(optional = nullable)]
     pub completed_at: Option<String>,
     pub presentation: ToolPresentationView,
+    pub reconstruction: MessageReconstructionView,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[ts(optional = nullable)]
     pub partial_output_tail: Option<String>,
@@ -181,42 +218,29 @@ pub struct RenderedToolCallView {
 
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ToolResultView {
-    pub tool_name: Option<String>,
-    pub tool_input: Option<String>,
-    pub output_text: Option<String>,
-    pub truncated: Option<bool>,
-    pub created_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ResponseView {
-    pub status: Option<String>,
-    pub content: Option<String>,
-    pub reasoning: Option<String>,
-    pub error_message: Option<String>,
-    pub token_count: Option<i64>,
-    pub materialized_message_sequence: Option<i64>,
-    pub materialized_at: Option<String>,
-    pub interrupted_at: Option<String>,
-    pub completed_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub cancel_cause: Option<DerivedCancelCauseView>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    #[ts(optional = nullable)]
-    pub backend_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
 pub struct PendingTurnView {
     pub request_id: String,
+    /// Internal reconciliation identity. The wire view keeps its existing
+    /// shape; canonical messages link to the physical request document, not
+    /// the caller-authored logical request id.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) request_doc_id: Option<String>,
     pub content: String,
     pub selected_skill_ids: Vec<String>,
     pub lifecycle_state: Option<String>,
     pub created_at: Option<String>,
+}
+
+/// Read-only presentation of the latest request's terminal facts. The request
+/// remains the owner; this is not response storage or a second lifecycle.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestOutcomeView {
+    pub failure_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[ts(optional = nullable)]
+    pub cancel_cause: Option<DerivedCancelCauseView>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -229,8 +253,9 @@ pub enum RenderedTimelineItem {
         #[ts(optional = nullable)]
         request_id: Option<String>,
         sequence: Option<i64>,
-        content: String,
+        content: Option<String>,
         timestamp: Option<String>,
+        reconstruction: MessageReconstructionView,
     },
     #[serde(rename_all = "camelCase")]
     AssistantMessage {
@@ -239,6 +264,7 @@ pub enum RenderedTimelineItem {
         content: Option<String>,
         reasoning: Option<String>,
         timestamp: Option<String>,
+        reconstruction: MessageReconstructionView,
     },
     #[serde(rename_all = "camelCase")]
     ToolGroup {
@@ -433,8 +459,7 @@ pub struct DesktopSessionSnapshot {
     pub turn_state: Option<String>,
     pub latest_request_id: Option<String>,
     pub retry_eligibility: RetryEligibilityView,
-    pub latest_response: Option<ResponseView>,
-    pub active_response_overlay: Option<ResponseView>,
+    pub latest_request_outcome: Option<RequestOutcomeView>,
     pub pending_turn: Option<PendingTurnView>,
     pub context: SessionContextView,
     pub timeline_items: Vec<RenderedTimelineItem>,
@@ -455,8 +480,4 @@ pub struct DesktopSessionSnapshot {
     #[serde(skip_serializing)]
     #[ts(skip)]
     pub tool_calls: Vec<ToolCallView>,
-    #[allow(dead_code)]
-    #[serde(skip_serializing)]
-    #[ts(skip)]
-    pub tool_results: Vec<ToolResultView>,
 }

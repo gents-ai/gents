@@ -301,7 +301,9 @@ pub(crate) fn validate_tree_delta(
             .context("missing Git raw mode prefix")?;
         for mode in [old_mode, header[1]] {
             if !matches!(mode, "000000" | "100644" | "100755") {
-                bail!("workspace path capability denies changed symlink/gitlink or unsupported mode {mode} at {path:?}");
+                bail!(
+                    "workspace path capability denies changed symlink/gitlink or unsupported mode {mode} at {path:?}"
+                );
             }
         }
     }
@@ -632,7 +634,9 @@ fn refuse_overlapping_dirty_trunk(trunk: &Path, changed_files: &[String]) -> Res
         }
         for path in paths {
             if changed_files.iter().any(|changed| changed == path) {
-                bail!("refusing to integrate: trunk has uncommitted changes overlapping sealed path {path}");
+                bail!(
+                    "refusing to integrate: trunk has uncommitted changes overlapping sealed path {path}"
+                );
             }
         }
     }

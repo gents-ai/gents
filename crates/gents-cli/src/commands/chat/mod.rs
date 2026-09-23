@@ -11,8 +11,8 @@ use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{create_goal_backed_agent_request, ensure_local_request_signer};
 use crate::{
     create_agent_request, print_json, require_non_empty, resolve_home_dir,
-    wait_for_terminal_response, write_json_output_file, RequestSubmitOptions, SubmittedRequest,
-    DEFAULT_HTTP_PORT,
+    wait_for_terminal_response, write_json_output_file, RequestOutputEnvelope,
+    RequestSubmitOptions, SubmittedRequest, DEFAULT_HTTP_PORT,
 };
 
 use streaming::{load_existing_tool_call_keys, stream_turn_progress};
@@ -56,7 +56,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
             .ensure_supported("chat", &[OutputFormat::Text, OutputFormat::Json])?
         {
             OutputFormat::Text => {
-                let (_submitted, response) = submit_chat_turn_with_goal(
+                let envelope = submit_chat_turn_with_goal(
                     &graphql,
                     &agent_did,
                     &session_id,
@@ -68,7 +68,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                 )
                 .await?;
                 if let Some(path) = args.output_file.as_deref() {
-                    write_text_output_file(path, response_text_content(&response))?;
+                    write_text_output_file(path, chat_turn_text_content(&envelope))?;
                 }
             }
             OutputFormat::Json => {
@@ -153,7 +153,7 @@ async fn submit_chat_turn_with_goal(
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
     poll_secs: u64,
-) -> Result<(SubmittedRequest, Value)> {
+) -> Result<RequestOutputEnvelope> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
     let submitted = match goal {
         Some(goal) => {
@@ -180,15 +180,14 @@ async fn submit_chat_turn_with_goal(
             .await?
         }
     };
-    let response = stream_turn_progress(
+    stream_turn_progress(
         graphql,
         &submitted,
         existing_tool_calls,
         timeout_secs,
         poll_secs,
     )
-    .await?;
-    Ok((submitted, response))
+    .await
 }
 
 async fn submit_chat_turn_json(
@@ -226,11 +225,16 @@ async fn submit_chat_turn_json(
             .await?
         }
     };
-    let response =
+    let envelope =
         wait_for_terminal_response(graphql, &submitted.request_id, timeout_secs, poll_secs)
             .await
-            .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?;
-    Ok(chat_turn_output(&submitted, response))
+            .with_context(|| {
+                format!(
+                    "waiting for request {} to reach a terminal lifecycle state",
+                    submitted.request_id
+                )
+            })?;
+    Ok(chat_turn_output(&submitted, envelope))
 }
 
 fn resolve_chat_message(message: &[String], message_file: Option<&Path>) -> Result<Option<String>> {
@@ -262,19 +266,33 @@ fn write_text_output_file(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-fn response_text_content(response: &Value) -> &str {
-    response
-        .get("content")
-        .and_then(Value::as_str)
+/// Terminal envelope selection only; `TerminalMessage` carries the exact
+/// terminal presentation, and `TerminalNoMessage` is explicit absence.
+fn terminal_presentation(
+    envelope: &RequestOutputEnvelope,
+) -> Option<&crate::CliOutputPresentation> {
+    match &envelope.output {
+        crate::CliOutputObservation::TerminalMessage { presentation, .. } => Some(presentation),
+        crate::CliOutputObservation::TerminalNoMessage => None,
+        _ => None,
+    }
+}
+
+fn chat_turn_text_content(envelope: &RequestOutputEnvelope) -> &str {
+    terminal_presentation(envelope)
+        .map(|presentation| presentation.body_markdown.as_str())
         .unwrap_or("")
 }
 
-fn chat_turn_output(submitted: &SubmittedRequest, response: Value) -> Value {
+fn chat_turn_output(submitted: &SubmittedRequest, envelope: RequestOutputEnvelope) -> Value {
+    let request = serde_json::to_value(&envelope.request).unwrap_or(serde_json::Value::Null);
+    let output = serde_json::to_value(&envelope.output).unwrap_or(serde_json::Value::Null);
     json!({
         "request_id": submitted.request_id,
         "session_id": submitted.session_id,
         "agent_did": submitted.agent_did,
         "behavior_id": submitted.behavior_id,
-        "response": response,
+        "request": request,
+        "output": output,
     })
 }

@@ -1507,7 +1507,18 @@ async fn rust_analyzer_starts_and_reports_ready() {
         rustc_sysroot().is_some(),
         "rustc --print sysroot is required for the isolated rust-project.json fixture"
     );
-    let server = rust_analyzer_server(8_000);
+    let mut server = rust_analyzer_server(8_000);
+    // The fixture lives outside the repository's toolchain override. Bind
+    // the host binary from the same toolchain checked above; resolving the
+    // rustup proxy relative to the temporary project can select a different
+    // default toolchain with no rust-analyzer component installed.
+    server.command = super::admit::admit_command(
+        "rust-analyzer",
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")),
+    )
+    .expect("repository rust-analyzer must pass host executable admission")
+    .to_string_lossy()
+    .into_owned();
     let config = sample_config(
         root.path().to_path_buf(),
         FileToolMode::ReadOnly,

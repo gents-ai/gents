@@ -11,6 +11,7 @@ export type LiveSmokeRunnerInfo = {
   deploymentLabel: string;
   agentDid: string;
   toolRoot: string;
+  dataRoot?: string;
 };
 
 export type LiveSmokeEvidence = LiveSmokeRunnerInfo & {
@@ -22,6 +23,8 @@ export type LiveSmokeEvidence = LiveSmokeRunnerInfo & {
   transcriptQueriedRows: number;
   transcriptMessageQueryLimit: number;
   transcriptToolCallQueryLimit: number;
+  preclosureLiveAssistantObserved: boolean;
+  preclosureLiveAssistantMaxTextLength: number;
   diagnostics: RequestDiagnosticsBundle;
 };
 
@@ -52,6 +55,8 @@ export function liveSmokeSummary(evidence: LiveSmokeEvidence) {
     `| Transcript rows queried | \`${evidence.transcriptQueriedRows}\` |`,
     `| Message query limit | \`${evidence.transcriptMessageQueryLimit}\` |`,
     `| Tool-call query limit | \`${evidence.transcriptToolCallQueryLimit}\` |`,
+    `| Live assistant observed before terminal completion | \`${evidence.preclosureLiveAssistantObserved}\` |`,
+    `| Maximum preclosure live assistant text length | \`${evidence.preclosureLiveAssistantMaxTextLength}\` |`,
     `| Desktop timeline rows | \`${evidence.diagnostics.desktop.timelineCount}\` |`,
     `| Remote timeline rows | \`${evidence.diagnostics.remote.timelineCount}\` |`,
     `| Desktop message rows | \`${evidence.diagnostics.desktop.messageCount}\` |`,
@@ -73,6 +78,7 @@ export function liveSmokeFailureSummary(evidence: LiveSmokeFailureEvidence) {
     `Bridge URL: \`${evidence.runner.baseUrl}\``,
     `Agent DID: \`${evidence.runner.agentDid}\``,
     `Tool root: \`${evidence.runner.toolRoot}\``,
+    `Data root: \`${evidence.runner.dataRoot ?? "not reported"}\``,
     "",
     "| Field | Value |",
     "| --- | --- |",

@@ -99,6 +99,38 @@ function bridge(
 }
 
 describe("desktop startup screen", () => {
+  it("requires explicit acknowledgement of the exact managed home before reset", async () => {
+    const reset = vi.fn(async () => undefined);
+    render(
+      <StartupScreen
+        error="legacy Lark store"
+        managedServerReset={{
+          managedHome: "/Users/test/.gents",
+          dataPath: "/Users/test/.gents/data",
+          confirmation: "RESET /Users/test/.gents AND ARCHIVE LOCAL HISTORY",
+          consequence:
+            "Existing local conversations and configuration will be archived and not imported.",
+          completed: false,
+          backupPath: null,
+          archivedPaths: [],
+        }}
+        onResetManagedServer={reset}
+        onRetry={vi.fn(async () => undefined)}
+        phase="managed-server-error"
+      />,
+    );
+
+    const action = screen.getByTestId("managed-server-reset");
+    expect(action).toBeDisabled();
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "/Users/test/.gents/data",
+    );
+    await userEvent.click(screen.getByTestId("managed-server-reset-confirmation"));
+    expect(action).toBeEnabled();
+    await userEvent.click(action);
+    expect(reset).toHaveBeenCalledOnce();
+  });
+
   it("names local-agent observation instead of misreporting a configuration read", async () => {
     const status = deferred<{
       state: "disabled";

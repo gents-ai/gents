@@ -11,7 +11,9 @@ import type {
   DesktopClientSnapshot,
   DesktopSessionSnapshot,
   P2PHealth,
+  ManagedServerResetResult,
 } from "@source-inc/gents-desktop-client";
+import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
 import {
   projectStartupPhaseAfterSnapshot,
@@ -50,9 +52,7 @@ export function useDesktopClientLifecycle({
     ? "checking-managed-server"
     : "loading-configuration";
   const startupPhaseRef = useRef<DesktopStartupPhase>(initialStartupPhase);
-  const startClientInFlight = useRef<Promise<DesktopClientSnapshot | null> | null>(
-    null,
-  );
+  const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(null);
   const initializationInFlight = useRef<Promise<void> | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const snapshotPublicationRef = useRef<
@@ -68,6 +68,8 @@ export function useDesktopClientLifecycle({
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [stopping, setStopping] = useState(false);
+  const [managedServerReset, setManagedServerReset] =
+    useState<ManagedServerResetResult | null>(null);
 
   function setStartupPhase(next: DesktopStartupPhase) {
     startupPhaseRef.current = next;
@@ -114,7 +116,7 @@ export function useDesktopClientLifecycle({
     return accepted;
   }
 
-  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot | null> {
+  async function ensureDesktopClientStarted(): Promise<DesktopClientSnapshot> {
     if (startClientInFlight.current) return startClientInFlight.current;
     setStarting(true);
     setError(null);
@@ -129,7 +131,7 @@ export function useDesktopClientLifecycle({
             setStartupPhase("client-error");
           }
         }
-        return null;
+        throw error;
       } finally {
         startClientInFlight.current = null;
         setStarting(false);
@@ -140,7 +142,11 @@ export function useDesktopClientLifecycle({
   }
 
   async function onStartClient() {
-    await ensureDesktopClientStarted();
+    try {
+      await ensureDesktopClientStarted();
+    } catch {
+      // The shared owner already published the exact bridge error.
+    }
   }
 
   function initializeDesktop(): Promise<void> {
@@ -156,6 +162,21 @@ export function useDesktopClientLifecycle({
           // already-saved remote peers. Surface the error after the shell is up.
           localServerAvailable.current = false;
           setError(String(error));
+          if (
+            error instanceof BridgeInvokeError &&
+            error.code === "incompatibleLocalStore" &&
+            api.resetManagedServer
+          ) {
+            try {
+              setManagedServerReset(await api.resetManagedServer());
+              setStartupPhase("managed-server-error");
+              return;
+            } catch (previewError) {
+              setError(
+                `${String(error)} Reset inspection failed: ${String(previewError)}`,
+              );
+            }
+          }
         }
       }
       setStartupPhase("loading-configuration");
@@ -171,6 +192,25 @@ export function useDesktopClientLifecycle({
 
   async function onRetryStartup() {
     await initializeDesktop();
+  }
+
+  async function onResetManagedServer() {
+    if (!managedServerReset || !api.resetManagedServer) return;
+    setStarting(true);
+    setError(null);
+    try {
+      const result = await api.resetManagedServer(managedServerReset.confirmation);
+      if (!result.completed || !result.backupPath) {
+        throw new Error("managed server reset did not create a backup");
+      }
+      setManagedServerReset(null);
+      await initializeDesktop();
+    } catch (error) {
+      setError(String(error));
+      setStartupPhase("managed-server-error");
+    } finally {
+      setStarting(false);
+    }
   }
 
   useEffect(() => {
@@ -241,6 +281,8 @@ export function useDesktopClientLifecycle({
     ensureDesktopClientStarted,
     onStartClient,
     onRetryStartup,
+    onResetManagedServer,
+    managedServerReset,
     restartDesktopClient,
   };
 }

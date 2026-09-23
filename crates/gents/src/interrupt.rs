@@ -69,6 +69,25 @@ fn exact_request_filter(
     ))
 }
 
+fn scoped_request_filter(
+    request_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<String> {
+    anyhow::ensure!(
+        !request_id.trim().is_empty() && !agent_did.trim().is_empty(),
+        "interrupt fetch requires logical request and principal identity"
+    );
+    let logical = escape_graphql_string(request_id);
+    let owner = escape_graphql_string(agent_did);
+    let requester = requester_did
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    Ok(format!(
+        "request_id:{{_eq:\"{logical}\"}},agent_did:{{_eq:\"{owner}\"}},requester_did:{{_eq:{requester}}}"
+    ))
+}
+
 /// Latch the same exact interrupt through local or HTTP transaction access.
 /// The existing completion loop observes the durable intent on the target node.
 pub async fn interrupt_request_by_doc_id_with_access(
@@ -280,16 +299,25 @@ async fn drain_request_queue_after_interrupt(
     }
 }
 
-pub async fn fetch_interrupt_requested_at(
+/// Fetch the durable interrupt intent for the exact physical AgentRequest
+/// document identified by `_docID`.
+///
+/// `_docID` is the globally unique physical key, so this lookup cannot
+/// cross principals or collide on a shared logical `request_id`.
+pub async fn fetch_interrupt_requested_at_by_doc_id(
     node: &EmbeddedNode,
-    request_id: &str,
+    request_doc_id: &str,
 ) -> Result<Option<String>> {
-    let escaped = escape_graphql_string(request_id);
+    anyhow::ensure!(
+        !request_doc_id.trim().is_empty(),
+        "interrupt fetch requires a physical request document id"
+    );
+    let escaped = escape_graphql_string(request_doc_id);
     let query = format!(
         r#"query {{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
+                filter: {{ _docID: {{ _eq: "{escaped}" }} }},
+                limit: 2
             ) {{
                 interrupt_requested_at
             }}
@@ -298,7 +326,7 @@ pub async fn fetch_interrupt_requested_at(
     let resp = node.execute(&query).await;
     if resp.has_errors() {
         bail!(
-            "fetch_interrupt_requested_at({request_id}) failed: {}",
+            "fetch_interrupt_requested_at_by_doc_id({request_doc_id}) failed: {}",
             resp.errors
                 .iter()
                 .map(|error| error.message.as_str())
@@ -306,17 +334,87 @@ pub async fn fetch_interrupt_requested_at(
                 .join("; ")
         );
     }
-    let value = resp
+    let rows = resp
         .data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))
         .and_then(|v| v.as_array())
-        .and_then(|arr| arr.first())
+        .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
+    anyhow::ensure!(rows.len() <= 1, "interrupt request fetch is ambiguous");
+    let value = rows
+        .first()
         .and_then(|row| row.get("interrupt_requested_at"))
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from);
     Ok(value)
+}
+
+/// Fetch the durable interrupt intent by logical request id.
+///
+/// The logical id is not a physical key: resolution goes through the
+/// existing request-binding owner, which rejects ambiguous logical ids
+/// instead of silently reading one replica's row with `limit: 1`. Callers
+/// carrying the physical `_docID` must prefer
+/// `fetch_interrupt_requested_at_by_doc_id`.
+pub async fn fetch_interrupt_requested_at(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> Result<Option<String>> {
+    let request_doc_id = crate::request_binding::require_request_doc_id(node, request_id).await?;
+    fetch_interrupt_requested_at_by_doc_id(node, &request_doc_id).await
+}
+
+/// Fetch the durable interrupt intent by logical request id within one
+/// principal scope (`agent_did` + optional `requester_did`).
+///
+/// Cross-principal collisions on the same logical id are excluded by the
+/// scope; any residual same-scope collision fails closed via the existing
+/// ambiguity rejection (`limit: 2` + row-count check), never `limit: 1`.
+pub async fn fetch_interrupt_requested_at_scoped(
+    node: &EmbeddedNode,
+    request_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<Option<String>> {
+    let filter = scoped_request_filter(request_id, agent_did, requester_did)?;
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{{filter}}},
+                limit: 2
+            ) {{
+                interrupt_requested_at
+            }}
+        }}"#
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        bail!(
+            "fetch_interrupt_requested_at_scoped({request_id}) failed: {}",
+            resp.errors
+                .iter()
+                .map(|error| error.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
+    }
+    let rows = resp
+        .data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("interrupt request fetch omitted rows"))?;
+    anyhow::ensure!(
+        rows.len() <= 1,
+        "interrupt request fetch is ambiguous within principal scope"
+    );
+    Ok(rows
+        .first()
+        .and_then(|row| row.get("interrupt_requested_at"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from))
 }
 
 #[derive(Debug, Clone)]

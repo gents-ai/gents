@@ -240,7 +240,7 @@ impl AcpServiceConfig {
 /// Per-session shim state.
 ///
 /// Gents documents record session identity (`AgentSession`) and request
-/// history (`AgentRequest`/`AgentResponse`); they have no cwd, model, or mode
+/// history (`AgentRequest`, `AgentMessage`, and `AgentOutputSegment`); they have no cwd, model, or mode
 /// fields. Everything the pager needs that the runtime does not model is
 /// connection-local state here and is never persisted.
 #[derive(Debug, Clone)]
@@ -1752,6 +1752,11 @@ impl AcpService {
 mod tests {
     use super::*;
     use crate::commands::grok_shim::projection::tools::PAGER_WAIT_FOR_EXIT_MESSAGE;
+    use crate::commands::grok_shim::test_fixtures::seed_canonical_assistant_message;
+    use crate::commands::grok_shim::test_fixtures::{
+        configure_runtime_behavior,
+        streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
+    };
     use crate::commands::grok_shim::turn::PromptBlock;
     use tokio::sync::Mutex;
 
@@ -2005,27 +2010,31 @@ mod tests {
         }) { _docID } }"#).await;
         ensure_no_errors(&result, "seed resume request").unwrap();
         let request = node
-            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "resume-request"}}) {_docID} }"#)
+            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "resume-request"}}, limit: 2) {_docID request_id agent_did requester_did session_id} }"#)
             .await;
         ensure_no_errors(&request, "lookup resume request").unwrap();
-        let request_doc_id = request.data.as_ref().unwrap()["AgentRequest"][0]["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        for sequence in 1..=70 {
-            let content = serde_json::to_string(&json!({"role":"assistant", "content":[{"type":"text", "text":format!("REPLAY_{sequence:03}\n")}]})).unwrap();
+        let rows = request.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), 1, "resume request identity must be exact");
+        let request: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(rows[0].clone()).unwrap();
+        for sequence in 1_i64..=70 {
             let message_key = gents::session::sequence_message_key(
                 "did:test:grok-shim",
                 "resume-history",
                 Some("did:test:grok-shim"),
-                sequence,
+                u32::try_from(sequence).expect("fixture sequence fits u32"),
             );
-            let result = node.execute(&format!(r#"mutation {{ create_AgentMessage(input: {{
-                message_key: "{}", request_id: "resume-request", request_doc_id: "{}", session_id: "resume-history",
-                agent_did: "did:test:grok-shim", requester_did: "did:test:grok-shim",
-                sequence: {sequence}, role: "assistant", content: "{}", timestamp: "2026-09-01T12:00:00Z"
-            }}) {{_docID}} }}"#, escape_graphql_string(&message_key), escape_graphql_string(&request_doc_id), escape_graphql_string(&content))).await;
-            ensure_no_errors(&result, "seed replay page").unwrap();
+            seed_canonical_assistant_message(
+                node,
+                &request,
+                &message_key,
+                sequence,
+                "",
+                &format!("REPLAY_{sequence:03}\n"),
+            )
+            .await;
         }
         let dispatch = service
             .handle_acp_payload(&request_payload(
@@ -2245,29 +2254,49 @@ mod tests {
 
     #[tokio::test]
     async fn native_task_kill_is_scoped_idempotent_and_uses_stock_envelope() {
-        let (_dir, service) = test_service().await;
-        service
-            .sessions
-            .lock()
-            .await
-            .insert("task-session".into(), AcpSessionState::new());
-        let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
-            service.config.node.clone(),
-            "task-owner".into(),
-            "task-session".into(),
-            service.config.agent_did.to_string(),
-            "task-button".into(),
-            1,
-            "bash".into(),
-            "{}".into(),
-            chrono::Utc::now() + chrono::Duration::minutes(5),
+        let prompt = "start task process";
+        let fixture = runtime_control_fixture(
+            "task-kill",
+            vec![StreamPlan::current_authored_user(
+                prompt,
+                vec![
+                    StreamResponse::streams(
+                        prompt,
+                        vec![StreamChunk::tool_call(
+                            "task-meta",
+                            "spawn_process",
+                            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+                        )],
+                    ),
+                    StreamResponse::completes(prompt, ["task started"]),
+                ],
+            )],
         )
-        .with_requester_did(Some(service.config.agent_did.to_string()));
-        lifecycle.start_running().await.unwrap();
+        .await;
+        let service = &fixture.service;
+        service
+            .handle_acp_payload(&request_payload(
+                "session/new",
+                json!({"_meta":{"sessionId":"task-session"}}),
+            ))
+            .await;
+        let completed = service
+            .handle_acp_payload(&request_payload(
+                "session/prompt",
+                json!({"sessionId":"task-session","prompt":[{"type":"text","text":prompt}]}),
+            ))
+            .await;
+        let completed_response = parse_response(completed.response.as_deref().unwrap());
+        assert!(
+            completed_response.get("error").is_none(),
+            "runtime task prompt failed: {completed_response}"
+        );
+        let task_id =
+            wait_for_running_bash_handle(service.config.node.as_ref(), "task-session").await;
         for params in [
             json!({"sessionId":"task-session"}),
             json!({"sessionId":"task-session","taskId":""}),
-            json!({"sessionId":"task-session","taskId":"task-button","source":"invalid"}),
+            json!({"sessionId":"task-session","taskId":task_id,"source":"invalid"}),
         ] {
             let response = service
                 .handle_acp_payload(&request_payload("x.ai/task/kill", params))
@@ -2285,180 +2314,119 @@ mod tests {
             let response = service
                 .handle_acp_payload(&request_payload(
                     "x.ai/task/kill",
-                    json!({"sessionId":session, "taskId":"task-button", "source":"clientUi"}),
+                    json!({"sessionId":session, "taskId":task_id, "source":"clientUi"}),
                 ))
                 .await;
             let value = parse_response(response.response.as_deref().unwrap());
             assert_eq!(
                 value["result"]["result"],
-                json!({"taskId":"task-button","outcome":expected}),
+                json!({"taskId":task_id,"outcome":expected}),
                 "{value}"
             );
         }
-        let response = service.config.node.execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "task-button"}}) {lifecycle_state} }"#).await;
+        let response = service.config.node.execute(&format!(r#"{{ AgentToolCall(filter: {{tool_call_id: {{_eq: "{}"}}}}) {{lifecycle_state}} }}"#, escape_graphql_string(&task_id))).await;
         assert_eq!(
             response.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
             "cancelled"
         );
+        fixture.shutdown().await;
     }
 
     #[tokio::test]
     async fn native_child_controls_and_usage_follow_physical_lineage() {
-        let (_dir, service) = test_service().await;
-        ensure_session_document(&service.config, "parent-session")
-            .await
-            .unwrap();
-        ensure_session_document(&service.config, "child-session")
-            .await
-            .unwrap();
-        ensure_session_document(&service.config, "unlinked-session")
-            .await
-            .unwrap();
-        service
-            .sessions
-            .lock()
-            .await
-            .insert("parent-session".into(), AcpSessionState::new());
+        let parent_prompt = "spawn child worker";
+        let child_prompt = "run child process";
+        let unlinked_prompt = "run unlinked process";
+        let child_args = serde_json::json!({
+            "name": "__BEHAVIOR__",
+            "prompt": child_prompt,
+            "await_mode": "background"
+        });
+        let mut fixture = runtime_control_fixture_with_plan_builder("child-controls", |behavior_id| {
+            vec![
+                StreamPlan::current_authored_user(
+                    parent_prompt,
+                    vec![
+                        StreamResponse::streams(
+                            parent_prompt,
+                            vec![StreamChunk::tool_call(
+                                "spawn-child-meta",
+                                "spawn_subagent",
+                                child_args.to_string().replace("__BEHAVIOR__", behavior_id),
+                            )],
+                        ),
+                        StreamResponse::completes(parent_prompt, ["child started"]),
+                    ],
+                ),
+                StreamPlan::current_authored_user(
+                    child_prompt,
+                    vec![
+                        StreamResponse::streams(
+                            child_prompt,
+                            vec![StreamChunk::tool_call(
+                                "child-process-meta",
+                                "spawn_process",
+                                r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+                            )],
+                        ),
+                        StreamResponse::completes(child_prompt, ["child process started"]),
+                    ],
+                ),
+                StreamPlan::current_authored_user(
+                    unlinked_prompt,
+                    vec![
+                        StreamResponse::streams(
+                            unlinked_prompt,
+                            vec![StreamChunk::tool_call(
+                                "unlinked-process-meta",
+                                "spawn_process",
+                                r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+                            )],
+                        ),
+                        StreamResponse::completes(unlinked_prompt, ["unlinked process started"]),
+                    ],
+                ),
+            ]
+        })
+        .await;
+        let service = &fixture.service;
+        for (session, prompt) in [
+            ("parent-session", parent_prompt),
+            ("unlinked-session", unlinked_prompt),
+        ] {
+            service
+                .handle_acp_payload(&request_payload(
+                    "session/new",
+                    json!({"_meta":{"sessionId":session}}),
+                ))
+                .await;
+            let completed = service
+                .handle_acp_payload(&request_payload(
+                    "session/prompt",
+                    json!({"sessionId":session,"prompt":[{"type":"text","text":prompt}]}),
+                ))
+                .await;
+            let completed_response = parse_response(completed.response.as_deref().unwrap());
+            assert!(
+                completed_response.get("error").is_none(),
+                "runtime control prompt failed for {session}: {completed_response}"
+            );
+        }
         let node = &service.config.node;
         let did = gents::graphql::escape_graphql_string(&service.config.agent_did);
-        let behavior = gents::graphql::escape_graphql_string(&service.config.behavior_id);
-        let root = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "parent", session_id: "parent-session", agent_did: "{did}", requester_did: "{did}",
-            behavior_id: "{behavior}", content: "parent", lifecycle_state: "completed", created_at: "2026-09-01T00:00:00Z"
-        }}) {{_docID}} }}"#)).await;
-        ensure_no_errors(&root, "root fixture").unwrap();
-        let root = node
-            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "parent"}}) {_docID} }"#)
-            .await;
-        ensure_no_errors(&root, "root fixture lookup").unwrap();
-        let root_doc = root.data.unwrap()["AgentRequest"][0]["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let observation = gents_protocol::graphql::graphql_input_literal(&json!({
-            "observation": {
-                "last_activity_at": "2026-09-01T00:00:00Z",
-                "latest_request": {
-                    "request_doc_id": root_doc.clone(),
-                    "request_id": "parent",
-                    "lifecycle_state": "completed"
-                }
-            }
-        }))
-        .unwrap();
-        let observed = node
-            .execute(&format!(
-                r#"mutation {{ update_AgentSession(filter: {{session_id: {{_eq: "parent-session"}}}}, input: {observation}) {{_docID}} }}"#
-            ))
-            .await;
-        ensure_no_errors(&observed, "parent session observation").unwrap();
-        let root_doc_escaped = gents::graphql::escape_graphql_string(&root_doc);
-        let bridge = node.execute(&format!(r#"mutation {{ create_AgentToolCall(input: {{
-            tool_call_key: "parent-session:spawn", tool_call_id: "spawn", request_id: "parent", request_doc_id: "{root_doc_escaped}",
-            session_id: "parent-session", agent_did: "{did}", requester_did: "{did}", tool_name: "spawn_subagent",
-            child_request_id: "child", await_mode: "background", lifecycle_state: "running"
-        }}) {{_docID}} }}"#)).await;
-        ensure_no_errors(&bridge, "bridge fixture").unwrap();
-        let bridge = node
-            .execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "spawn"}}) {_docID} }"#)
-            .await;
-        ensure_no_errors(&bridge, "bridge fixture lookup").unwrap();
-        let bridge_doc = bridge.data.unwrap()["AgentToolCall"][0]["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let bridge_doc = gents::graphql::escape_graphql_string(&bridge_doc);
-        let child = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "child", session_id: "child-session", agent_did: "{did}", requester_did: "{did}",
-            behavior_id: "{behavior}", content: "child", lifecycle_state: "processing", created_at: "2026-09-01T00:00:01Z",
-            caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{root_doc_escaped}",
-            caused_by_parent_tool_call_id: "spawn", caused_by_parent_tool_call_doc_id: "{bridge_doc}"
-        }}) {{_docID}} }}"#)).await;
-        ensure_no_errors(&child, "child fixture").unwrap();
-        let child = node
-            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "child"}}) {_docID} }"#)
-            .await;
-        let child_doc = child.data.unwrap()["AgentRequest"][0]["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let unlinked = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "unlinked", session_id: "unlinked-session", agent_did: "{did}", requester_did: "{did}",
-            behavior_id: "{behavior}", content: "unlinked", lifecycle_state: "processing", created_at: "2026-09-01T00:00:02Z"
-        }}) {{_docID}} }}"#)).await;
-        ensure_no_errors(&unlinked, "unlinked fixture").unwrap();
-        let unlinked = node
-            .execute(r#"{ AgentRequest(filter: {request_id: {_eq: "unlinked"}}) {_docID} }"#)
-            .await;
-        let unlinked_doc = unlinked.data.unwrap()["AgentRequest"][0]["_docID"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        for (request, request_doc, session) in [
-            ("parent", &root_doc, "parent-session"),
-            ("child", &child_doc, "child-session"),
-        ] {
-            let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
-                node.clone(),
-                request.into(),
-                session.into(),
-                service.config.agent_did.to_string(),
-                "ambiguous-process".into(),
-                2,
-                "bash".into(),
-                "{}".into(),
-                chrono::Utc::now() + chrono::Duration::minutes(5),
-            )
-            .with_request_doc_id(Some(request_doc.clone()))
-            .with_requester_did(Some(service.config.agent_did.to_string()));
-            lifecycle.start_running().await.unwrap();
-        }
-        let denied = service
-            .handle_acp_payload(&request_payload(
-                "x.ai/task/kill",
-                json!({"sessionId":"parent-session", "taskId":"ambiguous-process"}),
-            ))
-            .await;
-        let denied = parse_response(denied.response.as_deref().unwrap());
-        assert_eq!(
-            denied["result"]["result"]["outcome"], "not_found",
-            "{denied}"
-        );
-        let unchanged = node.execute(r#"{ AgentToolCall(filter: {tool_call_id: {_eq: "ambiguous-process"}}) {lifecycle_state} }"#).await;
-        assert!(unchanged.data.unwrap()["AgentToolCall"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["lifecycle_state"] == "running"));
-        for (request, request_doc, session) in [
-            ("child", &child_doc, "child-session"),
-            ("unlinked", &unlinked_doc, "unlinked-session"),
-        ] {
-            let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
-                node.clone(),
-                request.into(),
-                session.into(),
-                service.config.agent_did.to_string(),
-                "child-process".into(),
-                1,
-                "bash".into(),
-                "{}".into(),
-                chrono::Utc::now() + chrono::Duration::minutes(5),
-            )
-            .with_request_doc_id(Some(request_doc.clone()))
-            .with_requester_did(Some(service.config.agent_did.to_string()));
-            lifecycle.start_running().await.unwrap();
-        }
+        let child = wait_for_child_request(node).await;
+        let child_session = child.session_id.as_deref().unwrap();
+        let child_process = wait_for_running_bash_handle(node.as_ref(), child_session).await;
         for (session, outcome) in [
             ("unlinked-session", "not_found"),
             ("parent-session", "killed"),
-            ("child-session", "already_exited"),
+            (child_session, "already_exited"),
         ] {
             let response = service
                 .handle_acp_payload(&request_payload(
                     "x.ai/task/kill",
                     json!({
-                        "sessionId": session, "taskId": "child-process", "source": "teardown"
+                        "sessionId": session, "taskId": child_process, "source": "teardown"
                     }),
                 ))
                 .await;
@@ -2468,13 +2436,37 @@ mod tests {
                 "{response}"
             );
         }
+        let parent = exact_request_by_doc_id(
+            node.as_ref(),
+            child.caused_by_parent_request_doc_id.as_deref().unwrap(),
+        )
+        .await;
+        // The real accepted parent/child turns above legitimately consumed
+        // model tokens. Pin that runtime-owned baseline before adding the
+        // synthetic accounting rows so this assertion proves attribution,
+        // including exclusion of the foreign physical owner, without
+        // pretending the live calls did not occur.
+        RuntimeControlFixture::stop_runtime_parts(&fixture.shutdown, &mut fixture.runtime).await;
+        let baseline = service
+            .handle_acp_payload(&request_payload(
+                "x.ai/session/usage",
+                json!({"sessionId":"parent-session"}),
+            ))
+            .await;
+        let baseline = parse_response(baseline.response.as_deref().unwrap());
+        assert!(baseline.get("error").is_none(), "{baseline}");
+        let baseline = &baseline["result"]["usage"];
+        let baseline_input = baseline["inputTokens"].as_u64().unwrap();
+        let baseline_output = baseline["outputTokens"].as_u64().unwrap();
+        let baseline_cached = baseline["cachedReadTokens"].as_u64().unwrap();
+        let baseline_calls = baseline["modelCalls"].as_u64().unwrap();
         let foreign = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "foreign-usage", session_id: "child-session", agent_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
-        }}) {{_docID}} }}"#)).await;
+            request_id: "foreign-usage", session_id: "{}", agent_did: "{did}", requester_did: "did:test:foreign", lifecycle_state: "completed"
+        }}) {{_docID}} }}"#, escape_graphql_string(child_session))).await;
         ensure_no_errors(&foreign, "foreign usage fixture").unwrap();
         for (request, input, output, cached) in [
-            ("parent", 100, 10, 50),
-            ("child", 200, 20, 100),
+            (parent.request_id.as_str(), 100, 10, 50),
+            (child.request_id.as_str(), 200, 20, 100),
             ("foreign-usage", 9999, 999, 0),
         ] {
             let owner = node
@@ -2500,12 +2492,25 @@ mod tests {
             .await;
         let response = parse_response(usage.response.as_deref().unwrap());
         assert!(response.get("error").is_none(), "{response}");
-        assert_eq!(response["result"]["usage"]["inputTokens"], 300);
-        assert_eq!(response["result"]["usage"]["outputTokens"], 30);
-        assert_eq!(response["result"]["usage"]["cachedReadTokens"], 150);
-        assert_eq!(response["result"]["usage"]["modelCalls"], 2);
+        assert_eq!(
+            response["result"]["usage"]["inputTokens"],
+            baseline_input + 300
+        );
+        assert_eq!(
+            response["result"]["usage"]["outputTokens"],
+            baseline_output + 30
+        );
+        assert_eq!(
+            response["result"]["usage"]["cachedReadTokens"],
+            baseline_cached + 150
+        );
+        assert_eq!(
+            response["result"]["usage"]["modelCalls"],
+            baseline_calls + 2
+        );
         assert_eq!(response["result"]["usage"]["usageIsIncomplete"], true);
         assert!(response["result"]["usage"].get("costUsdTicks").is_none());
+        fixture.shutdown().await;
     }
 
     fn request_payload(method: &str, params: Value) -> String {
@@ -2529,6 +2534,254 @@ mod tests {
 
     fn parse_response(line: &str) -> Value {
         serde_json::from_str(line).expect("response line is JSON")
+    }
+
+    struct RuntimeControlFixture {
+        _dir: tempfile::TempDir,
+        service: AcpService,
+        _backend: MockStreamingBackend,
+        shutdown: tokio::sync::watch::Sender<bool>,
+        runtime: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
+    }
+
+    impl RuntimeControlFixture {
+        async fn stop_runtime_parts(
+            shutdown: &tokio::sync::watch::Sender<bool>,
+            runtime: &mut Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
+        ) {
+            let _ = shutdown.send(true);
+            if let Some(runtime) = runtime.take() {
+                runtime.await.unwrap().unwrap();
+            }
+        }
+
+        async fn shutdown(mut self) {
+            Self::stop_runtime_parts(&self.shutdown, &mut self.runtime).await;
+        }
+    }
+
+    async fn runtime_control_fixture(name: &str, plans: Vec<StreamPlan>) -> RuntimeControlFixture {
+        runtime_control_fixture_with_plan_builder(name, |_| plans).await
+    }
+
+    async fn runtime_control_fixture_with_plan_builder(
+        name: &str,
+        plans: impl FnOnce(&str) -> Vec<StreamPlan>,
+    ) -> RuntimeControlFixture {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = Arc::new(
+            gents::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap(),
+        );
+        let agent_did = gents::AgentIdentity::did(identity.as_ref()).to_string();
+        let behavior_id = gents::default_behavior_id_for_agent(&agent_did);
+        let node = Arc::new(
+            EmbeddedNode::builder()
+                .data_path(dir.path().join("node"))
+                .with_storage_backend(gents::defra_node::StorageBackend::Regolith)
+                .with_node_identity_did(&agent_did)
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let backend =
+            MockStreamingBackend::start_with_plans("grok-control-model", plans(&behavior_id))
+                .unwrap();
+        configure_runtime_behavior(
+            node.as_ref(),
+            &agent_did,
+            &behavior_id,
+            &format!("grok-control-{name}"),
+            backend.endpoint(),
+            "grok-control-model",
+            true,
+        )
+        .await;
+        let graphql = spawn_mock_graphql(node.clone()).await;
+        let config = AcpServiceConfig {
+            node: node.clone(),
+            agent_did: Arc::from(agent_did.as_str()),
+            behavior_id: Arc::from(behavior_id.as_str()),
+            current_model: bound_model(),
+            grok_home: None,
+        };
+        let turns = Arc::new(TurnManager::new(
+            node.clone(),
+            super::super::turn::TurnManagerConfig {
+                actor: identity::Did::new(agent_did.clone()).expect("fixture creator DID"),
+                agent_did: agent_did.clone(),
+                behavior_id: behavior_id.clone(),
+                graphql,
+            },
+        ));
+        let projections = Arc::new(ProjectionEngine::new(
+            node.clone(),
+            super::super::projection::BoundModelContext::new(
+                "grok-control-model".into(),
+                "Grok control model".into(),
+                262_144,
+            ),
+        ));
+        let service = AcpService::new(config, turns, projections);
+        let runtime_identity: Arc<dyn gents::AgentIdentity> = identity;
+        let agent = gents::Gents::from_default_behavior_documents(
+            node.clone(),
+            runtime_identity,
+            gents::DocumentRuntimeOptions {
+                tool_ceiling: gents::ToolCeiling::readonly(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
+        let runtime = tokio::spawn(agent.run(shutdown_rx));
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                let did = escape_graphql_string(&agent_did);
+                let response = node.execute(&format!(r#"{{ AgentRuntime(filter: {{agent_did: {{_eq: "{did}"}}}}, limit: 2) {{reconcile_phase}} AgentBehaviorReadiness(filter: {{agent_did: {{_eq: "{did}"}}}}, limit: 2) {{agent_did snapshot_json updated_at}} }}"#)).await;
+                ensure_no_errors(&response, "runtime control readiness").unwrap();
+                let data = response.data.as_ref().unwrap();
+                let status = data["AgentRuntime"].as_array().unwrap();
+                let readiness = data["AgentBehaviorReadiness"].as_array().unwrap();
+                let snapshot = readiness.first().and_then(|row| {
+                    let row = serde_json::from_value::<gents_protocol::row::AgentBehaviorReadinessRow>(row.clone()).ok()?;
+                    gents_protocol::row::decode_behavior_readiness_snapshot(&row, &agent_did).ok()
+                });
+                if status.len() == 1
+                    && status[0]["reconcile_phase"] == "idle"
+                    && readiness.len() == 1
+                    && snapshot.as_ref().is_some_and(|snapshot| {
+                        snapshot.process_state.accepts_work()
+                            && snapshot.active_generation >= 1
+                            && snapshot.behaviors.iter().any(|behavior| {
+                                behavior.behavior_id == behavior_id
+                                    && behavior.state == gents_protocol::row::BehaviorReadinessState::Ready
+                            })
+                    })
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("runtime control fixture readiness timeout");
+        RuntimeControlFixture {
+            _dir: dir,
+            service,
+            _backend: backend,
+            shutdown,
+            runtime: Some(runtime),
+        }
+    }
+
+    async fn wait_for_running_bash_handle(node: &EmbeddedNode, session_id: &str) -> String {
+        let session_id = escape_graphql_string(session_id);
+        tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{session_id}"}}, tool_name: {{_eq: "bash"}}, lifecycle_state: {{_eq: "running"}}}}, limit: 2) {{tool_call_id}} }}"#)).await;
+                ensure_no_errors(&response, "running bash handle").unwrap();
+                let rows = response.data.as_ref().unwrap()["AgentToolCall"].as_array().unwrap();
+                if rows.len() == 1 {
+                    return rows[0]["tool_call_id"].as_str().unwrap().to_owned();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        }).await.expect("running bash handle timeout")
+    }
+
+    async fn wait_for_child_request(
+        node: &Arc<EmbeddedNode>,
+    ) -> gents_protocol::row::AgentRequestRow {
+        let observed = tokio::time::timeout(std::time::Duration::from_secs(20), async {
+            loop {
+                let response = node.execute(r#"{ AgentRequest {_docID request_id agent_did requester_did session_id caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id} }"#).await;
+                ensure_no_errors(&response, "child request").unwrap();
+                let rows = response.data.as_ref().unwrap()["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| {
+                        row["caused_by_parent_request_doc_id"]
+                            .as_str()
+                            .is_some_and(|id| !id.trim().is_empty())
+                            && row["caused_by_parent_tool_call_doc_id"]
+                                .as_str()
+                                .is_some_and(|id| !id.trim().is_empty())
+                    })
+                    .collect::<Vec<_>>();
+                assert!(rows.len() <= 1, "ambiguous physical child requests: {rows:?}");
+                if rows.len() == 1 {
+                    return serde_json::from_value((*rows[0]).clone()).unwrap();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        match observed {
+            Ok(child) => child,
+            Err(_) => {
+                let diagnostic = node
+                    .execute(r#"{ AgentToolCall(filter: {tool_name: {_eq: "spawn_subagent"}}) {_docID request_id request_doc_id tool_call_id lifecycle_state tool_failure_class child_request_id spawn_target_did spawn_behavior_id await_mode} }"#)
+                    .await;
+                let presentation = diagnostic
+                    .data
+                    .as_ref()
+                    .and_then(|data| data["AgentToolCall"].as_array())
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| {
+                        Some((row["_docID"].as_str()?, row["request_doc_id"].as_str()?))
+                    });
+                let presentation = if let Some((tool_doc_id, request_doc_id)) = presentation {
+                    let request = node
+                        .execute(&format!(
+                            r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{}"}}}}, limit: 2) {{agent_did requester_did session_id}} }}"#,
+                            escape_graphql_string(request_doc_id)
+                        ))
+                        .await;
+                    let scope = request
+                        .data
+                        .as_ref()
+                        .and_then(|data| data["AgentRequest"].as_array())
+                        .and_then(|rows| rows.first());
+                    if let Some(scope) = scope {
+                        gents::tool_call_lifecycle::load_tool_call_presentation(
+                            &gents::ConfigAccess::Local(node.clone()),
+                            tool_doc_id,
+                            scope["agent_did"].as_str().unwrap_or_default(),
+                            scope["session_id"].as_str().unwrap_or_default(),
+                            scope["requester_did"].as_str(),
+                        )
+                        .await
+                        .map(|value| format!("{value:?}"))
+                        .unwrap_or_else(|error| format!("presentation error: {error:#}"))
+                    } else {
+                        "parent request scope unavailable".into()
+                    }
+                } else {
+                    "spawn bridge unavailable".into()
+                };
+                panic!(
+                    "child request timeout; durable spawn observations: data={:?} errors={:?}; canonical presentation={presentation}",
+                    diagnostic.data, diagnostic.errors,
+                );
+            }
+        }
+    }
+
+    async fn exact_request_by_doc_id(
+        node: &EmbeddedNode,
+        doc_id: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
+        let doc_id = escape_graphql_string(doc_id);
+        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{doc_id}"}}}}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#)).await;
+        ensure_no_errors(&response, "physical parent request").unwrap();
+        let rows = response.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), 1, "physical parent request must be exact");
+        serde_json::from_value(rows[0].clone()).unwrap()
     }
 
     /// Build a service whose `create_agent_request` seam points at a live
@@ -2624,7 +2877,6 @@ mod tests {
         let node = config.node.clone();
         let service = test_service_with_graphql(node, graphql).await;
         let agent_did = service.config.agent_did.to_string();
-        let behavior_id = service.config.behavior_id.to_string();
 
         // Create the session first so the prompt's session is known.
         service
@@ -2653,10 +2905,8 @@ mod tests {
         // an assistant row, then terminalization.
         let node_for_seed = config.node.clone();
         let seed_handle = tokio::spawn(async move {
-            let escaped_agent_did = gents::graphql::escape_graphql_string(&agent_did);
-            let escaped_behavior_id = gents::graphql::escape_graphql_string(&behavior_id);
             loop {
-                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }) { _docID request_id } }"#;
+                let query = r#"{ AgentRequest(filter: { lifecycle_state: { _eq: "pending" } }, limit: 2) { _docID request_id agent_did requester_did session_id } }"#;
                 let response = node_for_seed.execute(query).await;
                 let rows = response
                     .data
@@ -2666,75 +2916,39 @@ mod tests {
                     .cloned()
                     .unwrap_or_default();
                 if let Some(row) = rows.first() {
-                    let request_id = row
-                        .get("request_id")
-                        .and_then(Value::as_str)
-                        .unwrap()
-                        .to_string();
-                    let request_doc_id = row
-                        .get("_docID")
-                        .and_then(Value::as_str)
-                        .unwrap()
-                        .to_string();
-                    let message = serde_json::to_string(
-                        &gents_protocol::message::Message::assistant("live answer"),
-                    )
-                    .expect("serialize assistant message");
-                    let escaped = gents::graphql::escape_graphql_string(&message);
-                    let escaped_request = gents::graphql::escape_graphql_string(&request_id);
-                    let escaped_request_doc =
-                        gents::graphql::escape_graphql_string(&request_doc_id);
+                    assert_eq!(rows.len(), 1, "live request identity must be exact");
+                    let request: gents_protocol::row::AgentRequestRow =
+                        serde_json::from_value(row.clone()).unwrap();
+                    let escaped_request =
+                        gents::graphql::escape_graphql_string(&request.request_id);
                     let message_key = gents::session::sequence_message_key(
                         &agent_did,
                         "s-live",
                         Some(&agent_did),
                         1,
                     );
-                    let escaped_message_key = gents::graphql::escape_graphql_string(&message_key);
-                    let mutation = format!(
-                        r#"mutation {{
-                            create_AgentMessage(input: {{
-                                message_key: "{escaped_message_key}"
-                                session_id: "s-live"
-                                agent_did: "{escaped_agent_did}"
-                                requester_did: "{escaped_agent_did}"
-                                request_id: "{escaped_request}"
-                                request_doc_id: "{escaped_request_doc}"
-                                sequence: 1
-                                role: "assistant"
-                                content: "{escaped}"
-                                timestamp: "2026-09-01T00:00:00Z"
-                            }}) {{ _docID }}
-                        }}"#
-                    );
-                    let response = node_for_seed.execute(&mutation).await;
-                    gents::graphql::ensure_no_errors(&response, "seed message")
-                        .expect("seed message");
-                    // Terminalize with a completed response row.
-                    let now = chrono::Utc::now().to_rfc3339();
+                    let message_doc_id = seed_canonical_assistant_message(
+                        node_for_seed.as_ref(),
+                        &request,
+                        &message_key,
+                        1,
+                        "",
+                        "live answer",
+                    )
+                    .await;
+                    let terminal_output = gents_protocol::graphql::graphql_input_literal(
+                        &serde_json::to_value(gents_protocol::output::TerminalOutput::Message {
+                            message_doc_id,
+                        })
+                        .unwrap(),
+                    )
+                    .unwrap();
                     let mutation = format!(
                         r#"mutation {{
                             update_AgentRequest(
                                 filter: {{ request_id: {{ _eq: "{escaped_request}" }} }},
-                                input: {{ lifecycle_state: "completed" }}
+                                input: {{ lifecycle_state: "completed", terminal_output: {terminal_output} }}
                             ) {{ _docID }}
-                            create_AgentResponse(input: {{
-                                response_key: "{escaped_request}"
-                                request_id: "{escaped_request}"
-                                request_doc_id: "{escaped_request_doc}"
-                                agent_did: "{escaped_agent_did}"
-                                requester_did: "{escaped_agent_did}"
-                                behavior_id: "{escaped_behavior_id}"
-                                session_id: "s-live"
-                                content: ""
-                                reasoning: ""
-                                status: "complete"
-                                error_message: ""
-                                token_count: 0
-                                progress_seq: 0
-                                created_at: "{now}"
-                                completed_at: "{now}"
-                            }}) {{ _docID }}
                         }}"#
                     );
                     let response = node_for_seed.execute(&mutation).await;

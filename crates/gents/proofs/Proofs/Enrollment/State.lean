@@ -602,7 +602,7 @@ def projectedHydrationCatalogFor (s : State) (selectedNetwork : String)
           membership.adminSigned = true ∧ membership.fresh = true ∧
           membershipCurrentlyAuthorized s membership).image toHydrationMembership
   , sessions
-  , documents := ∅ }
+  , closureInputs := [] }
 
 def projectedClientToServerHydrationCatalog (s : State) (selectedNetwork : String)
     (sessions : Finset SessionHydration.SessionOwner) : SessionHydration.Catalog :=

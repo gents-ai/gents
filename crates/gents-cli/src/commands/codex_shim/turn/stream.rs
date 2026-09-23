@@ -3,6 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gents::config_client::ConfigAccess;
 use gents::UpdateSubscriptionSource;
 use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
@@ -19,13 +20,13 @@ use super::super::command_projection::{
 use super::super::compaction_projection::decode_gents_compaction_progress;
 use super::super::progress::{
     codex_turn_status, content_delta, decode_gents_tool_call_progress, gents_turn_progress_query,
-    response_field_is_blank, terminal_error_message, timestamp_millis,
+    hydrate_gents_tool_call_progress, terminal_error_message, timestamp_millis,
 };
 use super::super::projection_state::{stabilize_projection_kind, ChildStatus, CollabProjection};
 use super::super::protocol::{
     send_committed_user_message, send_notification, send_thread_status_changed,
 };
-use super::super::store::{hydrate_materialized_response_content, query_node_json};
+use super::super::store::query_node_json;
 use super::super::subagent_projection::{
     attach_subagent_link, is_subagent_control_tool, load_authorized_subagent_threads_for_root,
     observed_child_status, observed_collab_status, observed_collab_tool,
@@ -47,18 +48,11 @@ struct ProgressMarker {
     request_lifecycle_state: Option<String>,
     request_interrupt_requested_at: Option<String>,
     request_valid_until: Option<String>,
-    response_doc_id: Option<String>,
-    response_status: Option<String>,
-    response_token_count: Option<String>,
-    response_progress_seq: Option<String>,
-    response_reasoning_progress_seq: Option<String>,
-    response_content_len: Option<usize>,
+    request_lease_expires_at: Option<String>,
+    request_failure_reason: Option<String>,
+    response_content_fingerprint: Option<(usize, u64)>,
     response_reasoning_fingerprint: Option<(usize, u64)>,
-    response_error_len: Option<usize>,
-    response_materialized_message_sequence: Option<String>,
-    response_materialized_at: Option<String>,
-    response_completed_at: Option<String>,
-    response_interrupted_at: Option<String>,
+    selected_source: Option<gents::session::CanonicalSelectedSource>,
     tools: Vec<ToolProgressMarker>,
     inference_calls: Vec<InferenceCallProgressMarker>,
 }
@@ -106,26 +100,8 @@ struct ContentCursor {
 struct ReasoningCursor {
     observed_preview: String,
     active_item_id: Option<String>,
-    progress_seq: Option<String>,
+    selected_source: Option<gents::session::CanonicalSelectedSource>,
     segment: u64,
-    /// Text of the most recently completed segment, retained while the durable
-    /// row may still serve it stale. Cleared once staleness is disproven: an
-    /// observed empty tail (the runtime's reset-tail write landed), an advanced
-    /// `reasoning_progress_seq`, growth, divergence, `prime()`, or `reset()`.
-    /// Without it, re-observing the unchanged text after a boundary
-    /// manufactures a full replay on a fresh segment (#1040). The Lean
-    /// contract `reset_before_terminal_suppresses_durable_replay` forbids the
-    /// same replay at the terminal boundary; this cursor bookkeeping is what
-    /// establishes that contract's no-live-delta precondition mid-stream.
-    completed_preview: String,
-    /// `reasoning_progress_seq` from the last observation attributable to the
-    /// completed segment (the poll BEFORE the boundary read — the boundary
-    /// read itself may already carry a post-reset rewrite's advanced seq).
-    /// A stale re-read matches it; a genuine byte-identical rewrite has
-    /// advanced past it (`write_reasoning` bumps the seq on every append).
-    completed_reasoning_seq: Option<String>,
-    /// `reasoning_progress_seq` seen on the previous `observe` call.
-    observed_reasoning_seq: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -278,17 +254,12 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .pointer("/data/AgentRequest")
             .and_then(Value::as_array)
             .context("live request query omitted rows")?;
-        let responses = response
-            .pointer("/data/AgentResponse")
-            .and_then(Value::as_array)
-            .context("live response query omitted rows")?;
         anyhow::ensure!(
-            requests.len() == 1 && responses.len() <= 1,
-            "missing or ambiguous physical live request/response"
+            requests.len() == 1,
+            "missing or ambiguous physical live request"
         );
         let request_row = requests.first();
-        let response_row = responses.first();
-        for row in requests.iter().chain(responses.iter()) {
+        for row in requests.iter() {
             anyhow::ensure!(
                 row.get("agent_did").and_then(Value::as_str) == Some(current.agent_did.as_str())
                     && row.get("requester_did").and_then(Value::as_str)
@@ -310,28 +281,65 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(Value::as_array)
             .map(Vec::as_slice)
             .unwrap_or(&[]);
-        let response_status = response_row
-            .and_then(|row| row.get("status"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
         let lifecycle_state = request_row
             .as_ref()
             .and_then(|row| row.get("lifecycle_state"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let canonical_request: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(request_row.cloned().context("live request row missing")?)
+                .context("decoding canonical Codex request")?;
+        let canonical_output = gents::session::observe_request_output(
+            &ConfigAccess::Local(state.node.clone()),
+            &canonical_request,
+        )
+        .await
+        .context("observing canonical Codex output")?;
+        let presentation = match &canonical_output {
+            gents::session::CanonicalRequestOutput::Live(value)
+            | gents::session::CanonicalRequestOutput::Settling(value)
+            | gents::session::CanonicalRequestOutput::Published {
+                presentation: value,
+                ..
+            }
+            | gents::session::CanonicalRequestOutput::TerminalMessage {
+                presentation: value,
+                ..
+            } => Some(value),
+            gents::session::CanonicalRequestOutput::Denied => {
+                anyhow::bail!("canonical Codex output is denied")
+            }
+            gents::session::CanonicalRequestOutput::Conflicted => {
+                anyhow::bail!("canonical Codex output is conflicted")
+            }
+            gents::session::CanonicalRequestOutput::Invalid => {
+                anyhow::bail!("canonical Codex output is invalid")
+            }
+            _ => None,
+        };
+        // Only translate the owner's presentation for the existing wire delta
+        // helpers. Never clone admission input into an output-shaped object.
+        let rendered_output = presentation.map(|value| {
+            json!({
+                "content": value.body_markdown,
+                "reasoning": value.reasoning_markdown,
+            })
+        });
+        let response_row = rendered_output.as_ref();
         projection.observe_response_timing(
-            response_row
+            request_row
                 .and_then(|row| nonempty_timestamp_field(row, "created_at"))
                 .and_then(timestamp_millis),
-            response_row
-                .and_then(response_terminal_timestamp)
+            request_row
+                .and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
                 .and_then(timestamp_millis),
         );
-        let client_head = project_persisted_attempt(lifecycle_state, false, Some(response_status));
+        let client_head = project_persisted_attempt(lifecycle_state, false);
         let client_turn_state = client_head.map(|head| head.turn_state);
         let projection_settled = client_turn_state.is_some_and(|state| state.is_terminal());
 
-        let marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
+        let mut marker = progress_marker(request_row, response_row, tool_rows, inference_call_rows);
+        marker.selected_source = presentation.and_then(|value| value.selected_source.clone());
         let marker_changed = latest_progress_marker.as_ref() != Some(&marker);
         if marker_changed {
             latest_progress_marker = Some(marker);
@@ -412,25 +420,23 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
         let waiting_for_subagent_links = unresolved_terminal_control && !link_settle_expired;
 
         if marker_changed && !projection_settled {
-            if let Some(reasoning) = response_row
-                .and_then(|row| row.get("reasoning"))
-                .and_then(Value::as_str)
-            {
-                let observation = latest_reasoning_cursor.observe(
-                    &current.request_id,
-                    reasoning,
-                    response_row.and_then(|row| scalar_marker(Some(row), "progress_seq")),
-                    response_row.and_then(|row| scalar_marker(Some(row), "reasoning_progress_seq")),
-                );
-                if let Some(item_id) = observation.completed_item_id {
-                    projection
-                        .finish_reasoning(outbound, &item_id, None)
-                        .await?;
-                }
-                if let Some(delta) = observation.delta {
-                    projection
-                        .append_reasoning_delta(outbound, &delta.item_id, &delta.text)
-                        .await?;
+            if let Some(value) = presentation {
+                if let Some(source) = value.selected_source.as_ref() {
+                    let observation = latest_reasoning_cursor.observe(
+                        &current.request_id,
+                        value.reasoning_markdown.as_deref().unwrap_or(""),
+                        source,
+                    );
+                    if let Some(item_id) = observation.completed_item_id {
+                        projection
+                            .finish_reasoning(outbound, &item_id, None)
+                            .await?;
+                    }
+                    if let Some(delta) = observation.delta {
+                        projection
+                            .append_reasoning_delta(outbound, &delta.item_id, &delta.text)
+                            .await?;
+                    }
                 }
             }
         }
@@ -449,8 +455,22 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             {
                 continue;
             }
-            let Some(mut tool) = decode_gents_tool_call_progress(row) else {
-                continue;
+            let mut tool = match hydrate_gents_tool_call_progress(
+                &ConfigAccess::Local(state.node.clone()),
+                row,
+                &current.agent_did,
+                &current.session_id,
+                current.requester_did.as_deref(),
+                &current.request_doc_id,
+            )
+            .await
+            {
+                Ok(Some(tool)) => tool,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(%error, tool_key, "Codex live tool canonical payload not ready");
+                    continue;
+                }
             };
             if has_subagent_control {
                 attach_subagent_link(&mut tool, &subagent_links);
@@ -492,8 +512,8 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 let delta = content_delta_from_cursor(&mut latest_content_cursor, content);
                 projection.append_agent_delta(outbound, &delta).await?;
             }
-            latest_error_message = response_row
-                .and_then(|row| row.get("error_message"))
+            latest_error_message = request_row
+                .and_then(|row| row.get("failure_reason"))
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty())
                 .map(ToOwned::to_owned);
@@ -505,47 +525,58 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             .and_then(Value::as_str)
             .unwrap_or("");
         if projection_settled && !waiting_for_subagent_links {
-            let mut terminal_response = response_row.cloned().unwrap_or_else(|| {
-                json!({
-                    "request_id": current.request_id.clone(),
-                    "status": null,
-                    "content": null,
-                })
-            });
-            let should_wait_for_materialized_content = matches!(response_status, "complete" | "completed") // AgentResponse.status
-                    && response_field_is_blank(&terminal_response, "content")
-                    && terminal_response
-                        .get("materialized_message_sequence")
-                        .is_some_and(|value| !value.is_null());
-            let hydrated =
-                hydrate_materialized_response_content(state.node.as_ref(), &mut terminal_response)
-                    .await
-                    .context("hydrating materialized response content for terminal Codex turn")?;
-            if should_wait_for_materialized_content && !hydrated {
-                if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
-                    anyhow::bail!(
-                        "timed out waiting for materialized AgentMessage {} after {}s of inactivity\n{}",
-                        current.request_id,
-                        state.timeout.as_secs(),
-                        request_diagnostic_hint(&current.request_id)
-                    );
+            // Terminal content comes only from the shared typed owner: it
+            // classifies Loading/Denied/Conflicted/Invalid, distinguishes a
+            // terminal NoMessage from missing dependencies, and never promotes
+            // a retained partial attempt into the current answer. Request JSON
+            // (admission prompt included) is never overlaid as response text.
+            let terminal_presentation = match &canonical_output {
+                gents::session::CanonicalRequestOutput::TerminalMessage {
+                    presentation, ..
+                } => Some(presentation),
+                gents::session::CanonicalRequestOutput::Loading => {
+                    if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
+                        anyhow::bail!(
+                            "timed out waiting for terminal canonical output {} after {}s of inactivity\n{}",
+                            current.request_id,
+                            state.timeout.as_secs(),
+                            request_diagnostic_hint(&current.request_id)
+                        );
+                    }
+                    tokio::time::sleep(state.poll_interval).await;
+                    continue;
                 }
-                tokio::time::sleep(state.poll_interval).await;
-                continue;
-            }
+                gents::session::CanonicalRequestOutput::TerminalNoMessage => {
+                    // Terminal without a selected message: no answer to catch
+                    // up on; downstream projection surfaces the failure/empty
+                    // turn honestly.
+                    None
+                }
+                gents::session::CanonicalRequestOutput::Denied
+                | gents::session::CanonicalRequestOutput::Conflicted
+                | gents::session::CanonicalRequestOutput::Invalid
+                | gents::session::CanonicalRequestOutput::Absent
+                | gents::session::CanonicalRequestOutput::Live(_)
+                | gents::session::CanonicalRequestOutput::Settling(_)
+                | gents::session::CanonicalRequestOutput::Retracted
+                | gents::session::CanonicalRequestOutput::RetainedPartial(_)
+                | gents::session::CanonicalRequestOutput::Published { .. } => {
+                    anyhow::bail!(
+                        "settled Codex request has no valid terminal output: {canonical_output:?}"
+                    )
+                }
+            };
 
-            let completed_at_ms = response_terminal_timestamp(&terminal_response)
-                .or_else(|| {
-                    request_row.and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
-                })
+            let completed_at_ms = request_row
+                .and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
                 .and_then(timestamp_millis);
             projection
                 .set_completed_at(completed_at_ms.map(|timestamp| timestamp.div_euclid(1000)));
             projection.observe_response_timing(None, completed_at_ms);
 
-            let durable_reasoning = terminal_response
-                .get("reasoning")
-                .and_then(Value::as_str)
+            let durable_reasoning = terminal_presentation
+                .as_ref()
+                .and_then(|presentation| presentation.reasoning_markdown.as_deref())
                 .filter(|text| !text.trim().is_empty());
             let reasoning_item_id = latest_reasoning_cursor
                 .active_item_id(&current.request_id)
@@ -554,8 +585,9 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                 .finish_reasoning(outbound, &reasoning_item_id, durable_reasoning)
                 .await?;
 
-            if let Some(content) = terminal_response.get("content").and_then(Value::as_str) {
-                let delta = content_delta(projection.active_agent_text(), content);
+            if let Some(presentation) = terminal_presentation.as_ref() {
+                let delta =
+                    content_delta(projection.active_agent_text(), &presentation.body_markdown);
                 projection.append_agent_delta(outbound, &delta).await?;
             }
 
@@ -564,7 +596,6 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             );
             let error_message = if turn_status == codex::TurnStatus::Failed {
                 terminal_error_message(
-                    response_status,
                     latest_error_message.as_deref(),
                     lifecycle_state,
                     failure_reason,
@@ -690,7 +721,7 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
 
         if options.enforce_timeout && last_progress_at.elapsed() >= state.timeout {
             anyhow::bail!(
-                "timed out waiting for AgentResponse {} after {}s of inactivity\n{}",
+                "timed out waiting for canonical output for request {} after {}s of inactivity\n{}",
                 current.request_id,
                 state.timeout.as_secs(),
                 request_diagnostic_hint(&current.request_id)
@@ -765,12 +796,6 @@ fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> 
         .filter(|value| !value.is_empty())
 }
 
-fn response_terminal_timestamp(row: &Value) -> Option<&str> {
-    ["completed_at", "interrupted_at", "materialized_at"]
-        .into_iter()
-        .find_map(|field| nonempty_timestamp_field(row, field))
-}
-
 fn progress_marker(
     request_row: Option<&Value>,
     response_row: Option<&Value>,
@@ -781,21 +806,11 @@ fn progress_marker(
         request_lifecycle_state: scalar_marker(request_row, "lifecycle_state"),
         request_interrupt_requested_at: scalar_marker(request_row, "interrupt_requested_at"),
         request_valid_until: scalar_marker(request_row, "valid_until"),
-        response_doc_id: scalar_marker(response_row, "_docID"),
-        response_status: scalar_marker(response_row, "status"),
-        response_token_count: scalar_marker(response_row, "token_count"),
-        response_progress_seq: scalar_marker(response_row, "progress_seq"),
-        response_reasoning_progress_seq: scalar_marker(response_row, "reasoning_progress_seq"),
-        response_content_len: string_len_marker(response_row, "content"),
+        request_lease_expires_at: scalar_marker(request_row, "execution_lease_expires_at"),
+        request_failure_reason: scalar_marker(request_row, "failure_reason"),
+        response_content_fingerprint: string_fingerprint_marker(response_row, "content"),
         response_reasoning_fingerprint: string_fingerprint_marker(response_row, "reasoning"),
-        response_error_len: string_len_marker(response_row, "error_message"),
-        response_materialized_message_sequence: scalar_marker(
-            response_row,
-            "materialized_message_sequence",
-        ),
-        response_materialized_at: scalar_marker(response_row, "materialized_at"),
-        response_completed_at: scalar_marker(response_row, "completed_at"),
-        response_interrupted_at: scalar_marker(response_row, "interrupted_at"),
+        selected_source: None,
         tools: tool_rows.iter().map(tool_progress_marker).collect(),
         inference_calls: inference_call_rows
             .iter()
@@ -993,118 +1008,38 @@ impl ReasoningCursor {
         &mut self,
         request_id: &str,
         current: &str,
-        progress_seq: Option<String>,
-        reasoning_seq: Option<String>,
+        source: &gents::session::CanonicalSelectedSource,
     ) -> ReasoningObservation {
-        let progress_boundary = self.progress_seq.is_some()
-            && progress_seq.is_some()
-            && self.progress_seq != progress_seq;
-        self.progress_seq = progress_seq;
-        let previous_reasoning_seq = self.observed_reasoning_seq.take();
-        self.observed_reasoning_seq = reasoning_seq.clone();
-        let explicit_boundary = current.is_empty() && !self.observed_preview.is_empty();
-        let previous_preview = self.observed_preview.clone();
-        let completed_item_id = ((progress_boundary || explicit_boundary)
-            && !self.observed_preview.is_empty())
-        .then(|| self.active_item_id(request_id));
-        if completed_item_id.is_some() {
-            self.completed_preview = std::mem::take(&mut self.observed_preview);
-            self.completed_reasoning_seq = previous_reasoning_seq.or_else(|| reasoning_seq.clone());
+        let changed_source = self
+            .selected_source
+            .as_ref()
+            .is_some_and(|previous| previous != source);
+        let completed_item_id = (changed_source && !self.observed_preview.is_empty())
+            .then(|| self.active_item_id(request_id));
+        if changed_source {
+            let had_reasoning = !self.observed_preview.is_empty();
+            self.observed_preview.clear();
             self.active_item_id = None;
-            self.segment = self.segment.saturating_add(1);
-        }
-
-        if current.is_empty() {
-            // An observed empty tail proves the runtime's reset-tail write
-            // landed; identical text after this point is a genuine new segment.
-            self.completed_preview.clear();
-            self.completed_reasoning_seq = None;
-            return ReasoningObservation {
-                completed_item_id,
-                delta: None,
-            };
-        }
-        if (progress_boundary && current == previous_preview) || current == self.observed_preview {
-            return ReasoningObservation {
-                completed_item_id,
-                delta: None,
-            };
-        }
-        if self.observed_preview.is_empty() && !self.completed_preview.is_empty() {
-            if current == self.completed_preview {
-                let seq_advanced = reasoning_seq.is_some()
-                    && self.completed_reasoning_seq.is_some()
-                    && reasoning_seq != self.completed_reasoning_seq;
-                if !seq_advanced {
-                    // Stale re-read of the segment that already completed:
-                    // never reopen it.
-                    return ReasoningObservation {
-                        completed_item_id,
-                        delta: None,
-                    };
-                }
-                self.completed_preview.clear();
-                self.completed_reasoning_seq = None;
-            } else if let Some(suffix) = current.strip_prefix(self.completed_preview.as_str()) {
-                // The tail grew past the completed segment without an observed
-                // reset: only the unseen suffix is new.
-                self.completed_preview.clear();
-                self.completed_reasoning_seq = None;
-                self.observed_preview = current.to_string();
-                let item_id = self
-                    .active_item_id
-                    .get_or_insert_with(|| reasoning_item_id(request_id, self.segment))
-                    .clone();
-                return ReasoningObservation {
-                    completed_item_id,
-                    delta: Some(ReasoningDelta {
-                        item_id,
-                        text: suffix.to_string(),
-                    }),
-                };
-            } else if !progress_boundary {
-                // The durable reasoning column is a bounded rolling tail
-                // (MAX_LIVE_REASONING_BYTES); once the completed segment's
-                // stored tail was at capacity, growth rolls the window instead
-                // of prefix-extending it. On a stale-window poll (no fresh
-                // boundary), recover the unseen suffix via overlap so the
-                // already-completed bytes are not re-streamed. Boundary-call
-                // divergence keeps full-text semantics (pinned by
-                // reasoning_cursor_uses_progress_boundary_when_empty_write_was_missed).
-                let overlap = suffix_prefix_overlap(&self.completed_preview, current);
-                self.completed_preview.clear();
-                self.completed_reasoning_seq = None;
-                if overlap > 0 {
-                    self.observed_preview = current.to_string();
-                    let item_id = self
-                        .active_item_id
-                        .get_or_insert_with(|| reasoning_item_id(request_id, self.segment))
-                        .clone();
-                    return ReasoningObservation {
-                        completed_item_id,
-                        delta: Some(ReasoningDelta {
-                            item_id,
-                            text: current[overlap..].to_string(),
-                        }),
-                    };
-                }
-            } else {
-                self.completed_preview.clear();
-                self.completed_reasoning_seq = None;
+            if had_reasoning {
+                self.segment = self.segment.saturating_add(1);
             }
         }
+        self.selected_source = Some(source.clone());
 
-        let (delta, discontinuity) = if self.observed_preview.is_empty() {
-            (current, false)
+        if current.is_empty() || current == self.observed_preview {
+            return ReasoningObservation {
+                completed_item_id,
+                delta: None,
+            };
+        }
+
+        let delta = if self.observed_preview.is_empty() {
+            current
         } else if let Some(delta) = current.strip_prefix(&self.observed_preview) {
-            (delta, false)
+            delta
         } else {
             let overlap = suffix_prefix_overlap(&self.observed_preview, current);
-            if overlap == 0 {
-                (current, true)
-            } else {
-                (&current[overlap..], false)
-            }
+            &current[overlap..]
         };
         self.observed_preview = current.to_string();
         if delta.is_empty() {
@@ -1112,10 +1047,6 @@ impl ReasoningCursor {
                 completed_item_id,
                 delta: None,
             };
-        }
-        if discontinuity {
-            self.segment = self.segment.saturating_add(1);
-            self.active_item_id = Some(reasoning_item_id(request_id, self.segment));
         }
         let item_id = self
             .active_item_id
@@ -1133,9 +1064,7 @@ impl ReasoningCursor {
     fn prime(&mut self, item_id: String, text: &str) {
         self.observed_preview = text.to_string();
         self.active_item_id = Some(item_id);
-        self.completed_preview.clear();
-        self.completed_reasoning_seq = None;
-        self.observed_reasoning_seq = None;
+        self.selected_source = None;
     }
 
     fn active_item_id(&self, request_id: &str) -> String {
@@ -1147,11 +1076,8 @@ impl ReasoningCursor {
     fn reset(&mut self) {
         self.observed_preview.clear();
         self.active_item_id = None;
-        self.progress_seq = None;
+        self.selected_source = None;
         self.segment = 0;
-        self.completed_preview.clear();
-        self.completed_reasoning_seq = None;
-        self.observed_reasoning_seq = None;
     }
 }
 
@@ -1385,16 +1311,48 @@ async fn steering_input_for_request(
 
 #[cfg(test)]
 mod tests {
-    use gents_codex_protocol as codex;
-
     use super::{
-        content_delta_from_cursor, observe_subagent_link_settle_window, resumable_reasoning_item,
-        suffix_prefix_overlap, ContentCursor, ReasoningCursor,
+        content_delta, content_delta_from_cursor, observe_subagent_link_settle_window,
+        progress_marker, suffix_prefix_overlap, ContentCursor, ReasoningCursor,
+        ReasoningObservation,
     };
+    use gents_codex_protocol as codex;
+    use serde_json::json;
+
+    #[test]
+    fn silent_owner_renewal_and_request_failure_change_progress() {
+        let initial = json!({
+            "lifecycle_state": "processing",
+            "execution_lease_expires_at": "2026-09-22T00:00:30Z",
+            "failure_reason": null
+        });
+        let mut renewed = initial.clone();
+        renewed["execution_lease_expires_at"] = json!("2026-09-22T00:00:45Z");
+        let mut failed = initial.clone();
+        failed["failure_reason"] = json!("provider unavailable");
+        let marker = progress_marker(Some(&initial), None, &[], &[]);
+        assert_ne!(marker, progress_marker(Some(&renewed), None, &[], &[]));
+        assert_ne!(marker, progress_marker(Some(&failed), None, &[], &[]));
+        assert_eq!(marker, progress_marker(Some(&initial), None, &[], &[]));
+    }
+
+    #[test]
+    fn live_preview_changes_are_observed_and_terminal_text_catches_up() {
+        let request = json!({"lifecycle_state": "processing"});
+        let first = json!({"content": "hello", "reasoning": "thinking"});
+        let second = json!({"content": "hello!", "reasoning": "thinking"});
+        assert_ne!(
+            progress_marker(Some(&request), Some(&first), &[], &[]),
+            progress_marker(Some(&request), Some(&second), &[], &[]),
+        );
+        let mut cursor = ContentCursor::default();
+        assert_eq!(content_delta_from_cursor(&mut cursor, "hello"), "hello");
+        assert_eq!(content_delta_from_cursor(&mut cursor, "hello!"), "!");
+        assert_eq!(content_delta("hello!", "hello! world"), " world");
+    }
 
     #[tokio::test]
-    async fn reasoning_cursor_oversized_no_overlap_segment_terminally_completes_with_durable_text()
-    {
+    async fn reasoning_cursor_oversized_no_overlap_tail_terminally_completes_with_durable_text() {
         use std::sync::{atomic::AtomicU64, Arc};
         use std::time::Duration;
 
@@ -1432,18 +1390,14 @@ mod tests {
         let mut projection =
             TurnProjection::new(&state, "thread", "turn", temp.path().to_path_buf(), None);
         let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
         let first_tail = "a".repeat(gents::MAX_LIVE_REASONING_BYTES);
         let second_tail = "b".repeat(gents::MAX_LIVE_REASONING_BYTES);
         let durable_text = format!("{first_tail} omitted middle {second_tail}");
         assert!(durable_text.len() > gents::MAX_LIVE_REASONING_BYTES);
 
         let first = cursor
-            .observe(
-                "request-1",
-                &first_tail,
-                Some("1".to_string()),
-                Some("1".to_string()),
-            )
+            .observe("request-1", &first_tail, &source)
             .delta
             .expect("first bounded-tail delta");
         projection
@@ -1451,22 +1405,15 @@ mod tests {
             .await
             .expect("project first reasoning delta");
 
-        // A poll gap larger than the bounded preview has no overlap. This is
-        // existing segment behavior: the partial first item is completed and
-        // the new segment streams the latest tail. The final thread can thus
-        // show that partial prefix plus the full durable segment (a duplicate
-        // prefix). Terminal materialization, however, must complete the new
-        // segment with the exact durable text.
-        let second = cursor
-            .observe(
-                "request-1",
-                &second_tail,
-                Some("1".to_string()),
-                Some("2".to_string()),
-            )
-            .delta
-            .expect("unrecoverable bounded-tail delta");
-        assert_eq!(second.item_id, "gents-reasoning-request-1-segment-1");
+        // A poll gap larger than the bounded preview has no overlap. The
+        // source is still the same provider turn, so the latest tail extends
+        // its existing item. Terminal materialization replaces that item's
+        // incomplete streamed text with the exact durable text.
+        let observation = cursor.observe("request-1", &second_tail, &source);
+        assert!(observation.completed_item_id.is_none());
+        let second = observation.delta.expect("unrecoverable bounded-tail delta");
+        assert_eq!(second.item_id, first.item_id);
+        assert_eq!(second.text, second_tail);
         projection
             .append_reasoning_delta(&outbound, &second.item_id, &second.text)
             .await
@@ -1491,16 +1438,7 @@ mod tests {
                 completed.push((id, content.concat()));
             }
         }
-        assert_eq!(
-            completed,
-            vec![
-                ("gents-reasoning-request-1".to_string(), first_tail),
-                (
-                    "gents-reasoning-request-1-segment-1".to_string(),
-                    durable_text,
-                ),
-            ]
-        );
+        assert_eq!(completed, vec![(first.item_id, durable_text)]);
     }
 
     #[test]
@@ -1623,427 +1561,182 @@ mod tests {
         );
     }
 
+    fn reasoning_source(turn_index: u32) -> gents::session::CanonicalSelectedSource {
+        gents::session::CanonicalSelectedSource {
+            request_doc_id: "request-doc-1".to_string(),
+            source: gents_protocol::output::OutputSource::ProviderTurn {
+                scope: gents_protocol::rendered_request::CaptureScope {
+                    kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                    seq: 0,
+                },
+                turn_index,
+                attempt: 0,
+            },
+            writer: gents_protocol::output::OutputWriter::RequestExecution {
+                execution_generation: "generation-1".to_string(),
+            },
+        }
+    }
+
     #[test]
-    fn reasoning_cursor_emits_live_append_without_duplication() {
+    fn reasoning_cursor_appends_and_suppresses_same_source_replay() {
         let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
         let first = cursor
-            .observe("request-1", "inspect", Some("1".to_string()), None)
+            .observe("request-1", "inspect", &source)
             .delta
-            .expect("first reasoning delta");
+            .unwrap();
         assert_eq!(first.item_id, "gents-reasoning-request-1");
         assert_eq!(first.text, "inspect");
-
         let appended = cursor
-            .observe(
-                "request-1",
-                "inspect then test",
-                Some("1".to_string()),
-                None,
-            )
+            .observe("request-1", "inspect then test", &source)
             .delta
-            .expect("appended reasoning delta");
+            .unwrap();
         assert_eq!(appended.item_id, first.item_id);
         assert_eq!(appended.text, " then test");
         assert_eq!(
-            cursor.observe(
-                "request-1",
-                "inspect then test",
-                Some("1".to_string()),
-                None
-            ),
-            Default::default()
+            cursor.observe("request-1", "inspect then test", &source),
+            ReasoningObservation::default()
         );
     }
 
     #[test]
-    fn reasoning_cursor_recovers_delta_after_bounded_tail_rolls() {
+    fn reasoning_cursor_identical_next_source_survives_missed_empty_boundary() {
         let mut cursor = ReasoningCursor::default();
+        let first_source = reasoning_source(0);
+        let next_source = reasoning_source(1);
         cursor
-            .observe("request-1", "first middle", Some("1".to_string()), None)
+            .observe("request-1", "same thought", &first_source)
             .delta
-            .expect("first reasoning delta");
+            .unwrap();
+        let next = cursor.observe("request-1", "same thought", &next_source);
+        assert_eq!(
+            next.completed_item_id.as_deref(),
+            Some("gents-reasoning-request-1")
+        );
+        let delta = next.delta.unwrap();
+        assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
+        assert_eq!(delta.text, "same thought");
+        assert_eq!(
+            cursor.observe("request-1", "same thought", &next_source),
+            ReasoningObservation::default()
+        );
+    }
+
+    #[test]
+    fn reasoning_cursor_writer_change_is_a_distinct_owner() {
+        let mut cursor = ReasoningCursor::default();
+        let first_source = reasoning_source(0);
+        let mut next_owner = first_source.clone();
+        next_owner.writer = gents_protocol::output::OutputWriter::RequestExecution {
+            execution_generation: "generation-2".to_string(),
+        };
+        cursor
+            .observe("request-1", "same thought", &first_source)
+            .delta
+            .unwrap();
+        let next = cursor.observe("request-1", "same thought", &next_owner);
+        assert_eq!(
+            next.completed_item_id.as_deref(),
+            Some("gents-reasoning-request-1")
+        );
+        assert_eq!(next.delta.unwrap().text, "same thought");
+    }
+
+    #[test]
+    fn reasoning_cursor_live_to_settling_keeps_same_source() {
+        let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
+        cursor.observe("request-1", "live", &source).delta.unwrap();
+        assert_eq!(
+            cursor.observe("request-1", "live", &source),
+            ReasoningObservation::default()
+        );
+        let settling = cursor.observe("request-1", "live and settling", &source);
+        assert!(settling.completed_item_id.is_none());
+        assert_eq!(settling.delta.unwrap().text, " and settling");
+    }
+
+    #[test]
+    fn reasoning_cursor_empty_source_does_not_consume_item_number() {
+        let mut cursor = ReasoningCursor::default();
+        assert_eq!(
+            cursor.observe("request-1", "", &reasoning_source(0)),
+            ReasoningObservation::default()
+        );
+        let first = cursor
+            .observe("request-1", "first actual thought", &reasoning_source(1))
+            .delta
+            .unwrap();
+        assert_eq!(first.item_id, "gents-reasoning-request-1");
+    }
+
+    #[test]
+    fn reasoning_cursor_recovers_rolled_tail_without_new_source() {
+        let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
+        cursor
+            .observe("request-1", "first middle", &source)
+            .delta
+            .unwrap();
         let rolled = cursor
-            .observe("request-1", "middle last", Some("1".to_string()), None)
+            .observe("request-1", "middle last", &source)
             .delta
-            .expect("rolled reasoning delta");
+            .unwrap();
         assert_eq!(rolled.item_id, "gents-reasoning-request-1");
         assert_eq!(rolled.text, " last");
     }
 
     #[test]
+    fn reasoning_cursor_does_not_infer_new_source_from_disjoint_tail() {
+        let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
+        cursor
+            .observe("request-1", "first window", &source)
+            .delta
+            .unwrap();
+        let disjoint = cursor
+            .observe("request-1", "later window", &source)
+            .delta
+            .unwrap();
+        assert_eq!(disjoint.item_id, "gents-reasoning-request-1");
+        assert_eq!(disjoint.text, "later window");
+    }
+
+    #[test]
     fn reasoning_cursor_primes_resume_without_replay() {
         let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
         cursor.prime("gents-reasoning-request-1".to_string(), "already visible");
         assert!(cursor
-            .observe("request-1", "already visible", Some("1".to_string()), None)
+            .observe("request-1", "already visible", &source)
             .delta
             .is_none());
         let delta = cursor
-            .observe(
-                "request-1",
-                "already visible plus new",
-                Some("1".to_string()),
-                None,
-            )
+            .observe("request-1", "already visible plus new", &source)
             .delta
-            .expect("new reasoning after resume");
+            .unwrap();
         assert_eq!(delta.text, " plus new");
     }
 
     #[test]
-    fn resume_never_binds_current_cursor_to_foreign_reasoning_item() {
-        let turn = codex::Turn {
-            id: "request-2".to_string(),
-            items: vec![codex::ThreadItem::Reasoning {
-                id: "gents-reasoning-message-1".to_string(),
-                summary: Vec::new(),
-                content: vec!["reasoning from an earlier model turn".to_string()],
-            }],
-            items_view: codex::TurnItemsView::Full,
-            status: codex::TurnStatus::InProgress,
-            error: None,
-            started_at: None,
-            completed_at: None,
-            duration_ms: None,
-        };
-        assert!(resumable_reasoning_item(&turn, "gents-reasoning-request-2").is_none());
-    }
-
-    #[test]
-    fn reasoning_cursor_starts_new_item_after_unrecoverable_gap() {
+    fn reasoning_cursor_reset_allows_identical_first_source() {
         let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
         cursor
-            .observe("request-1", "old preview", Some("1".to_string()), None)
+            .observe("request-1", "same thought", &source)
             .delta
-            .expect("first reasoning delta");
-        let replacement = cursor
-            .observe(
-                "request-1",
-                "entirely new preview",
-                Some("1".to_string()),
-                None,
-            )
-            .delta
-            .expect("replacement reasoning delta");
-        assert_eq!(replacement.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(replacement.text, "entirely new preview");
-    }
-
-    #[test]
-    fn reasoning_cursor_segments_on_observed_empty_runtime_boundary() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "first turn", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-
-        let boundary = cursor.observe("request-1", "", Some("2".to_string()), None);
-        assert_eq!(
-            boundary.completed_item_id.as_deref(),
-            Some("gents-reasoning-request-1")
-        );
-        assert!(boundary.delta.is_none());
-
-        let next = cursor
-            .observe("request-1", "second turn", Some("2".to_string()), None)
-            .delta
-            .expect("second reasoning delta");
-        assert_eq!(next.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(next.text, "second turn");
-    }
-
-    #[test]
-    fn reasoning_cursor_uses_progress_boundary_when_empty_write_was_missed() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "tail shared", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-
-        let next = cursor.observe(
-            "request-1",
-            "shared but belongs to the next turn",
-            Some("2".to_string()),
-            None,
-        );
-        assert_eq!(
-            next.completed_item_id.as_deref(),
-            Some("gents-reasoning-request-1")
-        );
-        let delta = next.delta.expect("next-turn reasoning delta");
-        assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(delta.text, "shared but belongs to the next turn");
-    }
-
-    #[test]
-    fn reasoning_cursor_does_not_reopen_completed_segment_from_stale_tail() {
-        let mut cursor = ReasoningCursor::default();
-        let first = cursor
-            .observe(
-                "request-1",
-                "durable thought",
-                Some("1".to_string()),
-                Some("5".to_string()),
-            )
-            .delta
-            .expect("first reasoning delta");
-        assert_eq!(first.item_id, "gents-reasoning-request-1");
-
-        let boundary = cursor.observe(
-            "request-1",
-            "durable thought",
-            Some("2".to_string()),
-            Some("5".to_string()),
-        );
-        assert_eq!(
-            boundary.completed_item_id.as_deref(),
-            Some("gents-reasoning-request-1")
-        );
-        assert!(boundary.delta.is_none());
-
-        // The reset-tail write has not been observed yet; the row still serves
-        // the completed text. This must never reopen the segment (#1040).
-        assert_eq!(
-            cursor.observe(
-                "request-1",
-                "durable thought",
-                Some("2".to_string()),
-                Some("5".to_string()),
-            ),
-            Default::default()
-        );
-    }
-
-    #[test]
-    fn reasoning_cursor_ignores_stale_tail_across_repeated_progress_boundaries() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "durable thought", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
-        assert!(boundary.completed_item_id.is_some());
-
-        // A second progress boundary (e.g. a tool-result advance) with the
-        // reset still unobserved must not resurrect the completed text.
-        assert_eq!(
-            cursor.observe("request-1", "durable thought", Some("3".to_string()), None),
-            Default::default()
-        );
-    }
-
-    #[test]
-    fn reasoning_cursor_streams_only_new_suffix_when_stale_tail_grows() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe(
-                "request-1",
-                "durable thought",
-                Some("1".to_string()),
-                Some("5".to_string()),
-            )
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe(
-            "request-1",
-            "durable thought",
-            Some("2".to_string()),
-            Some("5".to_string()),
-        );
-        assert!(boundary.completed_item_id.is_some());
-
-        let grown = cursor
-            .observe(
-                "request-1",
-                "durable thought and more",
-                Some("2".to_string()),
-                Some("6".to_string()),
-            )
-            .delta
-            .expect("suffix delta after growth");
-        assert_eq!(grown.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(grown.text, " and more");
-    }
-
-    #[test]
-    fn reasoning_cursor_streams_identical_segment_after_observed_reset() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "durable thought", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
-        assert!(boundary.completed_item_id.is_some());
-
-        // Observing the cleared tail proves reset-tail landed; suppression ends.
-        let reset = cursor.observe("request-1", "", Some("2".to_string()), None);
-        assert!(reset.completed_item_id.is_none());
-        assert!(reset.delta.is_none());
-
-        let fresh = cursor
-            .observe("request-1", "durable thought", Some("2".to_string()), None)
-            .delta
-            .expect("identical text after observed reset is a genuine segment");
-        assert_eq!(fresh.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(fresh.text, "durable thought");
-    }
-
-    #[test]
-    fn reasoning_cursor_streams_identical_segment_when_reasoning_seq_advances() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe(
-                "request-1",
-                "durable thought",
-                Some("1".to_string()),
-                Some("5".to_string()),
-            )
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe(
-            "request-1",
-            "durable thought",
-            Some("2".to_string()),
-            Some("5".to_string()),
-        );
-        assert!(boundary.completed_item_id.is_some());
-
-        // write_reasoning bumps reasoning_progress_seq on every append, so an
-        // advanced seq with identical bytes is a genuine rewrite, not a stale read.
-        let rewrite = cursor
-            .observe(
-                "request-1",
-                "durable thought",
-                Some("2".to_string()),
-                Some("7".to_string()),
-            )
-            .delta
-            .expect("identical text with advanced reasoning seq streams fresh");
-        assert_eq!(rewrite.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(rewrite.text, "durable thought");
-    }
-
-    #[test]
-    fn reasoning_cursor_stale_window_divergence_streams_full_new_text() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "durable thought", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
-        assert!(boundary.completed_item_id.is_some());
-
-        let diverged = cursor.observe(
-            "request-1",
-            "completely different reasoning",
-            Some("2".to_string()),
-            None,
-        );
-        assert!(diverged.completed_item_id.is_none());
-        let delta = diverged.delta.expect("diverged text streams in full");
-        assert_eq!(delta.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(delta.text, "completely different reasoning");
-    }
-
-    #[test]
-    fn reasoning_cursor_reset_clears_completed_segment_memory() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "durable thought", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe("request-1", "durable thought", Some("2".to_string()), None);
-        assert!(boundary.completed_item_id.is_some());
-
-        // Steering handoff resets the cursor for a new request/response doc;
-        // the new request's first segment must stream even if byte-identical.
+            .unwrap();
         cursor.reset();
-        let fresh = cursor
-            .observe("request-1", "durable thought", Some("9".to_string()), None)
-            .delta
-            .expect("post-reset reasoning streams from scratch");
-        assert_eq!(fresh.item_id, "gents-reasoning-request-1");
-        assert_eq!(fresh.text, "durable thought");
-    }
-
-    #[test]
-    fn reasoning_cursor_streams_identical_rewrite_that_landed_with_the_boundary() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe(
-                "request-1",
-                "durable thought",
-                Some("1".to_string()),
-                Some("5".to_string()),
-            )
-            .delta
-            .expect("first reasoning delta");
-
-        // Reset-tail AND a byte-identical rewrite both landed inside the poll
-        // gap: the boundary read itself already carries the NEW segment's seq.
-        let boundary = cursor.observe(
-            "request-1",
-            "durable thought",
-            Some("2".to_string()),
-            Some("7".to_string()),
-        );
-        assert!(boundary.completed_item_id.is_some());
-
-        // The completed-segment memory must hold the PRE-boundary seq, so the
-        // genuinely new identical segment streams on the next poll.
-        let fresh = cursor
-            .observe(
-                "request-1",
-                "durable thought",
-                Some("2".to_string()),
-                Some("7".to_string()),
-            )
-            .delta
-            .expect("identical rewrite observed at the boundary must still stream");
-        assert_eq!(fresh.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(fresh.text, "durable thought");
-    }
-
-    #[test]
-    fn reasoning_cursor_streams_only_rolled_suffix_when_stale_tail_rolls() {
-        let mut cursor = ReasoningCursor::default();
-        cursor
-            .observe("request-1", "first middle", Some("1".to_string()), None)
-            .delta
-            .expect("first reasoning delta");
-        let boundary = cursor.observe("request-1", "first middle", Some("2".to_string()), None);
-        assert!(boundary.completed_item_id.is_some());
-
-        // The bounded tail rolled past the completed segment without an
-        // observed reset: only the unseen portion may stream.
-        let rolled = cursor
-            .observe("request-1", "middle last", Some("2".to_string()), None)
-            .delta
-            .expect("rolled suffix after boundary");
-        assert_eq!(rolled.item_id, "gents-reasoning-request-1-segment-1");
-        assert_eq!(rolled.text, " last");
-    }
-
-    #[test]
-    fn reasoning_cursor_primed_resume_does_not_replay_after_boundary() {
-        let mut cursor = ReasoningCursor::default();
-        cursor.prime("gents-reasoning-request-1".to_string(), "resumed thought");
-        assert!(cursor
-            .observe("request-1", "resumed thought", Some("1".to_string()), None)
-            .delta
-            .is_none());
-        let boundary = cursor.observe("request-1", "resumed thought", Some("2".to_string()), None);
         assert_eq!(
-            boundary.completed_item_id.as_deref(),
-            Some("gents-reasoning-request-1")
-        );
-
-        assert_eq!(
-            cursor.observe("request-1", "resumed thought", Some("2".to_string()), None),
-            Default::default()
+            cursor
+                .observe("request-1", "same thought", &source)
+                .delta
+                .unwrap()
+                .text,
+            "same thought"
         );
     }
-
     #[test]
     fn suffix_prefix_overlap_is_linear_and_utf8_safe() {
         assert_eq!(suffix_prefix_overlap("abc middle", "middle xyz"), 6);

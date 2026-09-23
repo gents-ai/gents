@@ -410,17 +410,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_REQUEST_NAME,
         gents_protocol::schemas::AGENT_REQUEST,
-        "bafyreieyeycrjfo5xsumx6ddnwqwtlvt4ufjjb4ayole7dgnrsp3wplhqq"
+        "bafyreibvvqzwu2xapbiybybwtx46ydmlub5tn2teocx7e7fq7jue4nw5kq"
     ),
     baseline_entry!(
-        gents_protocol::schemas::AGENT_RESPONSE_NAME,
-        gents_protocol::schemas::AGENT_RESPONSE,
-        "bafyreigr4eflydkzsigq7m2dzpdd7yy3ny5zwdwicefyzntjrsfiptua2u"
-    ),
-    baseline_entry!(
-        gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
-        gents_protocol::schemas::AGENT_TOOL_RESULT,
-        "bafyreievrced2cec6gsu4bg4htj2i4dq2sofvnyysmekokbue5rrbmi65e"
+        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
+        gents_protocol::schemas::AGENT_OUTPUT_SEGMENT,
+        "bafyreicetn5wfjia3tirpwnxd3hmfptjulkttd4ppl4bisqjs6rkn7lfgm"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_SESSION_NAME,
@@ -445,12 +440,12 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::AGENT_MESSAGE_NAME,
         gents_protocol::schemas::AGENT_MESSAGE,
-        "bafyreig7x5jbsj5mlpd2k2whc2v6d4tbwnwik6l3nvu67oiwb2vc4x2wru"
+        "bafyreigj4ru2gxajvrt65ssrufewgw6e3wsaxmdgei7y5zsjsdejyaugt4"
     ),
     baseline_entry!(
         gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
         gents_protocol::schemas::AGENT_TOOL_CALL,
-        "bafyreigb4fvfiyixw73psc5xqsxlzuhyoy7dxkowesrrpke6ktla74d5ji"
+        "bafyreigmujcbqx35xlol5zv5qxsq5veprnx6wvifwzzcekl5u3kb7xjz54"
     ),
     baseline_entry!(
         gents_protocol::schemas::COMPACTION_ENTRY_NAME,
@@ -609,10 +604,9 @@ pub fn fixture_lens_wasm() -> &'static [u8] {
 /// `fresh_apply_parity` and the baseline step guard enforce both constraints.
 pub const CLIENT_AUTHORED_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::AGENT_REQUEST_NAME,
-    gents_protocol::schemas::AGENT_RESPONSE_NAME,
     gents_protocol::schemas::AGENT_MESSAGE_NAME,
     gents_protocol::schemas::AGENT_TOOL_CALL_NAME,
-    gents_protocol::schemas::AGENT_TOOL_RESULT_NAME,
+    gents_protocol::schemas::AGENT_OUTPUT_SEGMENT_NAME,
     gents_protocol::schemas::AGENT_SESSION_NAME,
     gents_protocol::schemas::COMPACTION_ENTRY_NAME,
     gents_protocol::schemas::PEER_ENDPOINT_NAME,

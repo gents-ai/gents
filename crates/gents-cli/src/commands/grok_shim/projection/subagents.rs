@@ -17,17 +17,23 @@
 //! All queries go through the in-process embedded node (`node.execute`) with
 //! every interpolated value passed through `escape_graphql_string`; no HTTP
 //! GraphQL helper is used. Projection is bounded and request-id-scoped: one
-//! child-request query, one spawn-tool query, one child-response query, and
-//! one child-tool query per projected parent request, with no graph walks
+//! child-request query, one spawn-tool query, one child `InferenceCall` usage
+//! query, and one child-tool query per projected parent request, with no graph
+//! walks
 //! beyond the direct children of the request being projected.
+
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents::config_client::ConfigAccess;
 use gents::graphql::{ensure_no_errors, escape_graphql_string};
 use gents::run_timeline::{child_bridge_is_corroborated, TimelineRequestRow, TimelineToolCallRow};
+use gents::tool_call_lifecycle::load_tool_call_arguments;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 use super::{effective_context_window_tokens, nonempty};
 
@@ -99,7 +105,7 @@ pub(super) struct SubagentFinishedUpdate {
 }
 
 /// Terminal statuses carried by `subagent_finished`, mapped from the durable
-/// child request/response lifecycle.
+/// child request lifecycle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SubagentFinishStatus {
     Completed,
@@ -137,6 +143,8 @@ struct ChildRequestRow {
     #[serde(default)]
     terminalized_at: Option<String>,
     #[serde(default)]
+    terminal_output: Option<gents_protocol::output::TerminalOutput>,
+    #[serde(default)]
     created_at: Option<String>,
     #[serde(default)]
     caused_by_parent_request_id: Option<String>,
@@ -150,19 +158,24 @@ struct ChildRequestRow {
     input: Option<gents_protocol::request_input::RequestInput>,
 }
 
-/// Latest `AgentResponse` row for a child request; the durable source of
-/// token usage and error details (request lifecycle owns terminality).
+/// One committed `InferenceCall` row of a child request: the canonical usage
+/// owner for token accounting. Only terminal call states are selected, and
+/// usage aggregates across every committed call of the request, not a single
+/// latest row. Error details are never read here: `AgentRequest.failure_reason`
+/// is the sole durable error source.
 #[derive(Clone, Debug, Deserialize)]
-struct ChildResponseRow {
+struct ChildInferenceCallRow {
     request_doc_id: String,
     request_id: String,
     agent_did: String,
-    requester_did: Option<String>,
-    session_id: String,
     #[serde(default)]
-    token_count: Option<i64>,
+    call_id: Option<String>,
     #[serde(default)]
-    error_message: Option<String>,
+    call_seq: Option<i64>,
+    #[serde(default)]
+    prompt_tokens: Option<i64>,
+    #[serde(default)]
+    completion_tokens: Option<i64>,
 }
 
 /// An `AgentToolCall` row of the spawn tool, when the parent recorded one
@@ -180,8 +193,6 @@ struct SpawnToolRow {
     tool_call_id: String,
     #[serde(default)]
     child_request_id: Option<String>,
-    #[serde(default)]
-    args: Option<String>,
     /// Durable transcript position of the spawn call: the chronology key the
     /// subagent family merges by (`subagent_spawned` follows its spawn tool
     /// at the same sequence; progress/finished follow it after).
@@ -215,6 +226,7 @@ const CHILD_REQUEST_FIELDS: &str = r#"
     lifecycle_state
     failure_reason
     terminalized_at
+    terminal_output
     created_at
     caused_by_parent_request_id
     caused_by_parent_request_doc_id
@@ -223,14 +235,14 @@ const CHILD_REQUEST_FIELDS: &str = r#"
     input
 "#;
 
-const CHILD_RESPONSE_FIELDS: &str = r#"
+const CHILD_INFERENCE_CALL_FIELDS: &str = r#"
     request_doc_id
     request_id
     agent_did
-    requester_did
-    session_id
-    token_count
-    error_message
+    call_id
+    call_seq
+    prompt_tokens
+    completion_tokens
 "#;
 
 const SPAWN_TOOL_FIELDS: &str = r#"
@@ -242,7 +254,6 @@ const SPAWN_TOOL_FIELDS: &str = r#"
     request_doc_id
     tool_call_id
     child_request_id
-    args
     message_sequence
 "#;
 
@@ -369,7 +380,7 @@ impl SubagentUpdate {
 /// Bounded and request-id-scoped: the query set is exactly
 /// 1. one `AgentRequest` query for children of this request id,
 /// 2. one `AgentToolCall` query for the spawn rows of this request id,
-/// 3. one `AgentResponse` query for those child request ids,
+/// 3. one `InferenceCall` usage query for those child request ids,
 /// 4. one `AgentToolCall` query for the tool rows of those child request ids.
 ///
 /// Returns at most one `spawned` plus one terminal `finished` update per
@@ -377,7 +388,7 @@ impl SubagentUpdate {
 /// replays the session or duplicates durable materialization: the projection
 /// is read-only and every payload is a fresh notification value.
 pub(super) async fn project_subagents(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     parent: &gents_protocol::row::AgentRequestRow,
     parent_prompt_id: Option<&str>,
     context_window_tokens: u64,
@@ -437,6 +448,28 @@ pub(super) async fn project_subagents(
     // spawned-subagent event always follows its spawn tool call and
     // equal-sequence spawn rows never follow the query's iteration order.
     sort_spawn_rows(&mut spawn_tools);
+
+    // Spawn arguments are reconstructed per spawn row through the shared
+    // canonical tool presentation owner (`load_tool_call_arguments`): the
+    // retired `AgentToolCall.args` column is never read. A spawn row without
+    // a physical document id carries no presentation to load.
+    let access = ConfigAccess::Local(Arc::clone(node));
+    let mut spawn_arguments = std::collections::HashMap::new();
+    for tool in &spawn_tools {
+        let Some(doc_id) = tool.doc_id.as_deref().filter(|id| !id.trim().is_empty()) else {
+            continue;
+        };
+        let arguments = load_tool_call_arguments(
+            &access,
+            doc_id,
+            parent_agent_did,
+            parent_session_id,
+            parent.requester_did.as_deref(),
+        )
+        .await
+        .with_context(|| format!("canonical spawn tool arguments for {doc_id}"))?;
+        spawn_arguments.insert(doc_id.to_string(), arguments);
+    }
     let timeline_tools = spawn_tools
         .iter()
         .map(spawn_timeline_row)
@@ -478,22 +511,20 @@ pub(super) async fn project_subagents(
         });
     }
 
-    let response_response = node.execute(&child_responses_query(&children)).await;
-    ensure_no_errors(&response_response, "grok shim subagent response query")?;
-    let child_responses = decode_response_rows(&response_response)?;
+    let usage_response = node.execute(&child_usage_query(&children)).await;
+    ensure_no_errors(&usage_response, "grok shim subagent inference usage query")?;
+    let child_usage = decode_inference_call_rows(&usage_response)?;
 
     let tools_response = node.execute(&child_tools_query(&children)).await;
     ensure_no_errors(&tools_response, "grok shim subagent child tool query")?;
     let child_tools = decode_child_tool_rows(&tools_response)?;
-    for row in &child_responses {
+    for row in &child_usage {
         anyhow::ensure!(
             children.iter().any(|child| child.doc_id.as_deref()
                 == Some(row.request_doc_id.as_str())
                 && child.request_id == row.request_id
-                && child.agent_did == row.agent_did
-                && child.requester_did == row.requester_did
-                && child.session_id == row.session_id),
-            "child response query crossed physical scope"
+                && child.agent_did == row.agent_did),
+            "child inference usage query crossed physical scope"
         );
     }
     for row in &child_tools {
@@ -511,7 +542,8 @@ pub(super) async fn project_subagents(
     let (updates, chronology) = project_child_rows(
         &children,
         &spawn_tools,
-        &child_responses,
+        &spawn_arguments,
+        &child_usage,
         &child_tools,
         parent,
         parent_prompt_id,
@@ -588,7 +620,8 @@ fn normalize_rfc3339(value: Option<&str>) -> Option<String> {
 fn project_child_rows(
     children: &[ChildRequestRow],
     spawn_tools: &[SpawnToolRow],
-    child_responses: &[ChildResponseRow],
+    spawn_arguments: &HashMap<String, String>,
+    child_usage: &[ChildInferenceCallRow],
     child_tools: &[ChildToolRow],
     parent: &gents_protocol::row::AgentRequestRow,
     parent_prompt_id: Option<&str>,
@@ -639,13 +672,17 @@ fn project_child_rows(
                     .is_some_and(|child_request_id| child_request_id == child.request_id)
         });
         let spawn_sequence = spawn_tool.and_then(|tool| tool.message_sequence);
-        let child_response = child_responses.iter().find(|response| {
-            response.request_id == child.request_id
-                && Some(response.request_doc_id.as_str()) == child.doc_id.as_deref()
-                && response.agent_did == child.agent_did
-                && response.session_id == child.session_id
-                && response.requester_did == child.requester_did
-        });
+        // Canonical usage accounting: only the child request's own committed
+        // `InferenceCall` rows, selected and scope-checked against the child's
+        // physical request identity, aggregate into the projected token count.
+        let child_usage = child_usage
+            .iter()
+            .filter(|call| {
+                call.request_id == child.request_id
+                    && Some(call.request_doc_id.as_str()) == child.doc_id.as_deref()
+                    && call.agent_did == child.agent_did
+            })
+            .collect::<Vec<_>>();
         let child_tools = child_tools
             .iter()
             .filter(|tool| {
@@ -664,7 +701,7 @@ fn project_child_rows(
             .and_then(nonempty)
             .unwrap_or("general-purpose")
             .to_string();
-        let description = spawn_description(spawn_tool, child);
+        let description = spawn_description(spawn_tool, spawn_arguments, child);
 
         updates.push(SubagentUpdate::Spawned(SubagentSpawnedUpdate {
             subagent_id: subagent_id.clone(),
@@ -680,11 +717,11 @@ fn project_child_rows(
         }));
         chronology.push(spawn_sequence);
 
-        let finished = child.is_terminal(child_response);
+        let finished = child.is_terminal();
         if !finished {
             let progress = progress_update(
                 child,
-                child_response,
+                &child_usage,
                 &child_tools,
                 &subagent_id,
                 parent_session_id,
@@ -694,7 +731,7 @@ fn project_child_rows(
             chronology.push(spawn_sequence);
         }
 
-        if let Some(finished) = finished_update(child, child_response, &child_tools, &subagent_id) {
+        if let Some(finished) = finished_update(child, &child_usage, &child_tools, &subagent_id) {
             updates.push(SubagentUpdate::Finished(finished));
             chronology.push(spawn_sequence);
         }
@@ -705,7 +742,7 @@ fn project_child_rows(
 impl ChildRequestRow {
     /// Only the canonical request lifecycle owns terminality. An interrupt
     /// marker is a request to stop, not evidence that execution has stopped.
-    fn is_terminal(&self, _response: Option<&ChildResponseRow>) -> bool {
+    fn is_terminal(&self) -> bool {
         gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal_str(
             self.lifecycle_state.as_deref(),
         )
@@ -716,8 +753,8 @@ impl ChildRequestRow {
     /// the authority, no interrupt marker required), the failure terminal
     /// states (`failed`, `dead`, `superseded`) fail. Anything else — the
     /// still-active states — only ever projects progress, never a finish.
-    fn finish_status(&self, response: Option<&ChildResponseRow>) -> Option<SubagentFinishStatus> {
-        if !self.is_terminal(response) {
+    fn finish_status(&self) -> Option<SubagentFinishStatus> {
+        if !self.is_terminal() {
             return None;
         }
         match self.lifecycle_state.as_deref().and_then(nonempty) {
@@ -731,16 +768,13 @@ impl ChildRequestRow {
 
 fn progress_update(
     child: &ChildRequestRow,
-    child_response: Option<&ChildResponseRow>,
+    child_usage: &[&ChildInferenceCallRow],
     child_tools: &[&ChildToolRow],
     subagent_id: &str,
     parent_session_id: &str,
     context_window_tokens: u64,
 ) -> SubagentProgressUpdate {
-    let tokens_used = child_response
-        .and_then(|response| response.token_count)
-        .and_then(|tokens| u64::try_from(tokens.max(0)).ok())
-        .unwrap_or(0);
+    let tokens_used = aggregate_child_tokens(child_usage);
     let context_window_tokens = effective_context_window_tokens(context_window_tokens);
     SubagentProgressUpdate {
         subagent_id: subagent_id.to_string(),
@@ -762,26 +796,20 @@ fn progress_update(
 
 fn finished_update(
     child: &ChildRequestRow,
-    child_response: Option<&ChildResponseRow>,
+    child_usage: &[&ChildInferenceCallRow],
     child_tools: &[&ChildToolRow],
     subagent_id: &str,
 ) -> Option<SubagentFinishedUpdate> {
-    let status = child.finish_status(child_response)?;
+    let status = child.finish_status()?;
+    // `AgentRequest.failure_reason` is the sole durable error source: the
+    // retired response row's `error_message` fallback is gone, and no error
+    // text is invented from tool rows or usage rows.
     let error = child
         .failure_reason
         .as_deref()
         .and_then(nonempty)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            child_response
-                .and_then(|response| response.error_message.as_deref())
-                .and_then(nonempty)
-                .map(ToOwned::to_owned)
-        });
-    let tokens_used = child_response
-        .and_then(|response| response.token_count)
-        .and_then(|tokens| u64::try_from(tokens.max(0)).ok())
-        .unwrap_or(0);
+        .map(ToOwned::to_owned);
+    let tokens_used = aggregate_child_tokens(child_usage);
     Some(SubagentFinishedUpdate {
         subagent_id: subagent_id.to_string(),
         child_session_id: child.session_id.clone(),
@@ -843,14 +871,21 @@ fn subagent_id_for(child: &ChildRequestRow) -> String {
 /// Short description for the spawned update. The spawn tool's recorded name
 /// argument wins; otherwise the child request content is truncated to the
 /// pager's short-description scale.
-fn spawn_description(spawn_tool: Option<&SpawnToolRow>, child: &ChildRequestRow) -> String {
+fn spawn_description(
+    spawn_tool: Option<&SpawnToolRow>,
+    spawn_arguments: &HashMap<String, String>,
+    child: &ChildRequestRow,
+) -> String {
     if let Some(tool) = spawn_tool {
-        if let Some(args) = tool.args.as_deref().and_then(nonempty) {
-            if let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(args) {
-                for key in ["name", "description", "prompt"] {
-                    if let Some(value) = fields.get(key).and_then(Value::as_str).and_then(nonempty)
-                    {
-                        return truncate_description(value);
+        if let Some(doc_id) = tool.doc_id.as_deref().and_then(nonempty) {
+            if let Some(args) = spawn_arguments.get(doc_id).map(String::as_str) {
+                if let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(args) {
+                    for key in ["name", "description", "prompt"] {
+                        if let Some(value) =
+                            fields.get(key).and_then(Value::as_str).and_then(nonempty)
+                        {
+                            return truncate_description(value);
+                        }
                     }
                 }
             }
@@ -878,6 +913,23 @@ fn context_usage_pct(tokens_used: u64, context_window_tokens: u64) -> u8 {
             .saturating_div(context_window_tokens),
     )
     .unwrap_or(100)
+}
+
+/// Canonical usage accounting for a child request: sum the committed
+/// `InferenceCall` rows' `prompt_tokens`/`completion_tokens` (the pattern
+/// `codex_shim/thread_projection/usage.rs` uses), skipping negative or absent
+/// counts. A child with no committed calls projects zero tokens — never a
+/// fabricated single-row total.
+fn aggregate_child_tokens(child_usage: &[&ChildInferenceCallRow]) -> u64 {
+    let mut tokens = 0u64;
+    for call in child_usage {
+        for count in [call.prompt_tokens, call.completion_tokens] {
+            if let Some(count) = count.and_then(|tokens| u64::try_from(tokens).ok()) {
+                tokens = tokens.saturating_add(count);
+            }
+        }
+    }
+    tokens
 }
 
 fn elapsed_millis(started_at: Option<&str>, ended_at: Option<&str>) -> u64 {
@@ -975,10 +1027,28 @@ fn child_result_filter(children: &[ChildRequestRow]) -> String {
     format!("_or: [{scopes}]")
 }
 
-fn child_responses_query(children: &[ChildRequestRow]) -> String {
+fn child_usage_query(children: &[ChildRequestRow]) -> String {
+    // InferenceCall is physically owned by request_doc_id + principal; it has
+    // no requester/session columns. Keep requester/session scoping on the
+    // child request admission and re-check request identity after decode.
+    let scopes = children
+        .iter()
+        .map(|child| {
+            format!(
+                r#"{{agent_did: {{_eq: "{}"}}, request_doc_id: {{_eq: "{}"}}}}"#,
+                escape_graphql_string(&child.agent_did),
+                escape_graphql_string(
+                    child
+                        .doc_id
+                        .as_deref()
+                        .expect("verified child physical identity")
+                )
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
     format!(
-        "{{ AgentResponse(filter: {{{}}}) {{ {CHILD_RESPONSE_FIELDS} }} }}",
-        child_result_filter(children)
+        "{{ InferenceCall(filter: {{_or: [{scopes}], call_kind: {{_eq: \"inference\"}}, call_state: {{_in: [\"completed\", \"failed\", \"cancelled\"]}}}}) {{ {CHILD_INFERENCE_CALL_FIELDS} }} }}",
     )
 }
 
@@ -997,22 +1067,10 @@ fn decode_spawn_rows(response: &defra_node::QueryResponse) -> Result<Vec<SpawnTo
     decode_rows(response, "AgentToolCall", "spawn AgentToolCall")
 }
 
-fn decode_response_rows(response: &defra_node::QueryResponse) -> Result<Vec<ChildResponseRow>> {
-    let rows: Vec<ChildResponseRow> =
-        decode_rows(response, "AgentResponse", "child AgentResponse")?;
-    let mut identities = std::collections::HashSet::new();
-    for row in &rows {
-        anyhow::ensure!(
-            identities.insert((
-                &row.agent_did,
-                &row.session_id,
-                &row.requester_did,
-                &row.request_doc_id
-            )),
-            "ambiguous child response physical request scope"
-        );
-    }
-    Ok(rows)
+fn decode_inference_call_rows(
+    response: &defra_node::QueryResponse,
+) -> Result<Vec<ChildInferenceCallRow>> {
+    decode_rows(response, "InferenceCall", "child InferenceCall")
 }
 
 fn decode_child_tool_rows(response: &defra_node::QueryResponse) -> Result<Vec<ChildToolRow>> {
@@ -1057,8 +1115,10 @@ fn child_timeline_row(child: &ChildRequestRow) -> Option<TimelineRequestRow> {
 
 /// Project the narrow spawn row into the runtime DTO used by the shared
 /// provenance rule. Do not deserialize the sparse query into the full DTO:
-/// unrelated nullable tool fields (for example `args`) are intentionally not
-/// selected and must not make otherwise complete bridge evidence undecodable.
+/// unrelated nullable tool fields are intentionally not selected and must not
+/// make otherwise complete bridge evidence undecodable. Spawn arguments are
+/// not selected at all: they are reconstructed per spawn tool below through
+/// the shared canonical tool presentation owner.
 fn spawn_timeline_row(spawn: &SpawnToolRow) -> TimelineToolCallRow {
     TimelineToolCallRow {
         doc_id: spawn.doc_id.clone(),
@@ -1095,6 +1155,7 @@ mod tests {
             lifecycle_state: lifecycle_state.map(ToOwned::to_owned),
             failure_reason: None,
             terminalized_at: None,
+            terminal_output: None,
             created_at: Some("2026-08-31T22:46:45Z".to_string()),
             caused_by_parent_request_id: Some("parent-request".to_string()),
             caused_by_parent_request_doc_id: Some("doc-parent-request".to_string()),
@@ -1103,15 +1164,19 @@ mod tests {
         }
     }
 
-    fn response_row(request_id: &str, token_count: Option<i64>) -> ChildResponseRow {
-        ChildResponseRow {
+    fn usage_row(
+        request_id: &str,
+        prompt_tokens: Option<i64>,
+        completion_tokens: Option<i64>,
+    ) -> ChildInferenceCallRow {
+        ChildInferenceCallRow {
             request_id: request_id.to_string(),
             request_doc_id: format!("doc-{request_id}"),
             agent_did: "child-owner".into(),
-            requester_did: Some("parent-owner".into()),
-            session_id: format!("session-{request_id}"),
-            token_count,
-            error_message: None,
+            call_id: Some(format!("call-{request_id}")),
+            call_seq: Some(1),
+            prompt_tokens,
+            completion_tokens,
         }
     }
 
@@ -1270,8 +1335,16 @@ mod tests {
     #[test]
     fn running_child_projects_spawned_then_progress_without_finished() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let (updates, _chronology) =
-            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &children,
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[0].session_update_kind(), "subagent_spawned");
         assert_eq!(updates[1].session_update_kind(), "subagent_progress");
@@ -1285,11 +1358,12 @@ mod tests {
     #[test]
     fn completed_child_projects_spawned_then_finished_with_cancelled_false() {
         let children = vec![child_row("child-1", Some("completed"))];
-        let responses = vec![response_row("child-1", Some(1_024))];
+        let usage = vec![usage_row("child-1", Some(512), Some(512))];
         let (updates, _chronology) = project_child_rows(
             &children,
             &[],
-            &responses,
+            &HashMap::new(),
+            &usage,
             &[],
             &parent_fixture(),
             None,
@@ -1314,8 +1388,16 @@ mod tests {
     #[test]
     fn interrupted_child_projects_cancelled_finish() {
         let child = child_row("child-1", Some("interrupted"));
-        let (updates, _chronology) =
-            project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &[child],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         let Some(SubagentUpdate::Finished(finished)) = updates
             .iter()
             .find(|update| update.session_update_kind() == "subagent_finished")
@@ -1326,34 +1408,22 @@ mod tests {
     }
 
     #[test]
-    fn response_interrupted_marker_waits_for_request_terminalization() {
-        let children = vec![child_row("child-1", Some("processing"))];
-        let response: ChildResponseRow = serde_json::from_value(json!({
-            "request_id": "child-1", "request_doc_id":"doc-child-1", "agent_did":"child-owner", "requester_did":"parent-owner", "session_id":"session-child-1", "interrupted_at": "2026-08-31T22:46:46Z"
-        }))
-        .unwrap();
-        let (updates, _chronology) = project_child_rows(
-            &children,
-            &[],
-            &[response],
-            &[],
-            &parent_fixture(),
-            None,
-            262_144,
-        );
-        assert_eq!(updates.len(), 2);
-        assert!(matches!(&updates[1], SubagentUpdate::Progress(_)));
-    }
-
-    #[test]
     fn interrupted_row_without_marker_is_terminal_and_cancelled() {
         // The canonical lifecycle is authoritative: `interrupted` is
         // terminal even when the durable `interrupt_requested_at` marker
         // never latched (a lost/cleared marker must not resurrect an
         // interrupted child as still-running progress).
         let children = vec![child_row("child-1", Some("interrupted"))];
-        let (updates, _chronology) =
-            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &children,
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         assert_eq!(updates.len(), 2, "spawned then finished, no progress");
         assert_eq!(updates[0].session_update_kind(), "subagent_spawned");
         let SubagentUpdate::Finished(finished) = &updates[1] else {
@@ -1366,8 +1436,16 @@ mod tests {
     fn error_child_projects_failed_finish_with_reason() {
         let mut child = child_row("child-1", Some("failed"));
         child.failure_reason = Some("provider error".to_string());
-        let (updates, _chronology) =
-            project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &[child],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         let Some(SubagentUpdate::Finished(finished)) = updates
             .iter()
             .find(|update| update.session_update_kind() == "subagent_finished")
@@ -1388,8 +1466,16 @@ mod tests {
             // lifecycle alone decides terminality — `interrupted` is
             // terminal and cancels even when the marker is absent.
             let child = child_row("child-1", Some(lifecycle_state));
-            let (updates, _chronology) =
-                project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
+            let (updates, _chronology) = project_child_rows(
+                &[child],
+                &[],
+                &HashMap::new(),
+                &[],
+                &[],
+                &parent_fixture(),
+                None,
+                262_144,
+            );
             match updates
                 .iter()
                 .find(|update| update.session_update_kind() == "subagent_finished")
@@ -1419,8 +1505,16 @@ mod tests {
         // Still-active states project progress only.
         for active_state in ["pending", "claimed", "processing", "inputRequired"] {
             let children = vec![child_row("child-1", Some(active_state))];
-            let (updates, _chronology) =
-                project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
+            let (updates, _chronology) = project_child_rows(
+                &children,
+                &[],
+                &HashMap::new(),
+                &[],
+                &[],
+                &parent_fixture(),
+                None,
+                262_144,
+            );
             assert_eq!(updates.len(), 2, "{active_state} spawns then progresses");
             assert_eq!(updates[0].session_update_kind(), "subagent_spawned");
             assert_eq!(updates[1].session_update_kind(), "subagent_progress");
@@ -1431,8 +1525,16 @@ mod tests {
     fn rows_for_other_parents_are_ignored() {
         let mut child = child_row("child-1", Some("completed"));
         child.caused_by_parent_request_id = Some("other-parent".to_string());
-        let (updates, _chronology) =
-            project_child_rows(&[child], &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &[child],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         assert!(updates.is_empty());
     }
 
@@ -1451,12 +1553,16 @@ mod tests {
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-9".to_string(),
             child_request_id: Some("child-1".to_string()),
-            args: Some(r#"{"name":"repo scout"}"#.to_string()),
             message_sequence: Some(2),
         }];
+        let spawn_arguments = HashMap::from([(
+            "doc-call-1".to_string(),
+            r#"{"name":"repo scout"}"#.to_string(),
+        )]);
         let (updates, _chronology) = project_child_rows(
             &children,
             &spawn_tools,
+            &spawn_arguments,
             &[],
             &[],
             &parent_fixture(),
@@ -1477,8 +1583,16 @@ mod tests {
     #[test]
     fn child_session_id_is_the_subagent_id_without_a_spawn_tool_row() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let (updates, _chronology) =
-            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &children,
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
             panic!("first update should be spawned");
         };
@@ -1493,6 +1607,7 @@ mod tests {
         let (updates, _) = project_child_rows(
             &[child.clone()],
             &[],
+            &HashMap::new(),
             &[],
             &[],
             &parent,
@@ -1503,8 +1618,16 @@ mod tests {
             panic!("first update should be spawned");
         };
         assert_eq!(spawned.parent_prompt_id.as_deref(), Some("prompt-42"));
-        let (updates, _) =
-            project_child_rows(&[child.clone()], &[], &[], &[], &parent, None, 262_144);
+        let (updates, _) = project_child_rows(
+            &[child.clone()],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent,
+            None,
+            262_144,
+        );
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
             panic!("first update should be spawned");
         };
@@ -1514,6 +1637,7 @@ mod tests {
         assert!(project_child_rows(
             &[child],
             &[],
+            &HashMap::new(),
             &[],
             &[],
             &foreign_parent,
@@ -1528,8 +1652,16 @@ mod tests {
     fn child_behavior_id_maps_to_subagent_type_with_default() {
         let mut untyped = child_row("child-1", Some("processing"));
         untyped.behavior_id = None;
-        let (updates, _chronology) =
-            project_child_rows(&[untyped], &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &[untyped],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         let SubagentUpdate::Spawned(spawned) = &updates[0] else {
             panic!("first update should be spawned");
         };
@@ -1559,8 +1691,16 @@ mod tests {
     #[test]
     fn zero_context_window_falls_back_to_catalog_default() {
         let children = vec![child_row("child-1", Some("processing"))];
-        let (updates, _chronology) =
-            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 0);
+        let (updates, _chronology) = project_child_rows(
+            &children,
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            0,
+        );
         let SubagentUpdate::Progress(progress) = &updates[1] else {
             panic!("second update should be progress");
         };
@@ -1590,12 +1730,14 @@ mod tests {
         );
         assert!(query.contains(r#"caused_by_parent_request_id"#));
 
-        let responses =
-            child_responses_query(&[child_row("req-a", None), child_row("req-b", None)]);
+        let usage = child_usage_query(&[child_row("req-a", None), child_row("req-b", None)]);
         assert!(
-            responses.contains("doc-req-a")
-                && responses.contains("doc-req-b")
-                && responses.contains("request_doc_id")
+            usage.contains("doc-req-a")
+                && usage.contains("doc-req-b")
+                && usage.contains("request_doc_id")
+                && usage.contains("prompt_tokens")
+                && usage.contains("completion_tokens"),
+            "{usage}"
         );
 
         // Quotes and backslashes in list members are escaped too: the raw
@@ -1603,7 +1745,7 @@ mod tests {
         let hostile = r#"req"a\b"#;
         let mut hostile_child = child_row("hostile", None);
         hostile_child.doc_id = Some(hostile.into());
-        let escaped_list = child_responses_query(&[hostile_child]);
+        let escaped_list = child_usage_query(&[hostile_child]);
         assert!(
             escaped_list.contains(r#""req\"a\\b""#),
             "escaped member missing: {escaped_list}"
@@ -1688,8 +1830,16 @@ mod tests {
     #[test]
     fn blank_child_rows_do_not_project_a_finished_update() {
         let children = vec![child_row("child-1", None)];
-        let (updates, _chronology) =
-            project_child_rows(&children, &[], &[], &[], &parent_fixture(), None, 262_144);
+        let (updates, _chronology) = project_child_rows(
+            &children,
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
         assert_eq!(updates.len(), 2);
         assert_eq!(updates[1].session_update_kind(), "subagent_progress");
     }
@@ -1739,6 +1889,7 @@ mod tests {
         let (updates, _chronology) = project_child_rows(
             &children,
             &[],
+            &HashMap::new(),
             &[],
             &child_tools,
             &parent_fixture(),
@@ -1759,6 +1910,7 @@ mod tests {
         let (updates, _chronology) = project_child_rows(
             &[finished_child],
             &[],
+            &HashMap::new(),
             &[],
             &child_tools,
             &parent_fixture(),
@@ -1772,17 +1924,16 @@ mod tests {
     }
 
     #[test]
-    fn colliding_child_result_labels_cannot_replace_physical_scope() {
+    fn colliding_child_usage_rows_cannot_replace_physical_scope() {
         let child = child_row("child-1", Some("processing"));
-        let valid = response_row("child-1", Some(12));
+        let valid = usage_row("child-1", Some(6), Some(6));
         let mut foreign = valid.clone();
         foreign.request_doc_id = "foreign-physical".into();
-        let mut wrong_requester = valid.clone();
-        wrong_requester.requester_did = None;
         let (updates, _) = project_child_rows(
             &[child],
             &[],
-            &[foreign, wrong_requester, valid],
+            &HashMap::new(),
+            &[foreign, valid],
             &[],
             &parent_fixture(),
             None,
@@ -1791,7 +1942,95 @@ mod tests {
         let SubagentUpdate::Progress(progress) = &updates[1] else {
             panic!("progress expected")
         };
+        // A usage row keyed to a different physical request doc id never
+        // counts; only the row matching the child's physical identity does.
         assert_eq!(progress.tokens_used, 12);
+    }
+
+    #[test]
+    fn child_usage_query_selects_committed_inference_calls() {
+        let query = child_usage_query(&[child_row("child-1", None)]);
+        assert!(query.contains("InferenceCall("), "{query}");
+        assert!(
+            !query.to_lowercase().contains("agentresponse"),
+            "the retired response collection must not be queried: {query}"
+        );
+        assert!(
+            query.contains(r#"call_kind: {_eq: "inference"}"#),
+            "{query}"
+        );
+        assert!(
+            query.contains(r#"call_state: {_in: ["completed", "failed", "cancelled"]}"#),
+            "{query}"
+        );
+        assert!(query.contains("prompt_tokens"), "{query}");
+        assert!(query.contains("completion_tokens"), "{query}");
+        assert!(query.contains("request_doc_id"), "{query}");
+    }
+
+    #[test]
+    fn child_usage_aggregates_across_committed_calls() {
+        let usage = vec![
+            usage_row("child-1", Some(100), Some(50)),
+            usage_row("child-1", Some(30), Some(20)),
+        ];
+        let children = vec![child_row("child-1", Some("completed"))];
+        let (updates, _) = project_child_rows(
+            &children,
+            &[],
+            &HashMap::new(),
+            &usage,
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
+        let SubagentUpdate::Finished(finished) = &updates[1] else {
+            panic!("finished expected");
+        };
+        assert_eq!(
+            finished.tokens_used, 200,
+            "usage sums prompt+completion across every committed call"
+        );
+    }
+
+    #[test]
+    fn failure_reason_is_the_sole_durable_error_source() {
+        // A failed child with a failure_reason projects it verbatim.
+        let mut child = child_row("child-1", Some("failed"));
+        child.failure_reason = Some("provider unavailable".to_string());
+        let (updates, _) = project_child_rows(
+            &[child.clone()],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
+        let SubagentUpdate::Finished(finished) = &updates[1] else {
+            panic!("finished expected");
+        };
+        assert_eq!(finished.error.as_deref(), Some("provider unavailable"));
+
+        // A failed child without a failure_reason carries no error: no
+        // error text is invented from usage rows or tool rows.
+        child.failure_reason = None;
+        let (updates, _) = project_child_rows(
+            &[child],
+            &[],
+            &HashMap::new(),
+            &[],
+            &[],
+            &parent_fixture(),
+            None,
+            262_144,
+        );
+        let SubagentUpdate::Finished(finished) = &updates[1] else {
+            panic!("finished expected");
+        };
+        assert!(finished.error.is_none());
     }
 
     #[test]
@@ -1905,7 +2144,6 @@ mod tests {
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: tool_call_id.to_string(),
             child_request_id: Some(child.to_string()),
-            args: Some(r#"{"name":"scout"}"#.to_string()),
             message_sequence: sequence,
         };
         let mut rows = vec![
@@ -1959,7 +2197,6 @@ mod tests {
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-a".to_string(),
             child_request_id: Some("child-a".to_string()),
-            args: Some(r#"{"name":"scout a"}"#.to_string()),
             message_sequence: Some(5),
         };
         let spawn_z = SpawnToolRow {
@@ -1971,9 +2208,18 @@ mod tests {
             request_doc_id: Some("doc-parent-request".to_string()),
             tool_call_id: "call-z".to_string(),
             child_request_id: Some("child-z".to_string()),
-            args: Some(r#"{"name":"scout z"}"#.to_string()),
             message_sequence: Some(5),
         };
+        let spawn_arguments = HashMap::from([
+            (
+                "doc-call-a".to_string(),
+                r#"{"name":"scout a"}"#.to_string(),
+            ),
+            (
+                "doc-call-z".to_string(),
+                r#"{"name":"scout z"}"#.to_string(),
+            ),
+        ]);
         // Reverse input order for both families, then apply the same sorts
         // the decode boundary applies (`sort_child_rows` at decode;
         // `sort_spawn_rows` at decode) — the unit test drives the pure
@@ -1985,6 +2231,7 @@ mod tests {
         let (updates, chronology) = project_child_rows(
             &children,
             &spawn_tools,
+            &spawn_arguments,
             &[],
             &[],
             &parent_fixture(),
@@ -2020,6 +2267,128 @@ mod tests {
         (dir, node)
     }
 
+    /// Seed the canonical admission record for one physical spawn tool: the
+    /// closed `ProviderTurn` `ToolArguments` segment plus the
+    /// `RequestExecution` assistant header whose `ToolCall` block binds the
+    /// physical document, exactly as the shared canonical tool presentation
+    /// owner reconstructs arguments.
+    async fn seed_spawn_arguments(
+        node: &EmbeddedNode,
+        request_doc_id: &str,
+        session_id: &str,
+        tool_doc_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        message_sequence: u32,
+        arguments: &str,
+    ) {
+        use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+        use gents::graphql::single_mutation_document;
+        use gents::session::canonical_rows::{
+            output_segment_create_variables, transcript_message_create_variables,
+            CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        };
+        use gents_protocol::output::{
+            MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment,
+            OutputSource, OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration,
+            StreamPayload, TranscriptMessage,
+        };
+        let agent_did = "did:test:grok-shim";
+        let created_at = "2026-08-31T22:46:44Z";
+        let accepted_segment = OutputSegment {
+            agent_did: agent_did.into(),
+            requester_did: Some(agent_did.into()),
+            session_id: session_id.into(),
+            request_doc_id: request_doc_id.into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "generation-spawn-child".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: arguments.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolArguments {
+                        id: tool_call_id.into(),
+                        call_id: None,
+                        name: tool_name.into(),
+                    },
+                }),
+            }],
+            payload: arguments.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![arguments.len() as u64],
+            }),
+            created_at: created_at.into(),
+        };
+        let response = node
+            .execute_request_with_retry(
+                QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                    .with_variables(output_segment_create_variables(&accepted_segment).unwrap()),
+                ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "spawn segment seed: {:?}",
+            response.errors
+        );
+        let close_doc_id = single_mutation_document(&response, "create_AgentOutputSegment")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let header = TranscriptMessage {
+            message_key: "accepted:spawn-child".into(),
+            session_id: session_id.into(),
+            agent_did: agent_did.into(),
+            requester_did: Some(agent_did.into()),
+            request_doc_id: Some(request_doc_id.into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "generation-spawn-child".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: message_sequence,
+            role: MessageRole::Assistant,
+            native_id: None,
+            blocks: vec![MessageBlock::ToolCall {
+                tool_call_doc_id: tool_doc_id.into(),
+                id: tool_call_id.into(),
+                call_id: None,
+                name: tool_name.into(),
+                arguments: PayloadRef {
+                    close_doc_id,
+                    stream: 0,
+                },
+                signature: None,
+                additional_params: None,
+            }],
+            created_at: created_at.into(),
+        };
+        let response = node
+            .execute_request_with_retry(
+                QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                    .with_variables(transcript_message_create_variables(&header).unwrap()),
+                ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "spawn header seed: {:?}",
+            response.errors
+        );
+    }
+
     /// The production-shaped canonical-interrupt regression: a parent
     /// `AgentRequest` whose child row carries `lifecycle_state:
     /// "interrupted"` with **no** `interrupt_requested_at` marker latched.
@@ -2029,6 +2398,7 @@ mod tests {
     #[tokio::test]
     async fn embedded_interrupted_child_without_marker_projects_cancelled_finish() {
         let (_dir, node) = embedded_node().await;
+        let node = std::sync::Arc::new(node);
         let parent_request_id = "parent-req-embedded-interrupt";
         let child_request_id = "child-req-embedded-interrupt";
         let session_id = "s-embedded-interrupt";
@@ -2076,16 +2446,13 @@ mod tests {
                     agent_did: "did:test:grok-shim"
                     requester_did: "did:test:grok-shim"
                     tool_call_id: "call-child"
-                    tool_name: "task"
-                    args: "{{}}"
+                    tool_name: "spawn_subagent"
                     started_at: "2026-08-31T22:46:44Z"
                     deadline_at: "2099-08-31T22:46:44Z"
                     await_mode: "background"
                     cancel_policy: "cascade"
                     child_request_id: "{escaped_child}"
                     lifecycle_state: "running"
-                    status: "running"
-                    result: ""
                     message_sequence: 1
                 }}) {{ _docID }}
             }}"#
@@ -2102,6 +2469,17 @@ mod tests {
         )
         .expect("bridge document id");
         let escaped_tool_doc = escape_graphql_string(&tool_doc_id);
+        seed_spawn_arguments(
+            node.as_ref(),
+            &parent_doc_id,
+            session_id,
+            &tool_doc_id,
+            "call-child",
+            "spawn_subagent",
+            1,
+            r#"{"name":"repo scout"}"#,
+        )
+        .await;
 
         // Only the first child has the runtime's full logical+physical
         // provenance. The forged logical-only sibling must not project.
@@ -2211,7 +2589,6 @@ mod tests {
             .iter()
             .all(|update| update.subagent_id() != "forged-child-session"));
 
-        let node = std::sync::Arc::new(node);
         let sessions = vec![session_id.to_owned()];
         let params = json!({"subagentId": "child-session"});
         let get = control::handle(

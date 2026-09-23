@@ -4,9 +4,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use futures::FutureExt;
 use tokio::sync::{mpsc, watch, Mutex};
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
+use tokio_util::task::AbortOnDropHandle;
 
 use crate::admission::BackendAdmissionConfig;
+use crate::agent::worker_capacity::{scope_slot_capacity, WorkerCapacity};
 use crate::config::ResolvedBehavior;
 use crate::retry::RetryPolicy;
 use crate::runtime_snapshot::ResolvedRuntimeSnapshot;
@@ -17,6 +19,26 @@ use crate::watcher::AgentRequest;
 use std::collections::HashMap;
 
 const BEHAVIOR_EXECUTOR_QUEUE_CAPACITY: usize = 32;
+// A configured backend may advertise a very large inference limit. Local
+// request workers are a separate bounded resource: each active worker may
+// retain at most MAX_SUBAGENT_DEPTH parked ancestor continuations.
+const MAX_BEHAVIOR_WORKERS: usize = 256;
+
+fn bounded_active_limit(requested: usize) -> usize {
+    let depth =
+        usize::try_from(crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH).unwrap_or(usize::MAX);
+    let max_active = MAX_BEHAVIOR_WORKERS / depth.saturating_add(1);
+    requested.max(1).min(max_active.max(1))
+}
+
+fn parked_limit(active_limit: usize) -> usize {
+    let depth =
+        usize::try_from(crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH).unwrap_or(usize::MAX);
+    active_limit
+        .checked_mul(depth)
+        .unwrap_or(MAX_BEHAVIOR_WORKERS - active_limit)
+        .min(MAX_BEHAVIOR_WORKERS - active_limit)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BehaviorSlotState {
@@ -27,10 +49,11 @@ pub(super) enum BehaviorSlotState {
 pub(super) struct BehaviorSlot {
     pub(super) dispatcher: mpsc::Sender<AgentRequest>,
     pub(super) state_tx: watch::Sender<BehaviorSlotState>,
-    pub(super) handle: JoinHandle<()>,
+    pub(super) handle: AbortOnDropHandle<()>,
     pub(super) behavior_fingerprint: String,
     pub(super) tool_surface_fingerprint: String,
     pub(super) executor_capacity: usize,
+    pub(super) worker_task_count: usize,
     pub(super) queue_capacity: usize,
     pub(super) generation: u64,
 }
@@ -253,7 +276,21 @@ where
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
-    let executor_capacity = executor_capacity.max(1);
+    let requested_capacity = executor_capacity;
+    let executor_capacity = bounded_active_limit(executor_capacity);
+    if requested_capacity > executor_capacity {
+        tracing::warn!(
+            behavior_id = %behavior.behavior_id,
+            requested_capacity,
+            executor_capacity,
+            max_worker_tasks = MAX_BEHAVIOR_WORKERS,
+            "local behavior worker capacity was bounded"
+        );
+    }
+    let capacity = WorkerCapacity::new(executor_capacity, parked_limit(executor_capacity));
+    let worker_task_count = executor_capacity
+        .checked_add(capacity.parked_limit())
+        .expect("bounded worker task count");
     let (dispatcher, request_rx) = mpsc::channel(BEHAVIOR_EXECUTOR_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
     let (state_tx, state_rx) = watch::channel(BehaviorSlotState::Active);
@@ -261,11 +298,12 @@ where
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));
-    let handle = tokio::spawn(run_slot_workers(
+    let handle = AbortOnDropHandle::new(tokio::spawn(run_slot_workers(
         behavior,
         tool_surface,
         request_rx,
         executor_capacity,
+        capacity,
         retry_policy,
         runner,
         generation,
@@ -273,7 +311,7 @@ where
         state_rx,
         failure_policy,
         standing,
-    ));
+    )));
 
     BehaviorSlot {
         dispatcher,
@@ -282,6 +320,7 @@ where
         behavior_fingerprint,
         tool_surface_fingerprint,
         executor_capacity,
+        worker_task_count,
         queue_capacity: BEHAVIOR_EXECUTOR_QUEUE_CAPACITY,
         generation,
     }
@@ -303,7 +342,7 @@ pub(super) fn behavior_executor_capacity(
     backend_admission_configs
         .get(backend_id)
         .filter(|config| config.is_available())
-        .map(|config| config.max_concurrent.max(1))
+        .map(|config| bounded_active_limit(config.max_concurrent))
         .unwrap_or(1)
 }
 
@@ -452,6 +491,7 @@ async fn run_slot_workers<F, Fut>(
     tool_surface: Arc<ToolSurface>,
     request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
     executor_capacity: usize,
+    capacity: Arc<WorkerCapacity>,
     retry_policy: RetryPolicy,
     runner: F,
     generation: u64,
@@ -473,30 +513,40 @@ async fn run_slot_workers<F, Fut>(
         + 'static,
     Fut: std::future::Future<Output = Result<()>> + Send + 'static,
 {
+    let parked_capacity = capacity.parked_limit();
+    let worker_count = executor_capacity
+        .checked_add(parked_capacity)
+        .expect("bounded worker task count");
     tracing::info!(
         behavior_id = %behavior.behavior_id,
         executor_capacity,
+        parked_capacity,
+        worker_count,
         queue_capacity = BEHAVIOR_EXECUTOR_QUEUE_CAPACITY,
         "behavior executor worker pool starting"
     );
     let mut workers = JoinSet::new();
-    for worker_index in 0..executor_capacity {
-        workers.spawn(run_slot_loop(
-            behavior.clone(),
-            tool_surface.clone(),
-            request_rx.clone(),
-            generation,
-            retry_policy.clone(),
-            runner.clone(),
-            shutdown.clone(),
-            state_rx.clone(),
-            failure_policy.clone(),
-            standing.clone(),
+    for worker_index in 0..worker_count {
+        workers.spawn(scope_slot_capacity(
+            capacity.clone(),
+            run_slot_loop(
+                behavior.clone(),
+                tool_surface.clone(),
+                request_rx.clone(),
+                generation,
+                retry_policy.clone(),
+                runner.clone(),
+                shutdown.clone(),
+                state_rx.clone(),
+                failure_policy.clone(),
+                standing.clone(),
+            ),
         ));
         tracing::debug!(
             behavior_id = %behavior.behavior_id,
             worker_index,
             executor_capacity,
+            parked_capacity,
             "behavior executor worker spawned"
         );
     }

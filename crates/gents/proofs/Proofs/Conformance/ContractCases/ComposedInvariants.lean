@@ -35,7 +35,10 @@ def composedInvariantWitnesses : List ComposedInvariantWitness :=
     , toolCurrentTime := expiredPendingTool.currentTime
     , deadlineExceeded := decide withExpiredPendingTool.request.deadlineExceeded
     , wellFormedSource := "ComposedState.wellFormed_from_initial"
-    , preToolPersisted := false
+    -- `tool_spawn` is the canonical acceptance boundary: the pending tool is
+    -- already a member of the composed durable tool set before dispatch.
+    , preToolPersisted := decide
+        (withExpiredPendingTool.hasToolByCallId expiredPendingTool.callId)
     , cancelCause := some (ToolExecution.CancelCause.toDefraDB .deadline)
     }
   , { theoremName :=
@@ -58,7 +61,8 @@ def composedInvariantWitnesses : List ComposedInvariantWitness :=
     , toolCurrentTime := expiredRunningTool.currentTime
     , deadlineExceeded := decide withExpiredRunningTool.request.deadlineExceeded
     , wellFormedSource := "ComposedState.wellFormed_from_initial"
-    , preToolPersisted := true
+    , preToolPersisted := decide
+        (withExpiredRunningTool.hasToolByCallId expiredRunningTool.callId)
     , cancelCause := some (ToolExecution.CancelCause.toDefraDB .deadline)
     }
   , { theoremName :=
@@ -82,7 +86,8 @@ def composedInvariantWitnesses : List ComposedInvariantWitness :=
     , toolCurrentTime := pendingTool.currentTime
     , deadlineExceeded := decide interruptedWithTool.request.deadlineExceeded
     , wellFormedSource := "ComposedState.wellFormed_from_initial"
-    , preToolPersisted := false
+    , preToolPersisted := decide
+        (interruptedWithTool.hasToolByCallId pendingTool.callId)
     , cancelCause := some (ToolExecution.CancelCause.toDefraDB .interrupted)
     }
   , { theoremName :=
@@ -107,7 +112,8 @@ def composedInvariantWitnesses : List ComposedInvariantWitness :=
     , toolCurrentTime := runningTool.currentTime
     , deadlineExceeded := decide interruptedWithRunningTool.request.deadlineExceeded
     , wellFormedSource := "ComposedState.wellFormed_from_initial"
-    , preToolPersisted := true
+    , preToolPersisted := decide
+        (interruptedWithRunningTool.hasToolByCallId runningTool.callId)
     , cancelCause := some (ToolExecution.CancelCause.toDefraDB .interrupted)
     }
   ]

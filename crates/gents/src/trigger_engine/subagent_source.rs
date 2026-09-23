@@ -20,16 +20,17 @@ use crate::background_tools::{
     fail_running_subagent_tool_call, load_behavior_allow_cross_deployment,
     load_parent_subagent_authorization, subagent_spawn_denial, subagent_tool_not_allowed_payload,
 };
+use crate::config_client::ConfigAccess;
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
 use crate::graphql::escape_graphql_string;
+use crate::run_timeline_fetch::load_run_timeline_rows;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::tool_call_lifecycle::subagent_request::{
     create_subagent_request_with_request_id_and_workspace,
     create_subagent_request_with_trusted_parent_request_id_and_workspace,
 };
 use crate::tool_call_lifecycle::subagent_workspace::{
-    complete_lineage_from_bridge, resolve_child_workspace, ParentWorkspaceStamp,
-    SpawnWorkspaceError,
+    resolve_child_workspace, ParentWorkspaceStamp, SpawnWorkspaceError,
 };
 use crate::tool_call_lifecycle::{
     AwaitMode, CancelPolicy, FailureClass, IllegalToolCallTransition, ToolCallState,
@@ -89,8 +90,6 @@ struct ToolCallRow {
     #[serde(default)]
     tool_name: String,
     #[serde(default)]
-    args: String,
-    #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
     started_at: Option<String>,
@@ -104,6 +103,18 @@ struct ToolCallRow {
     child_request_id: Option<String>,
     #[serde(default)]
     spawn_target_did: Option<String>,
+    #[serde(default)]
+    spawn_behavior_id: Option<String>,
+    #[serde(default)]
+    delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
+    #[serde(default)]
+    delegated_input: Option<gents_protocol::output::DelegatedToolInput>,
+}
+
+#[derive(Clone)]
+struct PinnedTarget {
+    target_agent_did: String,
+    behavior_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,23 +140,11 @@ fn parent_reached_cancel_worthy_terminal(row: &AgentRequestRow) -> bool {
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
     name: String,
-    agent_did: String,
-    behavior_id: String,
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
     #[serde(default)]
-    parent_subagent_depth: Option<u32>,
-    #[serde(default)]
     workspace: Option<crate::background_tools::SpawnWorkspaceArg>,
-    #[serde(default)]
-    workspace_id: Option<String>,
-    #[serde(default)]
-    workspace_authority: Option<String>,
-    #[serde(default)]
-    workspace_owner_agent_did: Option<String>,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
 }
 
 impl SpawnArgs {
@@ -280,7 +279,6 @@ impl SubagentSource {
                     agent_did
                     tool_call_id
                     tool_name
-                    args
                     lifecycle_state
                     started_at
                     deadline_at
@@ -288,6 +286,9 @@ impl SubagentSource {
                     cancel_policy
                     child_request_id
                     spawn_target_did
+                    spawn_behavior_id
+                    delegated_workspace
+                    delegated_input
                 }}
             }}"#
         );
@@ -305,6 +306,53 @@ impl SubagentSource {
             .and_then(|value| serde_json::from_value(value.clone()).ok())
             .unwrap_or_default();
         Ok(rows.into_iter().next())
+    }
+
+    /// The bridge row is lifecycle-only.  Its spawn arguments remain in the
+    /// accepted provider header, so resolve them through the shared canonical
+    /// timeline reader by exact physical tool document identity.  There is no
+    /// retired `AgentToolCall.args` fallback and no logical-id/proximity join.
+    async fn load_spawn_args(&self, row: &ToolCallRow) -> anyhow::Result<SpawnArgs> {
+        if let Some(input) = &row.delegated_input {
+            return serde_json::from_str(&input.arguments).with_context(|| {
+                format!(
+                    "decode delegated spawn arguments for physical bridge {}",
+                    row.doc_id
+                )
+            });
+        }
+        let request_id = non_empty(row.request_id.as_deref())
+            .context("subagent bridge lacks parent request identity")?;
+        let rows = load_run_timeline_rows(&ConfigAccess::Local(self.node.clone()), request_id)
+            .await
+            .with_context(|| {
+                format!(
+                    "resolve canonical spawn admission for physical tool {}",
+                    row.doc_id
+                )
+            })?;
+        let matches = rows
+            .tool_calls
+            .into_iter()
+            .filter(|candidate| candidate.doc_id.as_deref() == Some(row.doc_id.as_str()))
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            matches.len() == 1,
+            "canonical timeline did not resolve exactly one physical spawn bridge {}",
+            row.doc_id
+        );
+        let args = &matches[0].args;
+        anyhow::ensure!(
+            !args.trim().is_empty(),
+            "canonical spawn admission has no arguments for physical bridge {}",
+            row.doc_id
+        );
+        serde_json::from_str(args).with_context(|| {
+            format!(
+                "decode canonical spawn arguments for physical bridge {}",
+                row.doc_id
+            )
+        })
     }
 
     async fn load_parent_request(
@@ -446,6 +494,11 @@ impl SubagentSource {
                 return None;
             }
         };
+        tracing::debug!(
+            local_did = %self.snapshot_rx.borrow().local_did,
+            bridge_count = doc_ids.len(),
+            "subagent source periodic rescan loaded running bridge rows",
+        );
 
         for doc_id in doc_ids {
             match self.build_intent_for_tool_call_doc(&doc_id).await {
@@ -487,8 +540,6 @@ impl SubagentSource {
         fail_running_subagent_tool_call(
             &self.node,
             &row.doc_id,
-            row.started_at.as_deref(),
-            row.deadline_at.as_deref(),
             &payload,
             FailureClass::ServiceUnavailable,
         )
@@ -500,15 +551,8 @@ impl SubagentSource {
         row: &ToolCallRow,
         error: SpawnWorkspaceError,
     ) -> anyhow::Result<bool> {
-        fail_running_subagent_tool_call(
-            &self.node,
-            &row.doc_id,
-            row.started_at.as_deref(),
-            row.deadline_at.as_deref(),
-            &error.payload(),
-            error.class,
-        )
-        .await
+        fail_running_subagent_tool_call(&self.node, &row.doc_id, &error.payload(), error.class)
+            .await
     }
 
     async fn build_intent_for_tool_call_doc(
@@ -559,34 +603,13 @@ impl SubagentSource {
             Some(value) => value.to_string(),
             None => return Ok(None),
         };
-        let spawn_args: SpawnArgs = serde_json::from_str(&row.args)?;
+        let spawn_args = self.load_spawn_args(&row).await?;
         let Some(row_spawn_target_did) = non_empty(row.spawn_target_did.as_deref()) else {
             return Ok(None);
         };
-        let Some(args_target_did) = non_empty(Some(&spawn_args.agent_did)) else {
+        let Some(row_spawn_behavior_id) = non_empty(row.spawn_behavior_id.as_deref()) else {
             return Ok(None);
         };
-        if row_spawn_target_did != args_target_did {
-            let failed = self
-                .fail_unauthorized_tool_call(
-                    &row,
-                    "/agent_did",
-                    args_target_did,
-                    "subagent target DID args do not match immutable spawn_target_did",
-                    &[],
-                )
-                .await?;
-            self.processed_tool_calls.insert(processed_key);
-            tracing::warn!(
-                parent_request_id = %parent_request_id,
-                parent_tool_call_id = %parent_tool_call_id,
-                spawn_target_did = %row_spawn_target_did,
-                args_agent_did = %args_target_did,
-                failed_tool_call = failed,
-                "subagent source rejected spawn with mismatched target DID fields",
-            );
-            return Ok(None);
-        }
         let Some(await_mode) = row
             .await_mode
             .as_deref()
@@ -634,7 +657,7 @@ impl SubagentSource {
         let Some(tool_name) = non_empty(Some(&row.tool_name)) else {
             return Ok(None);
         };
-        if trusted_paired_peer {
+        let target = if trusted_paired_peer {
             let local_did = snapshot.local_did.trim();
             if local_did.is_empty() || row_spawn_target_did != local_did {
                 tracing::debug!(
@@ -647,40 +670,30 @@ impl SubagentSource {
                 );
                 return Ok(None);
             }
-            let allow_cross_deployment = match load_behavior_allow_cross_deployment(
-                &self.node,
-                &local_did,
-                &spawn_args.behavior_id,
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    tracing::warn!(
-                        parent_request_id = %parent_request_id,
-                        parent_authoring_did = %parent_authoring_did,
-                        target_behavior_id = %spawn_args.behavior_id,
-                        %error,
-                        "subagent source could not load target behavior cross-deployment flag; refusing cross-deployment child",
-                    );
-                    return Ok(None);
-                }
-            };
-            if !allow_cross_deployment {
+            if snapshot.behavior(&row_spawn_behavior_id).is_none() {
                 tracing::warn!(
                     parent_request_id = %parent_request_id,
-                    parent_authoring_did = %parent_authoring_did,
-                    target_behavior_id = %spawn_args.behavior_id,
-                    "cross-deployment child refused: subagent_allow_cross_deployment is off for target behavior {behavior_id}",
-                    behavior_id = spawn_args.behavior_id,
+                    target_behavior_id = %row_spawn_behavior_id,
+                    local_did = %snapshot.local_did,
+                    "trusted peer target behavior is not in this host runtime snapshot",
                 );
                 return Ok(None);
             }
-            tracing::debug!(
-                parent_request_id = %parent_request_id,
-                parent_authoring_did = %parent_authoring_did,
-                "subagent source claiming cross-deployment spawn from paired peer",
-            );
+            if !load_behavior_allow_cross_deployment(&self.node, local_did, &row_spawn_behavior_id)
+                .await
+                .unwrap_or(false)
+            {
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    target_behavior_id = %row_spawn_behavior_id,
+                    "trusted peer target behavior has not enabled cross-deployment spawning",
+                );
+                return Ok(None);
+            }
+            PinnedTarget {
+                target_agent_did: row_spawn_target_did.to_owned(),
+                behavior_id: row_spawn_behavior_id.to_owned(),
+            }
         } else {
             let authorization = match load_parent_subagent_authorization(
                 &self.node,
@@ -739,14 +752,67 @@ impl SubagentSource {
                 );
                 return Ok(None);
             }
-        }
+            let Some(target) = authorization
+                .resolve_target(spawn_args.target_name())
+                .cloned()
+            else {
+                return Ok(None);
+            };
+            if target.target_agent_did != row_spawn_target_did {
+                let failed = self
+                    .fail_unauthorized_tool_call(
+                        &row,
+                        "/name",
+                        spawn_args.target_name(),
+                        "resolved target does not match immutable spawn_target_did",
+                        &authorization.allowed_target_names(),
+                    )
+                    .await?;
+                self.processed_tool_calls.insert(processed_key);
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    spawn_target_did = %row_spawn_target_did,
+                    resolved_target_did = %target.target_agent_did,
+                    failed_tool_call = failed,
+                    "subagent source rejected target that conflicts with immutable admission",
+                );
+                return Ok(None);
+            }
+            if target.behavior_id != row_spawn_behavior_id {
+                let failed = self
+                    .fail_unauthorized_tool_call(
+                        &row,
+                        "/name",
+                        spawn_args.target_name(),
+                        "resolved target does not match immutable spawn_behavior_id",
+                        &authorization.allowed_target_names(),
+                    )
+                    .await?;
+                self.processed_tool_calls.insert(processed_key);
+                tracing::warn!(
+                    parent_request_id = %parent_request_id,
+                    parent_tool_call_id = %parent_tool_call_id,
+                    spawn_behavior_id = %row_spawn_behavior_id,
+                    resolved_behavior_id = %target.behavior_id,
+                    failed_tool_call = failed,
+                    "subagent source rejected behavior that conflicts with immutable admission",
+                );
+                return Ok(None);
+            }
+            PinnedTarget {
+                target_agent_did: target.target_agent_did,
+                behavior_id: target.behavior_id,
+            }
+        };
 
-        if snapshot.behavior(&spawn_args.behavior_id).is_none() {
+        if snapshot.behavior(&target.behavior_id).is_none() {
             tracing::warn!(
                 parent_request_id = %parent_request_id,
                 parent_tool_call_id = %parent_tool_call_id,
                 target_name = %spawn_args.target_name(),
-                target_behavior_id = %spawn_args.behavior_id,
+                target_behavior_id = %target.behavior_id,
+                local_did = %snapshot.local_did,
                 "subagent source target behavior is not in the active runtime snapshot; skipping spawn",
             );
             return Ok(None);
@@ -773,49 +839,32 @@ impl SubagentSource {
             return Ok(None);
         }
 
-        let bridge_depth = spawn_args
-            .parent_subagent_depth
-            .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
         let parent_depth = match parent.as_ref() {
             Some(parent) => {
                 let row_depth = parent
                     .subagent_depth
                     .and_then(|depth| u32::try_from(depth).ok())
                     .ok_or(IllegalToolCallTransition::ParentLinkageIncoherent)?;
-                if bridge_depth != row_depth {
-                    anyhow::bail!(IllegalToolCallTransition::ParentLinkageIncoherent);
-                }
                 row_depth
             }
-            None => bridge_depth,
+            None if trusted_paired_peer => row
+                .delegated_input
+                .as_ref()
+                .map(|input| input.parent_subagent_depth)
+                .context("trusted subagent bridge omitted immutable parent depth")?,
+            None => return Ok(None),
         };
         let deadline =
             effective_deadline(row.deadline_at.as_deref(), spawn_args.deadline.as_deref());
-        let child_agent_did = row_spawn_target_did.to_string();
-        let parent_workspace = ParentWorkspaceStamp::from_fields(
-            &parent_authoring_did,
-            parent.as_ref().and_then(|row| row.workspace_id.as_deref()),
-            parent
-                .as_ref()
-                .and_then(|row| row.workspace_owner_agent_did.as_deref()),
-            parent
-                .as_ref()
-                .and_then(|row| row.workspace_authority.as_deref()),
-            parent
-                .as_ref()
-                .and_then(|row| row.workspace_seal_hash.as_deref()),
-        );
+        let child_agent_did = target.target_agent_did.clone();
+        let parent_workspace =
+            delegated_parent_workspace(&parent_authoring_did, row.delegated_workspace.as_ref())?;
         let operator_tool_root = crate::workspace::process_operator_tool_root();
         let workspace = match resolve_child_workspace(
             &self.node,
             &parent_workspace,
             spawn_args.workspace.as_ref(),
-            complete_lineage_from_bridge(
-                spawn_args.workspace_id.as_deref(),
-                spawn_args.workspace_owner_agent_did.as_deref(),
-                spawn_args.workspace_authority.as_deref(),
-                spawn_args.workspace_seal_hash.as_deref(),
-            ),
+            None,
             &child_agent_did,
             &parent_tool_call_id,
             &parent_request_id,
@@ -846,7 +895,7 @@ impl SubagentSource {
                 row.doc_id.clone(),
                 parent_depth,
                 child_agent_did,
-                spawn_args.behavior_id.clone(),
+                target.behavior_id.clone(),
                 spawn_args.prompt.clone(),
                 deadline,
                 parent_authoring_did.clone(),
@@ -863,7 +912,7 @@ impl SubagentSource {
                 row.doc_id.clone(),
                 parent_depth,
                 child_agent_did,
-                spawn_args.behavior_id.clone(),
+                target.behavior_id.clone(),
                 spawn_args.prompt.clone(),
                 deadline,
                 workspace,
@@ -911,8 +960,11 @@ impl SubagentSource {
                 }
             };
             let parent_interrupted = if parent.is_some() {
-                match crate::interrupt::fetch_interrupt_requested_at(&self.node, &parent_request_id)
-                    .await
+                match crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+                    &self.node,
+                    &parent_request_doc_id,
+                )
+                .await
                 {
                     Ok(value) => value.is_some(),
                     Err(error) => {
@@ -968,11 +1020,8 @@ impl SubagentSource {
         let fired_at = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true);
         let task = ResolvedTask {
             task_id: format!("subagent:{parent_tool_call_id}"),
-            name: Some(format!(
-                "Subagent {target}",
-                target = spawn_args.behavior_id
-            )),
-            behavior_id: spawn_args.behavior_id,
+            name: Some(format!("Subagent {target}", target = target.behavior_id)),
+            behavior_id: target.behavior_id,
             prompt_template: spawn_args.prompt,
             goal_objective_template: None,
             goal_token_budget: None,
@@ -1015,6 +1064,29 @@ impl SubagentSource {
             }),
         }))
     }
+}
+
+fn delegated_parent_workspace(
+    parent_authoring_did: &str,
+    delegated_workspace: Option<&gents_protocol::output::DelegatedWorkspace>,
+) -> anyhow::Result<ParentWorkspaceStamp> {
+    let lineage = match delegated_workspace {
+        Some(workspace) => crate::lifecycle::WorkspaceLineage {
+            workspace_id: Some(workspace.workspace_id.clone()),
+            workspace_owner_agent_did: Some(workspace.workspace_owner_agent_did.clone()),
+            workspace_authority: Some(workspace.workspace_authority.clone()),
+            workspace_seal_hash: workspace.workspace_seal_hash.clone(),
+        },
+        None => crate::lifecycle::WorkspaceLineage::default(),
+    };
+    lineage.require_authority_if_workspace_id()?;
+    Ok(ParentWorkspaceStamp::from_fields(
+        parent_authoring_did,
+        lineage.workspace_id.as_deref(),
+        lineage.workspace_owner_agent_did.as_deref(),
+        lineage.workspace_authority.as_deref(),
+        lineage.workspace_seal_hash.as_deref(),
+    ))
 }
 
 impl EventDeliveryRuntimeContract for SubagentSource {
@@ -1137,5 +1209,195 @@ fn effective_deadline(
         (Some(left), None) => Some(left),
         (None, Some(right)) => Some(right),
         (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod accepted_target_drift_tests {
+    use super::*;
+    use crate::config_client::{
+        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    };
+    use crate::tool_call_lifecycle::admission_fixture::{
+        published_admission, PublishedAdmissionOptions,
+    };
+    use crate::{Collection, ConfigAccess};
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn local_source_fails_accepted_bridge_when_target_name_drifts_from_immutable_did() {
+        let admitted = published_admission(PublishedAdmissionOptions {
+            name: "source-target-drift".into(),
+            real_identity: true,
+            await_mode: AwaitMode::Background,
+            cancel_policy: CancelPolicy::Cascade,
+            spawn_plan: Some(crate::streaming::SpawnAdmissionPlan {
+                tool_call_id: "bridge-native-tool".into(),
+                child_request_id: "child-source-target-drift".into(),
+                spawn_target_did: "overridden-by-fixture".into(),
+                spawn_behavior_id: "general".into(),
+                delegated_workspace: None,
+                await_mode: AwaitMode::Background,
+            }),
+            ..Default::default()
+        })
+        .await
+        .expect("publish canonically accepted spawn bridge");
+        let node = admitted.node;
+        let path = admitted.path;
+        let agent_did = admitted.agent_did;
+        let mut tool = admitted.tool;
+        let tool_doc_id = tool.doc_id().expect("accepted bridge document").to_string();
+        // The production background hook publishes the one immutable receipt
+        // after dispatch and before the source may terminalize a denial.
+        tool.publish_background_receipt("child started")
+            .await
+            .expect("publish accepted background receipt");
+
+        crate::test_support::install_test_behavior(&node, &agent_did, "general").await;
+        let documents = [
+            (
+                Collection::Tools,
+                json!({
+                    "agent_did": agent_did,
+                    "tools_id": "general:tools",
+                    "subagents": {
+                        "target_ids": ["target-drift"],
+                        "spawn_enabled": true,
+                        "background_enabled": true,
+                        "allow_cross_principal": true
+                    }
+                }),
+            ),
+            (
+                Collection::SubagentTarget,
+                json!({
+                    "agent_did": agent_did,
+                    "target_id": "target-drift",
+                    "name": "child",
+                    "target_agent_did": "did:key:zDifferentAuthorizedTarget",
+                    "behavior_id": "general"
+                }),
+            ),
+        ];
+        let plan = DesiredStateApplyPlan::new(
+            documents
+                .into_iter()
+                .map(|(collection, value)| DesiredStateApplyDocument {
+                    collection,
+                    add: value.clone(),
+                    update: value,
+                })
+                .collect(),
+        )
+        .unwrap();
+        ConfigAccess::transact_local(&node, None, "test.accepted_target_drift", |txn| {
+            let plan = &plan;
+            Box::pin(async move { apply_desired_state_plan(txn, plan).await })
+        })
+        .await
+        .unwrap();
+
+        let snapshot = ActiveRuntimeSnapshot {
+            generation: 1,
+            principal: None,
+            local_did: agent_did.clone(),
+            default_behavior_id: "general".into(),
+            behaviors: HashMap::new(),
+            tool_surfaces: HashMap::new(),
+            backend_admission_configs: HashMap::new(),
+            unavailable_behaviors: HashMap::new(),
+            active_schedules: HashMap::new(),
+            unavailable_schedules: HashSet::new(),
+            active_event_triggers: HashMap::new(),
+            unavailable_event_triggers: HashSet::new(),
+            active_tasks: HashMap::new(),
+            dispatchers: Default::default(),
+            behavior_executor_capacities: HashMap::new(),
+            behavior_executor_queue_capacities: HashMap::new(),
+        };
+        let (_snapshot_tx, snapshot_rx) = watch::channel(Arc::new(snapshot));
+        let mut source = SubagentSource::with_subscription_source_for_test(
+            node.clone(),
+            snapshot_rx,
+            node.clone(),
+            HashSet::new(),
+            CancellationToken::new(),
+        );
+        assert!(source
+            .build_intent_for_tool_call_doc(&tool_doc_id)
+            .await
+            .expect("source must evaluate accepted target drift")
+            .is_none());
+
+        let escaped = escape_graphql_string(&tool_doc_id);
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state tool_failure_class }} AgentRequest(filter: {{ request_id: {{ _eq: "child-source-target-drift" }} }}) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = response.data.expect("target-drift observation");
+        let tool_rows = data["AgentToolCall"].as_array().expect("bridge rows");
+        assert_eq!(tool_rows.len(), 1);
+        assert_eq!(tool_rows[0]["lifecycle_state"], "failed");
+        assert_eq!(tool_rows[0]["tool_failure_class"], "serviceUnavailable");
+        assert!(data["AgentRequest"]
+            .as_array()
+            .expect("child rows")
+            .is_empty());
+
+        drop(source);
+        drop(tool);
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod delegated_workspace_tests {
+    use super::*;
+
+    #[test]
+    fn immutable_workspace_snapshot_builds_parent_stamp() {
+        let stamp = delegated_parent_workspace(
+            "did:parent",
+            Some(&gents_protocol::output::DelegatedWorkspace {
+                workspace_id: "workspace-1".into(),
+                workspace_owner_agent_did: "did:workspace-owner".into(),
+                workspace_authority: "readOnly".into(),
+                workspace_seal_hash: Some("sealed-1".into()),
+            }),
+        )
+        .unwrap();
+        assert_eq!(stamp.workspace_id.as_deref(), Some("workspace-1"));
+        assert_eq!(
+            stamp.workspace_owner_agent_did.as_deref(),
+            Some("did:workspace-owner")
+        );
+        assert_eq!(stamp.workspace_authority.as_deref(), Some("readOnly"));
+        assert_eq!(stamp.workspace_seal_hash.as_deref(), Some("sealed-1"));
+    }
+
+    #[test]
+    fn absent_snapshot_is_only_an_unbound_parent_stamp() {
+        let stamp = delegated_parent_workspace("did:parent", None).unwrap();
+        assert!(!stamp.has_workspace_id());
+        assert!(stamp.workspace_owner_agent_did.is_none());
+        assert!(stamp.workspace_authority.is_none());
+    }
+
+    #[test]
+    fn malformed_immutable_workspace_snapshot_is_rejected() {
+        assert!(delegated_parent_workspace(
+            "did:parent",
+            Some(&gents_protocol::output::DelegatedWorkspace {
+                workspace_id: "workspace-1".into(),
+                workspace_owner_agent_did: "".into(),
+                workspace_authority: "readOnly".into(),
+                workspace_seal_hash: None,
+            }),
+        )
+        .is_err());
     }
 }

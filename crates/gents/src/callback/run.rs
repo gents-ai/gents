@@ -141,7 +141,7 @@ fn emit_create_workspace_from_source(source: &Value) -> Result<ActionPlan, Strin
         Some(other) => {
             return Err(format!(
                 "creation_policy `{other}` is not implemented in v1"
-            ))
+            ));
         }
     };
     let adapter = match optional_string(source, "adapter").as_deref() {

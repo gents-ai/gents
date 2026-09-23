@@ -50,6 +50,7 @@ struct ReadyMessage {
     deployment_label: String,
     agent_did: String,
     tool_root: String,
+    data_root: String,
 }
 
 fn main() -> Result<()> {
@@ -84,6 +85,7 @@ fn main() -> Result<()> {
         deployment_label: fixture.deployment_label().to_string(),
         agent_did: fixture.agent_did().to_string(),
         tool_root: fixture.tool_root().display().to_string(),
+        data_root: fixture.data_root().display().to_string(),
     };
     println!("{}", serde_json::to_string(&ready)?);
     std::io::stdout().flush().ok();

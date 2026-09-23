@@ -2,68 +2,120 @@ use serde::Deserialize;
 
 pub type NodeId = String;
 
+/// Executable actions serialized by the Lean R5 scenario owner. Conformance
+/// assertions consume this model-derived shape directly.
 #[derive(Debug, Deserialize)]
-pub struct Scenario {
+#[serde(deny_unknown_fields)]
+pub struct ModeledScenario {
     pub name: String,
-    pub actions: Vec<Action>,
+    pub actions: Vec<ModeledAction>,
+    pub expected_notifications: usize,
+    pub expected_wakes: usize,
+    pub expected_rejected_invocations: usize,
+    pub expected_a_bridges: Vec<ModeledBridgeFact>,
+    pub expected_b_children: Vec<ModeledChildFact>,
+    pub expected_a_generation: u64,
+    pub expected_b_generation: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeledBridgeFact {
+    pub tool: String,
+    pub child: String,
+    pub state: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeledChildFact {
+    pub child: String,
+    pub terminal: Option<String>,
+    pub interrupt_requested: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "op")]
-pub enum Action {
-    OperatorWritePairing {
+pub enum ModeledAction {
+    PairPrincipals {
         node: NodeId,
         peer: NodeId,
-        collections: Vec<String>,
     },
-    WriteParentToolCall {
-        node: NodeId,
-        parent_request_id: String,
-        parent_tool_call_id: String,
-        child_request_id: String,
-        behavior_id: String,
-        unclaimed_deadline_at: Option<String>,
+    PublishAcceptedBackgroundBridge {
+        tool: String,
+        child: String,
+        session: String,
+        parent_depth: u32,
     },
-    WriteAgentRequest {
-        node: NodeId,
-        request_id: String,
-        agent_did: String,
-        behavior_id: String,
-        state: String,
-        #[serde(default)]
-        caused_by_parent_request_id: Option<String>,
-        #[serde(default)]
-        caused_by_parent_tool_call_id: Option<String>,
+    RejectSpawnInvocation {
+        tool: String,
+        child: String,
+        session: String,
+        parent_depth: u32,
     },
-    ReplicateDoc {
-        from: NodeId,
+    ReplicateBridge {
+        tool: String,
+        #[serde(rename = "from")]
+        source: NodeId,
         to: NodeId,
-        collection: String,
-        doc_id: String,
     },
-    TerminalizeChildOnB {
-        request_id: String,
+    MaterializeChild {
+        child: String,
+        tool: String,
+    },
+    ReplicateChild {
+        child: String,
+        #[serde(rename = "from")]
+        source: NodeId,
+        to: NodeId,
+    },
+    PublishChildTerminal {
+        child: String,
         terminal: String,
-        #[serde(default)]
-        final_response: Option<String>,
+        has_message: bool,
     },
-    CancelParentOnA {
-        parent_request_id: String,
-        parent_tool_call_id: String,
+    ReplicateTerminalRequest {
+        child: String,
+        #[serde(rename = "from")]
+        source: NodeId,
+        to: NodeId,
     },
-    RunBackgroundCompletionObserverOnA,
-    RunCancelMirrorObserverOnB,
-    RunUnclaimedSpawnReconcilerOnA,
-    RunCancelAckObserverOnA,
-    RunRecoverySweepOn {
+    ReplicateOutputSegments {
+        child: String,
+        #[serde(rename = "from")]
+        source: NodeId,
+        to: NodeId,
+    },
+    ReplicateMessageHeader {
+        child: String,
+        #[serde(rename = "from")]
+        source: NodeId,
+        to: NodeId,
+    },
+    ObserveCompletion,
+    CancelBridge {
+        tool: String,
+    },
+    ReplicateCancelIntent {
+        tool: String,
+        #[serde(rename = "from")]
+        source: NodeId,
+        to: NodeId,
+    },
+    MirrorCancel {
+        tool: String,
+    },
+    ObserveCancelAck,
+    RecoverNode {
         node: NodeId,
     },
-    Crash {
+    CrashNode {
         node: NodeId,
+        durable_reopen_premise: bool,
     },
-    AdvanceClockOn {
+    AdvanceClock {
         node: NodeId,
         seconds: u64,
     },
-    WaitForConvergence,
+    Converge,
 }

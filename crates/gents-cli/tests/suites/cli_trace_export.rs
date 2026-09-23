@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use gents::defra_node::{EmbeddedNode, StorageBackend};
 use gents::ensure_runtime_schemas;
-use gents::llm::message::{AssistantContent, Message, ToolCall, ToolFunction};
 use gents::rendered_request::RenderedCompletionRequest;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -257,7 +256,7 @@ async fn trace_export_emits_amy_style_jsonl_and_classifies_completed_failures() 
     );
     assert_eq!(
         deadline.get("response_status").and_then(Value::as_str),
-        Some("error")
+        Some("failed")
     );
 
     // No persisted tool_failure_class: the export must classify the timed-out
@@ -461,12 +460,23 @@ async fn trace_timeline_reconstructs_request_events_from_persisted_rows() -> Res
         failed_tool.get("tool_name").and_then(Value::as_str),
         Some("bash")
     );
-    assert!(
-        events.iter().any(|event| {
-            event.get("kind").and_then(Value::as_str) == Some("response")
+    let final_message = events
+        .iter()
+        .find(|event| {
+            event.get("kind").and_then(Value::as_str) == Some("message")
                 && event.get("request_id").and_then(Value::as_str) == Some("req-1")
-        }),
-        "timeline missing response event: {timeline:#}"
+                && event.pointer("/header/sequence").and_then(Value::as_u64) == Some(6)
+        })
+        .unwrap_or_else(|| panic!("timeline missing canonical final message: {timeline:#}"));
+    assert!(final_message["doc_id"]
+        .as_str()
+        .is_some_and(|id| !id.is_empty()));
+    let native: gents_protocol::message::Message =
+        serde_json::from_value(final_message["message"].clone())?;
+    assert!(
+        matches!(native, gents_protocol::message::Message::Assistant { content, .. }
+        if content.iter().any(|block| matches!(block,
+            gents_protocol::message::AssistantContent::Text(text) if text.text == "done")))
     );
 
     Ok(())
@@ -979,7 +989,6 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
         );
         for sensitive_text in [
             "Inspect the repo and show README.md",
-            "reviewer private child response",
             "reviewer private child message",
         ] {
             assert!(
@@ -991,10 +1000,9 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     let openai_full = trace_project_json(tempdir.path(), home, "openai-codex", "full")?;
     assert_projection_json_matches_schema("openai_codex_run_trace", &openai_full)?;
     let openai_full_serialized = serde_json::to_string(&openai_full)?;
-    for expected_child_text in [
-        "reviewer private child response",
-        "reviewer private child message",
-    ] {
+    // The final output and transcript share one canonical message now; there
+    // is no independently stored child-response payload to redact or export.
+    for expected_child_text in ["reviewer private child message"] {
         assert!(
             openai_full_serialized.contains(expected_child_text),
             "unscoped full projection should include child-agent content {expected_child_text:?}: {openai_full:#}"
@@ -1011,10 +1019,6 @@ async fn trace_project_exports_first_adapter_shapes_from_persisted_rows() -> Res
     assert!(
         scoped_openai_serialized.contains("req-child"),
         "scoped projection should retain child delegation metadata: {scoped_openai:#}"
-    );
-    assert!(
-        !scoped_openai_serialized.contains("reviewer private child response"),
-        "scoped projection leaked child-agent response content: {scoped_openai:#}"
     );
     assert!(
         !scoped_openai_serialized.contains("reviewer private child message"),
@@ -1419,6 +1423,307 @@ async fn exec_doc_id(node: &EmbeddedNode, query: &str, collection: &str) -> Resu
         .with_context(|| format!("{collection} mutation response missing _docID"))
 }
 
+async fn exec_variables_doc_id(
+    node: &EmbeddedNode,
+    query: &str,
+    variables: Value,
+    collection: &str,
+) -> Result<String> {
+    let response = node
+        .execute_request_with_retry(
+            gents::defra_node::QueryRequest::new(query).with_variables(variables),
+            gents::defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+    gents::graphql::single_mutation_document(&response, &format!("create_{collection}"))?
+        .and_then(|row| row["_docID"].as_str().map(ToOwned::to_owned))
+        .with_context(|| format!("{collection} mutation omitted document"))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn seed_canonical_trace_tool(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    sequence: u32,
+    tool_call_id: &str,
+    tool_name: &str,
+    arguments: Value,
+    lifecycle_state: &str,
+    result: Option<&str>,
+    failure_class: Option<&str>,
+    child_request_id: Option<&str>,
+) -> Result<String> {
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let arguments = arguments.to_string();
+    let tool_doc_id = exec_doc_id(
+        node,
+        &format!(r#"mutation {{ create_AgentToolCall(input: {{tool_call_key: "{}:{}", agent_did: "{}", request_id: "{}", request_doc_id: "{}", session_id: "{}", message_sequence: {}, tool_name: "{}", tool_call_id: "{}", lifecycle_state: "{}", tool_failure_class: {}, child_request_id: {}, started_at: "2026-05-04T12:00:04.500Z", completed_at: "2026-05-04T12:00:06Z"}}) {{_docID}} }}"#,
+            escape_graphql_string(request_doc_id), escape_graphql_string(tool_call_id), escape_graphql_string(agent_did), escape_graphql_string(request_id), escape_graphql_string(request_doc_id), escape_graphql_string(session_id), sequence, escape_graphql_string(tool_name), escape_graphql_string(tool_call_id), escape_graphql_string(lifecycle_state), failure_class.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into()), child_request_id.map(|v| format!("\"{}\"", escape_graphql_string(v))).unwrap_or_else(|| "null".into())),
+        "AgentToolCall",
+    ).await?;
+    let generation = format!("trace:{request_doc_id}");
+    let argument_bytes = arguments.len();
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: None,
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.into(),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: sequence.into(),
+            },
+            turn_index: sequence,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.clone(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: argument_bytes as u32,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::ToolArguments {
+                    id: tool_call_id.into(),
+                    call_id: Some(tool_call_id.into()),
+                    name: tool_name.into(),
+                },
+            }),
+        }],
+        payload: arguments,
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![argument_bytes as u64],
+        }),
+        created_at: "2026-05-04T12:00:02Z".into(),
+    };
+    let close_doc_id = exec_variables_doc_id(
+        node,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        output_segment_create_variables(&segment)?,
+        "AgentOutputSegment",
+    )
+    .await?;
+    let header = TranscriptMessage {
+        message_key: format!("trace:{session_id}:{sequence}"),
+        session_id: session_id.into(),
+        agent_did: agent_did.into(),
+        requester_did: None,
+        request_doc_id: Some(request_doc_id.into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation,
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: tool_doc_id.clone(),
+            id: tool_call_id.into(),
+            call_id: Some(tool_call_id.into()),
+            name: tool_name.into(),
+            arguments: PayloadRef {
+                close_doc_id,
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+        created_at: "2026-05-04T12:00:02Z".into(),
+    };
+    exec_variables_doc_id(
+        node,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        transcript_message_create_variables(&header)?,
+        "AgentMessage",
+    )
+    .await?;
+    if let Some(result) = result {
+        let output = OutputSegment {
+            agent_did: agent_did.into(),
+            requester_did: None,
+            session_id: session_id.into(),
+            request_doc_id: request_doc_id.into(),
+            source: OutputSource::ToolCall {
+                tool_call_doc_id: tool_doc_id.clone(),
+            },
+            writer: OutputWriter::ToolExecution {
+                tool_call_doc_id: tool_doc_id.clone(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: result.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolOutput,
+                }),
+            }],
+            payload: result.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![result.len() as u64],
+            }),
+            created_at: "2026-05-04T12:00:06Z".into(),
+        };
+        let close_doc_id = exec_variables_doc_id(
+            node,
+            CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+            output_segment_create_variables(&output)?,
+            "AgentOutputSegment",
+        )
+        .await?;
+        let delivery = TranscriptMessage {
+            message_key: format!("trace-delivery:{tool_doc_id}"),
+            session_id: session_id.into(),
+            agent_did: agent_did.into(),
+            requester_did: None,
+            request_doc_id: Some(request_doc_id.into()),
+            publication: MessagePublication::ToolDelivery {
+                tool_call_doc_id: tool_doc_id.clone(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 100 + sequence,
+            role: MessageRole::User,
+            native_id: None,
+            blocks: vec![MessageBlock::ToolResult {
+                tool_call_doc_id: tool_doc_id.clone(),
+                id: tool_call_id.into(),
+                call_id: Some(tool_call_id.into()),
+                parts: vec![ToolResultPart::Text {
+                    text: PresentedPayload {
+                        output: PayloadRef {
+                            close_doc_id,
+                            stream: 0,
+                        },
+                        presentation: PayloadPresentation::Full,
+                    },
+                }],
+            }],
+            created_at: "2026-05-04T12:00:06Z".into(),
+        };
+        exec_variables_doc_id(
+            node,
+            CREATE_AGENT_MESSAGE_MUTATION,
+            transcript_message_create_variables(&delivery)?,
+            "AgentMessage",
+        )
+        .await?;
+    }
+    Ok(tool_doc_id)
+}
+
+async fn seed_canonical_terminal_text(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    sequence: u32,
+    text: &str,
+) -> Result<()> {
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
+    };
+    let generation = format!("trace:{request_doc_id}");
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: None,
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.into(),
+        source: OutputSource::Authored {
+            key: format!("trace-terminal:{request_doc_id}"),
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.clone(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: text.len() as u32,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: text.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![text.len() as u64],
+        }),
+        created_at: "2026-05-04T12:00:07Z".into(),
+    };
+    let close_doc_id = exec_variables_doc_id(
+        node,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        output_segment_create_variables(&segment)?,
+        "AgentOutputSegment",
+    )
+    .await?;
+    let header = TranscriptMessage {
+        message_key: format!("trace-terminal:{request_doc_id}"),
+        session_id: session_id.into(),
+        agent_did: agent_did.into(),
+        requester_did: None,
+        request_doc_id: Some(request_doc_id.into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation,
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id,
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: "2026-05-04T12:00:07Z".into(),
+    };
+    let message_doc_id = exec_variables_doc_id(
+        node,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        transcript_message_create_variables(&header)?,
+        "AgentMessage",
+    )
+    .await?;
+    let terminal = serde_json::to_value(TerminalOutput::Message { message_doc_id })?;
+    let response = node.execute_request_with_retry(gents::defra_node::QueryRequest::new(r#"mutation($id: String!, $terminal: JSON!) { update_AgentRequest(filter: {_docID: {_eq: $id}}, input: {terminal_output: $terminal}) {_docID} }"#).with_variables(json!({"id": request_doc_id, "terminal": terminal})), gents::defra_node::ExecuteRetryPolicy::default()).await;
+    anyhow::ensure!(!response.has_errors(), "{:?}", response.errors);
+    Ok(())
+}
+
 async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     exec(
         node,
@@ -1490,41 +1795,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         create_InferenceCall(input: {{call_id: "trace-inference", request_id: "req-1", request_doc_id: "{observed}", agent_did: "did:test:amy", behavior_id: "amy", backend_id: "studios-cluster", call_seq: 0, attempt: 0, call_kind: "primary", call_state: "completed", queued_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
         create_RenderedRequest(input: {{capture_key: "trace-model", request_commit_cid: "{commit}", request_json: "{rendered_body}", request_id: "req-1", request_doc_id: "{observed}", session_id: "session-1", agent_did: "did:test:amy", requester_did: "", behavior_id: "amy", model_name: "baa-ai/GLM-5.1-RAM-420GB-MLX", capture_scope: "inference.0", turn_index: 0, attempt: 0, capture_version: 1, source: "openai_chat_completions", created_at: "2026-05-04T12:00:02Z"}}) {{_docID}}
     }}"#)).await?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "req-1",
-                request_id: "req-1",
-                request_doc_id: "{}",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
-                session_id: "session-1",
-                content: "done",
-                reasoning: "",
-                status: "completed",
-                error_message: "",
-                token_count: 12,
-                progress_seq: 3,
-                materialized_message_sequence: 4,
-                materialized_at: "2026-05-04T12:00:06Z",
-                created_at: "2026-05-04T12:00:01Z",
-                completed_at: "2026-05-04T12:00:06Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&root_request_doc_id)
-        ),
-    )
-    .await?;
-
-    let success_message =
-        assistant_tool_message("call-success", "read", json!({"path":"README.md"}))?;
-    let failed_message = assistant_tool_message(
-        "call-fail",
-        "bash",
-        json!({"command":"grep","args":["-P","amy","README.md"]}),
-    )?;
     let failed_result = format!(
         "gents_exec: {}\nstdout:\n(empty)\nstderr:\ngrep: invalid option -- P",
         json!({
@@ -1554,128 +1824,36 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
             }
         })
     );
-    let missing_tool_message = assistant_tool_message(
-        "call-missing-tool",
-        "describe_tool",
-        json!({"service_id":"x-data","tool_name":"search_post"}),
-    )?;
-    let timed_out_message =
-        assistant_tool_message("call-timed-out", "bash", json!({"command":"sleep 120"}))?;
-    exec(
+    seed_canonical_trace_tool(
         node,
-        &format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "session-1:2",
-                    session_id: "session-1",
-                    agent_did: "did:test:amy",
-                    request_id: "req-1",
-                    request_doc_id: "{}",
-                    sequence: 2,
-                    role: "assistant",
-                    content: "{}",
-                    timestamp: "2026-05-04T12:00:02Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&success_message)
-        ),
+        &root_request_doc_id,
+        "req-1",
+        "session-1",
+        "did:test:amy",
+        2,
+        "call-success",
+        "read",
+        json!({"path":"README.md"}),
+        "completed",
+        Some("README contents"),
+        None,
+        None,
     )
     .await?;
-    exec(
+    let parent_tool_call_doc_id = seed_canonical_trace_tool(
         node,
-        &format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "session-1:3",
-                    session_id: "session-1",
-                    agent_did: "did:test:amy",
-                    request_id: "req-1",
-                    request_doc_id: "{}",
-                    sequence: 3,
-                    role: "assistant",
-                    content: "{}",
-                    timestamp: "2026-05-04T12:00:03Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&failed_message)
-        ),
-    )
-    .await?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "session-1:4",
-                    session_id: "session-1",
-                    agent_did: "did:test:amy",
-                    request_id: "req-1",
-                    request_doc_id: "{}",
-                    sequence: 4,
-                    role: "assistant",
-                    content: "{}",
-                    timestamp: "2026-05-04T12:00:04Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&missing_tool_message)
-        ),
-    )
-    .await?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "session-1:call-success",
-                agent_did: "did:test:amy",
-                request_id: "req-1",
-                request_doc_id: "{}",
-                session_id: "session-1",
-                message_sequence: 2,
-                tool_name: "read",
-                tool_call_id: "call-success",
-                args: "{{\"path\":\"README.md\"}}",
-                result: "README contents",
-                status: "completed",
-                lifecycle_state: "completed",
-                started_at: "2026-05-04T12:00:02Z",
-                completed_at: "2026-05-04T12:00:03Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&root_request_doc_id)
-        ),
-    )
-    .await?;
-    let parent_tool_call_doc_id = exec_doc_id(
-        node,
-        &format!(
-            r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "session-1:call-fail",
-                agent_did: "did:test:amy",
-                request_id: "req-1",
-                request_doc_id: "{}",
-                session_id: "session-1",
-                message_sequence: 3,
-                tool_name: "bash",
-                tool_call_id: "call-fail",
-                args: "{{\"command\":\"grep\",\"args\":[\"-P\",\"amy\",\"README.md\"]}}",
-                result: "{}",
-                status: "completed",
-                lifecycle_state: "failed",
-                tool_failure_class: "toolReturnedError",
-                child_request_id: "req-child",
-                started_at: "2026-05-04T12:00:03Z",
-                completed_at: "2026-05-04T12:00:04.500Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&failed_result)
-        ),
-        "AgentToolCall",
+        &root_request_doc_id,
+        "req-1",
+        "session-1",
+        "did:test:amy",
+        3,
+        "call-fail",
+        "bash",
+        json!({"command":"grep","args":["-P","amy","README.md"]}),
+        "failed",
+        Some(&failed_result),
+        Some("toolReturnedError"),
+        Some("req-child"),
     )
     .await?;
 
@@ -1720,51 +1898,13 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "AgentRequest",
     )
     .await?;
-    exec(
+    seed_canonical_terminal_text(
         node,
-        &format!(
-            r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "req-child",
-                request_id: "req-child",
-                request_doc_id: "{}",
-                agent_did: "did:test:reviewer",
-                behavior_id: "reviewer",
-                session_id: "session-child",
-                content: "reviewer private child response",
-                reasoning: "child reasoning",
-                status: "completed",
-                error_message: "",
-                token_count: 8,
-                progress_seq: 1,
-                materialized_message_sequence: 1,
-                materialized_at: "2026-05-04T12:00:07Z",
-                created_at: "2026-05-04T12:00:04Z",
-                completed_at: "2026-05-04T12:00:07Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&child_request_doc_id)
-        ),
-    )
-    .await?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-            create_AgentMessage(input: {{
-                message_key: "session-child:1",
-                session_id: "session-child",
-                agent_did: "did:test:reviewer",
-                request_id: "req-child",
-                request_doc_id: "{}",
-                sequence: 1,
-                role: "assistant",
-                content: "reviewer private child message",
-                timestamp: "2026-05-04T12:00:06Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&child_request_doc_id)
-        ),
+        &child_request_doc_id,
+        "session-child",
+        "did:test:reviewer",
+        1,
+        "reviewer private child message",
     )
     .await?;
 
@@ -1780,79 +1920,45 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "available_tools": ["search_posts"]
     })
     .to_string();
-    exec(
+    seed_canonical_trace_tool(
         node,
-        &format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "session-1:call-missing-tool",
-                    agent_did: "did:test:amy",
-                    request_id: "req-1",
-                    request_doc_id: "{}",
-                    session_id: "session-1",
-                    message_sequence: 4,
-                    tool_name: "describe_tool",
-                    tool_call_id: "call-missing-tool",
-                    args: "{{\"service_id\":\"x-data\",\"tool_name\":\"search_post\"}}",
-                    result: "{}",
-                    status: "completed",
-                    lifecycle_state: "failed",
-                    tool_failure_class: "serviceUnavailable",
-                    started_at: "2026-05-04T12:00:04Z",
-                    completed_at: "2026-05-04T12:00:04.250Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&missing_tool_result)
-        ),
+        &root_request_doc_id,
+        "req-1",
+        "session-1",
+        "did:test:amy",
+        4,
+        "call-missing-tool",
+        "describe_tool",
+        json!({"service_id":"x-data","tool_name":"search_post"}),
+        "failed",
+        Some(&missing_tool_result),
+        Some("serviceUnavailable"),
+        None,
     )
     .await?;
-
-    exec(
+    seed_canonical_trace_tool(
         node,
-        &format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "session-1:5",
-                    session_id: "session-1",
-                    agent_did: "did:test:amy",
-                    request_id: "req-1",
-                    request_doc_id: "{}",
-                    sequence: 5,
-                    role: "assistant",
-                    content: "{}",
-                    timestamp: "2026-05-04T12:00:05Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&timed_out_message)
-        ),
+        &root_request_doc_id,
+        "req-1",
+        "session-1",
+        "did:test:amy",
+        5,
+        "call-timed-out",
+        "bash",
+        json!({"command":"sleep 120"}),
+        "timedOut",
+        Some(""),
+        None,
+        None,
     )
     .await?;
-    exec(
+    seed_canonical_terminal_text(
         node,
-        &format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "session-1:call-timed-out",
-                    agent_did: "did:test:amy",
-                    request_id: "req-1",
-                    request_doc_id: "{}",
-                    session_id: "session-1",
-                    message_sequence: 5,
-                    tool_name: "bash",
-                    tool_call_id: "call-timed-out",
-                    args: "{}",
-                    result: "",
-                    status: "completed",
-                    lifecycle_state: "timedOut",
-                    started_at: "2026-05-04T12:00:04.500Z",
-                    completed_at: "2026-05-04T12:00:06Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&root_request_doc_id),
-            escape_graphql_string(&serde_json::json!({"command": "sleep 120"}).to_string())
-        ),
+        &root_request_doc_id,
+        "session-1",
+        "did:test:amy",
+        6,
+        "done",
     )
     .await?;
 
@@ -1889,79 +1995,20 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
         "AgentRequest",
     )
     .await?;
-    exec(
+    seed_canonical_trace_tool(
         node,
-        &format!(
-            r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "req-deadline",
-                request_id: "req-deadline",
-                request_doc_id: "{}",
-                agent_did: "did:test:amy",
-                behavior_id: "amy",
-                session_id: "session-2",
-                content: "",
-                reasoning: "",
-                status: "error",
-                error_message: "request deadline exceeded while waiting for inference stream item",
-                token_count: 0,
-                progress_seq: 3,
-                materialized_message_sequence: 4,
-                materialized_at: "2026-05-04T13:00:10Z",
-                created_at: "2026-05-04T13:00:01Z",
-                completed_at: "2026-05-04T13:00:10Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&deadline_request_doc_id)
-        ),
-    )
-    .await?;
-    let deadline_message =
-        assistant_tool_message("call-deadline", "read", json!({"path":"README.md"}))?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                message_key: "session-2:2",
-                session_id: "session-2",
-                agent_did: "did:test:amy",
-                request_id: "req-deadline",
-                    request_doc_id: "{}",
-                    sequence: 2,
-                    role: "assistant",
-                    content: "{}",
-                    timestamp: "2026-05-04T13:00:02Z"
-                }}) {{ _docID }}
-            }}"#,
-            escape_graphql_string(&deadline_request_doc_id),
-            escape_graphql_string(&deadline_message)
-        ),
-    )
-    .await?;
-    exec(
-        node,
-        &format!(
-            r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "session-2:call-deadline",
-                agent_did: "did:test:amy",
-                request_id: "req-deadline",
-                request_doc_id: "{}",
-                session_id: "session-2",
-                message_sequence: 2,
-                tool_name: "read",
-                tool_call_id: "call-deadline",
-                args: "{{\"path\":\"README.md\"}}",
-                result: "README contents",
-                status: "completed",
-                lifecycle_state: "completed",
-                started_at: "2026-05-04T13:00:02Z",
-                completed_at: "2026-05-04T13:00:03Z"
-            }}) {{ _docID }}
-        }}"#,
-            escape_graphql_string(&deadline_request_doc_id)
-        ),
+        &deadline_request_doc_id,
+        "req-deadline",
+        "session-2",
+        "did:test:amy",
+        2,
+        "call-deadline",
+        "read",
+        json!({"path":"README.md"}),
+        "completed",
+        Some("README contents"),
+        None,
+        None,
     )
     .await?;
     for (session, agent, request, doc, state, activity, preview) in [
@@ -2020,23 +2067,6 @@ async fn seed_trace_export_rows(node: &EmbeddedNode) -> Result<()> {
     Ok(())
 }
 
-fn assistant_tool_message(call_id: &str, name: &str, arguments: Value) -> Result<String> {
-    serde_json::to_string(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: call_id.to_string(),
-            call_id: Some(call_id.to_string()),
-            function: ToolFunction {
-                name: name.to_string(),
-                arguments,
-            },
-            signature: None,
-            additional_params: None,
-        })],
-    })
-    .context("serializing assistant tool message")
-}
-
 struct ProjectionGraphqlAcpMock {
     graphql: String,
 }
@@ -2068,8 +2098,13 @@ async fn spawn_projection_graphql_acp_mock() -> Result<ProjectionGraphqlAcpMock>
     for (resource_name, doc_id) in [
         ("AgentRequest", "doc-request-root"),
         ("AgentToolCall", "doc-tool-delegate"),
-        ("AgentResponse", "doc-response-root"),
         ("AgentSession", "doc-session"),
+        ("AgentMessage", "doc-message-root-tool"),
+        ("AgentMessage", "doc-message-root-result"),
+        ("AgentMessage", "doc-message-root-text"),
+        ("AgentOutputSegment", "doc-segment-root-args"),
+        ("AgentOutputSegment", "doc-segment-root-result"),
+        ("AgentOutputSegment", "doc-segment-root-text"),
     ] {
         allowed.insert((resource_name.to_string(), doc_id.to_string()), true);
     }
@@ -2105,13 +2140,13 @@ async fn projection_graphql_mock(
     } else if query.contains("RenderedRequest(") {
         json!({ "data": { "RenderedRequest": [] } })
     } else if query.contains("AgentMessage(") {
-        json!({ "data": { "AgentMessage": projection_mock_agent_messages() } })
+        json!({ "data": { "AgentMessage": projection_mock_agent_messages(query) } })
+    } else if query.contains("AgentOutputSegment(") {
+        json!({ "data": { "AgentOutputSegment": projection_mock_output_segments(query) } })
     } else if query.contains("AgentToolCall(") {
-        json!({ "data": { "AgentToolCall": projection_mock_tool_calls() } })
+        json!({ "data": { "AgentToolCall": projection_mock_tool_calls(query) } })
     } else if query.contains("Goal(") {
         json!({ "data": { "Goal": [] } })
-    } else if query.contains("AgentResponse(") {
-        json!({ "data": { "AgentResponse": projection_mock_agent_responses() } })
     } else if query.contains("AgentSession(") {
         json!({ "data": { "AgentSession": [projection_mock_session()] } })
     } else if query.contains("InferenceCall(") {
@@ -2167,6 +2202,7 @@ fn projection_mock_root_request() -> Value {
         "_docID": "doc-request-root",
         "request_id": "req-acp",
         "agent_did": "did:test:amy",
+        "requester_did": null,
         "behavior_id": "amy",
         "session_id": "session-acp",
         "content": "root visible request",
@@ -2190,6 +2226,7 @@ fn projection_mock_child_request() -> Value {
         "_docID": "doc-request-child",
         "request_id": "req-acp-child",
         "agent_did": "did:test:reviewer",
+        "requester_did": null,
         "behavior_id": "reviewer",
         "session_id": "session-acp",
         "content": "child private request",
@@ -2213,6 +2250,7 @@ fn projection_mock_forged_child_request() -> Value {
         "_docID": "doc-request-forged-child",
         "request_id": "req-forged-child",
         "agent_did": "did:test:reviewer",
+        "requester_did": null,
         "behavior_id": "reviewer",
         "session_id": "session-forged-child",
         "content": "forged child request",
@@ -2231,109 +2269,376 @@ fn projection_mock_forged_child_request() -> Value {
     })
 }
 
-fn projection_mock_agent_messages() -> Value {
-    json!([
-        {
-            "_docID": "doc-message-root",
-            "session_id": "session-acp",
-            "request_id": "req-acp",
-            "request_doc_id": "doc-request-root",
-            "sequence": 1,
-            "role": "assistant",
-            "content": "root visible message",
-            "timestamp": "2026-06-05T18:00:01Z"
+fn projection_mock_agent_messages(query: &str) -> Value {
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation,
+        PayloadRef, PresentedPayload, ToolResultPart, TranscriptMessage,
+    };
+    let root_tool = TranscriptMessage {
+        message_key: "acp-root-tool".into(),
+        session_id: "session-acp".into(),
+        agent_did: "did:test:amy".into(),
+        requester_did: None,
+        request_doc_id: Some("doc-request-root".into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "acp-root-generation".into(),
         },
-        {
-            "_docID": "doc-message-child",
-            "session_id": "session-acp",
-            "request_id": "req-acp-child",
-            "request_doc_id": "doc-request-child",
-            "sequence": 2,
-            "role": "assistant",
-            "content": "child private message",
-            "timestamp": "2026-06-05T18:00:03Z"
-        }
-    ])
+        outcome: OutputOutcome::Complete,
+        sequence: 1,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "doc-tool-delegate".into(),
+            id: "call-delegate".into(),
+            call_id: Some("call-delegate".into()),
+            name: "spawn_subagent".into(),
+            arguments: PayloadRef {
+                close_doc_id: "doc-segment-root-args".into(),
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+        created_at: "2026-06-05T18:00:01Z".into(),
+    };
+    let root_result = TranscriptMessage {
+        message_key: "acp-root-result".into(),
+        session_id: "session-acp".into(),
+        agent_did: "did:test:amy".into(),
+        requester_did: None,
+        request_doc_id: Some("doc-request-root".into()),
+        publication: MessagePublication::ToolDelivery {
+            tool_call_doc_id: "doc-tool-delegate".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 2,
+        role: MessageRole::User,
+        native_id: None,
+        blocks: vec![MessageBlock::ToolResult {
+            tool_call_doc_id: "doc-tool-delegate".into(),
+            id: "call-delegate".into(),
+            call_id: Some("call-delegate".into()),
+            parts: vec![ToolResultPart::Text {
+                text: PresentedPayload {
+                    output: PayloadRef {
+                        close_doc_id: "doc-segment-root-result".into(),
+                        stream: 0,
+                    },
+                    presentation: PayloadPresentation::Full,
+                },
+            }],
+        }],
+        created_at: "2026-06-05T18:00:02Z".into(),
+    };
+    let root_text = canonical_text_header(
+        "doc-request-root",
+        "doc-segment-root-text",
+        "acp-root-text",
+        3,
+    );
+    let child_text = canonical_text_header(
+        "doc-request-child",
+        "doc-segment-child-text",
+        "acp-child-text",
+        4,
+    );
+    filter_projection_mock_headers(
+        query,
+        vec![
+            with_mock_doc_id(root_tool, "doc-message-root-tool"),
+            with_mock_doc_id(root_result, "doc-message-root-result"),
+            with_mock_doc_id(root_text, "doc-message-root-text"),
+            with_mock_doc_id(child_text, "doc-message-child"),
+        ],
+    )
 }
 
-fn projection_mock_tool_calls() -> Value {
-    json!([
-        {
-            "_docID": "doc-tool-delegate",
-            "request_id": "req-acp",
-            "request_doc_id": "doc-request-root",
-            "session_id": "session-acp",
-            "message_sequence": 1,
-            "tool_name": "spawn_subagent",
-            "tool_call_id": "call-delegate",
-            "args": "{\"task\":\"review visible request\"}",
-            "result": "spawned reviewer",
-            "status": "completed",
-            "lifecycle_state": "completed",
-            "started_at": "2026-06-05T18:00:01Z",
-            "deadline_at": null,
-            "completed_at": "2026-06-05T18:00:02Z",
-            "selected_service_id": "gents",
-            "selected_tool_name": "spawn_subagent",
-            "tool_failure_class": null,
-            "denial_reason": null,
-            "denied_argv": [],
-            "denied_command": null,
-            "denied_argument": null,
-            "denied_subcommand": null,
-            "denied_prefix": [],
-            "policy_mode": null,
-            "policy_network": null,
-            "latency_ms": 1000,
-            "await_mode": "background",
-            "cancel_policy": null,
-            "cancel_cause": null,
-            "child_request_id": "req-acp-child"
-        }
-    ])
+fn canonical_text_header(
+    request_doc_id: &str,
+    close_doc_id: &str,
+    message_key: &str,
+    sequence: u32,
+) -> gents_protocol::output::TranscriptMessage {
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation,
+        PayloadRef, PresentedPayload, TranscriptMessage,
+    };
+    TranscriptMessage {
+        message_key: message_key.into(),
+        session_id: "session-acp".into(),
+        agent_did: if request_doc_id == "doc-request-child" {
+            "did:test:reviewer".into()
+        } else {
+            "did:test:amy".into()
+        },
+        requester_did: None,
+        request_doc_id: Some(request_doc_id.into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: format!("acp-generation-{sequence}"),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id: close_doc_id.into(),
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: "2026-06-05T18:00:03Z".into(),
+    }
 }
 
-fn projection_mock_agent_responses() -> Value {
-    json!([
-        {
-            "_docID": "doc-response-root",
-            "request_id": "req-acp",
-            "request_doc_id": "doc-request-root",
-            "agent_did": "did:test:amy",
-            "behavior_id": "amy",
-            "session_id": "session-acp",
-            "content": "root visible response",
-            "reasoning": "root visible reasoning",
-            "status": "completed",
-            "error_message": "",
-            "token_count": 7,
-            "progress_seq": 2,
-            "materialized_message_sequence": 1,
-            "materialized_at": "2026-06-05T18:00:04Z",
-            "created_at": "2026-06-05T18:00:00Z",
-            "completed_at": "2026-06-05T18:00:04Z",
-            "interrupted_at": null
-        },
-        {
-            "_docID": "doc-response-child",
-            "request_id": "req-acp-child",
-            "request_doc_id": "doc-request-child",
-            "agent_did": "did:test:reviewer",
-            "behavior_id": "reviewer",
-            "session_id": "session-acp",
-            "content": "child private response",
-            "reasoning": "child private reasoning",
-            "status": "completed",
-            "error_message": "",
-            "token_count": 5,
-            "progress_seq": 1,
-            "materialized_message_sequence": 2,
-            "materialized_at": "2026-06-05T18:00:05Z",
-            "created_at": "2026-06-05T18:00:02Z",
-            "completed_at": "2026-06-05T18:00:05Z",
-            "interrupted_at": null
+fn with_mock_doc_id<T: serde::Serialize>(document: T, doc_id: &str) -> Value {
+    let mut value = serde_json::to_value(document).expect("serialize canonical mock document");
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("_docID".into(), doc_id.into());
+    value
+}
+
+/// Apply the same physical and logical scope predicates used by the
+/// canonical header reader. In particular, its twin check intentionally
+/// queries by `(agent, session, requester)` plus `(message_key OR sequence)`;
+/// returning every session header there would fabricate a cross-agent twin.
+fn filter_projection_mock_headers(query: &str, rows: Vec<Value>) -> Value {
+    let mut rows = filter_projection_mock_rows(query, rows)
+        .as_array()
+        .expect("projection header rows")
+        .clone();
+    for agent_did in ["did:test:amy", "did:test:reviewer"] {
+        let predicate = format!(r#"agent_did: {{ _eq: "{agent_did}" }}"#);
+        if query.contains(&predicate) {
+            rows.retain(|row| row["agent_did"].as_str() == Some(agent_did));
         }
-    ])
+    }
+    if query.contains("_or:") {
+        rows.retain(|row| {
+            let key = row["message_key"].as_str().unwrap();
+            let sequence = row["sequence"].as_u64().unwrap();
+            query.contains(&format!(r#"message_key: {{ _eq: "{key}" }}"#))
+                || query.contains(&format!(r#"sequence: {{ _eq: {sequence} }}"#))
+        });
+    }
+    Value::Array(rows)
+}
+
+fn projection_mock_output_segments(query: &str) -> Value {
+    use gents_protocol::output::{
+        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+    let segment =
+        |doc_id: &str, request_doc_id: &str, payload: &str, stream_payload: StreamPayload| {
+            let bytes = payload.len() as u32;
+            let (source, writer) = match doc_id {
+                "doc-segment-root-result" => (
+                    OutputSource::ToolCall {
+                        tool_call_doc_id: "doc-tool-delegate".into(),
+                    },
+                    OutputWriter::ToolExecution {
+                        tool_call_doc_id: "doc-tool-delegate".into(),
+                    },
+                ),
+                "doc-segment-root-text" => (
+                    OutputSource::ProviderTurn {
+                        scope: CaptureScope {
+                            kind: CaptureScopeKind::Inference,
+                            seq: 2,
+                        },
+                        turn_index: 1,
+                        attempt: 0,
+                    },
+                    OutputWriter::RequestExecution {
+                        execution_generation: "acp-generation-3".into(),
+                    },
+                ),
+                "doc-segment-child-text" => (
+                    OutputSource::ProviderTurn {
+                        scope: CaptureScope {
+                            kind: CaptureScopeKind::Inference,
+                            seq: 1,
+                        },
+                        turn_index: 0,
+                        attempt: 0,
+                    },
+                    OutputWriter::RequestExecution {
+                        execution_generation: "acp-generation-4".into(),
+                    },
+                ),
+                _ => (
+                    OutputSource::ProviderTurn {
+                        scope: CaptureScope {
+                            kind: CaptureScopeKind::Inference,
+                            seq: 1,
+                        },
+                        turn_index: 0,
+                        attempt: 0,
+                    },
+                    OutputWriter::RequestExecution {
+                        execution_generation: "acp-root-generation".into(),
+                    },
+                ),
+            };
+            with_mock_doc_id(
+                OutputSegment {
+                    agent_did: if request_doc_id == "doc-request-child" {
+                        "did:test:reviewer".into()
+                    } else {
+                        "did:test:amy".into()
+                    },
+                    requester_did: None,
+                    session_id: "session-acp".into(),
+                    request_doc_id: request_doc_id.into(),
+                    source,
+                    writer,
+                    ordinal: Some(0),
+                    runs: vec![SegmentRun {
+                        stream: 0,
+                        bytes,
+                        declaration: Some(StreamDeclaration {
+                            block_index: 0,
+                            part_index: 0,
+                            payload: stream_payload,
+                        }),
+                    }],
+                    payload: payload.into(),
+                    close: Some(SourceClose::Closed {
+                        outcome: OutputOutcome::Complete,
+                        segments: 1,
+                        stream_bytes: vec![u64::from(bytes)],
+                    }),
+                    created_at: "2026-06-05T18:00:01Z".into(),
+                },
+                doc_id,
+            )
+        };
+    filter_projection_mock_rows(
+        query,
+        vec![
+            segment(
+                "doc-segment-root-args",
+                "doc-request-root",
+                r#"{"task":"review visible request"}"#,
+                StreamPayload::ToolArguments {
+                    id: "call-delegate".into(),
+                    call_id: Some("call-delegate".into()),
+                    name: "spawn_subagent".into(),
+                },
+            ),
+            segment(
+                "doc-segment-root-result",
+                "doc-request-root",
+                "spawned reviewer",
+                StreamPayload::ToolOutput,
+            ),
+            segment(
+                "doc-segment-root-text",
+                "doc-request-root",
+                "root visible message",
+                StreamPayload::Text,
+            ),
+            segment(
+                "doc-segment-child-text",
+                "doc-request-child",
+                "child private message",
+                StreamPayload::Text,
+            ),
+        ],
+    )
+}
+
+/// Canonical readers address dependencies by physical document ID. Scoped
+/// session/request reads omit an `_docID` equality and legitimately receive
+/// the full candidate set; exact reads must return exactly the addressed row.
+fn filter_projection_mock_rows(query: &str, rows: Vec<Value>) -> Value {
+    let addressed = rows.iter().filter_map(|row| {
+        let doc_id = row.get("_docID")?.as_str()?;
+        let exact = format!(r#"_docID: {{ _eq: "{doc_id}" }}"#);
+        query.contains(&exact).then(|| doc_id.to_owned())
+    });
+    let addressed = addressed.collect::<Vec<_>>();
+    if addressed.is_empty() {
+        return Value::Array(rows);
+    }
+    assert_eq!(
+        addressed.len(),
+        1,
+        "mock canonical dependency query must address one physical document: {query}"
+    );
+    Value::Array(
+        rows.into_iter()
+            .filter(|row| row["_docID"].as_str() == Some(addressed[0].as_str()))
+            .collect(),
+    )
+}
+
+fn projection_mock_tool_calls(query: &str) -> Value {
+    let mut rows = filter_projection_mock_rows(
+        query,
+        vec![json!(
+            {
+                "_docID": "doc-tool-delegate",
+                "request_id": "req-acp",
+                "agent_did": "did:test:amy",
+                "requester_did": null,
+                "request_doc_id": "doc-request-root",
+                "session_id": "session-acp",
+                "message_sequence": 1,
+                "tool_name": "spawn_subagent",
+                "tool_call_id": "call-delegate",
+                "status": "completed",
+                "lifecycle_state": "completed",
+                "started_at": "2026-06-05T18:00:01Z",
+                "deadline_at": null,
+                "completed_at": "2026-06-05T18:00:02Z",
+                "selected_service_id": "gents",
+                "selected_tool_name": "spawn_subagent",
+                "tool_failure_class": null,
+                "denial_reason": null,
+                "denied_argv": [],
+                "denied_command": null,
+                "denied_argument": null,
+                "denied_subcommand": null,
+                "denied_prefix": [],
+                "policy_mode": null,
+                "policy_network": null,
+                "latency_ms": 1000,
+                "await_mode": "background",
+                "cancel_policy": null,
+                "cancel_cause": null,
+                "child_request_id": "req-acp-child"
+            }
+        )],
+    )
+    .as_array()
+    .expect("projection tool rows")
+    .clone();
+    for (field, value) in [
+        ("agent_did", "did:test:amy"),
+        ("request_doc_id", "doc-request-root"),
+        ("session_id", "session-acp"),
+        ("tool_call_id", "call-delegate"),
+    ] {
+        let predicate = format!(r#"{field}: {{ _eq: "{value}" }}"#);
+        if query.contains(&predicate) {
+            rows.retain(|row| row[field].as_str() == Some(value));
+        }
+    }
+    // Known foreign scopes are intentionally empty. Returning the root tool
+    // here would invent an accepted binding for a different agent/request.
+    if query.contains(r#"agent_did: { _eq: "did:test:reviewer" }"#)
+        || query.contains(r#"request_doc_id: { _eq: "doc-request-child" }"#)
+    {
+        rows.clear();
+    }
+    Value::Array(rows)
 }
 
 fn projection_mock_session() -> Value {

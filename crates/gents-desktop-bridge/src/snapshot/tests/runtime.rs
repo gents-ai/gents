@@ -7,21 +7,22 @@ mod lean_vocab_test;
 use crate::types::TriggerView;
 use lean_vocab_test::{lean_trigger_dispatch_case_count, lean_trigger_dispatch_cases};
 
-fn canonical_session(requester: Option<&str>) -> gents_protocol::session::AgentSession {
+fn canonical_session(requester: Option<&str>) -> AgentSession {
     serde_json::from_value(serde_json::json!({
         "session_id":"session", "agent_did":"did:test:owner", "requester_did":requester,
         "behavior_id":"behavior", "created_at":"2026-09-01T00:00:00Z",
         "title":{"text":"Saved title","source":"user"}, "tags":["review"],
-        "provenance":{"task_id":"task", "graph_run_id":"graph", "fork":{"source_session_id":"parent","at_user_turn":2}}
-    })).unwrap()
+        "provenance":{"task_id":"task","graph_run_id":"graph","fork":{"source_session_id":"parent","at_user_turn":2}}
+    }))
+    .expect("canonical session")
 }
 
-fn indexed_session(requester: Option<&str>) -> gents_protocol::session::AgentSession {
+fn indexed_session(requester: Option<&str>) -> AgentSession {
     let mut session = canonical_session(requester);
-    session.observation = Some(gents_protocol::session::SessionObservation {
+    session.observation = Some(SessionObservation {
         last_activity_at: "2026-09-02T00:00:00Z".into(),
         preview: Some("latest prompt".into()),
-        latest_request: Some(gents_protocol::session::SessionRequestObservation {
+        latest_request: Some(SessionRequestObservation {
             request_doc_id: "physical-head".into(),
             request_id: "logical-head".into(),
             lifecycle_state: RequestLifecycleState::Processing,
@@ -45,11 +46,16 @@ fn indexed_request(requester: Option<&str>) -> AgentRequestRow {
 
 #[test]
 fn canonical_empty_sessions_preserve_title_fork_and_requester_groups() {
-    let rows = [
-        canonical_session(None),
-        canonical_session(Some("did:test:requester")),
-    ];
-    let summaries = session_summaries(&rows, &[], &[], "did:test:owner", &[], &[]);
+    let summaries = session_summaries(
+        &[
+            canonical_session(None),
+            canonical_session(Some("did:test:requester")),
+        ],
+        &[],
+        "did:test:owner",
+        &[],
+        &[],
+    );
     assert_eq!(summaries.len(), 2);
     assert_eq!(summaries[0].session_id, summaries[1].session_id);
     assert_ne!(summaries[0].requester_did, summaries[1].requester_did);
@@ -71,70 +77,59 @@ fn missing_indexed_request_does_not_fall_back_to_older_or_foreign_rows() {
     older.lifecycle_state = Some(RequestLifecycleState::Completed);
     let mut foreign = indexed_request(Some("did:test:foreign"));
     foreign.lifecycle_state = Some(RequestLifecycleState::Failed);
-    let summaries = session_summaries(
-        &[session],
-        &[older, foreign],
-        &[],
-        "did:test:owner",
-        &[],
-        &[],
-    );
+    let summaries = session_summaries(&[session], &[older, foreign], "did:test:owner", &[], &[]);
     assert_eq!(
         summaries[0].latest_request_doc_id.as_deref(),
         Some("physical-head")
     );
     assert_eq!(summaries[0].status.as_deref(), Some("processing"));
     assert_eq!(summaries[0].preview_text.as_deref(), Some("latest prompt"));
-    assert!(session_summaries(
-        &[],
-        &[indexed_request(None)],
-        &[],
+    assert!(
+        session_summaries(&[], &[indexed_request(None)], "did:test:owner", &[], &[]).is_empty()
+    );
+}
+
+#[test]
+fn session_summary_uses_request_lifecycle_not_retired_response_rows() {
+    let summaries = session_summaries(
+        &[indexed_session(Some("did:test:requester"))],
+        &[indexed_request(Some("did:test:requester"))],
         "did:test:owner",
         &[],
-        &[]
-    )
-    .is_empty());
+        &[],
+    );
+    assert_eq!(summaries[0].turn_state.as_deref(), Some("running"));
 }
 
 #[test]
 fn live_session_response_requires_physical_and_requester_identity() {
     let session = indexed_session(Some("did:test:requester"));
-    let request = indexed_request(Some("did:test:requester"));
-    let mut response: AgentResponseRow = serde_json::from_value(serde_json::json!({
-        "response_key": "logical-head",
-        "request_id": "logical-head",
-        "request_doc_id": "other-physical",
-        "agent_did": request.agent_did.clone(),
-        "requester_did": request.requester_did.clone(),
-        "session_id": request.session_id.clone(),
-        "status": "streaming"
-    }))
-    .expect("response row");
-    let project = |response: AgentResponseRow| {
-        session_summaries(
-            &[session.clone()],
-            &[request.clone()],
-            &[response],
-            "did:test:owner",
-            &[],
-            &[],
-        )
-    };
-    assert_eq!(
-        project(response.clone())[0].turn_state.as_deref(),
-        Some("waitingForClaim")
+    let mut wrong_physical = indexed_request(Some("did:test:requester"));
+    wrong_physical.doc_id = Some("wrong-physical".into());
+    wrong_physical.lifecycle_state = Some(RequestLifecycleState::Failed);
+    let mut wrong_requester = indexed_request(None);
+    wrong_requester.lifecycle_state = Some(RequestLifecycleState::Completed);
+    let adversarial = session_summaries(
+        &[session.clone()],
+        &[wrong_physical, wrong_requester],
+        "did:test:owner",
+        &[],
+        &[],
     );
-    response.request_doc_id = request.doc_id.clone();
-    response.requester_did = None;
-    assert_eq!(
-        project(response.clone())[0].turn_state.as_deref(),
-        Some("waitingForClaim")
+    assert_eq!(adversarial[0].turn_state.as_deref(), Some("running"));
+    assert_eq!(adversarial[0].status.as_deref(), Some("processing"));
+    let exact = session_summaries(
+        &[session],
+        &[indexed_request(Some("did:test:requester"))],
+        "did:test:owner",
+        &[],
+        &[],
     );
-    response.requester_did = request.requester_did.clone();
     assert_eq!(
-        project(response)[0].turn_state.as_deref(),
-        Some("streaming")
+        exact[0].latest_request_doc_id.as_deref(),
+        Some("physical-head")
     );
+    assert_eq!(exact[0].turn_state.as_deref(), Some("running"));
 }
 
 #[test]
@@ -142,75 +137,23 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
     let store = ClientStore::from_rows(ClientStoreRows {
         requests: vec![
             AgentRequestRow {
-                request_id: "req-mini-1".to_string(),
-                agent_did: Some("did:test:mini-1".to_string()),
-                requester_did: None,
-                behavior_id: Some("default".to_string()),
-                session_id: Some("session-mini-1".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
-                content: Some("run task".to_string()),
-                max_total_tokens: None,
+                doc_id: Some("doc-mini-1".into()),
+                request_id: "req-mini-1".into(),
+                agent_did: Some("did:test:mini-1".into()),
+                session_id: Some("session-mini-1".into()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: None,
-                execution_origin: Some("scheduled".to_string()),
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
-                created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
-                retry_count: Some(0),
-                max_retries: Some(3),
-                caused_by_trigger_id: Some("shared-schedule".to_string()),
-                caused_by_trigger_kind: Some("schedule".to_string()),
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_seal_hash: None,
+                caused_by_trigger_id: Some("shared-schedule".into()),
+                caused_by_trigger_kind: Some("schedule".into()),
                 ..Default::default()
             },
             AgentRequestRow {
-                request_id: "req-mini-2".to_string(),
-                agent_did: Some("did:test:mini-2".to_string()),
-                requester_did: None,
-                behavior_id: Some("default".to_string()),
-                session_id: Some("session-mini-2".to_string()),
-                retry_parent_request: None,
-                retry_root_request: None,
-                superseded_by_request: None,
-                content: Some("run task".to_string()),
-                max_total_tokens: None,
+                doc_id: Some("doc-mini-2".into()),
+                request_id: "req-mini-2".into(),
+                agent_did: Some("did:test:mini-2".into()),
+                session_id: Some("session-mini-2".into()),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: None,
-                execution_origin: Some("scheduled".to_string()),
-                failure_reason: None,
-                terminalized_at: None,
-                terminal_redrive_attempts: None,
-                created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                claimed_at: None,
-                deadline: None,
-                retry_count: Some(0),
-                max_retries: Some(3),
-                caused_by_trigger_id: Some("shared-schedule".to_string()),
-                caused_by_trigger_kind: Some("schedule".to_string()),
-                caused_by_correlation: None,
-                caused_by_trigger_context: None,
-                caused_by_trigger_doc_id: None,
-                caused_by_source_doc_id: None,
-                caused_by_parent_request_id: None,
-                interrupt_requested_at: None,
-                valid_until: None,
-                workspace_id: None,
-                workspace_authority: None,
-                workspace_seal_hash: None,
+                caused_by_trigger_id: Some("shared-schedule".into()),
+                caused_by_trigger_kind: Some("schedule".into()),
                 ..Default::default()
             },
         ],
@@ -218,10 +161,10 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
     });
     let triggers = vec![TriggerView {
         config: serde_json::from_value(serde_json::json!({
-            "agent_did":"did:test:mini-1","trigger_id":"shared-schedule","task_id":"task-1",
+            "agent_did":"did:test:mini-1", "trigger_id":"shared-schedule", "task_id":"task-1",
             "source":{"kind":"schedule","schedule_id":"schedule"}
         }))
-        .unwrap(),
+        .expect("trigger"),
         next_run_at: None,
         last_attempt_at: None,
         last_fired_source_doc_id: None,
@@ -229,9 +172,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
         last_error: None,
         fire_count: None,
     }];
-
     let runs = task_run_history(&store, "did:test:mini-1", "task-1", &triggers);
-
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].request_id, "req-mini-1");
 }

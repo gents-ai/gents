@@ -1,14 +1,71 @@
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use crate::llm::message::{
-    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResult,
-    ToolResultContent, UserContent,
+    AssistantContent, Message, Reasoning, Text, ToolCall, ToolFunction, ToolResultContent,
+    UserContent,
 };
 use crate::llm::{HookAction, ToolCallHookAction};
 use serde_json::json;
 
 use super::*;
+
+#[path = "tests/transcript_native.rs"]
+mod transcript_native;
+
+#[path = "tests/background_panic.rs"]
+mod background_panic;
+
+#[path = "tests/background_budget.rs"]
+mod background_budget;
+
+#[path = "tests/process_control_scope.rs"]
+mod process_control_scope;
+
+#[path = "tests/r4c_private_support.rs"]
+mod r4c_private_support;
+
+#[path = "../../tests/e2e_subagent/r4c_steer_subagent.rs"]
+mod r4c_steer_subagent;
+
+#[path = "tests/r4_subagent_control.rs"]
+mod r4_subagent_control;
+
+#[path = "tests/r4_wait_subagent_guard.rs"]
+mod r4_wait_subagent_guard;
+
+#[path = "../../tests/e2e_subagent/r4c_list_subagents.rs"]
+mod r4c_list_subagents;
+
+#[path = "../../tests/e2e_subagent/r4c_list_background_tools.rs"]
+mod r4c_list_background_tools;
+
+#[path = "../../tests/e2e_subagent/r4c_read_tool_output.rs"]
+mod r4c_read_tool_output;
+
+#[path = "../../tests/e2e_subagent/r4c_read_subagent_transcript.rs"]
+mod r4c_read_subagent_transcript;
+
+struct HookExecutionFixture {
+    lifecycle: crate::lifecycle::RequestLifecycle,
+    writer: crate::streaming::DefraStreamWriter,
+    turn: usize,
+}
+
+fn hook_execution_fixtures() -> &'static tokio::sync::Mutex<HashMap<String, HookExecutionFixture>> {
+    static FIXTURES: OnceLock<tokio::sync::Mutex<HashMap<String, HookExecutionFixture>>> =
+        OnceLock::new();
+    FIXTURES.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()))
+}
+
+fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> String {
+    // The test registry spans parallel embedded nodes, where logical request
+    // labels such as `parent-one` are intentionally reused. Keep fixtures
+    // scoped to the physical node as well as that label.
+    format!("{:p}:{request_id}", Arc::as_ptr(&hook.node))
+}
 
 #[tokio::test]
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
@@ -22,23 +79,46 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     );
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let registry = BackgroundExecutionRegistry::default();
-    let mut lifecycle = ToolCallLifecycle::new_background_tool(
+    let hook = DefraSessionHook::with_identity(
         node.clone(),
-        "request".into(),
-        "session".into(),
-        "did:test:owner".into(),
-        "large-output".into(),
-        1,
-        "bash".into(),
-        "{}".into(),
+        "general",
+        "did:test:owner",
+        FailurePolicy::default(),
+    )
+    .with_background_execution_registry(registry.clone());
+    let session_id = hook.session_id().await.unwrap();
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:owner",
+        "general",
+    )
+    .await
+    .unwrap();
+    bind_interruptible_request(
+        &node,
+        &hook,
+        "request",
+        &session_id,
         Utc::now() + chrono::Duration::minutes(5),
-    );
+    )
+    .await;
+    let mut lifecycle = accepted_hook_tool_lifecycle(
+        &hook,
+        "large-output",
+        "bash",
+        "{}",
+        Utc::now() + chrono::Duration::minutes(5),
+        crate::tool_call_lifecycle::AwaitMode::Background,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .await;
     lifecycle.start_running().await.unwrap();
-    let writer = registry
-        .live_outputs
-        .registry
-        .writer_for("large-output")
-        .await;
+    let binding = lifecycle
+        .tool_output_binding()
+        .expect("canonical output binding");
+    let writer = registry.live_outputs.canonical_writer_for(binding).await;
     let text = format!("BEGIN\n{}\nEND ✅", "abcdefghij".repeat(10_000));
     writer
         .append(
@@ -47,7 +127,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         )
         .await;
     let snapshot = registry
-        .read_process_output_snapshot(&node, "session", "did:test:owner", None, "large-output")
+        .read_process_output_snapshot(&node, &session_id, "did:test:owner", None, "large-output")
         .await
         .unwrap()
         .unwrap();
@@ -57,7 +137,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     assert!(registry
         .read_process_output_snapshot(
             &node,
-            "session",
+            &session_id,
             "did:test:owner",
             Some("foreign"),
             "large-output"
@@ -78,7 +158,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
         .is_none());
     let scope = crate::background_tools::ProcessControlScope {
         request_id: "next".into(),
-        session_id: "session".into(),
+        session_id: session_id.clone(),
         agent_did: "did:test:owner".into(),
         requester_did: None,
     };
@@ -99,19 +179,21 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     };
     assert!(page.has_more);
     assert!(page.output.len() <= 4096);
-    let overflow = vec![b'x'; crate::truncation::LIVE_STREAM_CAPACITY_BYTES + 17];
+    // Exceed the retired 256 KiB volatile-ring threshold: canonical segments
+    // must retain the full stream instead of reporting artificial eviction.
+    let overflow = vec![b'x'; 256 * 1024 + 17];
     writer
         .append(crate::background_tools::LiveOutputStream::Stdout, &overflow)
         .await;
     let snapshot = registry
-        .read_process_output_snapshot(&node, "session", "did:test:owner", None, "large-output")
+        .read_process_output_snapshot(&node, &session_id, "did:test:owner", None, "large-output")
         .await
         .unwrap()
         .unwrap();
-    assert!(snapshot["first_available_offset"].as_u64().unwrap() > 0);
+    assert_eq!(snapshot["first_available_offset"], 0);
     assert_eq!(
         snapshot["output"].as_str().unwrap().len(),
-        crate::truncation::LIVE_STREAM_CAPACITY_BYTES
+        text.len() + overflow.len()
     );
     assert_eq!(snapshot["has_more"], false);
 }
@@ -184,19 +266,23 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.unwrap();
-    create_interruptible_request_for_agent(
+    bind_interruptible_request(
         node.as_ref(),
+        &hook,
         "goal-request",
         &session_id,
-        "did:test:owner",
+        chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
-    hook.set_active_request_lineage(Some("goal-request".to_string()), None)
-        .await
-        .unwrap();
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
-        .await;
 
+    accept_hook_tool_call(
+        &hook,
+        "goal-create-forged",
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        r#"{"objective":"ship","agent_did":"did:test:other","session_id":"other"}"#,
+        None,
+    )
+    .await;
     let forged = hook
         .on_tool_call(
             crate::goal::CREATE_GOAL_TOOL_NAME,
@@ -216,6 +302,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
             .is_none()
     );
 
+    accept_hook_tool_call(
+        &hook,
+        "goal-create-valid",
+        crate::goal::CREATE_GOAL_TOOL_NAME,
+        r#"{"objective":"ship","token_budget":1000}"#,
+        None,
+    )
+    .await;
     let created = hook
         .on_tool_call(
             crate::goal::CREATE_GOAL_TOOL_NAME,
@@ -234,6 +328,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
     assert_eq!(goal.objective, "ship");
     assert_eq!(goal.token_budget, Some(1000));
 
+    accept_hook_tool_call(
+        &hook,
+        "goal-update-forged",
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        r#"{"status":"complete","session_id":"other"}"#,
+        None,
+    )
+    .await;
     let forged_update = hook
         .on_tool_call(
             crate::goal::UPDATE_GOAL_TOOL_NAME,
@@ -252,6 +354,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         Some(crate::goal::GoalStatus::Active)
     );
 
+    accept_hook_tool_call(
+        &hook,
+        "goal-get-valid",
+        crate::goal::GET_GOAL_TOOL_NAME,
+        "{}",
+        None,
+    )
+    .await;
     assert!(matches!(
         hook.on_tool_call(
             crate::goal::GET_GOAL_TOOL_NAME,
@@ -262,6 +372,14 @@ async fn authorized_goal_hook_derives_ownership_and_runs_create_get_update_lifec
         .await,
         ToolCallHookAction::Skip { .. }
     ));
+    accept_hook_tool_call(
+        &hook,
+        "goal-update-valid",
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        r#"{"status":"complete","reason":"done"}"#,
+        None,
+    )
+    .await;
     assert!(matches!(
         hook.on_tool_call(
             crate::goal::UPDATE_GOAL_TOOL_NAME,
@@ -413,14 +531,14 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    create_interruptible_request(node.as_ref(), "request-lineage", &session_id).await;
-
-    hook.set_active_request_lineage(
-        Some("request-lineage".to_string()),
-        Some("did:test:requester".to_string()),
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "request-lineage",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
     )
-    .await
-    .unwrap();
+    .await;
     let expected_doc_id = hook
         .state
         .lock()
@@ -429,8 +547,7 @@ async fn request_lineage_keeps_exact_doc_id_through_prompt_and_tool_paths() {
         .clone()
         .expect("resolved request doc id");
 
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::minutes(5)))
-        .await;
+    accept_hook_tool_call(&hook, "lineage-reload", "read", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("read", None, "lineage-reload", "{}")
             .await,
@@ -678,6 +795,7 @@ async fn create_interruptible_request_with_fields(
                 lifecycle_state: "processing",
                 backend_id: "",
                 execution_origin: "subagent",
+                subagent_depth: 0,
                 {extra_fields}
                 created_at: "{created_at}",
                 retry_count: 0,
@@ -744,11 +862,353 @@ async fn bind_interruptible_request(
     session_id: &str,
     deadline_at: chrono::DateTime<chrono::Utc>,
 ) {
-    create_interruptible_request(node, request_id, session_id).await;
-    hook.set_active_request_lineage(Some(request_id.to_string()), None)
-        .await
-        .expect("bind persisted request lineage");
+    bind_interruptible_request_with_requester(
+        node,
+        hook,
+        request_id,
+        session_id,
+        deadline_at,
+        None,
+    )
+    .await;
+}
+
+async fn bind_interruptible_request_with_requester(
+    node: &defra_node::EmbeddedNode,
+    hook: &DefraSessionHook,
+    request_id: &str,
+    session_id: &str,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+    requester_did: Option<&str>,
+) {
+    let requester_field = requester_did
+        .map(|did| {
+            format!(
+                "requester_did: \"{}\",",
+                crate::graphql::escape_graphql_string(did)
+            )
+        })
+        .unwrap_or_default();
+    let doc_id = create_interruptible_request_with_fields(
+        node,
+        request_id,
+        session_id,
+        &hook.agent_did,
+        &requester_field,
+    )
+    .await;
+    let reset = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(
+        !reset.has_errors(),
+        "reset test request: {:?}",
+        reset.errors
+    );
+    let loaded = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS
+        ))
+        .await;
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&loaded, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        hook.node.clone(),
+        "general",
+        &hook.agent_did,
+        row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    let writer = crate::streaming::DefraStreamWriter::new(
+        hook.node.clone(),
+        &hook.agent_did,
+        std::time::Duration::ZERO,
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    hook.set_active_request_lineage(
+        Some(request_id.to_string()),
+        requester_did.map(str::to_owned),
+    )
+    .await
+    .expect("bind persisted request lineage");
     hook.set_request_deadline_at(Some(deadline_at)).await;
+    hook_execution_fixtures().lock().await.insert(
+        hook_execution_fixture_key(hook, request_id),
+        HookExecutionFixture {
+            lifecycle,
+            writer,
+            turn: 0,
+        },
+    );
+}
+
+async fn publish_claimed_authored_input(
+    hook: &DefraSessionHook,
+    request_id: &str,
+    context: Option<Message>,
+    prompt: Message,
+) {
+    use crate::agent::loop_stream::LoopStreamItem;
+    use crate::agent::stream_processor::StreamProcessor;
+
+    let mut fixtures = hook_execution_fixtures().lock().await;
+    let fixture = fixtures
+        .get_mut(&hook_execution_fixture_key(hook, request_id))
+        .expect("claimed request requires owned execution fixture");
+    let request_doc_id = fixture.lifecycle.request().doc_id.clone();
+    let HookExecutionFixture {
+        lifecycle, writer, ..
+    } = fixture;
+    let mut processor = StreamProcessor::new(hook, writer, lifecycle, &request_doc_id);
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady { context, prompt }))
+        .await
+        .expect("publish claimed authored input");
+}
+
+async fn accept_hook_tool_call(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    tool_name: &str,
+    arguments: &str,
+    provider_call_id: Option<&str>,
+) {
+    let native_id = provider_call_id.unwrap_or(internal_call_id).to_string();
+    let message = Message::Assistant {
+        id: Some(format!("message-{internal_call_id}")),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: native_id,
+            call_id: provider_call_id.map(str::to_string),
+            function: ToolFunction {
+                name: tool_name.to_string(),
+                arguments: serde_json::from_str(arguments).expect("test tool arguments JSON"),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    publish_and_adopt_tool_turn(hook, internal_call_id, provider_call_id, message).await;
+}
+
+async fn accepted_hook_tool_lifecycle(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    tool_name: &str,
+    arguments: &str,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+    await_mode: crate::tool_call_lifecycle::AwaitMode,
+    cancel_policy: crate::tool_call_lifecycle::CancelPolicy,
+) -> crate::tool_call_lifecycle::ToolCallLifecycle {
+    accept_hook_tool_call(hook, internal_call_id, tool_name, arguments, None).await;
+    let state = hook.state.lock().await;
+    let request_id = state
+        .current_request_id
+        .clone()
+        .expect("accepted test tool requires active request");
+    let session_id = state
+        .session_id
+        .clone()
+        .expect("accepted test tool requires active session");
+    drop(state);
+    hook.adopt_accepted_tool_dispatch(
+        internal_call_id,
+        None,
+        &request_id,
+        &session_id,
+        tool_name,
+        arguments,
+        deadline_at,
+        await_mode,
+        cancel_policy,
+    )
+    .await
+    .expect("adopt published test tool")
+}
+
+async fn accepted_subagent_lifecycle(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+    await_mode: crate::tool_call_lifecycle::AwaitMode,
+    cancel_policy: crate::tool_call_lifecycle::CancelPolicy,
+    child_request_id: &str,
+) -> crate::tool_call_lifecycle::ToolCallLifecycle {
+    let arguments = serde_json::json!({
+        "name": "child",
+        "prompt": "work",
+        "await_mode": await_mode.as_str(),
+    });
+    let message = Message::Assistant {
+        id: Some(format!("message-{internal_call_id}")),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: internal_call_id.to_string(),
+            call_id: None,
+            function: ToolFunction {
+                name: crate::toolset::SPAWN_SUBAGENT_TOOL_NAME.to_string(),
+                arguments: arguments.clone(),
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    let request_id = hook
+        .state
+        .lock()
+        .await
+        .current_request_id
+        .clone()
+        .expect("accepted test subagent requires active request");
+    let mut fixtures = hook_execution_fixtures().lock().await;
+    let fixture = fixtures
+        .get_mut(&hook_execution_fixture_key(hook, &request_id))
+        .expect("claimed request requires owned execution fixture");
+    let turn = fixture.turn;
+    fixture.turn += 1;
+    fixture
+        .writer
+        .start_provider_attempt(
+            &fixture.lifecycle.request().doc_id,
+            turn,
+            0,
+            format!("inference.{}", turn + 1).parse().unwrap(),
+        )
+        .await;
+    let plan = crate::streaming::SpawnAdmissionPlan {
+        tool_call_id: internal_call_id.to_string(),
+        child_request_id: child_request_id.to_string(),
+        spawn_target_did: "did:test:target".to_string(),
+        spawn_behavior_id: "general".to_string(),
+        delegated_workspace: None,
+        await_mode,
+    };
+    let published = fixture
+        .writer
+        .publish_native_turn_with_spawn_admissions(&fixture.lifecycle, turn, 0, &message, &[plan])
+        .await
+        .expect("publish claimed subagent provider turn");
+    let accepted = published
+        .accepted_tools
+        .into_iter()
+        .next()
+        .expect("published test subagent acceptance");
+    drop(fixtures);
+    hook.register_stream_tool_call_identity(internal_call_id, &accepted.id, None)
+        .await;
+    hook.adopt_accepted_tool_calls(vec![(internal_call_id.to_string(), accepted)])
+        .await
+        .unwrap();
+    let session_id = hook.session_id().await.expect("active session");
+    hook.adopt_accepted_tool_dispatch(
+        internal_call_id,
+        None,
+        &request_id,
+        &session_id,
+        crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+        &arguments.to_string(),
+        deadline_at,
+        await_mode,
+        cancel_policy,
+    )
+    .await
+    .expect("adopt published test subagent")
+}
+
+async fn publish_and_adopt_tool_turn(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+    provider_call_id: Option<&str>,
+    message: Message,
+) {
+    publish_and_adopt_tool_turns(hook, &[(internal_call_id, provider_call_id)], message).await;
+}
+
+async fn publish_and_adopt_tool_turns(
+    hook: &DefraSessionHook,
+    calls: &[(&str, Option<&str>)],
+    message: Message,
+) -> u32 {
+    let request_id = hook
+        .state
+        .lock()
+        .await
+        .current_request_id
+        .clone()
+        .expect("accepted test tool requires active request");
+    let mut fixtures = hook_execution_fixtures().lock().await;
+    let fixture = fixtures
+        .get_mut(&hook_execution_fixture_key(hook, &request_id))
+        .expect("active request requires owned execution fixture");
+    let turn = fixture.turn;
+    fixture.turn += 1;
+    fixture
+        .writer
+        .start_provider_attempt(
+            &fixture.lifecycle.request().doc_id,
+            turn,
+            0,
+            format!("inference.{}", turn + 1).parse().unwrap(),
+        )
+        .await;
+    let published = fixture
+        .writer
+        .publish_native_turn(&fixture.lifecycle, turn, 0, &message)
+        .await
+        .unwrap();
+    assert_eq!(published.accepted_tools.len(), calls.len());
+    let sequence = published.sequence;
+    drop(fixtures);
+    let mut adopted = Vec::with_capacity(calls.len());
+    for ((internal_call_id, provider_call_id), accepted) in
+        calls.iter().copied().zip(published.accepted_tools)
+    {
+        assert_eq!(accepted.call_id.as_deref(), provider_call_id);
+        if let Some(provider_call_id) = provider_call_id {
+            assert_eq!(accepted.id, provider_call_id);
+        }
+        hook.register_stream_tool_call_identity(internal_call_id, &accepted.id, provider_call_id)
+            .await;
+        adopted.push((internal_call_id.to_string(), accepted));
+    }
+    hook.adopt_accepted_tool_calls(adopted).await.unwrap();
+    sequence
+}
+
+async fn publish_claimed_provider_turn(
+    hook: &DefraSessionHook,
+    request_id: &str,
+    message: Message,
+) {
+    let mut fixtures = hook_execution_fixtures().lock().await;
+    let fixture = fixtures
+        .get_mut(&hook_execution_fixture_key(hook, request_id))
+        .expect("claimed request requires owned execution fixture");
+    let turn = fixture.turn;
+    fixture.turn += 1;
+    fixture
+        .writer
+        .start_provider_attempt(
+            &fixture.lifecycle.request().doc_id,
+            turn,
+            0,
+            format!("inference.{}", turn + 1).parse().unwrap(),
+        )
+        .await;
+    fixture
+        .writer
+        .publish_native_turn(&fixture.lifecycle, turn, 0, &message)
+        .await
+        .expect("publish claimed provider turn");
 }
 
 async fn fetch_tool_call_row(
@@ -771,9 +1231,12 @@ async fn fetch_tool_call_row(
                     _docID
                     request_id
                     request_doc_id
+                    agent_did
+                    requester_did
+                    session_id
+                    message_sequence
                     deadline_at
                     lifecycle_state
-                    result
                     status
                     tool_failure_class
                     denial_reason
@@ -791,13 +1254,332 @@ async fn fetch_tool_call_row(
         "query tool call failed: {:?}",
         resp.errors
     );
-    resp.data
+    let mut row = resp
+        .data
         .as_ref()
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(|value| value.as_array())
         .and_then(|rows| rows.first())
         .cloned()
-        .expect("tool call row")
+        .expect("tool call row");
+    let output = crate::background_tools::canonical_tool_output(
+        node,
+        row["_docID"].as_str().unwrap(),
+        row["request_doc_id"].as_str().unwrap(),
+        row["session_id"].as_str().unwrap(),
+        row["agent_did"].as_str().unwrap(),
+        row["requester_did"].as_str(),
+    )
+    .await
+    .ok();
+    row["result"] = output.map_or(serde_json::Value::Null, serde_json::Value::String);
+    row
+}
+
+#[tokio::test]
+async fn list_processes_skip_publishes_canonical_tool_result() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(dir.path())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "control-result",
+        "did:test:control-result",
+        FailurePolicy::default(),
+    );
+    hook.on_completion_call(&user_text_message("list processes"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "request-control-result",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    accept_hook_tool_call(&hook, "list-call", "list_processes", "{}", None).await;
+
+    assert!(matches!(
+        hook.on_tool_call("list_processes", None, "list-call", "{}")
+            .await,
+        ToolCallHookAction::Skip { .. }
+    ));
+
+    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        "request-control-result",
+    )
+    .await
+    .unwrap();
+    let results = timeline
+        .messages
+        .iter()
+        .flat_map(|row| match &row.message {
+            Message::User { content } => content.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|content| match content {
+            UserContent::ToolResult(result) => Some(result),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), 1, "timeline={timeline:#?}");
+    assert_eq!(results[0].id, "list-call");
+}
+
+#[tokio::test]
+async fn wait_and_cancel_process_skip_publish_canonical_tool_results() {
+    let dir = tempfile::tempdir().unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(dir.path())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "control-results",
+        "did:test:control-results",
+        FailurePolicy::default(),
+    );
+    hook.on_completion_call(&user_text_message("control processes"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "request-control-results",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+
+    let long_handle = "x".repeat(60 * 1024);
+    let long_disallowed_tool = "y".repeat(60 * 1024);
+    let cases = [
+        (
+            "wait-call",
+            "wait_process",
+            r#"{"tool_call_id":"missing-background-handle"}"#.to_string(),
+        ),
+        (
+            "cancel-call",
+            "cancel_process",
+            r#"{"tool_call_id":"missing-background-handle"}"#.to_string(),
+        ),
+        (
+            "wait-long-call",
+            "wait_process",
+            serde_json::json!({ "tool_call_id": long_handle }).to_string(),
+        ),
+        (
+            "spawn-long-call",
+            "spawn_process",
+            serde_json::json!({ "tool_name": long_disallowed_tool, "args": {} }).to_string(),
+        ),
+    ];
+    let mut skipped = Vec::new();
+    for (id, name, args) in &cases {
+        accept_hook_tool_call(&hook, id, name, args, None).await;
+        let action = hook.on_tool_call(name, None, id, args).await;
+        let ToolCallHookAction::Skip { reason } = action else {
+            panic!("{name} should return its durable result to the provider; got {action:?}")
+        };
+        skipped.push((*id, reason));
+    }
+
+    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        "request-control-results",
+    )
+    .await
+    .unwrap();
+    let results = timeline
+        .messages
+        .iter()
+        .flat_map(|row| match &row.message {
+            Message::User { content } => content.as_slice(),
+            _ => &[],
+        })
+        .filter_map(|content| match content {
+            UserContent::ToolResult(result) => {
+                result.content.iter().find_map(|content| match content {
+                    ToolResultContent::Text(Text { text }) => {
+                        Some((result.id.as_str(), text.as_str()))
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results.len(), cases.len(), "timeline={timeline:#?}");
+    for ((expected_id, provider_text), (actual_id, replayed_text)) in skipped.iter().zip(&results) {
+        assert_eq!(actual_id, expected_id);
+        assert_eq!(
+            replayed_text, provider_text,
+            "provider replay must be exact"
+        );
+    }
+    let long_row = fetch_tool_call_row(node.as_ref(), &session_id, "wait-long-call").await;
+    let full = long_row["result"].as_str().expect("full raw long result");
+    let bounded = skipped
+        .iter()
+        .find(|(id, _)| *id == "wait-long-call")
+        .unwrap()
+        .1
+        .as_str();
+    assert!(
+        full.len() > bounded.len(),
+        "full raw output must be retained"
+    );
+    assert!(bounded.contains("[Showing lines"));
+    let long_spawn_row = fetch_tool_call_row(node.as_ref(), &session_id, "spawn-long-call").await;
+    let full_spawn = long_spawn_row["result"]
+        .as_str()
+        .expect("full raw spawn failure");
+    let bounded_spawn = skipped
+        .iter()
+        .find(|(id, _)| *id == "spawn-long-call")
+        .unwrap()
+        .1
+        .as_str();
+    assert!(
+        full_spawn.len() > bounded_spawn.len(),
+        "full raw spawn failure must be retained"
+    );
+    assert!(bounded_spawn.contains("[Showing lines"));
+}
+
+#[tokio::test]
+async fn control_tool_lost_terminal_compare_replays_the_durable_winner() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "control-race",
+        "did:test:control-race",
+        FailurePolicy::default(),
+    );
+    hook.on_completion_call(&user_text_message("race control completion"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "request-control-race",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let mut loser = accepted_hook_tool_lifecycle(
+        &hook,
+        "wait-race-call",
+        "wait_process",
+        r#"{"tool_call_id":"missing"}"#,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .await;
+    loser.start_running().await.unwrap();
+    let tool_doc_id = loser.doc_id().unwrap().to_owned();
+    let mut winner = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        &tool_doc_id,
+        "did:test:control-race",
+        &session_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(winner
+        .cancel_during_run(crate::tool_call_lifecycle::CancelCause::Interrupted)
+        .await
+        .unwrap());
+
+    let action = hook
+        .complete_control_tool_call(&mut loser, "wait_process", "unpublished loser".to_owned())
+        .await
+        .unwrap();
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("lost compare should replay durable Skip result; got {action:?}")
+    };
+    assert_eq!(
+        reason, "tool call cancelled",
+        "a lost compare must replay the exact already-published provider bytes"
+    );
+
+    let mut conflicting = accepted_hook_tool_lifecycle(
+        &hook,
+        "wait-conflict-call",
+        "wait_process",
+        r#"{"tool_call_id":"missing"}"#,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .await;
+    conflicting.start_running().await.unwrap();
+    let conflict_doc_id = conflicting.doc_id().unwrap().to_owned();
+    let mut completed = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        &conflict_doc_id,
+        "did:test:control-race",
+        &session_id,
+        None,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(completed
+        .complete_owned("durable winner", None)
+        .await
+        .unwrap());
+    assert!(
+        hook.complete_control_tool_call(
+            &mut conflicting,
+            "wait_process",
+            "conflicting completion".to_owned(),
+        )
+        .await
+        .is_err(),
+        "a different same-state closure is a modeled conflict, not a lost CAS"
+    );
+    let durable = crate::tool_call_lifecycle::query::load_tool_call_result(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &conflict_doc_id,
+        "did:test:control-race",
+        &session_id,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        crate::tool_call_lifecycle::query::render_tool_result(&durable).unwrap(),
+        "durable winner"
+    );
+    let presentation = crate::tool_call_lifecycle::load_tool_call_presentation(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        &conflict_doc_id,
+        "did:test:control-race",
+        &session_id,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(presentation.arguments, r#"{"tool_call_id":"missing"}"#);
+    assert_eq!(presentation.result.as_deref(), Some("durable winner"));
 }
 
 #[tokio::test]
@@ -837,6 +1619,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
 
     let args =
         r#"{"service_id":"metrics-prod","tool_name":"query_metrics","arguments":{"window":"5m"}}"#;
+    accept_hook_tool_call(&hook, "call-selected", "call_tool", args, None).await;
     assert!(matches!(
         hook.on_tool_call("call_tool", None, "call-selected", args)
             .await,
@@ -856,6 +1639,7 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         Some("query_metrics")
     );
 
+    accept_hook_tool_call(&hook, "call-native", "read_file", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("read_file", None, "call-native", "{}")
             .await,
@@ -870,45 +1654,6 @@ async fn call_tool_persists_concrete_dispatch_identity_without_rewriting_alias()
         .is_none_or(serde_json::Value::is_null));
 
     node.shutdown().await;
-}
-
-async fn fetch_tool_result_spill_row(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-    tool_name: &str,
-) -> serde_json::Value {
-    let session_id = crate::graphql::escape_graphql_string(session_id);
-    let tool_name = crate::graphql::escape_graphql_string(tool_name);
-    let resp = node
-        .execute(&format!(
-            r#"{{
-                AgentToolResult(
-                    filter: {{
-                        session_id: {{ _eq: "{session_id}" }},
-                        tool_name: {{ _eq: "{tool_name}" }}
-                    }},
-                    limit: 1
-                ) {{
-                    tool_call_doc_id
-                    output_text
-                    truncated
-                    truncation_metadata
-                }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query spilled tool result failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolResult"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("spilled tool result row")
 }
 
 #[tokio::test]
@@ -936,17 +1681,10 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
         HookAction::Continue
     ));
     let session_id = hook.session_id().await.expect("session id");
-    let deadline = chrono::DateTime::parse_from_rfc3339("2026-05-08T12:00:00Z")
-        .unwrap()
-        .with_timezone(&chrono::Utc);
-    hook.set_active_request_binding(
-        Some("req-deadline".to_string()),
-        Some("request-doc-deadline".to_string()),
-        None,
-    )
-    .await;
-    hook.set_request_deadline_at(Some(deadline)).await;
+    let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(node.as_ref(), &hook, "req-deadline", &session_id, deadline).await;
 
+    accept_hook_tool_call(&hook, "internal-deadline", "read", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("read", None, "internal-deadline", "{}")
             .await,
@@ -960,7 +1698,7 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     );
     assert_eq!(
         row.get("request_doc_id").and_then(|value| value.as_str()),
-        Some("request-doc-deadline")
+        hook.active_request_doc_id().await.as_deref()
     );
     let observed_deadline = chrono::DateTime::parse_from_rfc3339(
         row.get("deadline_at")
@@ -969,7 +1707,8 @@ async fn hook_attaches_active_request_deadline_to_tool_call_lifecycle() {
     )
     .unwrap()
     .with_timezone(&chrono::Utc);
-    assert_eq!(observed_deadline, deadline);
+    assert!(observed_deadline <= deadline);
+    assert!(observed_deadline > chrono::Utc::now());
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -1029,6 +1768,14 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
     )
     .await;
 
+    accept_hook_tool_call(
+        &hook,
+        "blocked-during-wrapup",
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        r#"{"status":"blocked","reason":"needs approval"}"#,
+        None,
+    )
+    .await;
     let action = hook
         .on_tool_call(
             crate::goal::UPDATE_GOAL_TOOL_NAME,
@@ -1055,7 +1802,7 @@ async fn update_goal_blocked_cannot_resurrect_budget_limited_goal() {
 }
 
 #[tokio::test]
-async fn completion_call_persists_context_once_before_prompt() {
+async fn claimed_authored_input_persists_context_once_before_prompt() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-context-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -1073,25 +1820,45 @@ async fn completion_call_persists_context_once_before_prompt() {
         "did:test:general",
         FailurePolicy::default(),
     );
+    let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let first_prompt = user_text_message("First request");
-    assert!(matches!(
-        hook.on_completion_call_with_context(&first_prompt, &[], Some(&context))
-            .await,
-        HookAction::Continue
-    ));
-    let second_prompt = user_text_message("Second turn");
-    assert!(matches!(
-        hook.on_completion_call_with_context(&second_prompt, &[], None)
-            .await,
-        HookAction::Continue
-    ));
+    assert!(
+        crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "context-request",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    publish_claimed_authored_input(
+        &hook,
+        "context-request",
+        Some(context.clone()),
+        first_prompt.clone(),
+    )
+    .await;
+    publish_claimed_authored_input(&hook, "context-request", Some(context), first_prompt).await;
 
-    let session_id = hook.session_id().await.expect("session id");
     let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
-    assert_eq!(history.len(), 3);
+    assert_eq!(history.len(), 2);
     assert!(matches!(
         &history[0],
         Message::User { content }
@@ -1102,12 +1869,6 @@ async fn completion_call_persists_context_once_before_prompt() {
         Message::User { content }
             if matches!(first_content(content), UserContent::Text(Text { text }) if text == "First request")
     ));
-    assert!(matches!(
-        &history[2],
-        Message::User { content }
-            if matches!(first_content(content), UserContent::Text(Text { text }) if text == "Second turn")
-    ));
-
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1116,8 +1877,8 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     // B2 (#497): the daemon retry loop builds a FRESH hook per attempt. A
     // transient failure before the first assistant token re-runs turn 1, which
     // would otherwise re-persist the <context> message + prompt. Durable
-    // request-scoped dedup (keyed on session_id + request_id + content) must
-    // keep them exactly-once across attempts.
+    // canonical authored keys bound to the claimed request document must keep
+    // them exactly-once across attempts.
     let data_path = std::env::temp_dir().join(format!("agent-hook-retry-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
         defra_node::EmbeddedNode::builder()
@@ -1131,7 +1892,7 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let context = user_text_message("<context>\nnow=2026-06-15T00:00:00Z\n</context>");
     let prompt = user_text_message("Do the thing");
 
-    // Attempt 1: fresh hook, stamp the active request id, persist turn 1.
+    // Attempt 1 claims the request before publishing provider input.
     let hook1 = DefraSessionHook::with_identity(
         node.clone(),
         "general",
@@ -1148,19 +1909,17 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     )
     .await
     .unwrap();
-    hook1
-        .set_active_request_binding(
-            Some("req-retry".to_string()),
-            Some("request-doc-retry".to_string()),
-            None,
-        )
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook1,
+        "req-retry",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let request_doc_id = hook1.active_request_doc_id().await.unwrap();
+    publish_claimed_authored_input(&hook1, "req-retry", Some(context.clone()), prompt.clone())
         .await;
-    assert!(matches!(
-        hook1
-            .on_completion_call_with_context(&prompt, &[], Some(&context))
-            .await,
-        HookAction::Continue
-    ));
     // Attempt 2 (retry): a brand-new hook resuming the same session with the
     // same request id re-runs turn 1, as the daemon retry loop would.
     let hook2 = DefraSessionHook::resume_with_identity_policy(
@@ -1176,16 +1935,11 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     hook2
         .set_active_request_binding(
             Some("req-retry".to_string()),
-            Some("request-doc-retry".to_string()),
+            Some(request_doc_id.clone()),
             None,
         )
         .await;
-    assert!(matches!(
-        hook2
-            .on_completion_call_with_context(&prompt, &[], Some(&context))
-            .await,
-        HookAction::Continue
-    ));
+    publish_claimed_authored_input(&hook2, "req-retry", Some(context), prompt).await;
 
     let history = crate::session::load_history(&node, &session_id, &hook2.agent_did, None)
         .await
@@ -1221,13 +1975,13 @@ async fn context_and_prompt_deduped_across_retry_attempts() {
     let rows = data["AgentMessage"].as_array().expect("message rows");
     assert!(rows
         .iter()
-        .all(|row| row["request_doc_id"] == "request-doc-retry"));
+        .all(|row| row["request_doc_id"] == request_doc_id));
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
-async fn keyed_steering_input_is_reused_when_the_prompt_hook_runs() {
+async fn steering_input_is_published_once_when_claimed_owner_runs() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-hook-steering-dedup-{}",
         uuid::Uuid::new_v4()
@@ -1257,41 +2011,29 @@ async fn keyed_steering_input_is_reused_when_the_prompt_hook_runs() {
     .await
     .unwrap();
     let prompt = user_text_message("also check the staging config");
-    let persisted = serde_json::to_string(&prompt).unwrap();
-    crate::session::append_message_once_with_key_and_requester_did(
+    assert!(
+        crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    bind_interruptible_request(
         node.as_ref(),
+        &hook,
+        "req-steering",
         &session_id,
-        "did:test:general",
-        None,
-        "user",
-        &persisted,
-        None,
-        Some("req-steering"),
-        Some("request-doc-steering"),
-        "steering-input:req-steering",
-        Some(1),
-    )
-    .await
-    .unwrap();
-    hook.set_active_request_binding(
-        Some("req-steering".to_string()),
-        Some("request-doc-steering".to_string()),
-        None,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
-
-    assert!(matches!(
-        hook.on_completion_call(&prompt, &[]).await,
-        HookAction::Continue
-    ));
+    publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
+    publish_claimed_authored_input(&hook, "req-steering", None, prompt.clone()).await;
 
     let response = node
         .execute(&format!(
             r#"{{
                 AgentMessage(filter: {{
-                    session_id: {{ _eq: "{}" }},
-                    request_id: {{ _eq: "req-steering" }}
-                }}) {{ message_key content }}
+                    session_id: {{ _eq: "{}" }}
+                }}) {{ message_key request_doc_id }}
             }}"#,
             crate::graphql::escape_graphql_string(&session_id)
         ))
@@ -1303,9 +2045,21 @@ async fn keyed_steering_input_is_reused_when_the_prompt_hook_runs() {
         .and_then(|data| data.get("AgentMessage"))
         .and_then(serde_json::Value::as_array)
         .expect("message rows");
-    assert_eq!(rows.len(), 1, "prompt hook must reuse the keyed input row");
-    assert_eq!(rows[0]["message_key"], "steering-input:req-steering");
-    assert_eq!(rows[0]["content"], persisted);
+    assert_eq!(
+        rows.len(),
+        1,
+        "claimed replay must reuse the authored input row"
+    );
+    let request_doc_id = hook.active_request_doc_id().await.unwrap();
+    assert_eq!(
+        rows[0]["message_key"],
+        format!("authored:{request_doc_id}:prompt")
+    );
+    assert_eq!(rows[0]["request_doc_id"], request_doc_id);
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+        .await
+        .unwrap();
+    assert_eq!(history, vec![prompt]);
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -1338,6 +2092,7 @@ async fn hook_maps_managed_timeout_result_to_timed_out_lifecycle() {
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(node.as_ref(), &hook, "req-timeout", &session_id, deadline).await;
 
+    accept_hook_tool_call(&hook, "internal-timeout", "never", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("never", None, "internal-timeout", "{}")
             .await,
@@ -1416,6 +2171,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
     )
     .await;
 
+    accept_hook_tool_call(&hook, "internal-unknown", "ghost_tool", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("ghost_tool", None, "internal-unknown", "{}")
             .await,
@@ -1456,7 +2212,7 @@ async fn hook_maps_unknown_tool_dispatch_to_failed_lifecycle() {
 }
 
 #[tokio::test]
-async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
+async fn hook_persists_exact_canonical_output_stream_without_legacy_spill_rows() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-full-spill-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -1495,9 +2251,10 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         .join("\n");
     let tool_args = "{}";
 
-    // The owned loop bounds the model-facing result itself and hands
-    // on_tool_result the FULL output; on_tool_result spills the full text and
-    // persists a bounded model observation carrying a spill pointer.
+    // The owned result remains exact. Model-facing bounding is a payload
+    // presentation and must not rewrite the native output stream or recreate
+    // the retired AgentToolResult spill collection.
+    accept_hook_tool_call(&hook, "internal-oversized", "oversized", tool_args, None).await;
     assert!(matches!(
         hook.on_tool_call("oversized", None, "internal-oversized", tool_args,)
             .await,
@@ -1520,42 +2277,7 @@ async fn hook_spills_full_tool_output_and_persists_bounded_observation() {
         .get("result")
         .and_then(|value| value.as_str())
         .expect("persisted tool call result");
-    assert!(persisted_result.contains("[Showing lines 1-2000 of 2101"));
-    assert!(persisted_result.contains("[Full output: DefraDB doc"));
-    assert!(!persisted_result.contains("line-2100"));
-    assert_ne!(
-        persisted_result, full_output,
-        "persisted result should be the bounded observation with a spill pointer, not the full output"
-    );
-
-    let spill = fetch_tool_result_spill_row(&node, &session_id, "oversized").await;
-    assert_eq!(
-        spill
-            .get("tool_call_doc_id")
-            .and_then(|value| value.as_str()),
-        tool_call.get("_docID").and_then(|value| value.as_str())
-    );
-    assert_eq!(
-        spill.get("truncated").and_then(|value| value.as_bool()),
-        Some(true)
-    );
-    assert_eq!(
-        spill.get("output_text").and_then(|value| value.as_str()),
-        Some(full_output.as_str())
-    );
-    let metadata: serde_json::Value = serde_json::from_str(
-        spill
-            .get("truncation_metadata")
-            .and_then(|value| value.as_str())
-            .expect("truncation metadata"),
-    )
-    .expect("metadata json");
-    assert_eq!(
-        metadata
-            .get("original_lines")
-            .and_then(|value| value.as_u64()),
-        Some(2101)
-    );
+    assert_eq!(persisted_result, full_output);
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -1603,6 +2325,8 @@ async fn cancelling_one_hook_does_not_cancel_unrelated_live_tool_call() {
     bind_interruptible_request(node.as_ref(), &hook_a, "req-a", &session_a, deadline).await;
     bind_interruptible_request(node.as_ref(), &hook_b, "req-b", &session_b, deadline).await;
 
+    accept_hook_tool_call(&hook_a, "internal-a", "slow", "{}", None).await;
+    accept_hook_tool_call(&hook_b, "internal-b", "slow", "{}", None).await;
     assert!(matches!(
         hook_a.on_tool_call("slow", None, "internal-a", "{}").await,
         ToolCallHookAction::Continue
@@ -1656,34 +2380,60 @@ async fn interruption_cascades_only_to_exact_parent_background_workers() {
     let session_id = hook.session_id().await.unwrap();
     let deadline = Utc::now() + chrono::Duration::minutes(5);
     bind_interruptible_request(&node, &hook, "parent", &session_id, deadline).await;
-    let parent_doc = hook.active_request_doc_id().await.unwrap();
     let mut reservations = Vec::new();
     let mut tokens = Vec::new();
-    for (id, physical, detached) in [
-        ("owned", parent_doc.as_str(), false),
-        ("detached", parent_doc.as_str(), true),
-        ("unrelated", "another-parent-doc", false),
-    ] {
-        let mut lifecycle = ToolCallLifecycle::new_background_tool(
-            node.clone(),
-            "parent".into(),
-            session_id.clone(),
-            "did:test:general".into(),
-            id.into(),
-            1,
-            "bash".into(),
-            "{}".into(),
+    for (id, detached) in [("owned", false), ("detached", true)] {
+        let mut lifecycle = accepted_hook_tool_lifecycle(
+            &hook,
+            id,
+            "bash",
+            "{}",
             deadline,
+            crate::tool_call_lifecycle::AwaitMode::Background,
+            if detached {
+                crate::tool_call_lifecycle::CancelPolicy::Detach
+            } else {
+                crate::tool_call_lifecycle::CancelPolicy::Cascade
+            },
         )
-        .with_request_doc_id(Some(physical.into()));
-        if detached {
-            lifecycle.cancel_policy = crate::tool_call_lifecycle::CancelPolicy::Detach;
-        }
+        .await;
         lifecycle.start_running().await.unwrap();
         let token = CancellationToken::new();
         reservations.push(hook.background_executions.reserve(id.into(), token.clone()));
         tokens.push(token);
     }
+    let unrelated_hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:general",
+        FailurePolicy::default(),
+    );
+    let unrelated_session_id = unrelated_hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        &node,
+        &unrelated_hook,
+        "unrelated-parent",
+        &unrelated_session_id,
+        deadline,
+    )
+    .await;
+    let mut unrelated = accepted_hook_tool_lifecycle(
+        &unrelated_hook,
+        "unrelated",
+        "bash",
+        "{}",
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Background,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .await;
+    unrelated.start_running().await.unwrap();
+    let unrelated_token = CancellationToken::new();
+    reservations.push(
+        hook.background_executions
+            .reserve("unrelated".into(), unrelated_token.clone()),
+    );
+    tokens.push(unrelated_token);
     let process_name = format!("background-parent-cascade-{}", uuid::Uuid::new_v4());
     let name = process_name.clone();
     let token = tokens[0].clone();
@@ -1726,12 +2476,14 @@ async fn interruption_cascades_only_to_exact_parent_background_workers() {
     let row = fetch_tool_call_row(&node, &session_id, "owned").await;
     assert_eq!(row["lifecycle_state"], "cancelled");
     assert_eq!(row["cancel_cause"], "interrupted");
-    for id in ["detached", "unrelated"] {
-        assert_eq!(
-            fetch_tool_call_row(&node, &session_id, id).await["lifecycle_state"],
-            "running"
-        );
-    }
+    assert_eq!(
+        fetch_tool_call_row(&node, &session_id, "detached").await["lifecycle_state"],
+        "running"
+    );
+    assert_eq!(
+        fetch_tool_call_row(&node, &unrelated_session_id, "unrelated").await["lifecycle_state"],
+        "running"
+    );
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
 }
 
@@ -1750,37 +2502,37 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let session_id = "session-cascade";
-    let child_request_id = "child-cascade";
-    let parent_doc_id = create_interruptible_request(&node, "parent-cascade", session_id).await;
-
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
         "did:test:general",
         FailurePolicy::default(),
     );
-    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
-        node.clone(),
-        "parent-cascade".to_string(),
-        session_id.to_string(),
-        "did:test:general".to_string(),
-        "tool-cascade".to_string(),
-        1,
-        "spawn_agent".to_string(),
-        "{}".to_string(),
+    let session_id = hook.session_id().await.unwrap();
+    let child_request_id = "child-cascade";
+    bind_interruptible_request(
+        &node,
+        &hook,
+        "parent-cascade",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    let parent_doc_id = hook.active_request_doc_id().await.unwrap();
+    let mut lifecycle = accepted_subagent_lifecycle(
+        &hook,
+        "tool-cascade",
         chrono::Utc::now() + chrono::Duration::minutes(5),
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
-        child_request_id.to_string(),
-        "did:test:target".to_string(),
+        child_request_id,
     )
-    .with_request_doc_id(Some(parent_doc_id.clone()));
+    .await;
     lifecycle.start_running().await.unwrap();
     create_corroborated_child_request(
         &node,
         child_request_id,
-        session_id,
+        &session_id,
         "parent-cascade",
         &parent_doc_id,
         "tool-cascade",
@@ -1794,7 +2546,7 @@ async fn cancelling_cascade_subagent_tool_latches_child_interrupt() {
 
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
 
-    let parent_row = fetch_tool_call_row(&node, session_id, "tool-cascade").await;
+    let parent_row = fetch_tool_call_row(&node, &session_id, "tool-cascade").await;
     assert_eq!(
         parent_row
             .get("lifecycle_state")
@@ -1825,31 +2577,32 @@ async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let session_id = "session-detach";
-    let child_request_id = "child-detach";
-    create_interruptible_request(&node, child_request_id, session_id).await;
-
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
         "did:test:general",
         FailurePolicy::default(),
     );
-    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
-        node.clone(),
-        "parent-detach".to_string(),
-        session_id.to_string(),
-        "did:test:general".to_string(),
-        "tool-detach".to_string(),
-        1,
-        "spawn_agent".to_string(),
-        "{}".to_string(),
+    let session_id = hook.session_id().await.unwrap();
+    let child_request_id = "child-detach";
+    bind_interruptible_request(
+        &node,
+        &hook,
+        "parent-detach",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    create_interruptible_request(&node, child_request_id, &session_id).await;
+    let mut lifecycle = accepted_subagent_lifecycle(
+        &hook,
+        "tool-detach",
         chrono::Utc::now() + chrono::Duration::minutes(5),
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Detach,
-        child_request_id.to_string(),
-        "did:test:target".to_string(),
-    );
+        child_request_id,
+    )
+    .await;
     lifecycle.start_running().await.unwrap();
     hook.in_flight_lifecycles
         .lock()
@@ -1858,7 +2611,7 @@ async fn cancelling_detached_subagent_tool_does_not_interrupt_child() {
 
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 1);
 
-    let parent_row = fetch_tool_call_row(&node, session_id, "tool-detach").await;
+    let parent_row = fetch_tool_call_row(&node, &session_id, "tool-detach").await;
     assert_eq!(
         parent_row
             .get("lifecycle_state")
@@ -1891,31 +2644,29 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     );
     ensure_runtime_schemas(&node).await.unwrap();
 
-    let session_id = "session-mixed-tools";
-    let child_request_id = "child-mixed-tools";
-    let parent_doc_id = create_interruptible_request(&node, "parent-mixed-tools", session_id).await;
-
     let hook = DefraSessionHook::with_identity(
         node.clone(),
         "general",
         "did:test:general",
         FailurePolicy::default(),
     );
+    let session_id = hook.session_id().await.unwrap();
+    let child_request_id = "child-mixed-tools";
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, "parent-mixed-tools", &session_id, deadline).await;
+    let parent_doc_id = hook.active_request_doc_id().await.unwrap();
 
     // Native tool without a child request.
-    let mut outer = crate::tool_call_lifecycle::ToolCallLifecycle::new(
-        node.clone(),
-        "parent-mixed-tools".to_string(),
-        session_id.to_string(),
-        "did:test:general".to_string(),
-        "native-tool".to_string(),
-        1,
-        "slow_tool".to_string(),
-        "{}".to_string(),
+    let mut outer = accepted_hook_tool_lifecycle(
+        &hook,
+        "native-tool",
+        "slow_tool",
+        "{}",
         deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
     )
-    .with_request_doc_id(Some(parent_doc_id.clone()));
+    .await;
     outer.start_running().await.unwrap();
     hook.in_flight_lifecycles
         .lock()
@@ -1923,27 +2674,24 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         .insert("native-tool".to_string(), outer);
 
     // One child bridge under the same parent cancel map.
-    let mut bridge = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
-        node.clone(),
-        "parent-mixed-tools".to_string(),
-        session_id.to_string(),
-        "did:test:general".to_string(),
-        "child-bridge".to_string(),
-        2,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
+    let mut bridge = accepted_subagent_lifecycle(
+        &hook,
+        "child-bridge",
         deadline,
         crate::tool_call_lifecycle::AwaitMode::Background,
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
-        child_request_id.to_string(),
-        "did:test:target".to_string(),
+        child_request_id,
     )
-    .with_request_doc_id(Some(parent_doc_id.clone()));
+    .await;
     bridge.start_running().await.unwrap();
+    assert!(bridge
+        .publish_background_receipt("child started")
+        .await
+        .unwrap());
     create_corroborated_child_request(
         &node,
         child_request_id,
-        session_id,
+        &session_id,
         "parent-mixed-tools",
         &parent_doc_id,
         "child-bridge",
@@ -1959,7 +2707,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     // Duplicate interrupt delivery is a no-op once the map is empty.
     assert_eq!(hook.cancel_in_flight_tool_calls().await.unwrap(), 0);
 
-    let outer_row = fetch_tool_call_row(&node, session_id, "native-tool").await;
+    let outer_row = fetch_tool_call_row(&node, &session_id, "native-tool").await;
     assert_eq!(
         outer_row
             .get("lifecycle_state")
@@ -1983,7 +2731,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         Some("cascade")
     );
 
-    let bridge_row = fetch_tool_call_row(&node, session_id, "child-bridge").await;
+    let bridge_row = fetch_tool_call_row(&node, &session_id, "child-bridge").await;
     assert_eq!(
         bridge_row
             .get("lifecycle_state")
@@ -2008,7 +2756,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     // Late complete must not overwrite the interrupt terminal (CAS).
     let mut reloaded = crate::tool_call_lifecycle::ToolCallLifecycle::load(
         node.clone(),
-        session_id,
+        &session_id,
         "native-tool",
     )
     .await
@@ -2017,12 +2765,16 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     // Force in-memory running so complete() is attempted; durable CAS must lose.
     reloaded.set_state(crate::tool_call_lifecycle::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
-    reloaded.complete("late success").await.unwrap();
+    let late_completion = reloaded.complete("late success").await;
+    let late_error = late_completion
+        .expect_err("late completion without a matching running lifecycle must be rejected");
     assert!(
-        reloaded.is_cancelled(),
-        "late complete must adopt durable cancelled state"
+        late_error
+            .to_string()
+            .contains("canonical tool delivery replay payload differs from terminal result"),
+        "unexpected late-completion failure: {late_error:#}"
     );
-    let outer_after = fetch_tool_call_row(&node, session_id, "native-tool").await;
+    let outer_after = fetch_tool_call_row(&node, &session_id, "native-tool").await;
     assert_eq!(
         outer_after
             .get("lifecycle_state")
@@ -2072,6 +2824,7 @@ async fn hook_can_fail_live_tool_call_without_conflating_timeout_or_cancel() {
     )
     .await;
 
+    accept_hook_tool_call(&hook, "internal-fail", "slow", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("slow", None, "internal-fail", "{}").await,
         ToolCallHookAction::Continue
@@ -2118,11 +2871,16 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Inspect /tmp/main.rs");
-    assert!(matches!(
-        hook.on_completion_call(&user_prompt, &[]).await,
-        HookAction::Continue
-    ));
     let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -2131,8 +2889,31 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    publish_claimed_authored_input(&hook, "request-streaming-turn", None, user_prompt).await;
 
     let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
+    let streamed_assistant_turn = Message::Assistant {
+        id: None,
+        content: vec![
+            AssistantContent::Reasoning(
+                Reasoning::new("Need to inspect the file first").with_id("rs_1".to_string()),
+            ),
+            AssistantContent::ToolCall(ToolCall {
+                id: "call-1".to_string(),
+                call_id: Some("call-1".to_string()),
+                function: ToolFunction {
+                    name: "read".to_string(),
+                    arguments: json!({ "file_path": "/tmp/main.rs" }),
+                },
+                signature: None,
+                additional_params: None,
+            }),
+            AssistantContent::Text(Text {
+                text: "I'm reading the file now.".to_string(),
+            }),
+        ],
+    };
+    publish_and_adopt_tool_turn(&hook, "internal-1", Some("call-1"), streamed_assistant_turn).await;
     assert!(matches!(
         hook.on_tool_call("read", Some("call-1".to_string()), "internal-1", tool_args,)
             .await,
@@ -2151,52 +2932,17 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
         HookAction::Continue
     ));
 
-    let streamed_assistant_turn = Message::Assistant {
-        id: None,
-        content: vec![
-            AssistantContent::Reasoning(
-                Reasoning::new("Need to inspect the file first").with_id("rs_1".to_string()),
-            ),
-            AssistantContent::ToolCall(ToolCall {
-                id: "internal-1".to_string(),
-                call_id: Some("call-1".to_string()),
-                function: ToolFunction {
-                    name: "read".to_string(),
-                    arguments: json!({ "file_path": "/tmp/main.rs" }),
-                },
-                signature: None,
-                additional_params: None,
-            }),
-            AssistantContent::Text(Text {
-                text: "I'm reading the file now.".to_string(),
-            }),
-        ],
-    };
-    hook.persist_message(&streamed_assistant_turn)
-        .await
-        .unwrap();
-
-    hook.persist_stream_tool_result_message(
-        &ToolResult {
-            id: "internal-1".to_string(),
-            call_id: Some("call-1".to_string()),
-            content: vec![ToolResultContent::Text(Text {
-                text: "ephemeral stream payload".to_string(),
+    publish_claimed_provider_turn(
+        &hook,
+        "request-streaming-turn",
+        Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Text(Text {
+                text: "The file looks healthy.".to_string(),
             })],
         },
-        "internal-1",
     )
-    .await
-    .unwrap();
-
-    hook.persist_message(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::Text(Text {
-            text: "The file looks healthy.".to_string(),
-        })],
-    })
-    .await
-    .unwrap();
+    .await;
 
     let session_id = hook.session_id().await.expect("session id");
     let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
@@ -2230,37 +2976,7 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
             if matches!(first_content(content), AssistantContent::Text(Text { text }) if text == "The file looks healthy.")
     ));
 
-    let resp = node
-        .execute(&format!(
-            r#"{{
-                    AgentToolCall(
-                        filter: {{
-                            session_id: {{ _eq: "{session_id}" }},
-                            tool_call_id: {{ _eq: "internal-1" }}
-                        }},
-                        limit: 1
-                    ) {{
-                        message_sequence
-                        result
-                        status
-                    }}
-                }}"#
-        ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query tool call failed: {:?}",
-        resp.errors
-    );
-
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("tool call row");
+    let row = fetch_tool_call_row(&node, &session_id, "call-1").await;
 
     assert_eq!(
         row.get("message_sequence").and_then(|value| value.as_u64()),
@@ -2278,14 +2994,9 @@ async fn streaming_turn_persists_full_assistant_history_in_sequence() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// #492 durable reasoning: an assistant turn that carries chain-of-thought
-/// reasoning persists that reasoning into the DURABLE `AgentMessage.reasoning`
-/// field at materialize time. This is the Rust realization of the Lean
-/// `finalizeComplete_copies_reasoning_then_clears` contract
-/// (`durableReasoning := tailReasoning`): the durable copy is captured at
-/// materialize independent of the live `AgentResponse.reasoning` tail, which
-/// the #64 contract still clears on finalize (asserted separately by
-/// `streaming::tests::write_reasoning_persists_on_response`).
+/// #492 durable reasoning: the published canonical message reconstructs the
+/// assistant turn's reasoning from immutable output segments. This exercises
+/// the native publication/read path, not the retired response-tail storage.
 #[tokio::test]
 async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
     let data_path = std::env::temp_dir().join(format!(
@@ -2308,77 +3019,61 @@ async fn assistant_turn_materializes_durable_reasoning_into_agent_message() {
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Explain the plan");
-    assert!(matches!(
-        hook.on_completion_call(&user_prompt, &[]).await,
-        HookAction::Continue
-    ));
-
-    // Assistant turn WITH reasoning + visible text.
-    hook.persist_message(&Message::Assistant {
-        id: None,
-        content: vec![
-            AssistantContent::Reasoning(Reasoning::new("First weigh the trade-offs, then answer.")),
-            AssistantContent::Text(Text {
-                text: "Here is the plan.".to_string(),
-            }),
-        ],
-    })
+    let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
     .await
     .unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "request-durable-reasoning",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    publish_claimed_authored_input(&hook, "request-durable-reasoning", None, user_prompt).await;
 
-    let session_id = hook.session_id().await.expect("session id");
+    // Assistant turn WITH reasoning + visible text.
+    publish_claimed_provider_turn(
+        &hook,
+        "request-durable-reasoning",
+        Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning::new(
+                    "First weigh the trade-offs, then answer.",
+                )),
+                AssistantContent::Text(Text {
+                    text: "Here is the plan.".to_string(),
+                }),
+            ],
+        },
+    )
+    .await;
 
-    // Read the DURABLE AgentMessage rows directly (load_history decodes only
-    // `content`; here we assert the dedicated `reasoning` column).
-    let resp = node
-        .execute(&format!(
-            r#"{{
-                AgentMessage(
-                    filter: {{ session_id: {{ _eq: "{session_id}" }} }},
-                    order: {{ sequence: ASC }}
-                ) {{ role content reasoning }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query AgentMessage failed: {:?}",
-        resp.errors
-    );
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| value.as_array())
-        .cloned()
-        .expect("agent message rows");
-
-    let assistant = rows
+    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
+        .await
+        .unwrap();
+    let assistant = history
         .iter()
-        .find(|row| row.get("role").and_then(|v| v.as_str()) == Some("assistant"))
-        .expect("assistant row");
-
-    // Durable reasoning persisted into the dedicated field.
-    let reasoning = assistant
-        .get("reasoning")
-        .and_then(|value| value.as_str())
-        .expect("reasoning field present");
-    assert_eq!(
-        reasoning, "First weigh the trade-offs, then answer.",
-        "durable AgentMessage.reasoning must carry the assistant turn's reasoning"
-    );
-
-    // The user turn carries no reasoning (empty, not null) so the field
-    // round-trips deterministically.
-    let user = rows
-        .iter()
-        .find(|row| row.get("role").and_then(|v| v.as_str()) == Some("user"))
-        .expect("user row");
-    assert_eq!(
-        user.get("reasoning").and_then(|value| value.as_str()),
-        Some(""),
-        "non-assistant rows carry empty durable reasoning"
-    );
+        .find_map(|message| match message {
+            Message::Assistant { content, .. } => Some(content),
+            _ => None,
+        })
+        .expect("assistant canonical message");
+    assert!(assistant.iter().any(|part| matches!(
+        part,
+        AssistantContent::Reasoning(reasoning)
+            if matches!(reasoning.content.as_slice(),
+                [crate::llm::message::ReasoningContent::Text { text, .. }]
+                    if text == "First weigh the trade-offs, then answer.")
+    )));
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -2404,12 +3099,16 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         "did:test:general",
         FailurePolicy::default(),
     );
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Read notes.txt"), &[])
-            .await,
-        HookAction::Continue
-    ));
     let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -2418,8 +3117,23 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    publish_claimed_authored_input(
+        &hook,
+        "request-read-file-observation",
+        None,
+        user_text_message("Read notes.txt"),
+    )
+    .await;
 
     let tool_args = r#"{"path":"notes.txt","start_line":2,"end_line":3}"#;
+    accept_hook_tool_call(
+        &hook,
+        "internal-read",
+        "read_file",
+        tool_args,
+        Some("call-read"),
+    )
+    .await;
     assert!(matches!(
         hook.on_tool_call(
             "read_file",
@@ -2447,39 +3161,6 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
         HookAction::Continue
     ));
 
-    hook.persist_message(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: "internal-read".to_string(),
-            call_id: Some("call-read".to_string()),
-            function: ToolFunction {
-                name: "read_file".to_string(),
-                arguments: json!({
-                    "path": "notes.txt",
-                    "start_line": 2,
-                    "end_line": 3,
-                }),
-            },
-            signature: None,
-            additional_params: None,
-        })],
-    })
-    .await
-    .unwrap();
-
-    hook.persist_stream_tool_result_message(
-        &ToolResult {
-            id: "internal-read".to_string(),
-            call_id: Some("call-read".to_string()),
-            content: vec![ToolResultContent::Text(Text {
-                text: "ephemeral stream payload".to_string(),
-            })],
-        },
-        "internal-read",
-    )
-    .await
-    .unwrap();
-
     let session_id = hook.session_id().await.expect("session id");
     let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
@@ -2496,13 +3177,13 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
     let ToolResultContent::Text(Text { text }) = first_content(&tool_result.content) else {
         panic!("expected text tool result content");
     };
+    assert_eq!(text, raw_read_output);
     assert_eq!(
-        text,
+        super::persistence::test_model_observation_for_tool_result("read_file", raw_read_output,),
         "Read notes.txt (lines 2-3 of 3):\nL2: beta\nL3: gamma"
     );
-    assert!(!text.contains("gents_fs"));
 
-    let row = fetch_tool_call_row(&node, &session_id, "internal-read").await;
+    let row = fetch_tool_call_row(&node, &session_id, "call-read").await;
     assert_eq!(
         row.get("result").and_then(|value| value.as_str()),
         Some(raw_read_output)
@@ -2512,7 +3193,7 @@ async fn read_file_result_persists_raw_output_but_models_compact_observation() {
 }
 
 #[tokio::test]
-async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
+async fn owned_tool_result_materializes_one_transcript_row() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-hook-tool-result-message-dedupe-{}",
         uuid::Uuid::new_v4()
@@ -2532,11 +3213,6 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         "did:test:general",
         FailurePolicy::default(),
     );
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Inspect /tmp/main.rs"), &[])
-            .await,
-        HookAction::Continue
-    ));
     let session_id = hook.session_id().await.expect("session id");
     crate::session::create_session_with_behavior_id(
         node.as_ref(),
@@ -2555,12 +3231,27 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    publish_claimed_authored_input(
+        &hook,
+        "request-tool-result-dedupe",
+        None,
+        user_text_message("Inspect /tmp/main.rs"),
+    )
+    .await;
 
     let stored_call_id = "OaoTQYzCdoptKiK_mdhBA";
     let model_result_id = "c6b8bdeb-ab92-4481-b763-bdafbd463904";
     let tool_args = r#"{"file_path":"/tmp/main.rs"}"#;
     let tool_result_text = "fn main() {}\n";
 
+    accept_hook_tool_call(
+        &hook,
+        stored_call_id,
+        "read",
+        tool_args,
+        Some(model_result_id),
+    )
+    .await;
     assert!(matches!(
         hook.on_tool_call(
             "read",
@@ -2571,22 +3262,6 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         .await,
         ToolCallHookAction::Continue
     ));
-
-    hook.persist_message(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: model_result_id.to_string(),
-            call_id: Some(model_result_id.to_string()),
-            function: ToolFunction {
-                name: "read".to_string(),
-                arguments: json!({ "file_path": "/tmp/main.rs" }),
-            },
-            signature: None,
-            additional_params: None,
-        })],
-    })
-    .await
-    .unwrap();
 
     assert!(matches!(
         hook.on_tool_result(
@@ -2600,28 +3275,10 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         HookAction::Continue
     ));
 
-    let duplicate_tool_result_message = Message::User {
-        content: vec![UserContent::ToolResult(ToolResult {
-            id: model_result_id.to_string(),
-            call_id: Some(model_result_id.to_string()),
-            content: vec![ToolResultContent::Text(Text {
-                text: tool_result_text.to_string(),
-            })],
-        })],
-    };
     let session_id = hook.session_id().await.expect("session id");
-    let first_result_sequence =
-        crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
-            .await
-            .expect("first tool-result sequence");
-    let reused_sequence = hook
-        .persist_message(&duplicate_tool_result_message)
+    let result_sequence = crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
         .await
-        .unwrap();
-    assert_eq!(
-        reused_sequence, first_result_sequence,
-        "a duplicate observation must reuse the first tool-result message sequence"
-    );
+        .expect("first tool-result sequence");
 
     let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
@@ -2687,68 +3344,13 @@ async fn duplicate_tool_result_message_observation_reuses_transcript_row() {
         .collect::<std::collections::HashSet<_>>();
     assert_eq!(tool_call_keys.len(), 1);
     assert_eq!(tool_call_ids.len(), 1);
-    assert_eq!(tool_call_ids.iter().next().copied(), Some(stored_call_id));
+    assert_eq!(tool_call_ids.iter().next().copied(), Some(model_result_id));
 
-    assert_eq!(
-        hook.persist_message_with_progress(&duplicate_tool_result_message)
-            .await
-            .unwrap(),
-        (first_result_sequence, false),
-        "the cached result is not new durable progress",
-    );
-    let resumed = DefraSessionHook::resume_with_identity_policy(
-        node.clone(),
-        &session_id,
-        "general",
-        "did:test:general",
-        None,
-        FailurePolicy::default(),
-    )
-    .await
-    .unwrap();
-    // Reconstruct the already-persisted assistant turn with empty observation
-    // caches, as a fresh stream consumer would encounter a replayed tool result.
-    resumed.state.lock().await.transcript_turn = TranscriptTurnState::AssistantPersisted {
-        sequence: first_result_sequence - 1,
-    };
-    assert!(resumed
-        .state
-        .lock()
-        .await
-        .persisted_tool_result_message_sequences
-        .is_empty());
-    assert!(resumed
-        .state
-        .lock()
-        .await
-        .persisted_tool_result_keys
-        .is_empty());
-    let replay = ToolResult {
-        id: model_result_id.to_string(),
-        call_id: Some(model_result_id.to_string()),
-        content: vec![ToolResultContent::Text(Text {
-            text: tool_result_text.to_string(),
-        })],
-    };
-    assert!(
-        !resumed
-            .persist_stream_tool_result_progress(&replay, stored_call_id)
-            .await
-            .unwrap(),
-        "a durable keyed-append duplicate must not authorize lease renewal even with empty caches"
-    );
-    assert!(
-        !resumed
-            .persist_stream_tool_result_progress(&replay, stored_call_id)
-            .await
-            .unwrap(),
-        "subsequent cached observations must remain no-ops"
-    );
     assert_eq!(
         crate::session::max_sequence(&node, &session_id, &hook.agent_did, None)
             .await
             .unwrap(),
-        first_result_sequence
+        result_sequence
     );
     assert_eq!(
         crate::session::load_history(&node, &session_id, &hook.agent_did, None)
@@ -2782,27 +3384,51 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
         "did:test:general",
         FailurePolicy::default(),
     );
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("Run two tools"), &[])
-            .await,
-        HookAction::Continue
-    ));
-
+    let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
+    bind_interruptible_request(
+        node.as_ref(),
+        &hook,
+        "request-distinct-results",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
+    publish_claimed_authored_input(
+        &hook,
+        "request-distinct-results",
+        None,
+        user_text_message("Run two tools"),
+    )
+    .await;
     for result_id in ["result-1", "result-2"] {
-        hook.persist_message(&Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: result_id.to_string(),
-                call_id: Some(result_id.to_string()),
-                content: vec![ToolResultContent::Text(Text {
-                    text: "same payload".to_string(),
-                })],
-            })],
-        })
-        .await
-        .unwrap();
+        accept_hook_tool_call(&hook, result_id, "echo", "{}", Some(result_id)).await;
+        assert!(matches!(
+            hook.on_tool_call("echo", Some(result_id.to_string()), result_id, "{}")
+                .await,
+            ToolCallHookAction::Continue
+        ));
+        assert!(matches!(
+            hook.on_tool_result(
+                "echo",
+                Some(result_id.to_string()),
+                result_id,
+                "{}",
+                &crate::tool_call_lifecycle::ToolOutcome::Completed("same payload".to_string()),
+            )
+            .await,
+            HookAction::Continue
+        ));
     }
 
-    let session_id = hook.session_id().await.expect("session id");
     let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
@@ -2823,7 +3449,7 @@ async fn tool_result_message_dedupe_preserves_distinct_result_ids() {
 }
 
 #[tokio::test]
-async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result() {
+async fn accepted_tool_turns_keep_results_bound_to_their_assistant_headers() {
     let data_path =
         std::env::temp_dir().join(format!("agent-hook-tool-turn-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -2842,11 +3468,16 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         FailurePolicy::default(),
     );
     let user_prompt = user_text_message("Inspect mini-1");
-    assert!(matches!(
-        hook.on_completion_call(&user_prompt, &[]).await,
-        HookAction::Continue
-    ));
     let session_id = hook.session_id().await.expect("session id");
+    crate::session::create_session_with_behavior_id(
+        node.as_ref(),
+        &session_id,
+        "general",
+        "did:test:general",
+        "general",
+    )
+    .await
+    .unwrap();
     bind_interruptible_request(
         node.as_ref(),
         &hook,
@@ -2855,27 +3486,14 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         chrono::Utc::now() + chrono::Duration::minutes(5),
     )
     .await;
+    publish_claimed_authored_input(&hook, "request-tool-turn", None, user_prompt).await;
 
+    accept_hook_tool_call(&hook, "internal-1", "first", "{}", Some("call-1")).await;
     assert!(matches!(
         hook.on_tool_call("first", None, "internal-1", "{}").await,
         ToolCallHookAction::Continue
     ));
-    hook.persist_message(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: "call-1".to_string(),
-            call_id: None,
-            function: ToolFunction {
-                name: "first".to_string(),
-                arguments: json!({}),
-            },
-            signature: None,
-            additional_params: None,
-        })],
-    })
-    .await
-    .unwrap();
-
+    accept_hook_tool_call(&hook, "internal-2", "second", "{}", Some("call-2")).await;
     assert!(matches!(
         hook.on_tool_call("second", None, "internal-2", "{}").await,
         ToolCallHookAction::Continue
@@ -2896,38 +3514,8 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
     let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
         .await
         .unwrap();
-    assert_eq!(
-        history.len(),
-        2,
-        "tool result must not be persisted before its assistant turn"
-    );
-
-    let resp = node
-        .execute(&format!(
-            r#"{{
-                AgentToolCall(
-                    filter: {{
-                        session_id: {{ _eq: "{session_id}" }},
-                        tool_call_id: {{ _eq: "internal-2" }}
-                    }},
-                    limit: 1
-                ) {{ message_sequence result status }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !resp.has_errors(),
-        "query tool call failed: {:?}",
-        resp.errors
-    );
-    let row = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| value.as_array())
-        .and_then(|rows| rows.first())
-        .cloned()
-        .expect("tool call row");
+    assert_eq!(history.len(), 4);
+    let row = fetch_tool_call_row(&node, &session_id, "call-2").await;
     assert_eq!(
         row.get("message_sequence").and_then(|value| value.as_u64()),
         Some(3)
@@ -2941,38 +3529,6 @@ async fn tool_call_after_saved_assistant_starts_new_turn_without_orphan_result()
         Some("completed")
     );
 
-    hook.persist_message(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: "call-2".to_string(),
-            call_id: None,
-            function: ToolFunction {
-                name: "second".to_string(),
-                arguments: json!({}),
-            },
-            signature: None,
-            additional_params: None,
-        })],
-    })
-    .await
-    .unwrap();
-    hook.persist_stream_tool_result_message(
-        &ToolResult {
-            id: "call-2".to_string(),
-            call_id: None,
-            content: vec![ToolResultContent::Text(Text {
-                text: "stream fallback".to_string(),
-            })],
-        },
-        "internal-2",
-    )
-    .await
-    .unwrap();
-
-    let history = crate::session::load_history(&node, &session_id, &hook.agent_did, None)
-        .await
-        .unwrap();
-    assert_eq!(history.len(), 4);
     assert!(matches!(
         &history[2],
         Message::Assistant { content, .. }
@@ -3041,6 +3597,7 @@ async fn remote_presentations_persist_the_same_selected_identity() {
                 r#"{"service_id":"selected-service","tool_name":"inspect","arguments":{}}"#
             }
         };
+        accept_hook_tool_call(&hook, &format!("remote-call-{index}"), &name, args, None).await;
         assert!(matches!(
             hook.on_tool_call(&name, None, &format!("remote-call-{index}"), args)
                 .await,
@@ -3125,22 +3682,6 @@ async fn background_execution_completion_wait_observes_task_abort_guard_drop() {
     .expect("task-owned reservation should release on abort");
 }
 
-#[tokio::test]
-async fn flushed_sequence_commit_cannot_resurrect_removed_live_output() {
-    let state = BackgroundLiveOutputState::default();
-    state.record_flushed_seq_if_live("removed-tool", 7).await;
-    assert!(!state.flushed_seq.lock().await.contains_key("removed-tool"));
-
-    let _writer = state.writer_for("live-tool").await;
-    state.record_flushed_seq_if_live("live-tool", 9).await;
-    assert_eq!(
-        state.flushed_seq.lock().await.get("live-tool").copied(),
-        Some(9)
-    );
-    state.remove("live-tool").await;
-    assert!(!state.flushed_seq.lock().await.contains_key("live-tool"));
-}
-
 /// Issue #1002 defect 2: the parent-deadline sweep must not fabricate child
 /// terminal evidence. `bridge_failure(ChildTerminal::Dead)` is licensed by the
 /// Lean model only with an observed child failure terminal
@@ -3174,46 +3715,42 @@ async fn parent_deadline_sweep_times_out_foreground_bridge_without_child_evidenc
         FailurePolicy::default(),
     );
 
-    let session_id = "bridge-deadline-session";
+    let session_id = hook.session_id().await.unwrap();
+    bind_interruptible_request(
+        &node,
+        &hook,
+        "bridge-deadline-parent",
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
     // The child request is alive (processing) — no terminal evidence exists.
-    create_interruptible_request(&node, "bridge-deadline-child", session_id).await;
+    create_interruptible_request(&node, "bridge-deadline-child", &session_id).await;
 
     // Foreground subagent bridge over the live child, running past its
     // (parent-derived) deadline.
-    let mut expired_bridge = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
-        node.clone(),
-        "bridge-deadline-parent".to_string(),
-        session_id.to_string(),
-        "did:test:general".to_string(),
-        "bridge-deadline-call".to_string(),
-        0,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
+    let mut expired_bridge = accepted_subagent_lifecycle(
+        &hook,
+        "bridge-deadline-call",
         chrono::Utc::now() - chrono::Duration::seconds(5),
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
-        "bridge-deadline-child".to_string(),
-        "did:test:target".to_string(),
-    );
+        "bridge-deadline-child",
+    )
+    .await;
     expired_bridge.start_running().await.unwrap();
 
     // Negative control: an identical bridge whose deadline is still open must
     // be left running by the sweep.
-    let mut open_bridge = crate::tool_call_lifecycle::ToolCallLifecycle::new_subagent(
-        node.clone(),
-        "bridge-deadline-parent".to_string(),
-        session_id.to_string(),
-        "did:test:general".to_string(),
-        "bridge-open-call".to_string(),
-        1,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
+    let mut open_bridge = accepted_subagent_lifecycle(
+        &hook,
+        "bridge-open-call",
         chrono::Utc::now() + chrono::Duration::minutes(5),
         crate::tool_call_lifecycle::AwaitMode::Foreground,
         crate::tool_call_lifecycle::CancelPolicy::Cascade,
-        "bridge-deadline-child".to_string(),
-        "did:test:target".to_string(),
-    );
+        "bridge-deadline-child",
+    )
+    .await;
     open_bridge.start_running().await.unwrap();
 
     {
@@ -3225,7 +3762,7 @@ async fn parent_deadline_sweep_times_out_foreground_bridge_without_child_evidenc
     let expired = hook.timeout_expired_tool_calls().await.unwrap();
     assert_eq!(expired, 1, "only the expired bridge is swept");
 
-    let row = fetch_tool_call_row(&node, session_id, "bridge-deadline-call").await;
+    let row = fetch_tool_call_row(&node, &session_id, "bridge-deadline-call").await;
     assert_eq!(
         row.get("lifecycle_state").and_then(|v| v.as_str()),
         Some("timedOut"),
@@ -3238,7 +3775,7 @@ async fn parent_deadline_sweep_times_out_foreground_bridge_without_child_evidenc
         "the deadline cause must be recorded"
     );
 
-    let open_row = fetch_tool_call_row(&node, session_id, "bridge-open-call").await;
+    let open_row = fetch_tool_call_row(&node, &session_id, "bridge-open-call").await;
     assert_eq!(
         open_row.get("lifecycle_state").and_then(|v| v.as_str()),
         Some("running"),
@@ -3316,6 +3853,7 @@ async fn forged_lifecycle_sentinel_in_tool_output_persists_as_completed() {
     )
     .await;
 
+    accept_hook_tool_call(&hook, "internal-forgery", "cat_log", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("cat_log", None, "internal-forgery", "{}")
             .await,
@@ -3397,6 +3935,7 @@ async fn trusted_reported_failure_persists_typed_state_and_model_facing_text() {
     )
     .await;
 
+    accept_hook_tool_call(&hook, "internal-reported-failure", "bash", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("bash", None, "internal-reported-failure", "{}")
             .await,
@@ -3489,6 +4028,14 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
         .await
         .unwrap()
         .unwrap();
+    accept_hook_tool_call(
+        &persistence_hook,
+        "premature-goal-complete",
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        r#"{"status":"complete","reason":"text alone is not output"}"#,
+        None,
+    )
+    .await;
     assert!(matches!(
         persistence_hook
             .on_tool_call(
@@ -3517,28 +4064,40 @@ async fn goal_completion_shares_output_gate_and_preserves_operator_override() {
     assert_eq!(after.continuation_sequence, before.continuation_sequence);
     assert_eq!(after.completion_evidence, before.completion_evidence);
 
-    // Use the existing tool lifecycle owner, not a raw fabricated completed row.
-    // The gate's contract counts completed write acknowledgments; domain document
-    // writes and authenticated continuation membership have separate consumers.
-    let mut output = crate::tool_call_lifecycle::ToolCallLifecycle::new(
-        node.clone(),
-        "goal-output-request".into(),
-        session.clone(),
-        "did:test:general".into(),
-        "required-output".into(),
-        2,
-        "write_scan_result".into(),
-        "{}".into(),
-        deadline,
+    accept_hook_tool_call(
+        &persistence_hook,
+        "required-output",
+        "write_scan_result",
+        "{}",
+        None,
     )
-    .with_request_doc_id(Some(request_doc));
-    output.start_running().await.unwrap();
+    .await;
+    assert!(matches!(
+        persistence_hook
+            .on_tool_call("write_scan_result", None, "required-output", "{}")
+            .await,
+        ToolCallHookAction::Continue
+    ));
+    let mut output = persistence_hook
+        .in_flight_lifecycles
+        .lock()
+        .await
+        .remove("required-output")
+        .expect("accepted write lifecycle");
     assert_eq!(gate.unmet().await.unwrap().len(), 1);
     output
         .complete("persisted scan result acknowledgment")
         .await
         .unwrap();
     assert!(gate.unmet().await.unwrap().is_empty());
+    accept_hook_tool_call(
+        &persistence_hook,
+        "acknowledged-goal-complete",
+        crate::goal::UPDATE_GOAL_TOOL_NAME,
+        r#"{"status":"complete","reason":"required scan output is durable"}"#,
+        None,
+    )
+    .await;
     assert!(matches!(
         persistence_hook
             .on_tool_call(
@@ -3642,6 +4201,7 @@ async fn cancelled_tool_result_persists_cancelled_lifecycle_with_interrupt_cause
     )
     .await;
 
+    accept_hook_tool_call(&hook, "internal-cancelled", "slow", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("slow", None, "internal-cancelled", "{}")
             .await,
@@ -3720,6 +4280,7 @@ async fn real_bash_policy_denial_persists_typed_class_and_payload() {
     )
     .await;
 
+    accept_hook_tool_call(&hook, "internal-real-denial", "bash", "{}", None).await;
     assert!(matches!(
         hook.on_tool_call("bash", None, "internal-real-denial", "{}")
             .await,

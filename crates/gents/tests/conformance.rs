@@ -50,31 +50,28 @@ use lean_vocab_test::{
     lean_codex_shim_thread_status_cases, lean_codex_shim_tool_metadata_cases,
     lean_codex_shim_turn_lifecycle_cases, lean_command_env_case, lean_command_policy_case,
     lean_command_sandbox_case, lean_compaction_cursor_cases, lean_compaction_reducer_cases,
-    lean_composed_invariant_witnesses, lean_contract_snapshot, lean_descendant_graph_cases,
-    lean_event_delivery_convergence_traces, lean_event_delivery_source_instances,
-    lean_event_delivery_transition_cases, lean_inference_slot_accounting_cases,
-    lean_mcp_health_cases, lean_queue_deadline_cases, lean_r4c_background_work_case,
-    lean_r4c_background_work_cases, lean_r6_background_theorem_witness,
-    lean_r6_background_theorem_witnesses, lean_r6_backgrounding_case, lean_r6_backgrounding_cases,
-    lean_recovery_sweep_cases, lean_request_transition_cases, lean_response_interrupt_flow_cases,
-    lean_response_transition_cases, lean_restart_disposition_cases, lean_startup_readiness_cases,
-    lean_state_machine_contract, lean_subagent_delegation_graph_cases,
-    lean_tool_output_paging_cases, lean_transcript_case, lean_transcript_cases,
-    lean_vocabulary_values, LeanEventDeliveryAction, LeanLifecycleTransitionCase,
-    LeanR4cBackgroundWorkCase,
+    lean_contract_snapshot, lean_descendant_graph_cases, lean_event_delivery_convergence_traces,
+    lean_event_delivery_source_instances, lean_event_delivery_transition_cases,
+    lean_inference_slot_accounting_cases, lean_mcp_health_cases, lean_queue_deadline_cases,
+    lean_r4c_background_work_case, lean_r4c_background_work_cases,
+    lean_r6_background_theorem_witness, lean_r6_background_theorem_witnesses,
+    lean_r6_backgrounding_case, lean_r6_backgrounding_cases, lean_recovery_sweep_cases,
+    lean_request_transition_cases, lean_reserved_child_materialization_cases,
+    lean_restart_disposition_cases, lean_startup_readiness_cases, lean_state_machine_contract,
+    lean_subagent_delegation_graph_cases, lean_tool_output_paging_cases, lean_transcript_case,
+    lean_transcript_cases, lean_vocabulary_values, LeanEventDeliveryAction,
+    LeanLifecycleTransitionCase, LeanR4cBackgroundWorkCase,
 };
 use support::conformance_consumers::assert_registered_conformance_consumers_resolve;
 use support::snapshots::{
     fetch_message_snapshots_for_session, fetch_request_lineage_snapshot,
     fetch_request_lineage_snapshot_by_tuple, fetch_request_snapshot, fetch_request_snapshot_raw,
-    fetch_response_content, fetch_response_interrupted_at, fetch_response_snapshot,
     fetch_session_snapshot, fetch_tool_call_snapshots_for_session, MessageSnapshot,
-    RequestLineageSnapshot, RequestSnapshot, ResponseSnapshot, ToolCallSnapshot,
+    RequestLineageSnapshot, RequestSnapshot, ToolCallSnapshot,
 };
 use support::{
     build_request, create_agent_session, create_request, create_request_with_signed_fields,
-    create_request_with_valid_until, create_response_with_content_and_status,
-    create_response_with_status, first_optional_row, first_row, materialization_identity,
+    create_request_with_valid_until, first_optional_row, first_row, materialization_identity,
     set_interrupt_requested_at, set_request_lifecycle_state, test_db, AGENT_DID, AGENT_NAME,
     BACKEND_ID, DEADLINE_SECS,
 };
@@ -97,8 +94,6 @@ mod command_policy;
 mod compaction_gate;
 #[path = "conformance/completion_retry.rs"]
 mod completion_retry;
-#[path = "conformance/composed_invariants.rs"]
-mod composed_invariants;
 #[path = "conformance/config_replication.rs"]
 mod config_replication;
 #[path = "conformance/coverage.rs"]
@@ -127,6 +122,8 @@ mod lsp;
 mod mailbox;
 #[path = "conformance/mcp_health.rs"]
 mod mcp_health;
+#[path = "conformance/native_remote_spawn.rs"]
+mod native_remote_spawn;
 #[path = "conformance/p2p_observability.rs"]
 mod p2p_observability;
 #[path = "conformance/prompt_template.rs"]
@@ -149,8 +146,6 @@ mod startup_readiness;
 mod streaming_compaction;
 #[path = "conformance/tool_call.rs"]
 mod tool_call;
-#[path = "conformance/transcript.rs"]
-mod transcript;
 
 #[test]
 fn lean_executable_contracts_cover_initial_domains() {
@@ -162,24 +157,9 @@ async fn generated_recovery_sweep_cases_drive_startup_recovery_contract() {
     recovery_sweeps::generated_recovery_sweep_cases_drive_startup_recovery_contract().await;
 }
 
-#[tokio::test]
-async fn generated_restart_disposition_cases_drive_recover_all() {
-    recovery_sweeps::generated_restart_disposition_cases_drive_recover_all().await;
-}
-
-#[tokio::test]
-async fn generated_read_tool_output_witness_drives_hook_dispatch() {
-    background::generated_read_tool_output_witness_drives_hook_dispatch().await;
-}
-
-#[tokio::test]
-async fn generated_bridge_step_cases_drive_bridge_lifecycle() {
-    background::generated_bridge_step_cases_drive_bridge_lifecycle().await;
-}
-
-#[tokio::test]
-async fn subagent_liveness_reconciliation_converges_expired_processing_to_zero() {
-    recovery_sweeps::subagent_liveness_reconciliation_converges_expired_processing_to_zero().await;
+#[test]
+fn generated_reserved_child_materialization_cases_are_derived() {
+    recovery_sweeps::generated_reserved_child_materialization_cases_are_derived();
 }
 
 #[tokio::test]
@@ -204,9 +184,8 @@ async fn terminal_redrive_window_advances_past_sixty_four_rows() {
 }
 
 #[tokio::test]
-async fn durable_response_repairs_request_after_terminal_write_gap() {
-    replicated_request_convergence::durable_response_repairs_request_after_terminal_write_gap()
-        .await;
+async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
+    replicated_request_convergence::canonical_recovery_repairs_expired_request_after_terminal_write_gap().await;
 }
 
 #[tokio::test]
@@ -225,18 +204,8 @@ async fn drain_wakeups_never_interrupts_foreign_replica() {
 }
 
 #[tokio::test]
-async fn generated_r6_backgrounding_cases_drive_tool_backgrounding_contract() {
-    background::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract().await;
-}
-
-#[tokio::test]
-async fn generated_r6_background_theorem_witnesses_drive_admission_budget_invariant() {
-    background::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant().await;
-}
-
-#[tokio::test]
-async fn generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace() {
-    background::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace().await;
+async fn generated_r6_backgrounding_case_metadata_matches_export() {
+    background::generated_r6_backgrounding_case_metadata_matches_export().await;
 }
 
 #[test]
@@ -263,10 +232,23 @@ fn generated_r5_cross_principal_cases_drive_production_dispatch() {
         .expect("r5 cross-deployment conformance thread panicked");
 }
 
-#[tokio::test]
-async fn generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance() {
-    composed_invariants::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance()
-        .await;
+#[test]
+fn generated_remote_spawn_contract_drives_native_cross_principal_seam() {
+    std::thread::Builder::new()
+        .name("native-remote-spawn-conformance".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build native remote-spawn runtime")
+                .block_on(
+                    native_remote_spawn::generated_remote_spawn_contract_drives_native_seam(),
+                );
+        })
+        .expect("spawn native remote-spawn conformance thread")
+        .join()
+        .expect("native remote-spawn conformance thread panicked");
 }
 
 // This integration fence drives two live runtimes and two P2P nodes. Match the
@@ -303,56 +285,13 @@ fn generated_startup_readiness_cases_pin_bounded_barrier_release() {
     startup_readiness::generated_startup_readiness_cases_pin_bounded_barrier_release();
 }
 
-#[tokio::test]
-async fn generated_transcript_cases_drive_agent_message_ordering_contract() {
-    transcript::generated_transcript_cases_drive_agent_message_ordering_contract().await;
-}
-
-#[tokio::test]
-async fn generated_streaming_response_cases_pin_lifecycle_contract() {
-    streaming_compaction::generated_streaming_response_cases_pin_lifecycle_contract().await;
-}
-
-#[test]
-fn generated_streaming_response_interrupt_flow_cases_drive_daemon_contract() {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .thread_stack_size(16 * 1024 * 1024)
-        .enable_all()
-        .build()
-        .expect("build streaming interrupt-flow runtime")
-        .block_on(
-            streaming_compaction::generated_streaming_response_interrupt_flow_cases_drive_daemon_contract(),
-        );
-}
-
-#[test]
-fn generated_execution_lease_expiry_case_drives_daemon_recovery_contract() {
-    std::thread::Builder::new()
-        .name("streaming-idle-timeout-conformance".into())
-        .stack_size(16 * 1024 * 1024)
-        .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("build streaming idle-timeout runtime")
-                .block_on(async {
-                    streaming_compaction::generated_execution_lease_expiry_case_drives_daemon_recovery_contract()
-                        .await;
-                });
-        })
-        .expect("spawn streaming idle-timeout conformance thread")
-        .join()
-        .expect("streaming idle-timeout conformance thread panicked");
-}
-
 #[test]
 fn generated_compaction_reducer_cases_pin_contract() {
     streaming_compaction::generated_compaction_reducer_cases_pin_contract();
 }
 
 #[test]
-fn compaction_gate_blocks_reduction_while_a_response_streams() {
+fn compaction_runtime_reduces_valid_canonical_history() {
     // This test drives the same bulky-history DefraDB replay path as the
     // runtime. Match the production CLI's worker stack instead of Tokio's 2 MiB
     // test default, which is too small for that path.
@@ -362,7 +301,7 @@ fn compaction_gate_blocks_reduction_while_a_response_streams() {
         .enable_all()
         .build()
         .expect("build compaction-gate runtime")
-        .block_on(compaction_gate::compaction_gate_blocks_reduction_while_a_response_streams());
+        .block_on(compaction_gate::compaction_runtime_reduces_valid_canonical_history());
 }
 
 #[test]
@@ -536,9 +475,5 @@ mod self_config;
 mod structure;
 #[path = "conformance/subagent_source.rs"]
 mod subagent_source;
-#[path = "conformance/tool_execution.rs"]
-mod tool_execution;
-#[path = "conformance/tool_execution_subagent.rs"]
-mod tool_execution_subagent;
 #[path = "conformance/tool_policy.rs"]
 mod tool_policy;

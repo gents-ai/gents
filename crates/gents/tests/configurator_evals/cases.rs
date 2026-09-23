@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 /// Selected configuration only, excluding timestamps/runtime observations.
 /// Check preservation independently of the configurator's own receipts.
 async fn behavior_configuration(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     behavior_id: Option<&str>,
 ) -> Result<serde_json::Value> {
@@ -37,7 +37,7 @@ async fn behavior_configuration(
 /// Exercise the generated default in a new session without changing its grants.
 pub(super) async fn verify_builder_execution(
     activation: &stages::ActivationFence,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     agent_did: &str,
     user_home: &str,
     evidence: &std::path::Path,
@@ -76,15 +76,15 @@ pub(super) async fn verify_builder_execution(
         std::fs::read_to_string(std::path::Path::new(user_home).join("readiness/test.sh"))?;
     ensure!(script == "#!/bin/sh\nset -eu\ntest \"$((2 + 2))\" -eq 4\nprintf 'BUILD_TEST_OK\\n' > \"$(dirname \"$0\")/result.txt\"\n",
         "Builder changed the requested test script");
-    let calls = rows(
-        node,
-        &format!(
-            r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}}}) {{tool_name lifecycle_state args result}} }}"#,
-            gents::graphql::escape_graphql_string(&result.request_id)
-        ),
-        "AgentToolCall",
+    let calls = gents::run_timeline_fetch::load_run_timeline_rows(
+        &gents::ConfigAccess::Local(node.clone()),
+        &result.request_id,
     )
-    .await?;
+    .await?
+    .tool_calls
+    .into_iter()
+    .map(serde_json::to_value)
+    .collect::<Result<Vec<_>, _>>()?;
     if !calls
         .iter()
         .any(|call| recorded_readiness_command(call, std::path::Path::new(user_home)))
@@ -99,7 +99,7 @@ pub(super) async fn verify_builder_execution(
 
 pub(super) async fn verify_skill_workflow(
     activation: &stages::ActivationFence,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     setup: &str,
     workspace: &std::path::Path,
@@ -227,15 +227,7 @@ pub(super) async fn verify_skill_workflow(
             == format!("{marker}\n"),
         "skill supporting-file procedure produced the wrong receipt"
     );
-    let calls = rows(
-        node,
-        &format!(
-            r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{}"}}}}) {{tool_name lifecycle_state}} }}"#,
-            gents::graphql::escape_graphql_string(&executed.request_id)
-        ),
-        "AgentToolCall",
-    )
-    .await?;
+    let calls = super::onboarding_scenarios::tool_calls(node, &executed.request_id).await?;
     ensure!(
         calls
             .iter()
@@ -261,7 +253,7 @@ fn skill_workflow_separates_preview_from_scoped_approval() {
 
 pub(super) async fn verify_document_automation(
     activation: &stages::ActivationFence,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     setup: &str,
     evidence: &std::path::Path,
@@ -274,7 +266,7 @@ pub(super) async fn verify_document_automation(
     let diagnostics = node.execute(&format!(r#"{{
         Trigger(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{trigger_id task_id last_error}}
         Task(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{task_id behavior_id prompt_template}}
-        AgentRequest(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{request_id caused_by_trigger_id lifecycle_state}}
+        AgentRequest(filter: {{agent_did: {{_eq: "{escaped}"}}}}) {{request_id caused_by_trigger_id lifecycle_state failure_reason}}
     }}"#)).await;
     std::fs::write(
         evidence.join("automation-dispatch.json"),
@@ -310,7 +302,7 @@ pub(super) async fn verify_document_automation(
 }
 
 async fn automation_trigger_ids(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
 ) -> Result<Vec<serde_json::Value>> {
     let escaped_owner = gents::graphql::escape_graphql_string(owner);
@@ -329,7 +321,7 @@ async fn automation_trigger_ids(
 
 async fn run_document_automation(
     activation: &stages::ActivationFence,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     setup: &str,
     evidence: &std::path::Path,

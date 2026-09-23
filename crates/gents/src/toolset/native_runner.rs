@@ -123,9 +123,6 @@ impl NativeFsRunner {
             .as_ref()
             .map(|runtime| runtime.cancellation_token.clone())
             .unwrap_or_default();
-        let live_output = runtime
-            .as_ref()
-            .and_then(|runtime| runtime.live_output.clone());
         let root = self.effective_root();
         let (argv, environment) = if runtime
             .as_ref()
@@ -168,7 +165,9 @@ impl NativeFsRunner {
             stdin,
             environment,
             tool_name: Some(tool_name.to_string()),
-            live_output,
+            // The typed runner decodes subprocess stdout into a different
+            // native result. It does not own the bash composed presentation.
+            live_output: None,
         })
         .await
         {
@@ -469,8 +468,9 @@ printf '{"ok":true,"output":"sandboxed read","error":null}'"#
         std::fs::remove_file(fixture.grant.root().join("target/native-readback")).unwrap();
         fixture
             .owner
-            .terminalize_owned_without_stream(
+            .terminalize_owned(
                 crate::lifecycle::RequestTerminalOutcome::Failed,
+                gents_protocol::output::TerminalOutput::NoMessage,
                 Some("end reader incarnation"),
             )
             .await

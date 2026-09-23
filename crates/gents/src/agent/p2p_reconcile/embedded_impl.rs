@@ -246,7 +246,8 @@ pub(super) async fn push_documents_to_peer(
     let docs = documents
         .iter()
         .map(|document| P2pDocumentRequest {
-            collection: document.collection.clone(),
+            collection: super::session_hydration::hydration_collection_name(document.collection)
+                .to_string(),
             doc_id: document.doc_id.clone(),
         })
         .collect::<Vec<_>>();
@@ -719,67 +720,75 @@ mod tests {
     }
 
     async fn seed_cross_deployment_bridge(
-        node: &EmbeddedNode,
-        parent_request_id: &str,
-        parent_doc_id: &str,
-        coordinator_did: &str,
+        node: &Arc<EmbeddedNode>,
+        lifecycle: &crate::lifecycle::RequestLifecycle,
+        writer: &crate::streaming::DefraStreamWriter,
         host_did: &str,
         tool_call_id: &str,
         child_request_id: &str,
-        sequence: u64,
+        turn: usize,
     ) -> String {
-        let args = serde_json::json!({
-            "name": "remote-target",
-            "behavior_id": "behavior-1",
-            "prompt": "delegated work"
-        })
-        .to_string();
-        let response = node
-            .execute(&format!(
-                r#"mutation {{ create_AgentToolCall(input: {{
-                    tool_call_key: "remote-session:{}", request_id: "{}",
-                    request_doc_id: "{}", session_id: "remote-session",
-                    agent_did: "{}", requester_did: "{}",
-                    message_sequence: {}, tool_name: "spawn_subagent", tool_call_id: "{}",
-                    args: "{}", status: "called", lifecycle_state: "running",
-                    await_mode: "background", cancel_policy: "cascade",
-                    child_request_id: "{}", spawn_target_did: "{}"
-                }}) {{ _docID }} }}"#,
-                escape_graphql_string(tool_call_id),
-                escape_graphql_string(parent_request_id),
-                escape_graphql_string(parent_doc_id),
-                escape_graphql_string(coordinator_did),
-                escape_graphql_string(coordinator_did),
-                sequence,
-                escape_graphql_string(tool_call_id),
-                escape_graphql_string(&args),
-                escape_graphql_string(child_request_id),
-                escape_graphql_string(host_did),
-            ))
+        use crate::tool_call_lifecycle::{AwaitMode, CancelPolicy, ToolCallLifecycle};
+        use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+        writer
+            .start_provider_attempt(
+                &lifecycle.request().doc_id,
+                turn,
+                0,
+                format!("inference.{}", turn + 1).parse().unwrap(),
+            )
             .await;
-        assert!(
-            !response.has_errors(),
-            "seed bridge {tool_call_id}: {:?}",
-            response.errors
-        );
-        response
-            .data
-            .as_ref()
-            .and_then(|data| {
-                data.get("create_AgentToolCall")
-                    .or_else(|| data.get("add_AgentToolCall"))
-            })
-            .and_then(|value| {
-                value.get("_docID").or_else(|| {
-                    value
-                        .as_array()
-                        .and_then(|rows| rows.first())
-                        .and_then(|row| row.get("_docID"))
-                })
-            })
-            .and_then(serde_json::Value::as_str)
-            .expect("bridge doc id")
-            .to_string()
+        let message = Message::Assistant {
+            id: Some(format!("remote-provider-{turn}")),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: tool_call_id.into(),
+                call_id: Some(tool_call_id.into()),
+                function: ToolFunction::new(
+                    "spawn_subagent".into(),
+                    serde_json::json!({
+                        "name": "remote-target",
+                        "behavior_id": "behavior-1",
+                        "prompt": "delegated work"
+                    }),
+                ),
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        let publication = writer
+            .publish_native_turn_with_spawn_admissions(
+                lifecycle,
+                turn,
+                0,
+                &message,
+                &[crate::streaming::SpawnAdmissionPlan {
+                    tool_call_id: tool_call_id.into(),
+                    child_request_id: child_request_id.into(),
+                    spawn_target_did: host_did.into(),
+                    spawn_behavior_id: "behavior-1".into(),
+                    delegated_workspace: None,
+                    await_mode: AwaitMode::Background,
+                }],
+            )
+            .await
+            .expect("accept remote bridge intent");
+        let accepted = publication.accepted_tools.into_iter().next().unwrap();
+        let doc_id = accepted.tool_call_doc_id.clone();
+        let mut bridge = ToolCallLifecycle::from_accepted(
+            node.clone(),
+            lifecycle.request().agent_did.clone(),
+            lifecycle.request().requester_did.clone(),
+            accepted,
+            lifecycle.claimed_deadline_at().unwrap(),
+            AwaitMode::Background,
+            CancelPolicy::Cascade,
+        )
+        .expect("adopt accepted bridge");
+        bridge
+            .start_running()
+            .await
+            .expect("dispatch remote bridge");
+        doc_id
     }
 
     async fn wait_for_peer_info(admin: &EmbeddedRemoteP2pAdmin) -> Vec<String> {
@@ -902,7 +911,7 @@ mod tests {
         node: &Arc<EmbeddedNode>,
         suffix: &str,
         requester_did: Option<&str>,
-    ) {
+    ) -> (String, String, String, u32) {
         let request_id = format!("return-{suffix}-response");
         let session_id = format!("return-{suffix}-session");
         let agent_did = "did:key:host";
@@ -920,23 +929,9 @@ mod tests {
         )
         .await
         .expect("create routed AgentSession");
-        let escaped_request_id = escape_graphql_string(&request_id);
-        crate::session::save_message_with_requester_did(
-            node,
-            &session_id,
-            agent_did,
-            requester_did,
-            1,
-            "assistant",
-            "child result",
-            None,
-            None,
-            None,
-        )
-        .await
-        .expect("create routed AgentMessage");
         let response = node.execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ {} }} }}"#,
+            r#"mutation {{ update_AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, input: {{ lifecycle_state: "pending" }}) {{ {} }} }}"#,
+            escape_graphql_string(&request_id),
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         let request =
@@ -962,15 +957,47 @@ mod tests {
         lifecycle
             .begin_owned_execution(&writer)
             .await
-            .expect("create routed AgentResponse");
+            .expect("begin routed execution");
+        // The child result travels as a real canonical provider turn: the
+        // writer publishes the assistant header plus its payload stream, and
+        // terminalization selects the exact published header instead of a
+        // retired AgentResponse row.
+        writer
+            .start_provider_attempt(
+                &lifecycle.request().doc_id,
+                0,
+                0,
+                gents_protocol::rendered_request::CaptureScope {
+                    kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                    seq: 0,
+                },
+            )
+            .await;
+        let published = writer
+            .publish_native_turn(
+                &lifecycle,
+                0,
+                0,
+                &gents_protocol::message::Message::assistant("child result"),
+            )
+            .await
+            .expect("publish routed child result turn");
         lifecycle
             .terminalize_owned(
-                &writer,
                 crate::lifecycle::RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::Message {
+                    message_doc_id: published.message_doc_id.clone(),
+                },
                 None,
             )
             .await
             .expect("complete routed request");
+        (
+            request_id,
+            session_id,
+            published.message_doc_id,
+            published.sequence,
+        )
     }
 
     async fn collection_values(
@@ -1303,7 +1330,7 @@ mod tests {
                     request_id: "{parent_request_id}", agent_did: "{coordinator_did}",
                     requester_did: "{coordinator_did}", behavior_id: "parent-behavior",
                     session_id: "remote-session", retry_root_request: "{parent_request_id}",
-                    content: "remote parent", lifecycle_state: "processing",
+                    content: "remote parent", lifecycle_state: "pending",
                     execution_origin: "interactive", created_at: "2026-08-30T00:00:00Z",
                     retry_count: 0, max_retries: 3, subagent_depth: 0
                 }}) {{ _docID }} }}"#,
@@ -1332,26 +1359,49 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .expect("parent doc id")
             .to_string();
+        let parent_request =
+            crate::request_binding::load_agent_request(&coordinator, parent_request_id)
+                .await
+                .unwrap()
+                .unwrap();
+        let mut parent_lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+            coordinator.clone(),
+            "parent-behavior",
+            &coordinator_did,
+            parent_request,
+            120,
+        );
+        assert_eq!(
+            parent_lifecycle.claim().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let parent_writer = crate::streaming::DefraStreamWriter::new(
+            coordinator.clone(),
+            &coordinator_did,
+            Duration::ZERO,
+        );
+        parent_lifecycle
+            .begin_owned_execution(&parent_writer)
+            .await
+            .unwrap();
         let bridge_doc_id = seed_cross_deployment_bridge(
             &coordinator,
-            parent_request_id,
-            &parent_doc_id,
-            &coordinator_did,
+            &parent_lifecycle,
+            &parent_writer,
             &host_did,
             "bridge-1",
             "remote-child-1",
-            1,
+            0,
         )
         .await;
         let revoked_bridge_doc_id = seed_cross_deployment_bridge(
             &coordinator,
-            parent_request_id,
-            &parent_doc_id,
-            &coordinator_did,
+            &parent_lifecycle,
+            &parent_writer,
             &host_did,
             "bridge-2",
             "remote-child-2",
-            2,
+            1,
         )
         .await;
         let immutable_update = coordinator
@@ -1512,9 +1562,12 @@ mod tests {
         fresh_daemon
             .process_request(fresh, shutdown_rx.clone())
             .await;
+        let fresh_state = host.execute(
+            r#"{ AgentRequest(filter: { request_id: { _eq: "remote-child-1" } }) { lifecycle_state failure_reason error_message terminal_output } }"#,
+        ).await;
         assert!(
             fresh_calls.load(Ordering::SeqCst) > 0,
-            "fresh cross-deployment child did not reach the provider"
+            "fresh cross-deployment child did not reach the provider: {fresh_state:?}"
         );
 
         GraphqlEnrollmentStore::new(host.clone(), host_identity.clone())
@@ -1575,8 +1628,12 @@ mod tests {
         let sender_addresses = wait_for_peer_info(&sender_admin).await;
         let receiver_addresses = wait_for_peer_info(&receiver_admin).await;
 
-        seed_subagent_return_artifacts(&sender, "match", Some("did:key:coord")).await;
-        seed_subagent_return_artifacts(&sender, "unrelated", None).await;
+        let (match_request_id, match_session_id, match_header_doc_id, match_sequence) =
+            seed_subagent_return_artifacts(&sender, "match", Some("did:key:coord")).await;
+        let (unrelated_request_id, _unrelated_session_id, _unrelated_header, _unrelated_sequence) =
+            seed_subagent_return_artifacts(&sender, "unrelated", None).await;
+        let (foreign_request_id, _foreign_session_id, _foreign_header, _foreign_sequence) =
+            seed_subagent_return_artifacts(&sender, "foreign", Some("did:key:other")).await;
 
         let template = resolve_template(SUBAGENT_HOST_TEMPLATE).expect("subagent-host template");
         let collections = template
@@ -1610,38 +1667,126 @@ mod tests {
             .await
             .expect("install requester-scoped return replicator");
 
-        wait_for_value(
-            &receiver,
-            "AgentResponse",
-            "response_key",
-            "return-match-response",
+        wait_for_value(&receiver, "AgentRequest", "request_id", &match_request_id).await;
+        wait_for_value(&receiver, "AgentMessage", "_docID", &match_header_doc_id).await;
+        assert_eq!(
+            collection_values(&receiver, "AgentRequest", "request_id").await,
+            BTreeSet::from([match_request_id.clone()]),
+            "only the requester-routed return request must replicate"
+        );
+        // The terminal owner must have selected the exact physical header on
+        // the sender; the same selection must survive replication untouched.
+        let sender_terminal = sender
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ _docID lifecycle_state terminal_output }} }}"#,
+                escape_graphql_string(&match_request_id),
+            ))
+            .await;
+        let sender_terminal_row = &sender_terminal.data.as_ref().unwrap()["AgentRequest"][0];
+        let match_request_doc_id = sender_terminal_row["_docID"]
+            .as_str()
+            .expect("sender request doc id")
+            .to_string();
+        assert_eq!(sender_terminal_row["lifecycle_state"], "completed");
+        assert_eq!(
+            sender_terminal_row["terminal_output"],
+            serde_json::to_value(gents_protocol::output::TerminalOutput::Message {
+                message_doc_id: match_header_doc_id.clone(),
+            })
+            .unwrap()
+        );
+        let receiver_message_rows = crate::session::canonical_rows::decode_transcript_message_row(
+            &receiver
+                .execute(&format!(
+                    r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+                    escape_graphql_string(&match_header_doc_id),
+                    crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
+                ))
+                .await
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentMessage"))
+                .and_then(|rows| rows.as_array())
+                .and_then(|rows| rows.first())
+                .cloned()
+                .expect("replicated canonical AgentMessage"),
         )
-        .await;
+        .expect("decode replicated canonical AgentMessage");
+        assert_eq!(
+            receiver_message_rows.doc_id, match_header_doc_id,
+            "AgentMessage replication must preserve the physical header identity"
+        );
+        assert_eq!(receiver_message_rows.message.session_id, match_session_id);
+        assert_eq!(receiver_message_rows.message.sequence, match_sequence);
         wait_for_value(
             &receiver,
-            "AgentMessage",
-            "message_key",
-            &crate::session::sequence_message_key(
-                "did:key:host",
-                "return-match-session",
-                Some("did:key:coord"),
-                1,
-            ),
+            "AgentOutputSegment",
+            "request_doc_id",
+            &match_request_doc_id,
         )
         .await;
         assert_eq!(
-            collection_values(&receiver, "AgentResponse", "response_key").await,
-            BTreeSet::from(["return-match-response".to_string()])
+            collection_values(&receiver, "AgentOutputSegment", "request_doc_id").await,
+            BTreeSet::from([match_request_doc_id.clone()]),
+            "only the routed return projection's segments must replicate"
         );
-        assert_eq!(
-            collection_values(&receiver, "AgentMessage", "message_key").await,
-            BTreeSet::from([crate::session::sequence_message_key(
+        // Canonical output only carries the header and its segments; the
+        // retired AgentResponse collection must not appear on the return leg.
+        let agent_response_rows = receiver.execute("{ AgentResponse { response_key } }").await;
+        assert!(
+            agent_response_rows.has_errors(),
+            "AgentResponse is a retired collection: receiver queries must reject it"
+        );
+        // The exact projected child result must reconstruct on the receiver
+        // through the canonical reader. Header replication races segment
+        // replication, so poll until the full dependency closure has arrived.
+        let mut projected = None;
+        for _ in 0..120 {
+            match crate::session::load_canonical_message_from_node(
+                &receiver,
+                &match_header_doc_id,
                 "did:key:host",
-                "return-match-session",
                 Some("did:key:coord"),
-                1
-            )])
+            )
+            .await
+            {
+                Ok((_, message)) => {
+                    projected = Some(message);
+                    break;
+                }
+                Err(error)
+                    if error
+                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                        .is_some_and(|error| error.is_incomplete()) =>
+                {
+                    // Missing dependency: replication is still converging.
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+                Err(error) => {
+                    panic!("reconstructing projected child result failed: {error:#}");
+                }
+            }
+        }
+        assert_eq!(
+            projected.expect("projected child result reconstructed"),
+            gents_protocol::message::Message::assistant("child result"),
+            "receiver must project the exact child result"
         );
+        // Unrouted sessions and foreign requester routes must never replicate.
+        assert!(
+            !collection_values(&receiver, "AgentRequest", "request_id")
+                .await
+                .contains(&unrelated_request_id),
+            "unrouted host-local artifact leaked to the receiver"
+        );
+        assert!(
+            !collection_values(&receiver, "AgentRequest", "request_id")
+                .await
+                .contains(&foreign_request_id),
+            "foreign-requester artifact leaked to the receiver"
+        );
+
         assert_eq!(
             collection_values(&receiver, "AgentSession", "session_id").await,
             BTreeSet::new(),

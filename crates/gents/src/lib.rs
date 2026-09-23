@@ -6,6 +6,11 @@
 #[cfg(test)]
 extern crate self as gents;
 
+// The same fixture owners back external and crate-private conformance tests.
+#[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+pub(crate) mod support;
+
 pub mod adapter_projection;
 pub(crate) mod admission;
 pub mod agent;
@@ -66,6 +71,9 @@ pub(crate) mod provider_input;
 pub mod provider_budget {
     pub use crate::provider_input::budget::{effective_input_budget, threshold_budget};
 }
+#[cfg(test)]
+#[path = "lean_vocab_test/canonical_execution/native_adapter.rs"]
+mod canonical_execution_native_adapter;
 pub(crate) mod provider_usage;
 pub mod starter_recipes;
 pub mod startup_readiness;
@@ -78,6 +86,47 @@ pub mod xai_oauth_refresh;
 /// Shared in-crate test utilities.
 #[cfg(test)]
 pub(crate) mod test_support {
+    /// Scripted providers have no HTTP transport. Persist their actual request
+    /// through the capture owner before returning synthetic provider output,
+    /// rather than bypassing the owned loop's armed-capture requirement.
+    pub(crate) async fn capture_scripted_provider_request(
+        request: &rig::completion::CompletionRequest,
+        model: &str,
+    ) -> Result<(), rig::completion::CompletionError> {
+        use rig::http_client::HttpClientExt;
+        let body = rig::providers::openai::completion::CompletionRequest::try_from((
+            model.to_string(),
+            request.clone(),
+        ))
+        .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+        let mut body = serde_json::to_value(body)
+            .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+        body["stream"] = serde_json::Value::Bool(true);
+        body["stream_options"] = serde_json::json!({ "include_usage": true });
+        let inner = crate::rendered_request::transport::CountingInner::default();
+        let transport = crate::rendered_request::transport::RenderedRequestCapturingHttpClient::new(
+            inner.clone(),
+        );
+        let outbound = rig::http_client::Request::builder()
+            .method("POST")
+            .uri("https://scripted-provider.invalid/v1/chat/completions")
+            .header("content-type", "application/json")
+            .body(bytes::Bytes::from(serde_json::to_vec(&body).map_err(
+                |error| rig::completion::CompletionError::ProviderError(error.to_string()),
+            )?))
+            .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+        transport
+            .send_streaming(outbound)
+            .await
+            .map_err(|error| rig::completion::CompletionError::ProviderError(error.to_string()))?;
+        assert_eq!(
+            inner.send_count(),
+            1,
+            "capture must authorize scripted provider send"
+        );
+        Ok(())
+    }
+
     /// Install an explicit, inert inference/context/tools chain for a named test behavior.
     /// Schemas must already be registered. The principal's default is never changed.
     pub(crate) async fn install_test_behavior(
@@ -280,8 +329,8 @@ pub use document_config::{
     WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
-    import_external_adapter_capture_to_timeline_rows, ExternalAdapterCapture,
-    ExternalAdapterImport, ExternalAdapterMapping, ExternalAdapterSource,
+    import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
+    ExternalAdapterMapping, ExternalAdapterSource,
 };
 pub use gents_protocol::client_protocol;
 pub use health_checker::{
@@ -296,7 +345,10 @@ pub use identity::{
     load_or_create_macos_keychain_identity, load_or_create_macos_secure_enclave_identity,
     AgentIdentity, KeyIdentity, RegisteredIdentity, RuntimePrincipal, ServiceAccount,
 };
-pub use interrupt::{fetch_interrupt_requested_at, interrupt_request, interrupt_request_by_doc_id};
+pub use interrupt::{
+    fetch_interrupt_requested_at, fetch_interrupt_requested_at_by_doc_id, interrupt_request,
+    interrupt_request_by_doc_id,
+};
 pub use lifecycle::{
     background_wake_next_retry_at, background_wake_retry_delay,
     build_signed_pending_agent_request_with_lineage_workspace_and_conversation_title,
@@ -325,7 +377,7 @@ pub use run_timeline::{
     build_run_timeline, RetrySummary, RunTimeline, RunTimelineEvent, RunTimelineRows,
     TimelineGoalParentState, TimelineGoalState, TimelineGoalTransitionEvent,
     TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineSessionRow, TimelineToolCallRow,
 };
 pub use runtime_snapshot::{
     ActiveRuntimeSnapshot, ConcurrencyMode, DispatcherMap, EventTriggerFireMode,
@@ -335,11 +387,11 @@ pub use runtime_snapshot::{
 #[cfg(feature = "agent-memory")]
 pub use schema::AGENT_MEMORY_SCHEMA;
 pub use schema::{
-    ensure_runtime_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_MESSAGE_SCHEMA, AGENT_PRINCIPAL_SCHEMA,
-    AGENT_REQUEST_SCHEMA, AGENT_RESPONSE_SCHEMA, AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA,
-    AGENT_TOOL_CALL_SCHEMA, AGENT_TOOL_RESULT_SCHEMA, COMPACTION_ENTRY_SCHEMA, GOAL_SCHEMA,
-    INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA, MAILBOX_ITEM_SCHEMA,
-    OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
+    ensure_runtime_schemas, AGENT_BEHAVIOR_SCHEMA, AGENT_MESSAGE_SCHEMA,
+    AGENT_OUTPUT_SEGMENT_SCHEMA, AGENT_PRINCIPAL_SCHEMA, AGENT_REQUEST_SCHEMA,
+    AGENT_RUNTIME_SCHEMA, AGENT_SESSION_SCHEMA, AGENT_TOOL_CALL_SCHEMA, COMPACTION_ENTRY_SCHEMA,
+    GOAL_SCHEMA, INFERENCE_BACKEND_SCHEMA, INFERENCE_CALL_SCHEMA, INFERENCE_PROFILE_SCHEMA,
+    MAILBOX_ITEM_SCHEMA, OAUTH_CREDENTIAL_SCHEMA, SCHEDULE_SCHEMA, TASK_SCHEMA, TOOLS_SCHEMA,
     TOOL_SERVICE_HEALTH_STATE_SCHEMA, TOOL_SERVICE_REGISTRY_SCHEMA,
 };
 pub use session::load_history;
@@ -362,7 +414,7 @@ pub use trigger_engine::goal_source::GoalSource;
 pub use trigger_engine::subagent_source::SubagentSource;
 pub use trigger_engine::subscription_source::UpdateSubscriptionSource;
 pub use trigger_engine::{FireIntent, FireResult, TriggerKind, TriggerSource};
-pub use truncation::{DefraSpillTruncator, TruncationLimits, TruncationMode, Truncator};
+pub use truncation::{TruncationLimits, TruncationMode};
 pub use watcher::{AgentRequest, DefraWatcher, Watcher};
 
 #[doc(hidden)]

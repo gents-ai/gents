@@ -15,7 +15,7 @@ pub(super) fn command_denial_from_row(row: &AgentToolCallRow) -> Option<CommandD
         denied_command,
         denied_argument: normalize_optional(row.denied_argument.as_deref()),
         denied_subcommand: normalize_optional(row.denied_subcommand.as_deref()),
-        diagnostic: normalize_optional(row.result.as_deref()).unwrap_or_default(),
+        diagnostic: normalize_optional(row.denial_reason.as_deref()).unwrap_or_default(),
     })
 }
 

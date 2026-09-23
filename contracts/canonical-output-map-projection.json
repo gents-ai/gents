@@ -1,0 +1,406 @@
+[
+    {
+      "id": "projection-canonical-reconstruction-and-output",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructExtent" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructPayload" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" }
+      ],
+      "generated_groups": ["canonical_output_projection_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": [
+        "crates/gents-protocol/src/output.rs",
+        "crates/gents/src/session/history.rs",
+        "crates/gents/src/background_tools.rs",
+        "crates/gents/src/agent/stream_processor.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/hook/tests/transcript_native.rs",
+        "crates/gents/tests/conformance/streaming_compaction.rs",
+        "crates/gents/src/background_tools.rs",
+        "crates/gents/src/hook/tests.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Reconstruct dense committed extents by ordinal and stream with exact declaration positions and bytes.",
+        "Classify absent dependencies as loading, ACP denial as denied, distinct twins as conflicted, and malformed sealed runs as invalid.",
+        "Ignore benign late flushes beyond a selected sealed extent while rejecting in-extent twins.",
+        "Treat raw exact duplicate facts idempotently without normalizing the fixture before the native adapter sees them.",
+        "Reconstruct native reasoning parts, opaque payload retention, tool argument JSON, tool results, media metadata, roles, publication metadata, signatures, and native IDs exactly.",
+        "Project live output only for the exact current request generation or eligible physical tool owner; closed output is never a live preview.",
+        "Require exact terminal selection before exposing retained Partial diagnostics and never promote retained bytes into an authored answer."
+      ],
+      "retired_bindings": [
+        "AgentResponse",
+        "decode_persisted_message",
+        "present_persisted_message",
+        "StreamBufferSnapshot",
+        "AssistantTurnAccumulator::message_snapshot",
+        "LeanResponseTransitionCase",
+        "LeanResponseInterruptFlowCase",
+        "lean_response_transition_cases",
+        "lean_response_transition_case",
+        "lean_response_interrupt_flow_cases",
+        "lean_response_interrupt_flow_case",
+        "generated_streaming_response_cases_pin_lifecycle_contract",
+        "generated_streaming_response_interrupt_flow_cases_drive_daemon_contract",
+        "session_snapshot_streaming_response_overlay_consumes_generated_transition_cases"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-canonical-compaction-and-provider-input",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/Compaction/Strip.lean", "symbol": "Compaction.strip" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ProviderView.lean", "symbol": "Compaction.providerViewGlobal" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ProviderView.lean", "symbol": "Compaction.providerViewTurn" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/Executable.lean", "symbol": "Compaction.compactionReducerCases" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/Executable.lean", "symbol": "Compaction.compactionCursorCases" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.advanceCursor?" }
+      ],
+      "generated_groups": ["compaction_reducer_cases", "compaction_cursor_cases"],
+      "fixture_status": "summary_only",
+      "native_owner_paths": [
+        "crates/gents/src/compaction.rs",
+        "crates/gents/src/provider_input.rs",
+        "crates/gents/src/agent/daemon/request.rs",
+        "crates/gents/src/session/compaction_entries.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/tests/conformance/streaming_compaction.rs",
+        "crates/gents/tests/conformance/compaction_gate.rs",
+        "crates/gents/src/compaction/tests.rs",
+        "crates/gents/src/provider_input/tests.rs",
+        "crates/gents/tests/conformance/prompt_assembly.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Feed reconstructed native messages, not mutable response summaries, into provider sanitization and token budgeting.",
+        "Preserve assistant tool-call and user tool-result pairing across strip, provider-view, split, summary, and retained-tail boundaries.",
+        "Use native provider call IDs rather than physical tool document IDs when matching pairs and detecting reused keys.",
+        "Advance the compaction cursor only across a provider-stable published prefix below the shared sequence allocator.",
+        "Show provider-view fixpoint and prefix stability under later canonical publication, including forked headers and background notification pairs.",
+        "Replace LeanCompactionReducerCase.response_status with the modeled publication_ready, provider_fixpoint, and turn_boundary checks instead of restoring response lifecycle state.",
+        "Replace the response-status gate only after its surviving published-prefix guarantee is exercised on concrete native inputs.",
+        "The formal projection/estimate/reduction boundary has its own projection-compaction-threshold-join entry. It does not upgrade these summary-only reducer/cursor rows or prove native serialization. The real serialized-request experiment remains native.external-projected-request-threshold.",
+        "Still summary-only: the reducer and cursor cases. Their concrete row inputs must be exported before the response-status gate is replaced."
+      ],
+      "retired_bindings": [
+        "compaction::ResponseStatus",
+        "ResponseStatusIndex",
+        "AllTerminal",
+        "NoneKnown",
+        "session_has_live_response",
+        "LeanCompactionReducerCase.response_status"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-compaction-threshold-join",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.reduceCanonicalRebuildAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/Compaction.lean", "symbol": "CanonicalOutput.Execution.Compaction.canonical_composed_dispatch_binds_reconstruction" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.reduceRebuildAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.projectAndAuthorize" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_binds_exact_source" },
+        { "file": "crates/gents/proofs/Proofs/Compaction/ReductionEngine.lean", "symbol": "Compaction.ReductionEngine.composed_dispatch_is_authorized" }
+      ],
+      "constructors": [],
+      "generated_groups": ["compaction_projection_join_cases", "compaction_canonical_projection_cases", "repaired_projection_admission_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": ["crates/gents/src/provider_input.rs", "crates/gents/src/compaction.rs", "crates/gents-loop/src/loop_stream/request_assembly.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/compaction_projection_join.rs", "crates/gents/src/lean_vocab_test/compaction_canonical_projection.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "Resolve exact selected canonical identities to reconstructed native messages without silently dropping a missing, ambiguous or incomplete publication.",
+        "Drive reduction from the estimate of the projected complete request, including fixed request layers through the existing native callback; never substitute stored or presented payload sums.",
+        "Exercise equality and one-over budget, projection/estimation failure, invalid reduction partitions, and exact checkpoint-plus-suffix rebuilding.",
+        "Reproject and remeasure after reduction or provider-view repair, rejecting a still-over-budget request or one with no positive output capacity.",
+        "Controlled projection observations exercise the formal composition only. Run native.external-projected-request-threshold to validate the real serializer and estimator; native consumer coverage is still pending."
+      ],
+      "retired_bindings": []
+    },
+    {
+      "id": "projection-payload-presentation",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.payloadLengths" },
+        { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/PayloadPresentation.lean", "symbol": "Conformance.PayloadPresentationContracts.cases" }
+      ],
+      "constructors": [],
+      "generated_groups": ["canonical_payload_presentation_cases"],
+      "fixture_status": "concrete_inputs",
+      "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs"],
+      "native_status": "pending",
+      "required_cases": [
+        "Compare stored and reconstructed payload lengths for full presentation, literals, head/tail windows and missing dependencies.",
+        "This group covers reconstruction only: payload counts exclude metadata, URLs, escaping and request structure and do not establish provider sizing or a compaction decision.",
+        "The actual serialized-request estimate/threshold join is tracked separately by native.external-projected-request-threshold."
+      ],
+      "retired_bindings": []
+    },
+    {
+      "id": "projection-live-prefix-observation-order",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Transition.lean", "symbol": "StreamingResponse.Transition" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Transition.lean", "symbol": "StreamingResponse.Trace" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.BenignSourceExtension" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.reconstructOpen_grows_under_benign_arrival" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/PrefixGrowth.lean", "symbol": "StreamingResponse.live_views_do_not_rewind_under_benign_arrival" }
+      ],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/streaming.rs",
+        "crates/gents/src/agent/stream_processor.rs",
+        "crates/gents-desktop-core/src/client/observe.rs",
+        "crates/gents-desktop-core/src/client/observe/projection_store.rs",
+        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/agent/loop_stream/tests/streaming.rs",
+        "crates/gents-desktop-core/src/client/observe/tests.rs",
+        "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
+        "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
+        "crates/gents/tests/conformance/streaming_compaction.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Export ordered before/after observations and exact before/after views rather than isolated final projection summaries.",
+        "Show a contiguous open source growing from one valid UTF-8 prefix to a longer prefix without rewind under benign immutable delivery.",
+        "Interleave header arrival, closure arrival, extent segments, exact replay, foreign-source facts, denial evidence, and owner-liveness changes in distinct traces.",
+        "Keep missing ordinal observations loading or settling until reconstructable; never infer liveness solely from the absence of a closure.",
+        "Demonstrate that conflicting twins and malformed consumed runs fail closed and are excluded from the benign-extension premise.",
+        "Drive desktop reordered-query and observer-patch behavior from the same trace expectations; canonical_output_projection_cases currently exports isolated observations only."
+      ],
+      "retired_bindings": [
+        "StreamingResponse",
+        "AgentResponse.status",
+        "AgentResponse.content",
+        "AgentResponse.reasoning",
+        "AgentResponse.reasoning_progress_seq"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-canonical-fork-and-hydration",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.forkHeader" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.forkMetadataMatches" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Hydration.lean", "symbol": "CanonicalOutput.Hydration.buildManifest" },
+        { "file": "crates/gents/proofs/Proofs/SessionHydration/State.lean", "symbol": "SessionHydration.buildDocuments" },
+        { "file": "crates/gents/proofs/Proofs/SessionHydration/Receiver.lean", "symbol": "SessionHydration.projectCanonicalSnapshot" }
+      ],
+      "generated_groups": [
+        "session_hydration_decision_cases",
+        "session_hydration_closure_cases",
+        "session_hydration_apply_cases",
+        "session_hydration_progress_cases",
+        "session_hydration_durable_cases"
+      ],
+      "fixture_status": "summary_only",
+      "native_owner_paths": [
+        "crates/gents/src/session/fork.rs",
+        "crates/gents/src/agent/p2p_reconcile/session_hydration.rs",
+        "crates/gents/src/agent/p2p_reconcile/session_hydration_reconcile.rs",
+        "crates/gents-protocol/src/session_hydration.rs",
+        "crates/gents-desktop-core/src/client/query/session_transcript.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/agent/p2p_reconcile/session_hydration_closure.rs",
+        "crates/gents/tests/conformance/session_hydration.rs",
+        "crates/gents/src/session/tests.rs",
+        "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
+        "crates/gents/tests/e2e_triggers/app_collection_pairing_p2p_e2e.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Fork by copying native headers only, preserving numeric sequence, payload references, outcome, and exact origin while removing live request membership.",
+        "Reject fork metadata mismatch, reordered child headers, missing origins, conflicting origins, and denied origins with distinct outcomes.",
+        "Build an authorized transitive manifest containing selected headers, every referenced closure and extent segment, terminal selection dependencies, and recursive fork origins.",
+        "Permit authorized fork dependencies across sessions without treating arbitrary parent-session history as selected.",
+        "Keep missing dependencies loading/incomplete, denial rejected, twins conflicted, and served completion contingent on exact signed identity coverage plus reconstruction.",
+        "Exercise actual document sets and expected manifests; the currently emitted hydration booleans and counts are insufficient native reconstruction inputs."
+      ],
+      "retired_bindings": [
+        "CALL_FIELDS",
+        "SPILL_FIELDS",
+        "remap_output",
+        "remap_message",
+        "AgentToolResult"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-terminal-selection-and-subagent-final-result",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.resolveTerminal" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Terminal.lean", "symbol": "CanonicalOutput.terminalPublicationEligible" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.resolveTerminalPayload" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.absent_terminal_selection_has_no_answer" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/TerminalPayload.lean", "symbol": "CanonicalOutput.unknown_selected_header_is_not_latest" }
+      ],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents-protocol/src/output.rs",
+        "crates/gents-protocol/src/row.rs",
+        "crates/gents/src/background_tools.rs",
+        "crates/gents/src/background_completion/projection.rs",
+        "crates/gents/src/hook/persistence/subagent_bridge.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
+        "crates/gents/tests/conformance/background.rs",
+        "crates/gents/tests/e2e_subagent/r4_subagent_completion.rs",
+        "crates/gents/src/background_tools.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Resolve only the request's explicit terminal_output Message identity or explicit NoMessage; never select the latest visible assistant row.",
+        "Reject missing selection, missing or conflicting header identity, wrong request/session scope, non-assistant role, tool-delivery publication, fork publication, and ACP denial distinctly.",
+        "Reconstruct every dependency of the selected message before returning a subagent final result; missing remains incomplete and denied remains denied.",
+        "Bind child final-result reads to the authenticated physical child request and descendant edge, not a matching logical request ID or session sequence.",
+        "Ensure late background messages and unrelated headers cannot replace terminal selection after request terminalization.",
+        "Export concrete terminal selection, headers, segments, denials, expected native message or exact error; no terminal-selection fixture group currently exists."
+      ],
+      "retired_bindings": [
+        "AgentResponse.final_message_sequence",
+        "AgentResponse.materialized_message_sequence",
+        "AgentResponseFinalRow",
+        "AgentMessageContentRow",
+        "load_child_final_response"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-canonical-remote-delegated-arguments",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Delegation.lean", "symbol": "CanonicalOutput.prepareDelegatedInput" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Delegation.lean", "symbol": "CanonicalOutput.prepareDelegatedCall" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Delegation.lean", "symbol": "CanonicalOutput.receiveDelegatedInput" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.toolIntents" }
+      ],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents-protocol/src/output.rs",
+        "crates/gents-protocol/src/row.rs",
+        "crates/gents/src/tool_call_lifecycle/transition/native.rs",
+        "crates/gents/src/request_admission.rs",
+        "crates/gents/src/background_tools.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/tests/conformance/r5_cross_principal.rs",
+        "crates/gents/tests/e2e_live/subagent_delegation_live.rs",
+        "crates/gents/src/tool_call_lifecycle/query/cascade_scope_tests.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "On accepted Complete assistant request publication, reconstruct exactly the addressed tool call's argument stream and validate native JSON before copying it.",
+        "Reject Partial, recovery, fork, tool-delivery, retracted, malformed, wrong-source, unknown-call, and local-target attempts to create delegated input.",
+        "Bind copied bytes and source provenance to the exact physical addressed call, coordinator, and remote target in the publication transaction.",
+        "Ensure the remote host can consume authenticated delegated arguments without authority to hydrate the parent header, sibling streams, reasoning, text, or history.",
+        "Replay the same immutable delegated input and reject changed bytes or source identity without adding a second argument owner.",
+        "Export concrete records, message, intent, principals, expected delegated value or exact error; no canonical delegation fixture group currently exists."
+      ],
+      "retired_bindings": [
+        "AgentToolCall.args",
+        "AgentToolCall.result",
+        "AgentToolCall.partial_output_start",
+        "AgentToolCall.partial_output_end",
+        "AgentToolResult"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-provider-input-materialization-and-narrowing",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateMessageStructure" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateProviderOrder" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.validateExactProviderPositions" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.resolveMessagePayload" }
+      ],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents/src/provider_input.rs",
+        "crates/gents/src/llm/rig_compat.rs",
+        "crates/gents-loop/src/loop_stream/request_assembly.rs",
+        "crates/gents/src/agent/loop_stream.rs",
+        "crates/gents/src/compaction.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents/src/provider_input/tests.rs",
+        "crates/gents/tests/conformance/prompt_assembly.rs",
+        "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
+        "crates/gents/src/agent/loop_stream/tests/capture.rs",
+        "crates/gents/src/compaction/tests.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Materialize provider input only from fully reconstructed canonical native messages selected in stable transcript order.",
+        "Validate role/block legality, publication shape, exact provider block and part positions, payload kind, tool identity, media metadata, UTF-8, JSON arguments, and presentation ranges before provider narrowing.",
+        "Preserve signed and encrypted reasoning, native IDs, tool signatures, call IDs, additional parameters, media details, and original argument bytes through reconstruction into provider-specific conversion.",
+        "Apply provider-input sanitization and compaction only after reconstruction; never repair a missing, denied, conflicting, malformed, or illegally ordered canonical dependency into a shorter prompt.",
+        "Narrow provider-specific wire fields without changing the canonical transcript or creating a second persisted message representation.",
+        "Export ordered canonical records/messages plus the exact reconstructed native list and narrowed provider request expectation; compaction summaries and prompt sanitizer fixtures do not cover this materialization join."
+      ],
+      "retired_bindings": [
+        "decode_persisted_message",
+        "present_persisted_message",
+        "repair_provider_input",
+        "AgentMessage.content",
+        "AgentMessage.reasoning"
+      ],
+      "constructors": []
+    },
+    {
+      "id": "projection-canonical-client-observation-join",
+      "model_symbols": [
+        { "file": "crates/gents/proofs/Proofs/Client/Output.lean", "symbol": "Client.projectOutput" },
+        { "file": "crates/gents/proofs/Proofs/Client/Output.lean", "symbol": "Client.outputMissing" },
+        { "file": "crates/gents/proofs/Proofs/Client/Types.lean", "symbol": "projectHead" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" }
+      ],
+      "generated_groups": [],
+      "fixture_status": "not_exported",
+      "native_owner_paths": [
+        "crates/gents-protocol/src/client_protocol.rs",
+        "crates/gents-desktop-core/src/client/store/turns.rs",
+        "crates/gents-desktop-core/src/client/store/indexing.rs",
+        "crates/gents-desktop-core/src/client/observe/projection_store.rs",
+        "crates/gents-desktop-core/src/client/query/session_transcript.rs",
+        "crates/gents-cli/src/commands/codex_shim/turn/active.rs"
+      ],
+      "consumer_paths": [
+        "crates/gents-protocol/src/client_protocol/tests.rs",
+        "crates/gents-desktop-core/src/client/store/tests/observer_projection.rs",
+        "crates/gents-desktop-core/src/client/query/tests/projection_and_patches.rs",
+        "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
+        "crates/gents/tests/conformance/streaming_compaction.rs"
+      ],
+      "native_status": "pending",
+      "required_cases": [
+        "Derive request status only from lifecycle state while independently projecting absent, live, settling, loading, denied, conflicted, invalid, retracted, retained Partial, and published output views.",
+        "Do not turn a terminal request into running when its selected output header or payload dependency is missing.",
+        "Preserve retry-tip ambiguity rejection and supersession selection without response-status precedence or a response fallback.",
+        "Handle reordered header/segment arrival and exact duplicate observations without UI-local sync or loading heuristics.",
+        "Render only presentation-visible content while retaining native encrypted or redacted reasoning for reconstruction and provider input.",
+        "Export AttemptView plus canonical observation input and exact Client.projectOutput expectation; canonical_output_projection_cases currently covers only the output half of this join.",
+        "Drive desktop and CLI observation owners from the resulting joined fixtures rather than the stale AgentResponse readers."
+      ],
+      "retired_bindings": [
+        "client_protocol::ResponseStatus",
+        "client_protocol::InvalidResponseStatus",
+        "client_protocol::ResponseSnapshot",
+        "AttemptView.response",
+        "ClientTurnState::Streaming",
+        "RequestWithResponseStatus"
+      ],
+      "constructors": []
+    }
+]

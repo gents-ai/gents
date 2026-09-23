@@ -67,17 +67,33 @@ private def retryJson (name : String) (rows : List AgentSession.RequestFact) (pa
     ("parent_doc", toJson parentDoc), ("failed_id", toJson (1 : Nat)), ("new_id", toJson (3 : Nat)),
     ("after", (SessionState.retryFromRows? retryState indexed rows parentDoc 1 3).map
       retryStateJson |>.getD Json.null)]
-private def rowJson (r : SessionFork.Row) : Json := Json.mkObj
-  [("doc_id", toJson r.docId), ("scope", scopeJson r.scope), ("sequence", toJson r.sequence),
-   ("request_id", toJson r.requestId), ("request_doc_id", toJson r.requestDocId),
-   ("spill_refs", toJson r.spillRefs)]
+private def roleName : CanonicalOutput.MessageRole → String
+  | .system => "system"
+  | .user => "user"
+  | .assistant => "assistant"
+private def publicationJson : CanonicalOutput.MessagePublication → Json
+  | .requestExecution generation => Json.mkObj
+      [("kind", toJson "request_execution"), ("generation", toJson generation)]
+  | .requestRecovery generation => Json.mkObj
+      [("kind", toJson "request_recovery"), ("generation", toJson generation)]
+  | .toolDelivery call => Json.mkObj
+      [("kind", toJson "tool_delivery"), ("call", toJson call)]
+  | .fork origin => Json.mkObj [("kind", toJson "fork"), ("origin", toJson origin)]
+private def messageJson (message : CanonicalOutput.MessageEnvelope) : Json := Json.mkObj
+  [("doc_id", toJson message.header.id), ("session", toJson message.header.session),
+   ("message_key", toJson message.key), ("sequence", toJson message.sequence),
+   ("native_id", toJson message.nativeId), ("created_at", toJson message.createdAt),
+   ("request_doc_id", toJson message.header.request),
+   ("origin_header_id", toJson message.header.origin),
+   ("payload_refs", toJson (message.header.refs.map fun ref => Json.mkObj
+     [("close_id", toJson ref.closeId), ("stream", toJson ref.stream)])),
+   ("role", toJson (roleName message.header.role)),
+   ("publication", publicationJson message.header.publication)]
 private def historyJson (h : SessionFork.History) : Json := Json.mkObj
-  [("messages", toJson (h.messages.map rowJson)), ("calls", toJson (h.calls.map rowJson)),
-   ("spills", toJson (h.spills.map fun s => Json.mkObj
-     [("row", rowJson s.row), ("call_doc_id", toJson s.callDocId)])),
+  [("messages", toJson (h.messages.map messageJson)),
    ("compactions", toJson (h.compactions.map fun c => Json.mkObj
-     [("row", rowJson c.row), ("through_sequence", toJson c.throughSequence),
-      ("key_session", toJson c.keySession)]))]
+     [("doc_id", toJson c.id), ("session", toJson c.session),
+      ("sequence", toJson c.sequence), ("through_sequence", toJson c.throughSequence)]))]
 private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
     (agent session : Nat) (requester : Option (Option Nat)) : Json := Json.mkObj
   [("name", toJson name), ("requests", toJson (rows.map requestJson)),
@@ -86,16 +102,22 @@ private def selectionJson (name : String) (rows : List AgentSession.RequestFact)
    ("requester", toJson (requester.getD none)),
    ("selected", (AgentSession.latest rows agent session requester).map requestJson |>.getD Json.null)]
 private def forkJson (name : String) (source : SessionFork.History)
-    (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json := Json.mkObj
-  [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
+    (target : AgentSession.Scope) (cut : Nat) (authorized idle coherent : Bool) : Json :=
+  let authorization : SessionFork.SourceAuthorization :=
+    if authorized then
+      ⟨scope, source.messages.map (·.header.id), source.compactions.map (·.id)⟩
+    else
+      ⟨{ scope with agent := scope.agent + 1 }, source.messages.map (·.header.id),
+        source.compactions.map (·.id)⟩
+  Json.mkObj [("name", toJson name), ("source", historyJson source), ("parent", scopeJson scope),
    ("child", scopeJson target), ("exclusive_sequence_cut", toJson cut),
    ("document_id_offset", toJson (1000 : Nat)), ("authorized", toJson authorized),
    ("idle", toJson idle), ("coherent", toJson coherent),
-   ("published", (SessionFork.publish source scope target remap cut authorized idle coherent).map
+   ("published", (SessionFork.publish source scope target remap childKey cut authorization idle coherent).map
       historyJson |>.getD Json.null)]
 
-/-- Full copy inputs and computed durable outputs, not a names-and-PASS manifest.
-The exclusive sequence cut is resolved from the user-turn API by the adapter. -/
+/-- Header-only fork inputs and computed durable outputs. Payload/tool/segment
+rows remain origin dependencies and are never copied or remapped. -/
 def sessionDocumentsJson : String := (Json.mkObj
   [("document_reference_encoding", toJson "interned collection plus _docID, not raw _docID"),
    ("retry", toJson [
@@ -129,15 +151,12 @@ def sessionDocumentsJson : String := (Json.mkObj
       forkJson "exact_copy" history child 1 true true true,
       forkJson "empty_prefix" history child 0 true true true,
       forkJson "duplicate_message_sequence" duplicateSequenceHistory child 1 true true true,
-      forkJson "call_without_source_message" orphanCallHistory child 1 true true true,
       forkJson "wrong_requester" history { child with requester := none } 1 true true true,
       forkJson "busy_source" history child 1 true false true,
       forkJson "mixed_generation" history child 1 true true false,
       forkJson "unauthorized" history child 1 false true true,
       forkJson "cursor_beyond_source"
-        { history with compactions := [⟨sourceRow 4 1, 99, 10⟩] } child 100 true true true,
+        { history with compactions := [⟨4, scope.session, 1, 99⟩] } child 100 true true true,
       forkJson "invalid_compaction_sequence"
-        { history with compactions := [⟨sourceRow 4 2, 0, 10⟩] } child 1 true true true,
-      forkJson "cut_breaks_spill_reference"
-        splitLinkHistory child 1 true true true])]).compress
+        { history with compactions := [⟨4, scope.session, 2, 0⟩] } child 1 true true true])]).compress
 end Conformance.Contracts

@@ -120,8 +120,6 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
     // Conformance guard for the loop's own threading: across a multi-tool,
     // multi-turn run, every request's history must pair calls with results and
     // keep assistant content provider-ordered — by construction, no sanitizer.
-    let (_node, hook) = test_hook().await;
-
     let model = ScriptedModel::new_turns(vec![
         // Turn 1: text + reasoning + two tool calls in one assistant turn.
         vec![
@@ -149,7 +147,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("run the tools"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -177,8 +175,6 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     // — no call site can forget the sanitizer. Feed a dirty history (unpaired
     // call, orphaned result, text-after-call ordering) and assert the request
     // on the wire satisfies the provider invariants.
-    let (_node, hook) = test_hook().await;
-
     let unpaired_call = crate::llm::message::ToolCall {
         id: "call-unpaired".to_string(),
         call_id: Some("call-unpaired".to_string()),
@@ -232,7 +228,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     ]);
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("continue"),
         dirty_history,
         Arc::new(Vec::new()),
@@ -333,7 +329,7 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
         }
     }
 
-    let (node, hook) = test_hook().await;
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     // The wire parser could not parse the corrupt bytes, so rig carries them as
     // a raw Value::String — exactly the shape persisted in the production store.
@@ -356,40 +352,24 @@ async fn corrupt_589_tool_args_salvage_runs_and_history_stays_object_shaped() {
 
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        Some(hook.clone()),
         Message::user("describe list_hosts"),
         Vec::new(),
         Arc::new(tools),
-        config(4),
+        owned_config(4),
     );
-    futures::pin_mut!(stream);
-
-    let mut tool_results = Vec::new();
-    while let Some(item) = stream.next().await {
-        if let LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
-            StreamedUserContent::ToolResult { tool_result, .. },
-        )) = item.expect("loop item should be Ok")
-        {
-            tool_results.push(
-                tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
-                    &tool_result.content.first(),
-                ))
-                .to_string(),
-            );
-        }
-    }
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    assert!(collected.error.is_none(), "{:?}", collected.error);
 
     // (a) The intended call ran: salvage recovered `tool_name: list_hosts`.
     assert_eq!(
-        tool_results,
+        collected.tool_results,
         vec!["described:list_hosts".to_string()],
         "the salvageable #589 payload must run the intended call, not waste a turn"
     );
 
-    // (b) The next provider request carries object-shaped arguments. (The
-    // durable AgentMessage fence lives in the StreamProcessor harness —
-    // `stream_processor::tests::corrupt_tool_call_arguments_persist_object_shaped`
-    // — since the bare generator does not persist assistant turns.)
+    // (b) The next provider request carries object-shaped arguments after the
+    // owned StreamProcessor has published the accepted turn.
     let histories = model.seen_histories().await;
     assert_eq!(histories.len(), 2);
     assert_all_history_tool_args_object_shaped(&histories[1]);
@@ -429,7 +409,7 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
         }
     }
 
-    let (node, hook) = test_hook().await;
+    let (node, hook, writer, mut lifecycle) = owned_test_hook().await;
 
     let model = ScriptedModel::new_turns(vec![
         vec![
@@ -449,16 +429,18 @@ async fn nonobject_tool_args_never_reach_durable_history_or_provider() {
 
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        Some(hook.clone()),
         Message::user("describe"),
         Vec::new(),
         Arc::new(tools),
-        config(4),
+        owned_config(4),
     );
-    futures::pin_mut!(stream);
-    while let Some(item) = stream.next().await {
-        item.expect("loop must not fail; non-object args are notified, not raised");
-    }
+    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    assert!(
+        collected.error.is_none(),
+        "non-object args must be notified, not raised: {:?}",
+        collected.error
+    );
 
     // The started call terminalized failed/argumentInvalid — never a live
     // completed call carrying poison (#589's persist gate).
@@ -654,13 +636,8 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
     );
 
     for case in cases {
-        let builder = LayeredPromptBuilder::for_behavior(
-            "system prompt",
-            "fence",
-            &["bash"],
-            false,
-            &[],
-        );
+        let builder =
+            LayeredPromptBuilder::for_behavior("system prompt", "fence", &["bash"], false, &[]);
 
         let conversation = (0..case.conversation_len)
             .map(|index| Message::user(format!("conversation-{index}")))
@@ -679,10 +656,7 @@ async fn generated_layer_cases_pin_the_assembled_request_order() {
 
         let mut assembled = skill_reminders;
         assembled.extend(built.messages);
-        assembled.extend(super::assemble_new_messages(
-            None,
-            Message::user("prompt"),
-        ));
+        assembled.extend(super::assemble_new_messages(None, Message::user("prompt")));
 
         // The preamble is a field on the completion request, not a message.
         assert!(

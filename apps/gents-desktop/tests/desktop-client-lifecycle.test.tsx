@@ -80,7 +80,7 @@ describe("desktop client restart selection ordering", () => {
     );
     await waitFor(() => expect(api.fetchDesktopSnapshot).toHaveBeenCalledOnce());
 
-    let starting!: Promise<Record<string, unknown> | null>;
+    let starting!: Promise<Record<string, unknown>>;
     act(() => {
       starting = result.current.ensureDesktopClientStarted();
     });
@@ -175,13 +175,15 @@ describe("desktop client restart selection ordering", () => {
     );
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    let starting!: Promise<Record<string, unknown> | null>;
+    let starting!: Promise<Record<string, unknown>>;
     act(() => {
       starting = result.current.ensureDesktopClientStarted();
     });
     await act(async () => result.current.refreshSnapshot());
     start.reject(new Error("stale start failed"));
-    await act(async () => starting);
+    await act(async () => {
+      await expect(starting).rejects.toThrow("stale start failed");
+    });
 
     expect(result.current.snapshot).toBe(refreshed);
     expect(result.current.startupPhase).toBe("ready");
@@ -216,7 +218,9 @@ describe("desktop client restart selection ordering", () => {
     });
     await act(async () => result.current.refreshSnapshot());
     start.reject(new Error("start failed"));
-    await act(async () => pending);
+    await act(async () => {
+      await expect(pending).rejects.toThrow("start failed");
+    });
     expect(result.current.startupPhase).toBe("client-error");
     expect(result.current.starting).toBe(false);
     expect(setError).toHaveBeenCalledWith("Error: start failed");

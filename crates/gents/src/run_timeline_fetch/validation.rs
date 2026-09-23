@@ -93,20 +93,25 @@ pub(super) fn validate_request_scoped_rows(
     bindings: &BTreeMap<String, String>,
     messages: &[TimelineMessageRow],
     tool_calls: &[TimelineToolCallRow],
-    responses: &[TimelineResponseRow],
     inference_calls: &[TimelineInferenceCallRow],
     compactions: &[TimelineCompactionRow],
     provider_context_reductions: &[TimelineProviderContextReductionRow],
     rendered_requests: &[TimelineRenderedRequestRow],
 ) -> Result<()> {
     for row in messages {
-        validate_optional_request_binding(
-            bindings,
-            "AgentMessage",
-            row.doc_id.as_deref().unwrap_or("<unknown>"),
-            row.request_id.as_deref(),
-            row.request_doc_id.as_deref(),
-        )?;
+        // Messages no longer carry a logical request label; the physical
+        // request doc is the only request reference (#1425).
+        anyhow::ensure!(
+            row.request_doc_id == row.header.request_doc_id,
+            "AgentMessage row disagrees with its canonical request reference"
+        );
+        if let Some(doc_id) = row.header.request_doc_id.as_deref() {
+            anyhow::ensure!(
+                bindings.contains_key(doc_id),
+                "AgentMessage {} names an unresolved physical request {doc_id}",
+                row.doc_id.as_deref().unwrap_or(&row.header.message_key)
+            );
+        }
     }
     for row in tool_calls {
         validate_optional_request_binding(
@@ -114,15 +119,6 @@ pub(super) fn validate_request_scoped_rows(
             "AgentToolCall",
             row.doc_id.as_deref().unwrap_or(&row.tool_call_id),
             row.request_id.as_deref(),
-            row.request_doc_id.as_deref(),
-        )?;
-    }
-    for row in responses {
-        validate_required_request_binding(
-            bindings,
-            "AgentResponse",
-            row.doc_id.as_deref().unwrap_or(&row.request_id),
-            &row.request_id,
             row.request_doc_id.as_deref(),
         )?;
     }

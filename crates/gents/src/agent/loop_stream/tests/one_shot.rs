@@ -1,8 +1,9 @@
 #[tokio::test]
-async fn run_loop_to_text_persists_assistant_reply() {
-    // Regression: one-shot (run_loop_to_text) must persist the assistant reply,
-    // not just the user prompt.
-    let (node, hook) = test_hook().await;
+async fn run_loop_to_text_returns_the_final_assistant_reply() {
+    // Ownership mapping: the durable assistant-reply regression that lived here
+    // is owned by the StreamProcessor/canonical-writer layer
+    // (crates/gents/src/agent/stream_processor/tests.rs, FinalResponse ->
+    // publish_native_turn). This auxiliary only returns the final text.
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("the answer".to_string()),
         RawStreamingChoice::FinalResponse(()),
@@ -10,7 +11,6 @@ async fn run_loop_to_text_persists_assistant_reply() {
 
     let reply = run_loop_to_text(
         model,
-        Some(hook.clone()),
         Message::user("the question"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -19,26 +19,17 @@ async fn run_loop_to_text_persists_assistant_reply() {
     .await
     .expect("run_loop_to_text should succeed");
     assert_eq!(reply, "the answer");
-
-    let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
-        .await
-        .unwrap();
-    assert!(
-        history.iter().any(|message| matches!(message,
-            Message::Assistant { content, .. }
-                if content.iter().any(|c| matches!(c, AssistantContent::Text(text)
-                    if text.text == "the answer")))),
-        "one-shot must persist the assistant reply; history: {history:?}"
-    );
 }
 
 #[tokio::test]
-async fn run_loop_to_text_persists_tool_using_transcript() {
-    // Regression: for tool-using one-shots, both the assistant tool-call turn and
-    // the tool-result message must be persisted (tool-result persistence gates on
-    // the assistant turn being persisted first).
-    let (node, hook) = test_hook().await;
+async fn run_loop_to_text_threads_tool_calls_and_returns_the_final_reply() {
+    // Ownership mapping: the durable tool-transcript regression that lived here
+    // (assistant tool-call turn + tool-result message persisted) is owned by the
+    // StreamProcessor/canonical-writer layer
+    // (crates/gents/src/agent/stream_processor/tests.rs, ToolCall ->
+    // persist_inflight_assistant_turn, ToolResult -> pair closure). The
+    // auxiliary must still surface tool returns through the stream and return
+    // the final reply.
     let model = ScriptedModel::new_turns(vec![
         echo_tool_turn(),
         vec![
@@ -49,7 +40,6 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
 
     let reply = run_loop_to_text(
         model,
-        Some(hook.clone()),
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -58,36 +48,17 @@ async fn run_loop_to_text_persists_tool_using_transcript() {
     .await
     .expect("run_loop_to_text should succeed");
     assert_eq!(reply, "done");
-
-    let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
-        .await
-        .unwrap();
-    assert!(
-        history.iter().any(|message| matches!(message,
-            Message::User { content }
-                if content.iter().any(|c| matches!(c, UserContent::ToolResult(result)
-                    if tool_result_text(first_content(&result.content)) == "ECHOED")))),
-        "tool-using one-shot must persist the tool-result message; history: {history:?}"
-    );
-    assert!(
-        history.iter().any(|message| matches!(message,
-            Message::Assistant { content, .. }
-                if content.iter().any(|c| matches!(c, AssistantContent::Text(text)
-                    if text.text == "done")))),
-        "tool-using one-shot must persist the final assistant reply; history: {history:?}"
-    );
 }
 
 #[tokio::test(start_paused = true)]
-async fn run_loop_to_text_retract_persists_only_the_resample() {
-    // The one-shot consumer must reset its accumulator on TurnRetracted.
-    // Without the reset, the
-    // retracted partial ("Based on") concatenates with the resample and the
-    // durable assistant message becomes "Based onThe answer is 42" — corrupting
-    // the transcript that feeds future history and training capture, even though
-    // the returned string is correct. This fences that exact regression.
-    let (node, hook) = test_hook().await;
+async fn run_loop_to_text_retract_discards_the_partial_before_the_resample() {
+    // The nonpersistent one-shot consumer must reset its accumulator on
+    // TurnRetracted so the returned final text is the resample, not the
+    // retracted partial concatenated with it. The durable-side regression
+    // (a retracted partial must never persist as an assistant message) is owned
+    // by the StreamProcessor layer
+    // (crates/gents/src/agent/stream_processor/tests.rs,
+    // turn_retraction_resets_live_tail_and_discards_partial_assistant).
     let model = ScriptedModel::new_calls(vec![
         ScriptedCall::TurnWithMidStreamError(
             vec![RawStreamingChoice::Message("Based on".to_string())],
@@ -101,7 +72,6 @@ async fn run_loop_to_text_retract_persists_only_the_resample() {
 
     let reply = run_loop_to_text(
         model,
-        Some(hook.clone()),
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -110,26 +80,4 @@ async fn run_loop_to_text_retract_persists_only_the_resample() {
     .await
     .expect("run_loop_to_text should succeed after a mid-stream retract");
     assert_eq!(reply, "The answer is 42");
-
-    let session_id = hook.session_id().await.expect("session id");
-    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
-        .await
-        .unwrap();
-    let assistant_texts: Vec<String> = history
-        .iter()
-        .filter_map(|message| match message {
-            Message::Assistant { content, .. } => Some(content),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|content| match content {
-            AssistantContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        assistant_texts,
-        vec!["The answer is 42".to_string()],
-        "retract must discard the partial; persisted assistant text: {assistant_texts:?}"
-    );
 }

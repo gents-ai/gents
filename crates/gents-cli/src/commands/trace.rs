@@ -19,7 +19,7 @@ use gents::trace_export::{
     latency_ms, raw_message_json, AmyToolCallTraceRecord,
 };
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::cli::args::{
@@ -394,6 +394,14 @@ fn projection_redaction_mode(arg: TraceProjectionRedactionArg) -> ProjectionReda
     }
 }
 
+#[derive(Deserialize)]
+struct TraceToolSelection {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    request_id: String,
+    request_doc_id: String,
+}
+
 async fn trace_export(args: TraceExportArgs) -> Result<()> {
     let (access, _home_dir) =
         crate::resolve_config_access(args.home.as_deref(), args.graphql.as_deref()).await?;
@@ -430,26 +438,39 @@ async fn trace_export(args: TraceExportArgs) -> Result<()> {
         String::new()
     };
     let query = format!(
-        r#"{{AgentToolCall({filter} order:{{started_at:DESC}}, limit:{}) {{_docID request_doc_id request_id session_id message_sequence tool_name tool_call_id args result lifecycle_state tool_failure_class started_at completed_at}}}}"#,
+        r#"{{AgentToolCall({filter} order:{{started_at:DESC}}, limit:{}) {{_docID request_doc_id request_id}}}}"#,
         args.limit
     );
-    let calls: Vec<TimelineToolCallRow> = load_rows(&access, "AgentToolCall", &query).await?;
+    let calls: Vec<TraceToolSelection> = load_rows(&access, "AgentToolCall", &query).await?;
     let mut records = Vec::with_capacity(calls.len());
     for call in calls {
-        let rows = match (call.request_id.as_deref(), call.request_doc_id.as_deref()) {
-            (Some(id), Some(_)) => {
-                if !timelines.contains_key(id) {
-                    timelines.insert(id.to_owned(), load_run_timeline_rows(&access, id).await?);
-                }
-                timelines.get(id)
-            }
-            (None, None) => None,
-            _ => anyhow::bail!(
-                "tool call {} has an incomplete request identity",
-                call.tool_call_id
-            ),
-        };
-        records.push(build_record(&call, rows, &args)?);
+        if !timelines.contains_key(&call.request_id) {
+            timelines.insert(
+                call.request_id.clone(),
+                load_run_timeline_rows(&access, &call.request_id).await?,
+            );
+        }
+        let rows = &timelines[&call.request_id];
+        anyhow::ensure!(
+            rows.request.doc_id.as_deref() == Some(call.request_doc_id.as_str()),
+            "selected tool {} conflicts with the physical request identity",
+            call.doc_id
+        );
+        // The timeline owner reconstructs arguments/results from canonical
+        // headers and segments. Selection must not create a second payload
+        // reader or silently export empty defaults from lifecycle rows.
+        let mut matching = rows
+            .tool_calls
+            .iter()
+            .filter(|tool| tool.doc_id.as_deref() == Some(call.doc_id.as_str()));
+        let tool = matching
+            .next()
+            .context("selected tool is absent from canonical timeline")?;
+        anyhow::ensure!(
+            matching.next().is_none(),
+            "duplicate physical tool in canonical timeline"
+        );
+        records.push(build_record(tool, Some(rows), &args)?);
     }
     write_jsonl(args.output_file.as_deref(), &records)
 }
@@ -470,12 +491,6 @@ fn build_record(
             tool_call.tool_call_id
         );
     }
-    let response = rows.and_then(|rows| {
-        rows.responses.iter().find(|response| {
-            response.request_doc_id == rows.request.doc_id
-                && response.request_id == rows.request.request_id
-        })
-    });
     let mut failure_parts = Vec::new();
     if let Some(request) = request {
         push_nonempty(
@@ -483,10 +498,6 @@ fn build_record(
             request.lifecycle_state.map(|state| state.as_str()),
         );
         push_nonempty(&mut failure_parts, request.failure_reason.as_deref());
-    }
-    if let Some(response) = response {
-        push_nonempty(&mut failure_parts, response.status.as_deref());
-        push_nonempty(&mut failure_parts, response.error_message.as_deref());
     }
     let request_failure = (!failure_parts.is_empty()).then(|| failure_parts.join("\n"));
     let request_failure_class = analyze_request_failure(request_failure.as_deref());
@@ -499,7 +510,7 @@ fn build_record(
     let analysis = analyze_tool_call_with_persisted_outcome(
         &tool_call.tool_name,
         &tool_call.args,
-        &tool_call.result,
+        tool_call.result.as_deref().unwrap_or_default(),
         lifecycle_state,
         tool_call.tool_failure_class.as_deref(),
     );
@@ -509,15 +520,20 @@ fn build_record(
                 message.sequence == sequence
                     && message.session_id == tool_call.session_id
                     && message.request_doc_id == rows.request.doc_id
-                    && message.request_id.as_deref() == Some(rows.request.request_id.as_str())
             })
         })
     });
-    let raw_assistant_message = message.map(|message| raw_message_json(&message.content));
+    // Native message plumbing: the canonical reader's reconstructed native
+    // message is the only source. Serialization errors propagate (never
+    // silently dropped); the raw tool call is matched by exact tool-call ID
+    // within that message — a tool name is not identity.
+    let raw_assistant_message = match message {
+        Some(message) => Some(raw_message_json(&message.message)?),
+        None => None,
+    };
     let raw_tool_call_json = message.and_then(|message| {
         extract_raw_tool_call_json(
-            &message.role,
-            &message.content,
+            &message.message,
             &tool_call.tool_call_id,
             &tool_call.tool_name,
         )
@@ -535,6 +551,15 @@ fn build_record(
             .all(|call| call.backend_id.as_ref() == Some(first))
             .then(|| first.clone())
     });
+    // The canonical request lifecycle owns terminal state and failure. Keep
+    // the legacy-shaped export columns for the external trace schema, but do
+    // not resurrect an AgentResponse observation or logical-ID join.
+    let canonical_terminal_status = request
+        .and_then(|request| request.lifecycle_state)
+        .map(|state| state.as_str().to_string());
+    let canonical_terminal_error = request
+        .and_then(|request| request.failure_reason.clone())
+        .filter(|reason| !reason.trim().is_empty());
     Ok(AmyToolCallTraceRecord {
         run_id: args.run_id.clone(),
         case_id: args.case_id.clone(),
@@ -547,8 +572,8 @@ fn build_record(
             .and_then(|request| request.lifecycle_state)
             .map(|state| state.as_str().to_string()),
         request_failure_reason: request.and_then(|request| request.failure_reason.clone()),
-        response_status: response.and_then(|response| response.status.clone()),
-        response_error_message: response.and_then(|response| response.error_message.clone()),
+        response_status: canonical_terminal_status,
+        response_error_message: canonical_terminal_error,
         request_failure_class,
         backend_id,
         model_name,
@@ -565,7 +590,7 @@ fn build_record(
         validation_errors: analysis.validation_errors,
         repair_attempt: None,
         final_arguments_sent: analysis.final_arguments_sent,
-        tool_result: tool_call.result.clone(),
+        tool_result: tool_call.result.clone().unwrap_or_default(),
         native_tool_output: analysis.native_tool_output,
         tool_result_ok: analysis.tool_result_ok,
         tool_call_completed: lifecycle_state == ToolCallState::Completed,
@@ -650,7 +675,7 @@ mod tests {
             tool_call_id: "call".into(),
             tool_name: "bash".into(),
             args: "{}".into(),
-            result: "done".into(),
+            result: Some("done".into()),
             lifecycle_state: Some("completed".into()),
             message_sequence: Some(3),
             ..Default::default()
@@ -686,6 +711,9 @@ mod tests {
     #[test]
     fn export_uses_only_matching_historical_observations_and_explicit_labels() {
         let mut rows = rows();
+        rows.request.lifecycle_state =
+            Some(gents_protocol::request_lifecycle::RequestLifecycleState::Failed);
+        rows.request.failure_reason = Some("canonical terminal failure".into());
         rows.inference_calls = vec![
             TimelineInferenceCallRow {
                 request_id: "request".into(),
@@ -707,13 +735,29 @@ mod tests {
             ..Default::default()
         }];
         rows.messages.push(TimelineMessageRow {
-            request_id: Some("request".into()),
+            doc_id: None,
             request_doc_id: Some("foreign".into()),
             session_id: "session".into(),
             sequence: 3,
-            role: "assistant".into(),
-            content: "foreign content".into(),
-            ..Default::default()
+            timestamp: None,
+            agent_did: None,
+            header: gents_protocol::output::TranscriptMessage {
+                message_key: "session:3".into(),
+                session_id: "session".into(),
+                agent_did: "did:test:agent".into(),
+                requester_did: None,
+                request_doc_id: Some("foreign".into()),
+                publication: gents_protocol::output::MessagePublication::RequestExecution {
+                    execution_generation: "gen-1".into(),
+                },
+                outcome: gents_protocol::output::OutputOutcome::Complete,
+                sequence: 3,
+                role: gents_protocol::output::MessageRole::Assistant,
+                native_id: None,
+                blocks: Vec::new(),
+                created_at: "2026-01-01T00:00:03Z".into(),
+            },
+            message: gents_protocol::message::Message::assistant("foreign content"),
         });
         let record = build_record(&call(), Some(&rows), &args()).unwrap();
         assert_eq!(record.run_id.as_deref(), Some("run"));
@@ -721,6 +765,11 @@ mod tests {
         assert_eq!(record.backend_id.as_deref(), Some("observed-backend"));
         assert_eq!(record.model_name.as_deref(), Some("observed-model"));
         assert_eq!(record.prompt.as_deref(), Some("prompt"));
+        assert_eq!(record.response_status.as_deref(), Some("failed"));
+        assert_eq!(
+            record.response_error_message.as_deref(),
+            Some("canonical terminal failure")
+        );
         assert!(record.inference_profile_id.is_none());
         assert!(record.raw_assistant_message.is_none());
         rows.inference_calls.push(TimelineInferenceCallRow {

@@ -748,7 +748,7 @@ async fn run_eval_trial(
             stages::acceptance(async {
                 let onboarding = stages::execute(
                     &activation,
-                    db.node.as_ref(),
+                    &db.node,
                     &agent_did,
                     &setup_behavior_id,
                     "onboarding",
@@ -779,7 +779,7 @@ async fn run_eval_trial(
                 &evidence,
                 stages::acceptance(cases::verify_builder_execution(
                     &activation,
-                    db.node.as_ref(),
+                    &db.node,
                     &agent_did,
                     &user_home,
                     &evidence,
@@ -795,7 +795,7 @@ async fn run_eval_trial(
                 stages::acceptance(async {
                     cases::verify_skill_workflow(
                         &activation,
-                        db.node.as_ref(),
+                        &db.node,
                         &agent_did,
                         &setup_behavior_id,
                         &workspace,
@@ -803,7 +803,7 @@ async fn run_eval_trial(
                     )
                     .await?;
                     verify_configuration(
-                        db.node.as_ref(),
+                        &db.node,
                         &agent_did,
                         &setup_behavior_id,
                         &user_home,
@@ -823,7 +823,7 @@ async fn run_eval_trial(
                 stages::acceptance(async {
                     cases::verify_document_automation(
                         &activation,
-                        db.node.as_ref(),
+                        &db.node,
                         &agent_did,
                         &setup_behavior_id,
                         &evidence,

@@ -129,7 +129,7 @@ impl Tool for DefraQueryTool {
                 "Read documents from a DefraDB collection with a structured, read-only query. \
                  Provide a collection name, the fields to return, an optional DefraDB filter \
                  object, and an optional limit. Returns JSON: {{collection, count, results}}. \
-                 Use this to inspect agent state and traces (e.g. AgentRequest, AgentResponse, \
+                 Use this to inspect agent state and traces (e.g. AgentRequest, AgentOutputSegment, \
                  AgentMessage, AgentToolCall, AgentSession) instead of hand-writing GraphQL. \
                  To discover a collection's queryable fields before guessing, call with \
                  fields: [\"*\"] — this returns the field inventory (names and types) instead \

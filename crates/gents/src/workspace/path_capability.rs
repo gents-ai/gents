@@ -149,7 +149,11 @@ impl WorkspacePathCapability {
                     if alias_key(spelling) != wanted_alias {
                         continue;
                     }
-                    ensure!(spelling == *component, "workspace path spelling/alias mismatch: requested {component}, found {spelling} in {}", parent.display());
+                    ensure!(
+                        spelling == *component,
+                        "workspace path spelling/alias mismatch: requested {component}, found {spelling} in {}",
+                        parent.display()
+                    );
                     ensure!(exact.is_none(), "ambiguous workspace path: {path}");
                     exact = Some(entry.path());
                 }

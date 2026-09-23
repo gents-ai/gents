@@ -35,8 +35,8 @@ pub struct AgentRequest {
     pub created_at: String,
     pub deadline: Option<String>,
     pub execution_generation: Option<String>,
+    pub execution_lease_secs: Option<i64>,
     pub execution_lease_expires_at: Option<String>,
-    pub execution_progress_seq: u64,
     pub subagent_depth: u32,
     pub caused_by_parent_request_id: Option<String>,
     pub caused_by_parent_request_doc_id: Option<String>,
@@ -77,6 +77,12 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             .transpose()
             .context("agent request subagent_depth must fit in u32")?
             .unwrap_or(0);
+        let execution_lease_secs = match row.execution_lease_secs {
+            Some(secs) if secs < 0 => {
+                anyhow::bail!("agent request execution_lease_secs must be non-negative");
+            }
+            other => other,
+        };
         let request = Self {
             doc_id: row.doc_id.context("agent request is missing _docID")?,
             request_id: row.request_id,
@@ -99,13 +105,8 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
                 .context("agent request is missing created_at")?,
             deadline: normalize_optional_string(row.deadline),
             execution_generation: normalize_optional_string(row.execution_generation),
+            execution_lease_secs,
             execution_lease_expires_at: normalize_optional_string(row.execution_lease_expires_at),
-            execution_progress_seq: row
-                .execution_progress_seq
-                .map(u64::try_from)
-                .transpose()
-                .context("agent request execution_progress_seq must fit in u64")?
-                .unwrap_or(0),
             subagent_depth,
             caused_by_parent_request_id: row.caused_by_parent_request_id,
             caused_by_parent_request_doc_id: row.caused_by_parent_request_doc_id,

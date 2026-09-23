@@ -104,16 +104,16 @@ pub(super) async fn run_monitor_trial(
             reporting::write_json_new(&evidence.join("monitor-preview-before.json"), &preview_before)?;
             let before = configuration_snapshot(db.node.as_ref(), &owner).await?;
             stages::checked(CASES[0], &evidence, stages::acceptance(async {
-                let preview = run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-preview", &render(MONITOR_PREVIEW, "{{ROOT}}", &root), &evidence).await?;
+                let preview = run_stage(&activation, &db.node, &owner, &setup, "monitor-preview", &render(MONITOR_PREVIEW, "{{ROOT}}", &root), &evidence).await?;
                 let after = preview_snapshot(db.node.as_ref()).await.map_err(stages::infrastructure)?;
                 reporting::write_json_new(&evidence.join("monitor-preview-after.json"), &after).map_err(stages::infrastructure)?;
                 ensure!(after == preview_before, "preview mutated canonical configuration or schema");
-                let calls = tool_calls(db.node.as_ref(), &preview.request_id).await.map_err(stages::infrastructure)?;
+                let calls = tool_calls(&db.node, &preview.request_id).await.map_err(stages::infrastructure)?;
                 assert_preview_calls(&calls)?;
                 Ok(())
             })).await?;
             let configured = stages::checked(CASES[1], &evidence, stages::acceptance(async {
-                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-configure", &render(MONITOR_APPROVE, "{{ROOT}}", &root), &evidence).await?;
+                run_stage(&activation, &db.node, &owner, &setup, "monitor-configure", &render(MONITOR_APPROVE, "{{ROOT}}", &root), &evidence).await?;
                 let snapshot = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
                 let behavior = new_working_behavior(&before, &snapshot)?;
                 ensure!(behavior["inference_profile_id"] == "onboarding-medium");
@@ -132,7 +132,7 @@ pub(super) async fn run_monitor_trial(
             let automation_before = mailbox_automation(db.node.as_ref(), &owner, id).await?;
             reporting::write_json_new(&evidence.join("monitor-automation-config.json"), &automation_before)?;
             stages::checked(CASES[2], &evidence, stages::acceptance(async {
-                run_stage(&activation, db.node.as_ref(), &owner, &setup, "monitor-edit-in-place", &MONITOR_EDIT.replace("{{BEHAVIOR_ID}}", id), &evidence).await?;
+                run_stage(&activation, &db.node, &owner, &setup, "monitor-edit-in-place", &MONITOR_EDIT.replace("{{BEHAVIOR_ID}}", id), &evidence).await?;
                 let mut after = configuration_snapshot(db.node.as_ref(), &owner).await.map_err(stages::infrastructure)?;
                 let old_prompt = behavior_context(&configured, behavior)?["system_prompt"].as_str().context("prompt missing")?;
                 let context = after["contexts"].as_array_mut().context("contexts missing")?.iter_mut().find(|c| c["context_id"] == behavior["context_id"]).context("original context missing")?;
@@ -147,7 +147,7 @@ pub(super) async fn run_monitor_trial(
             let mut first = Vec::new();
             for (index, case) in [(3, "monitor-mailbox-output"), (4, "monitor-deduplicate")] {
                 stages::checked(CASES[index], &evidence, stages::acceptance(async {
-                    submit_mailbox_input(db.node.as_ref(), &automation_before, id, case, &evidence).await?;
+                    submit_mailbox_input(&db.node, &automation_before, id, case, &evidence).await?;
                     let rows = sorted(super::rows(db.node.as_ref(), query, "MailboxItem").await.map_err(stages::infrastructure)?, "item_key");
                     reporting::write_json_new(&evidence.join(format!("{case}-mailbox.json")), &rows)?;
                     ensure!(!rows.is_empty(), "automation produced no mailbox output");
@@ -432,7 +432,7 @@ async fn mailbox_automation(
 }
 
 async fn submit_mailbox_input(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     automation: &Value,
     behavior: &str,
     case: &str,
@@ -631,7 +631,7 @@ async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
     let setup = gents::default_inference_profile_id_for_behavior(&behavior);
     for effort in [Some(gents::config::ReasoningEffort::High), None] {
         install_onboarding_profiles(
-            db.node.as_ref(),
+            &db.node,
             &owner,
             crate::support::live_inference::D4F_BACKEND_ID,
             "test-model",
@@ -847,11 +847,18 @@ fn assert_global_negatives(snapshot: &Value, setup_behavior_id: &str) -> Result<
 }
 
 pub(super) async fn tool_calls(
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     request_id: &str,
 ) -> Result<Vec<Value>> {
-    let request_id = gents::graphql::escape_graphql_string(request_id);
-    super::rows(node, &format!(r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{tool_name lifecycle_state tool_failure_class args result}} }}"#), "AgentToolCall").await
+    Ok(gents::run_timeline_fetch::load_run_timeline_rows(
+        &gents::ConfigAccess::Local(node.clone()),
+        request_id,
+    )
+    .await?
+    .tool_calls
+    .into_iter()
+    .map(serde_json::to_value)
+    .collect::<Result<Vec<_>, _>>()?)
 }
 
 fn successful_shell_call(calls: &[Value]) -> bool {
@@ -910,7 +917,7 @@ fn rejected_forbidden_root(calls: &[Value], forbidden_root: &Path) -> bool {
 
 async fn run_stage(
     activation: &super::stages::ActivationFence,
-    node: &gents::defra_node::EmbeddedNode,
+    node: &std::sync::Arc<gents::defra_node::EmbeddedNode>,
     owner: &str,
     behavior: &str,
     stage: &str,
@@ -979,7 +986,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     let model = super::model_name();
     let (agent_did, setup_behavior_id) =
         crate::support::live_inference::bind_d4f_backend_for_model(
-            db.node.as_ref(),
+            &db.node,
             identity.as_ref(),
             &model,
         )
@@ -1033,7 +1040,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     let phase_one = async {
         let fresh = run_stage(
             &activation,
-            db.node.as_ref(),
+            &db.node,
             &agent_did,
             &setup_behavior_id,
             "onboarding-fresh-setup",
@@ -1058,7 +1065,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
 
         let task = run_stage(
             &activation,
-            db.node.as_ref(),
+            &db.node,
             &agent_did,
             &builder_id,
             "onboarding-harmless-task",
@@ -1075,14 +1082,14 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
                 == "SMALL SAFE TASK\n"
         );
         ensure!(
-            successful_shell_call(&tool_calls(db.node.as_ref(), &task.request_id).await?),
+            successful_shell_call(&tool_calls(&db.node, &task.request_id).await?),
             "harmless task has no successful shell execution evidence"
         );
 
         for pass in 1..=2 {
             run_stage(
                 &activation,
-                db.node.as_ref(),
+                &db.node,
                 &agent_did,
                 &setup_behavior_id,
                 &format!("onboarding-reentry-{pass}"),
@@ -1102,7 +1109,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
             .replace("{{PROJECT_ROOT}}", &user_home.to_string_lossy());
         run_stage(
             &activation,
-            db.node.as_ref(),
+            &db.node,
             &agent_did,
             &setup_behavior_id,
             "onboarding-conflicting-preferences",
@@ -1117,7 +1124,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
 
         let rejected = run_stage(
             &activation,
-            db.node.as_ref(),
+            &db.node,
             &agent_did,
             &setup_behavior_id,
             "onboarding-rejected-authority",
@@ -1125,7 +1132,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
             &evidence,
         )
         .await?;
-        let rejected_calls = tool_calls(db.node.as_ref(), &rejected.request_id).await?;
+        let rejected_calls = tool_calls(&db.node, &rejected.request_id).await?;
         ensure!(
             rejected_forbidden_root(&rejected_calls, &forbidden_root),
             "no tool outcome proves rejection of the forbidden root"
@@ -1137,7 +1144,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
 
         run_stage(
             &activation,
-            db.node.as_ref(),
+            &db.node,
             &agent_did,
             &setup_behavior_id,
             "onboarding-authority-recovery",
@@ -1154,7 +1161,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
 
         run_stage(
             &activation,
-            db.node.as_ref(),
+            &db.node,
             &agent_did,
             &setup_behavior_id,
             "onboarding-change-default",
@@ -1188,7 +1195,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     let activation = super::stages::ActivationFence::new(runtime, observer, db.node.clone());
     let after_restart = run_stage(
         &activation,
-        db.node.as_ref(),
+        &db.node,
         &agent_did,
         &recovered_id,
         "onboarding-after-restart",

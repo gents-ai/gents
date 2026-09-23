@@ -2,14 +2,14 @@ use super::*;
 use anyhow::Context;
 use gents_protocol::row::AgentRequestRow;
 
-#[derive(Debug, serde::Deserialize)]
-struct RecoveryResponseRow {
-    status: String,
-    #[serde(default)]
-    error_message: Option<String>,
-    #[serde(default)]
-    interrupted_at: Option<String>,
-}
+#[path = "canonical_recovery.rs"]
+mod canonical_recovery;
+
+#[cfg(test)]
+pub(crate) use canonical_recovery::{
+    recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,
+    RecoverySelectionRejected,
+};
 
 #[derive(Debug, Default)]
 struct ActiveRequestRecoveryReport {
@@ -215,7 +215,6 @@ async fn recover_active_requests(
                 interrupt_requested_at
                 execution_generation
                 execution_lease_expires_at
-                execution_progress_seq
             }}
         }}"#
     );
@@ -260,7 +259,6 @@ async fn recover_active_requests(
                 continue;
             }
         };
-        let persisted_response = load_recovery_response(node, agent_did, request_doc_id).await?;
 
         let Some(expected_generation) = row
             .execution_generation
@@ -304,81 +302,47 @@ async fn recover_active_requests(
                 continue;
             }
         };
-        let Some(expected_progress_seq) = row.execution_progress_seq.filter(|value| *value >= 0)
-        else {
-            report.requests.failed += 1;
-            tracing::warn!(
-                request_doc_id,
-                request_id = %row.request_id,
-                execution_generation = expected_generation,
-                "active AgentRequest has missing or negative execution_progress_seq"
-            );
-            continue;
-        };
         if expiry > now {
             report.requests.awaiting_outcome += 1;
             continue;
         }
 
-        let response_is_interrupted = persisted_response
-            .as_ref()
-            .and_then(|response| response.interrupted_at.as_deref())
-            .is_some_and(|value| !value.trim().is_empty());
-        let interrupt_was_requested = row
-            .interrupt_requested_at
-            .as_deref()
-            .is_some_and(|value| !value.trim().is_empty());
-        let outcome = match persisted_response
-            .as_ref()
-            .map(|response| response.status.as_str())
-        {
-            Some("complete") => RequestTerminalOutcome::Completed,
-            Some("error") if response_is_interrupted => RequestTerminalOutcome::Interrupted,
-            Some("error") => RequestTerminalOutcome::Failed,
-            _ if interrupt_was_requested => RequestTerminalOutcome::Interrupted,
-            _ => RequestTerminalOutcome::Failed,
-        };
-        let reason = match outcome {
-            RequestTerminalOutcome::Completed => "",
-            RequestTerminalOutcome::Interrupted => "interrupted",
-            RequestTerminalOutcome::Dead
-            | RequestTerminalOutcome::Superseded
-            | RequestTerminalOutcome::Failed => persisted_response
-                .as_ref()
-                .and_then(|response| response.error_message.as_deref())
-                .filter(|reason| !reason.trim().is_empty())
-                .unwrap_or_else(|| {
-                    if persisted_response.is_some() {
-                        "daemon restarted before response could be finalized"
-                    } else {
-                        "daemon restarted before response could be generated"
-                    }
-                }),
-        };
-        match recover_execution_generation(
+        match canonical_recovery::recover_expired_generation(
             node,
             row,
             expected_generation,
             expected_expiry,
-            expected_progress_seq,
-            outcome,
-            reason,
         )
         .await
         {
-            Ok(TerminalizeResult::Won) => {
+            Ok(canonical_recovery::RecoveryResult::Won { published }) => {
                 report.requests.repaired += 1;
-                report.responses_recovered += 1;
-                tracing::info!(
-                    request_doc_id,
-                    request_id = %row.request_id,
-                    session_id,
-                    execution_generation = expected_generation,
-                    execution_progress_seq = expected_progress_seq,
-                    "recovered expired request execution lease"
-                );
+                report.responses_recovered += published;
             }
-            Ok(TerminalizeResult::AlreadySame | TerminalizeResult::Lost) => {}
+            Ok(canonical_recovery::RecoveryResult::Lost) => {
+                report.requests.awaiting_outcome += 1;
+            }
+            Err(error) if definitive_output_corruption(&error) => {
+                // Failed recovery rolled back. Revoke only the same observed
+                // lease tuple; a renewal/recovery winner makes this lose. This
+                // metadata-only escape never repairs or chooses payload twins.
+                match super::execution_lease::revoke_execution_preserving_output(
+                    node,
+                    row,
+                    super::RequestTerminalOutcome::Dead,
+                    &format!("canonical output integrity failure: {error}"),
+                )
+                .await
+                {
+                    Ok(super::TerminalizeResult::Won) => report.requests.repaired += 1,
+                    Ok(_) => report.requests.awaiting_outcome += 1,
+                    Err(revoke_error) => {
+                        report.requests.failed += 1;
+                        tracing::warn!(request_doc_id, %error, %revoke_error,
+                            "could not revoke corrupted expired execution");
+                    }
+                }
+            }
             Err(error) => {
                 report.requests.failed += 1;
                 tracing::warn!(
@@ -386,9 +350,8 @@ async fn recover_active_requests(
                     request_id = %row.request_id,
                     session_id,
                     execution_generation = expected_generation,
-                    execution_progress_seq = expected_progress_seq,
-                    error = %error,
-                    "failed to recover expired request execution lease"
+                    %error,
+                    "failed canonical expired-generation recovery"
                 );
             }
         }
@@ -397,34 +360,29 @@ async fn recover_active_requests(
     Ok(report)
 }
 
-async fn load_recovery_response(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    request_doc_id: &str,
-) -> Result<Option<RecoveryResponseRow>> {
-    let agent_did = escape_graphql_string(agent_did);
-    let request_doc_id = escape_graphql_string(request_doc_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{
-                    agent_did: {{ _eq: "{agent_did}" }},
-                    request_doc_id: {{ _eq: "{request_doc_id}" }}
-                }},
-                limit: 1
-            ) {{
-                status
-                error_message
-                interrupted_at
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying response for request_doc_id={request_doc_id}: {:?}",
-            response.errors
-        );
-    }
-    crate::graphql::first_row(&response, "AgentResponse")
+/// Missing replica dependencies and access/storage failures are not proof of
+/// corruption. Only typed contradictory or malformed immutable facts authorize
+/// the model's metadata-only revocation escape.
+fn definitive_output_corruption(error: &anyhow::Error) -> bool {
+    use gents_protocol::output::recovery::RecoveryPlanError;
+    use gents_protocol::output::ReconstructionError;
+    matches!(
+        error.downcast_ref::<RecoveryPlanError>(),
+        Some(
+            RecoveryPlanError::IdentityConflict { .. }
+                | RecoveryPlanError::ConflictingOrdinal { .. }
+                | RecoveryPlanError::InvalidWriter
+                | RecoveryPlanError::MalformedExtent
+        )
+    ) || matches!(
+        error.downcast_ref::<ReconstructionError>(),
+        Some(
+            ReconstructionError::ConflictingSegments { .. }
+                | ReconstructionError::ConflictingClosures { .. }
+                | ReconstructionError::InvalidWriter { .. }
+                | ReconstructionError::ExtentMismatch { .. }
+                | ReconstructionError::InvalidPayload { .. }
+                | ReconstructionError::InvalidStructure { .. }
+        )
+    )
 }

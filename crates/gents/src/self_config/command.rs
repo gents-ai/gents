@@ -102,7 +102,9 @@ impl ConfigCommandParams {
                 ["datastore", "get" | "create" | "edit", ..]
                 | ["mcp-service", "get" | "preview" | "edit", ..] => 2,
                 ["automation", "get" | "preview" | "edit", _, ..] => 3,
-                _ => bail!("target_id is supported for datastore, automation and mcp-service document commands; use --help for the command path"),
+                _ => bail!(
+                    "target_id is supported for datastore, automation and mcp-service document commands; use --help for the command path"
+                ),
             };
             anyhow::ensure!(
                 argv.get(position).is_none_or(|arg| arg.starts_with('-')),
@@ -311,7 +313,10 @@ impl ConfigCommandTool {
             "help" => self.help(argv.get(1).map(String::as_str)),
             "get" => {
                 let (behavior_id, rest) = extract_behavior_target(&argv[1..])?;
-                anyhow::ensure!(rest.is_empty(), "config get accepts only --behavior BEHAVIOR_ID");
+                anyhow::ensure!(
+                    rest.is_empty(),
+                    "config get accepts only --behavior BEHAVIOR_ID"
+                );
                 let core = self.target_core(behavior_id.as_deref(), "get")?;
                 let value = core
                     .read_effective_config(&self.categories, self.no_lockout, self.dry_run)
@@ -723,16 +728,15 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
             "list" if resource == "backend" => {
                 let parsed = ParsedArgs::parse(&argv[1..])?;
                 parsed.reject_mutation_flags()?;
-                self.inference_inventory(
-                    target,
-                    parse_limit(&parsed)?,
-                    parsed.one("cursor")?,
-                )
-                .await
+                self.inference_inventory(target, parse_limit(&parsed)?, parsed.one("cursor")?)
+                    .await
             }
             "get" => {
                 let (behavior_id, rest) = extract_behavior_target(&argv[1..])?;
-                anyhow::ensure!(rest.len() <= 1, "{resource} get accepts at most one ID and --behavior BEHAVIOR_ID");
+                anyhow::ensure!(
+                    rest.len() <= 1,
+                    "{resource} get accepts at most one ID and --behavior BEHAVIOR_ID"
+                );
                 let core = self.target_core(behavior_id.as_deref(), resource)?;
                 match rest.first() {
                     Some(id) => self.exact_read(target, id).await,
@@ -744,13 +748,12 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
                 let core = self.target_core(behavior_id.as_deref(), resource)?;
                 let patch = parse_patch(&rest, target)?;
                 let request = match target {
-                    SelfConfigTarget::Tools => {
-                        tools_request(&core, patch, self.allow_pack_install)
-                    }
+                    SelfConfigTarget::Tools => tools_request(&core, patch, self.allow_pack_install),
                     SelfConfigTarget::InferenceBackend => backend_request(patch),
                     _ => unreachable!("bound resource"),
                 };
-                self.patch(&core, verb, protect_working_behavior(request)).await
+                self.patch(&core, verb, protect_working_behavior(request))
+                    .await
             }
             other => bail!(
                 "unknown {resource} command {other:?}; accepted: get, preview, edit; run config help {resource}"
@@ -954,7 +957,8 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
         match verb {
             "get" => {
                 anyhow::ensure!(argv.len() == 2, "mcp-service get accepts one SERVICE_ID");
-                self.exact_read(SelfConfigTarget::ToolServiceRegistry, id).await
+                self.exact_read(SelfConfigTarget::ToolServiceRegistry, id)
+                    .await
             }
             "preview" | "edit" => {
                 let patch = parse_patch(&argv[2..], SelfConfigTarget::ToolServiceRegistry)?;
@@ -979,7 +983,10 @@ Bundled names resolve locally; NAMESPACE/NAME resolves through the operator-sele
         match verb {
             "get" => {
                 let (behavior_id, rest) = extract_behavior_target(&argv[3..])?;
-                anyhow::ensure!(rest.is_empty(), "automation get accepts KIND, ID, and --behavior BEHAVIOR_ID");
+                anyhow::ensure!(
+                    rest.is_empty(),
+                    "automation get accepts KIND, ID, and --behavior BEHAVIOR_ID"
+                );
                 let core = self.target_core(behavior_id.as_deref(), "automation")?;
                 self.automation_read(&core, target, id).await
             }
@@ -1526,7 +1533,9 @@ fn profile_target(name: &str) -> Result<(&'static str, SelfConfigTarget)> {
         "execution" => Ok(("execution", SelfConfigTarget::InferenceExecution)),
         "retry-policy" => Ok(("retry_policy", SelfConfigTarget::InferenceRetryPolicy)),
         "compaction" => Ok(("compaction", SelfConfigTarget::Compaction)),
-        other => bail!("unknown profile target {other:?}; accepted: profile, sampling, execution, retry-policy, compaction"),
+        other => bail!(
+            "unknown profile target {other:?}; accepted: profile, sampling, execution, retry-policy, compaction"
+        ),
     }
 }
 
@@ -1926,7 +1935,13 @@ pub(super) fn behavior_params(
         .map(String::as_str)
         .collect();
     for field in &clear {
-        anyhow::ensure!(matches!(*field, "display_name" | "description" | "system_prompt" | "root"), "field {field:?} cannot be cleared; accepted: display_name, description, system_prompt, root");
+        anyhow::ensure!(
+            matches!(
+                *field,
+                "display_name" | "description" | "system_prompt" | "root"
+            ),
+            "field {field:?} cannot be cleared; accepted: display_name, description, system_prompt, root"
+        );
     }
     let update = |option: &str, field: &str| -> Result<StringUpdate> {
         let value = parsed.one(option)?;

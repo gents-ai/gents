@@ -65,14 +65,8 @@ def boundaryEventDeliveryFairSubstrateId : String :=
 def boundaryEventDeliveryRescanDocCapId : String :=
   "boundary.event-delivery.rescan-doc-cap"
 
-def boundaryStreamingResponseIdleTimeoutDeadlineId : String :=
-  "boundary.streaming-response.idle-timeout-deadline"
-
 def boundaryPromptAssemblyProviderInputSanitizationId : String :=
   "boundary.prompt-assembly.provider-input-sanitization"
-
-def boundaryCompactionSafeToReduceSessionScopeId : String :=
-  "boundary.compaction.safe-to-reduce-session-scope"
 
 def boundaryCompactionUniqueCallIdsCheckedId : String :=
   "boundary.compaction.unique-call-ids-checked"
@@ -111,7 +105,7 @@ def boundaries : List Boundary :=
     , domain := "RequestLifecycle"
     , subject := "recovery-sweep reachable request edges"
     , statement :=
-        "claimed->completed, claimed->dead, and processing->dead are taken by no single RequestContext.Action, but registered recovery sweeps perform them on persisted rows: terminal repair completes a claimed request whose response already landed, and the subagent-liveness sweep terminalizes an expired claimed or processing child as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs."
+        "claimed->dead and processing->dead are taken by no single RequestContext.Action, but the subagent-liveness recovery sweep terminalizes an expired claimed or processing child as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs. Expired owned generations otherwise terminalize failed or interrupted through CanonicalOutput.Execution recovery; no durable response row repairs claimed work to completed."
     , acceptedFollowUp :=
         some "Compose the Request machine with Proofs/Recovery so these edges are proven in one model instead of cited across two."
     }
@@ -233,37 +227,21 @@ def boundaries : List Boundary :=
     , acceptedFollowUp :=
         some "Paginate EventSource rescan past SEEN_DOCS_SEED_LIMIT to eliminate the residual missed_event_observation mode; tracked in #564."
     }
-  , { id := boundaryStreamingResponseIdleTimeoutDeadlineId
-    , domain := "StreamingResponse"
-    , subject := "stream idle timeout deadline precondition"
-    , statement :=
-        "StreamingResponse streamIdleTimeout transitions assume the runtime only fires the timeout after the stream idle deadline has elapsed; Rust satisfies this with the configured liveness timeout rather than a persisted response-clock field."
-    }
   , { id := boundaryPromptAssemblyProviderInputSanitizationId
     , domain := "PromptAssembly"
     , subject := "provider input sanitization"
     , statement :=
         "Durable transcripts may contain unpaired assistant tool-call rows while tool execution is interrupted, failed, or in flight; provider sends must narrow loaded history through sanitize_history_for_provider so no dangling tool call reaches the backend."
     }
-  , { id := boundaryCompactionSafeToReduceSessionScopeId
-    , domain := "Compaction"
-    , subject := "safeToReduce resolver scope"
-    , statement :=
-        "PromptView.safeToReduce requires every retained tool-result row to carry a known terminal response status. Rust resolves this at session scope: compaction::safe_to_reduce is the modelled predicate and is what the conformance case drives, while agent/daemon/request.rs backs it with a single non-terminal-AgentResponse query rather than per-message request_id linkage. All-terminal at session scope implies terminal for every row, so the refinement can only err toward unsafe, whose cost is a skipped compaction retried on the next request."
-    , acceptedFailureMode :=
-        some "A row whose request has no AgentResponse row at all (a crashed run) reads unsafe in the model but safe under the session check. sanitize_history_for_provider already removes half-turns from crashed runs — an unpaired call or an orphaned result never reaches compaction's input — so what survives is a complete turn, which is safe to summarize."
-    , acceptedFollowUp :=
-        some "Per-message request_id linkage would close the gap exactly; it requires widening session::load_history's return shape and every caller."
-    }
   , { id := boundaryCompactionUniqueCallIdsCheckedId
     , domain := "Compaction"
     , subject := "UniqueCallIds is checked, not structural"
     , statement :=
-        "providerViewGlobal_append and the compacted-prefix correspondence assume PromptAssembly.UniqueCallIds. That is a hypothesis, not a structural guarantee: tool-call ids come from the provider and no ingestion path enforces uniqueness across a session. The coarser providerViewGlobal credits an announcement from the globally resolved set, so a later turn reusing an id would resurrect an earlier unpaired announcement and shift the prefix under an already-stored count — Compaction.reused_call_id_breaks_prefix_stability exhibits it. Production does not: drop_unpaired_tool_calls scopes resolution to the active turn (resolved_keys_per_turn), and Compaction.reused_call_id_is_prefix_stable_per_turn shows the same witness is stable under providerViewTurn, which providerViewTurn_eq_providerViewGlobal proves equal to providerViewGlobal whenever UniqueCallIds holds. agent/daemon/request.rs still verifies compaction::has_unique_call_ids over the provider view before compacting and skips reduction when it fails, now as defence in depth rather than as the only guard."
+        "providerViewGlobal_append and the compacted-prefix correspondence are row-level theorems over abstract call symbols. Compaction.reused_call_id_breaks_prefix_stability exhibits the global sanitizer hazard, while reused_call_id_is_prefix_stable_per_turn isolates the same symbols by an ordinary turn boundary. Canonical publication now binds Transcript call symbols to physical tool documents. These proofs therefore do not, by themselves, establish repeated provider-native call-id behavior; transferring them requires a verified native-message-to-provider-input row codec."
     , acceptedFailureMode :=
-        some "A session whose provider reuses call ids stops compacting: the prompt grows until the request fails on context overflow rather than silently dropping rows that were never summarized. Counts already stored before a reuse appeared are still applied to a prefix that reuse may have shifted; the post-drop production sanitizer keeps the provider view valid, so the residual harm is bounded to context skew."
+        some "Until the native codec refinement is implemented, production compaction must conservatively reject a prefix whose content-bearing provider projection cannot be shown equal to the checked row projection."
     , acceptedFollowUp :=
-        some "Transfer soundness and prefix/cursor laws to the content-bearing per-turn sanitizer, including repeated call occurrences, then retire the global proof models. The row-level sanitizeTurn operation already scopes resolution per turn; its current soundness/idempotence bridge still requires UniqueCallIds."
+        some "Prove the content-bearing native-message/provider-input projection refines the row-level per-turn sanitizer, keeping physical tool document identity distinct from provider-native call metadata; then transfer the stable-prefix/cursor laws."
     }
   , { id := boundaryModelNatTypedIdsTimeId
     , domain := "CoreTypes"

@@ -2,12 +2,14 @@
 
 use std::sync::Arc;
 
+use anyhow::Context;
 use gents::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
 use gents::graphql::escape_graphql_string;
 use gents::{ensure_runtime_schemas, watcher::AgentRequest, AgentIdentity, KeyIdentity};
 use serde::Deserialize;
 use tempfile::TempDir;
 
+pub mod accepted_turn;
 pub mod conformance_consumers;
 pub mod enrollment;
 pub mod fixtures;
@@ -17,9 +19,11 @@ pub mod interrupt;
 pub mod live_inference;
 pub mod mock_endpoint;
 pub mod mock_subscription;
+pub mod native_remote_spawn;
 pub mod p2p_waits;
 pub mod pairing_conformance;
 pub mod r5_conformance;
+pub mod r5_cross_principal_runtime;
 pub mod snapshots;
 pub mod streaming_backend;
 pub mod waits;
@@ -42,6 +46,7 @@ pub struct TestDb {
     pub node_identity: Arc<dyn AgentIdentity>,
     pub process_generation: u64,
     node_identity_did: String,
+    p2p_reopen: Option<TestP2pAdmission>,
     tempdir: TempDir,
 }
 
@@ -54,15 +59,22 @@ impl TestDb {
         let data_path = self.tempdir.path().to_path_buf();
         let before = self.process_generation;
 
+        // Stopping the embedded process closes its subscriptions and other
+        // node-owned services. Those tasks may retain Arc handles briefly
+        // after the top-level agent task has been aborted, so wait for their
+        // actual release before claiming an exclusive durable-store reopen.
+        self.node.shutdown().await;
+        let release_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        while Arc::strong_count(&self.node) != 1 && tokio::time::Instant::now() < release_deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
         let strong = Arc::strong_count(&self.node);
         if strong != 1 {
             anyhow::bail!(
-                "simulate_process_crash: cannot exclusively drop EmbeddedNode \
+                "simulate_process_crash: stopped EmbeddedNode retained live owners \
                  (strong_count={strong}); crash boundary would not clear process state"
             );
         }
-
-        self.node.shutdown().await;
 
         let stand_in = Arc::new(
             EmbeddedNode::builder()
@@ -85,17 +97,18 @@ impl TestDb {
             }
         }
 
-        let reopened = EmbeddedNode::builder()
+        let mut reopen_builder = EmbeddedNode::builder()
             .data_path(&data_path)
-            .with_node_identity_did(&self.node_identity_did)
-            .build()
-            .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "simulate_process_crash: reopen durable store at {} failed: {e}",
-                    data_path.display()
-                )
-            })?;
+            .with_node_identity_did(&self.node_identity_did);
+        if let Some(admission) = &self.p2p_reopen {
+            reopen_builder = reopen_builder.with_p2p(test_p2p_config(admission, &data_path));
+        }
+        let reopened = reopen_builder.build().await.map_err(|e| {
+            anyhow::anyhow!(
+                "simulate_process_crash: reopen durable store at {} failed: {e}",
+                data_path.display()
+            )
+        })?;
         self.node = Arc::new(reopened);
 
         ensure_runtime_schemas(&self.node)
@@ -136,6 +149,7 @@ pub async fn test_db_in(tempdir: TempDir) -> TestDb {
         node_identity,
         process_generation: 0,
         node_identity_did,
+        p2p_reopen: None,
         tempdir,
     }
 }
@@ -187,23 +201,7 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         EmbeddedNode::builder()
             .data_path(tempdir.path())
             .with_node_identity_did(&node_identity_did)
-            .with_p2p(P2PConfig {
-                port: 0,
-                bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
-                relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
-                discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
-                allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
-                max_concurrent_multipath_paths: None,
-                secret_key_path: None,
-                load_persisted_collections: false,
-                max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
-                max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
-                rate_limit_burst: admission.rate_limit_burst,
-                rate_limit_rate: admission.rate_limit_rate,
-                max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
-                max_pending_dags: admission.max_pending_dags,
-                rebroadcast_on_merge: false,
-            })
+            .with_p2p(test_p2p_config(&admission, tempdir.path()))
             .build()
             .await
             .expect("embedded p2p node"),
@@ -216,7 +214,28 @@ pub async fn test_p2p_db_with_admission(name: &str, admission: TestP2pAdmission)
         node_identity,
         process_generation: 0,
         node_identity_did,
+        p2p_reopen: Some(admission),
         tempdir,
+    }
+}
+
+fn test_p2p_config(admission: &TestP2pAdmission, data_path: &std::path::Path) -> P2PConfig {
+    P2PConfig {
+        port: 0,
+        bind_addr: Some(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
+        relay_mode: p2p::iroh::IrohRelayModeConfig::Disabled,
+        discovery: p2p::iroh::IrohDiscoveryConfig::Disabled,
+        allowlist: p2p::iroh::IrohAllowlistConfig::AcceptAll,
+        max_concurrent_multipath_paths: None,
+        secret_key_path: Some(data_path.join("p2p.key")),
+        load_persisted_collections: true,
+        max_concurrent_dag_fetches: admission.max_concurrent_dag_fetches,
+        max_concurrent_push_tasks: admission.max_concurrent_push_tasks,
+        rate_limit_burst: admission.rate_limit_burst,
+        rate_limit_rate: admission.rate_limit_rate,
+        max_doc_sync_request_doc_ids: p2p::sync::DEFAULT_MAX_DOC_SYNC_REQUEST_DOC_IDS,
+        max_pending_dags: admission.max_pending_dags,
+        rebroadcast_on_merge: false,
     }
 }
 
@@ -448,105 +467,6 @@ pub async fn create_retry_request(
     first_row::<DocIdRow>(&resp, "AgentRequest").doc_id
 }
 
-pub async fn create_response_with_status(
-    node: &EmbeddedNode,
-    response_key: &str,
-    request_id: &str,
-    session_id: &str,
-    status: &str,
-) -> String {
-    create_response_with_content_and_status(node, response_key, request_id, session_id, "", status)
-        .await
-}
-
-pub async fn create_response_with_content_and_status(
-    node: &EmbeddedNode,
-    response_key: &str,
-    request_id: &str,
-    session_id: &str,
-    content: &str,
-    status: &str,
-) -> String {
-    let response_key = escape_graphql_string(response_key);
-    let request_id = escape_graphql_string(request_id);
-    let request_lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ _docID agent_did requester_did behavior_id }} }}"#)).await;
-    assert!(!request_lookup.has_errors(), "{:?}", request_lookup.errors);
-    let request_rows = request_lookup
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentRequest"))
-        .and_then(serde_json::Value::as_array)
-        .expect("AgentRequest rows");
-    assert_eq!(
-        request_rows.len(),
-        1,
-        "response fixture requires one request"
-    );
-    let request_row = &request_rows[0];
-    let request_doc_id =
-        escape_graphql_string(request_row["_docID"].as_str().expect("request document id"));
-    let agent_did = escape_graphql_string(
-        request_row["agent_did"]
-            .as_str()
-            .expect("request agent DID"),
-    );
-    let behavior_id = escape_graphql_string(
-        request_row["behavior_id"]
-            .as_str()
-            .expect("request behavior"),
-    );
-    let requester_did = request_row["requester_did"]
-        .as_str()
-        .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
-        .unwrap_or_else(|| "requester_did: null,".to_string());
-    let session_id = escape_graphql_string(session_id);
-    let content = escape_graphql_string(content);
-    let completed_at = if matches!(status, "complete" | "error") {
-        "2026-03-23T00:01:00Z"
-    } else {
-        ""
-    };
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{response_key}",
-                request_id: "{request_id}",
-                request_doc_id: "{request_doc_id}",
-                agent_did: "{agent_did}",
-                {requester_did}
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                content: "{content}",
-                status: "{status}",
-                token_count: 0,
-                progress_seq: 0,
-                created_at: "2026-03-23T00:00:00Z",
-                completed_at: "{completed_at}"
-            }}) {{ _docID }}
-        }}"#,
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create response failed: {:?}",
-        resp.errors
-    );
-
-    let query = format!(
-        r#"{{
-            AgentResponse(filter: {{ response_key: {{ _eq: "{response_key}" }} }}) {{
-                _docID
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    first_row::<DocIdRow>(&resp, "AgentResponse").doc_id
-}
-
-pub async fn create_response(node: &EmbeddedNode, response_key: &str) -> String {
-    create_response_with_status(node, response_key, "req-1", "session-1", "streaming").await
-}
-
 pub async fn set_interrupt_requested_at(node: &EmbeddedNode, doc_id: &str, at: &str) {
     let doc_id = escape_graphql_string(doc_id);
     let at = escape_graphql_string(at);
@@ -619,8 +539,8 @@ pub fn build_request(
         created_at,
         deadline: None,
         execution_generation: None,
+        execution_lease_secs: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -799,39 +719,126 @@ pub async fn create_agent_message_in_scope(
     content: &str,
     timestamp: &str,
 ) {
-    let agent_did_escaped = escape_graphql_string(agent_did);
-    let requester = requester_did
-        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-        .unwrap_or_else(|| "null".into());
-    let session_id_escaped = escape_graphql_string(session_id);
-    let role_escaped = escape_graphql_string(role);
-    let content_escaped = escape_graphql_string(content);
-    let timestamp_escaped = escape_graphql_string(timestamp);
-    let message_key = escape_graphql_string(&gents::session::sequence_message_key(
-        agent_did,
-        session_id,
-        requester_did,
-        sequence,
-    ));
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentMessage(input: {{
-                message_key: "{message_key}",
-                session_id: "{session_id_escaped}",
-                agent_did: "{agent_did_escaped}",
-                requester_did: {requester},
-                sequence: {sequence},
-                role: "{role_escaped}",
-                content: "{content_escaped}",
-                timestamp: "{timestamp_escaped}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
+    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let role = match role {
+        "user" => MessageRole::User,
+        "assistant" => MessageRole::Assistant,
+        "system" => MessageRole::System,
+        other => panic!("unsupported message role in create_agent_message_in_scope: {other}"),
+    };
+
+    let request_doc_id = format!("fixture-request:{session_id}:{sequence}");
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: requester_did.map(Into::into),
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.clone(),
+        source: if role == MessageRole::Assistant {
+            OutputSource::ProviderTurn {
+                scope: CaptureScope {
+                    kind: CaptureScopeKind::Inference,
+                    seq: u64::from(sequence),
+                },
+                turn_index: 0,
+                attempt: 0,
+            }
+        } else {
+            OutputSource::Authored {
+                key: format!("fixture:{sequence}"),
+            }
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: "fixture-generation".into(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: content.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: content.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![content.len() as u64],
+        }),
+        created_at: timestamp.into(),
+    };
+    let segment_response = node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                .with_variables(output_segment_create_variables(&segment).unwrap()),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
     assert!(
-        !resp.has_errors(),
+        !segment_response.has_errors(),
+        "create_AgentOutputSegment failed: {:?}",
+        segment_response.errors
+    );
+    let close_doc_id =
+        gents::graphql::single_mutation_document(&segment_response, "create_AgentOutputSegment")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+    let message = TranscriptMessage {
+        message_key: gents::session::sequence_message_key(
+            agent_did,
+            session_id,
+            requester_did,
+            sequence,
+        ),
+        session_id: session_id.into(),
+        agent_did: agent_did.into(),
+        requester_did: requester_did.map(Into::into),
+        request_doc_id: Some(request_doc_id),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "fixture-generation".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role,
+        native_id: (role == MessageRole::Assistant).then(|| format!("native-{sequence}")),
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id,
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: timestamp.into(),
+    };
+    let response = node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&message).unwrap()),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(
+        !response.has_errors(),
         "create_AgentMessage failed: {:?}",
-        resp.errors
+        response.errors
     );
 }
 
@@ -887,44 +894,6 @@ pub async fn create_agent_tool_call(
         .as_str()
         .expect("physical call ID")
         .to_owned()
-}
-
-pub async fn create_agent_tool_result(
-    node: &EmbeddedNode,
-    session_id: &str,
-    tool_call_doc_id: &str,
-    tool_name: &str,
-    tool_input: &str,
-    output_text: &str,
-    created_at: &str,
-) {
-    let session_id_escaped = escape_graphql_string(session_id);
-    let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
-    let tool_name_escaped = escape_graphql_string(tool_name);
-    let tool_input_escaped = escape_graphql_string(tool_input);
-    let output_text_escaped = escape_graphql_string(output_text);
-    let created_at_escaped = escape_graphql_string(created_at);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentToolResult(input: {{
-                agent_did: "{AGENT_DID}",
-                session_id: "{session_id_escaped}",
-                tool_name: "{tool_name_escaped}",
-                tool_input: "{tool_input_escaped}",
-                output_text: "{output_text_escaped}",
-                truncated: false,
-                truncation_metadata: "",
-                tool_call_doc_id: "{tool_call_doc_id}",
-                created_at: "{created_at_escaped}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let resp = node.execute(&mutation).await;
-    assert!(
-        !resp.has_errors(),
-        "create_AgentToolResult failed: {:?}",
-        resp.errors
-    );
 }
 
 pub async fn create_compaction_entry(
@@ -1049,5 +1018,145 @@ pub async fn begin_owned_execution(
         &lifecycle.request().agent_did,
         std::time::Duration::ZERO,
     );
-    lifecycle.begin_owned_execution(&writer).await
+    lifecycle.begin_owned_execution(&writer).await?;
+    Ok(lifecycle.request().doc_id.clone())
+}
+
+/// Complete one already-admitted pending request through the real execution,
+/// provider-publication, and terminal-selection owners. Integration fixtures
+/// use this instead of writing canonical segment/header rows or guessing an
+/// execution generation.
+pub async fn complete_pending_request_with_canonical_output(
+    db: &TestDb,
+    row: gents_protocol::row::AgentRequestRow,
+    text: &str,
+) -> anyhow::Result<String> {
+    let behavior_id = row
+        .behavior_id
+        .clone()
+        .context("completion fixture request omitted behavior")?;
+    let prompt = row
+        .content
+        .clone()
+        .context("completion fixture request omitted prompt")?;
+    let session_id = row
+        .session_id
+        .clone()
+        .context("completion fixture request omitted session")?;
+    anyhow::ensure!(
+        row.agent_did.as_deref() == Some(db.node_identity.did()),
+        "completion fixture request is not owned by the fixture runtime identity"
+    );
+
+    let backend_id = format!("fixture-completion-{}", row.request_id);
+    let backend = streaming_backend::MockStreamingBackend::start_with_plans(
+        "fixture-completion-model",
+        vec![streaming_backend::StreamPlan::current_authored_user(
+            prompt.clone(),
+            vec![streaming_backend::StreamResponse::streams(
+                prompt,
+                vec![streaming_backend::StreamChunk::text(text)],
+            )],
+        )],
+    )?;
+    fixtures::bind_behavior_backend(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        &behavior_id,
+        &backend_id,
+        backend.endpoint(),
+        "fixture-completion-model",
+    )
+    .await;
+    let escaped_session_id = escape_graphql_string(&session_id);
+    let title = gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
+        "text": "fixture-title",
+        "source": "generated"
+    }))?;
+    let title_response = db
+        .node
+        .execute(&format!(
+            r#"mutation {{ update_AgentSession(filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}, input: {{ title: {title} }}) {{ _docID }} }}"#
+        ))
+        .await;
+    anyhow::ensure!(
+        !title_response.has_errors(),
+        "prepopulating completion fixture title failed: {:?}",
+        title_response.errors
+    );
+    let identity: std::sync::Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_behavior_documents(
+        db.node.clone(),
+        identity,
+        gents::DocumentRuntimeOptions::default(),
+    )
+    .await?;
+    let prepared = accepted_turn::PreparedAcceptedTurn { backend };
+    let runtime = accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
+    live_inference::wait_for_request_terminal(
+        db.node.as_ref(),
+        &row.request_id,
+        std::time::Duration::from_secs(20),
+    )
+    .await;
+    runtime.shutdown().await;
+    let request_id = escape_graphql_string(&row.request_id);
+    let response = db
+        .node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ terminal_output }} }}"#
+        ))
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "reading completed fixture output failed: {:?}",
+        response.errors
+    );
+    #[derive(Deserialize)]
+    struct TerminalRow {
+        terminal_output: Option<gents_protocol::output::TerminalOutput>,
+    }
+    let terminal: TerminalRow = first_row(&response, "AgentRequest");
+    match terminal.terminal_output {
+        Some(gents_protocol::output::TerminalOutput::Message { message_doc_id }) => {
+            Ok(message_doc_id)
+        }
+        other => anyhow::bail!("completion fixture selected no assistant message: {other:?}"),
+    }
+}
+
+pub async fn load_request_row_by_logical_id(
+    node: &EmbeddedNode,
+    request_id: &str,
+) -> gents_protocol::row::AgentRequestRow {
+    let request_id = escape_graphql_string(request_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{
+                _docID request_id agent_did requester_did behavior_id session_id content input
+                execution_origin created_at deadline valid_until subagent_depth
+                caused_by_parent_request_id caused_by_parent_request_doc_id
+                caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id lifecycle_state
+                interrupt_requested_at execution_generation execution_lease_expires_at
+                terminal_output
+            }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "query failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(serde_json::Value::as_array)
+        .expect("AgentRequest query omitted rows");
+    assert_eq!(
+        rows.len(),
+        1,
+        "logical request identity must resolve to exactly one physical row"
+    );
+    serde_json::from_value(rows[0].clone()).expect("decode exact AgentRequest row")
 }

@@ -213,7 +213,14 @@ use std::sync::Arc;
 
 use defra_node::EmbeddedNode;
 
+pub(crate) mod delivery;
 pub(crate) mod query;
+// Consumers reconstruct invocation replies through the same physical-identity
+// owner as the runtime; admission and mutation internals remain private.
+pub use query::{
+    load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
+    render_tool_result, CanonicalToolCallPresentation,
+};
 mod recovery;
 pub(crate) mod runtime;
 pub mod subagent_request;
@@ -221,6 +228,28 @@ pub(crate) mod subagent_workspace;
 mod transition;
 
 pub use gents_loop::tool_call_lifecycle::{FailureClass, ToolOutcome};
+#[cfg(test)]
+pub(crate) mod admission_fixture;
+#[cfg(test)]
+mod background_conformance;
+#[cfg(test)]
+mod background_hook_conformance;
+#[cfg(test)]
+mod cascade_source_conformance;
+#[cfg(test)]
+mod completion_owner_conformance;
+#[cfg(test)]
+mod composed_conformance;
+#[cfg(test)]
+mod recovery_closeout_conformance;
+#[cfg(test)]
+mod recovery_conformance;
+#[cfg(test)]
+mod recovery_orphan_conformance;
+#[cfg(test)]
+mod request_scope_conformance;
+
+pub(crate) use crate::streaming::AcceptedToolCall;
 pub use recovery::{
     deadline_at_is_expired, deadline_is_expired, BackgroundCompletionSideEffectReport,
     OrphanedBackgroundToolReport, SubagentLivenessReport, TerminalParentToolReport,
@@ -246,9 +275,22 @@ pub struct ToolCallLifecycle {
     agent_did: String,
     requester_did: Option<String>,
     tool_call_id: String,
+    /// The provider's optional secondary call identity.  This is immutable
+    /// accepted-header provenance and is used to pair the native result.
+    call_id: Option<String>,
     message_sequence: u32,
     tool_name: String,
-    args: String,
+    /// Exact accepted assistant header that introduced this physical call.
+    /// It is intentionally absent only on old in-memory constructors that can
+    /// no longer dispatch under the canonical schema.
+    accepted_header_doc_id: Option<String>,
+    arguments: Option<gents_protocol::output::PayloadRef>,
+    execution_generation: Option<String>,
+    /// A native background execution is admitted by an already accepted
+    /// `spawn_process` call.  It is deliberately not an `AcceptedToolCall` of
+    /// its own: this is the immutable physical provenance used for dispatch,
+    /// recovery and completion notification routing.
+    spawned_by_tool_call_doc_id: Option<String>,
     doc_id: Option<String>,
     deadline_at: chrono::DateTime<chrono::Utc>,
     state: ToolCallState,
@@ -260,6 +302,7 @@ pub struct ToolCallLifecycle {
     pub(crate) cancel_policy: CancelPolicy,
     pub(crate) child_request_id: Option<String>,
     pub(crate) spawn_target_did: Option<String>,
+    pub(crate) spawn_behavior_id: Option<String>,
     pub(crate) unclaimed_deadline_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
@@ -269,14 +312,93 @@ struct SelectedToolIdentity {
     tool_name: String,
 }
 
+/// Input to the one `spawn_process` admission transaction.  The stable
+/// `tool_call_id` is derived from the accepted parent document, not generated
+/// by a retrying hook invocation; the returned lifecycle always carries the
+/// newly-created child's physical document ID separately.
+#[derive(Clone, Debug)]
+pub(crate) struct SpawnedBackgroundToolAdmission {
+    pub(crate) tool_name: String,
+    pub(crate) deadline_at: chrono::DateTime<chrono::Utc>,
+}
+
 impl ToolCallLifecycle {
+    pub(crate) fn execution_generation(&self) -> Option<&str> {
+        self.execution_generation.as_deref()
+    }
+    /// Adopt a pending row that was atomically published with an accepted
+    /// provider header.  This is the only constructor for direct canonical
+    /// dispatch: it deliberately has no create transition.
+    pub(crate) fn from_accepted(
+        node: Arc<EmbeddedNode>,
+        agent_did: String,
+        requester_did: Option<String>,
+        accepted: AcceptedToolCall,
+        deadline_at: chrono::DateTime<chrono::Utc>,
+        await_mode: AwaitMode,
+        cancel_policy: CancelPolicy,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            accepted.delegated_input.is_none(),
+            "delegated tool admission requires the remote-host lifecycle owner"
+        );
+        if let Some(plan) = accepted.spawn_admission.as_ref() {
+            anyhow::ensure!(
+                plan.await_mode == await_mode,
+                "dispatch await mode conflicts with immutable spawn admission"
+            );
+        }
+        Ok(Self {
+            node,
+            request_id: String::new(),
+            request_doc_id: Some(accepted.request_doc_id),
+            session_id: accepted.session_id,
+            agent_did,
+            requester_did: requester_did.and_then(|did| {
+                let did = did.trim();
+                (!did.is_empty()).then(|| did.to_owned())
+            }),
+            tool_call_id: accepted.id,
+            call_id: accepted.call_id,
+            message_sequence: accepted.message_sequence,
+            tool_name: accepted.tool_name,
+            accepted_header_doc_id: Some(accepted.accepted_header_doc_id),
+            arguments: Some(accepted.arguments),
+            execution_generation: Some(accepted.execution_generation),
+            spawned_by_tool_call_doc_id: None,
+            doc_id: Some(accepted.tool_call_doc_id),
+            deadline_at,
+            state: ToolCallState::Pending,
+            started_at: None,
+            failure_class: None,
+            cancel_cause: None,
+            selected_tool_identity: None,
+            await_mode,
+            cancel_policy,
+            child_request_id: accepted
+                .spawn_admission
+                .as_ref()
+                .map(|plan| plan.child_request_id.clone()),
+            spawn_target_did: accepted
+                .spawn_admission
+                .as_ref()
+                .map(|plan| plan.spawn_target_did.clone()),
+            spawn_behavior_id: accepted
+                .spawn_admission
+                .as_ref()
+                .map(|plan| plan.spawn_behavior_id.clone()),
+            unclaimed_deadline_at: None,
+        })
+    }
+
     /// Exact DefraDB document identifier after the first persisted transition.
     pub fn doc_id(&self) -> Option<&str> {
         self.doc_id.as_deref()
     }
 
-    /// Construct a new lifecycle. Does NOT persist; the first transition
-    /// method (`start_running`) creates the DefraDB row.
+    /// Construct an unbound lifecycle value. It cannot dispatch: canonical
+    /// dispatch requires `from_accepted` with an already-published tool row.
+    /// Remaining callers are being migrated off this legacy constructor.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         node: Arc<EmbeddedNode>,
@@ -286,7 +408,7 @@ impl ToolCallLifecycle {
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
-        args: String,
+        _args: String,
         deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
@@ -297,9 +419,13 @@ impl ToolCallLifecycle {
             agent_did,
             requester_did: None,
             tool_call_id,
+            call_id: None,
             message_sequence,
             tool_name,
-            args,
+            accepted_header_doc_id: None,
+            arguments: None,
+            execution_generation: None,
+            spawned_by_tool_call_doc_id: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -311,6 +437,7 @@ impl ToolCallLifecycle {
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
             spawn_target_did: None,
+            spawn_behavior_id: None,
             unclaimed_deadline_at: None,
         }
     }
@@ -345,10 +472,27 @@ impl ToolCallLifecycle {
         self
     }
 
-    /// Constructor for the subagent invocation path. Sets child_request_id (the
-    /// link to the spawned child AgentRequest) and lets the caller pick await_mode
-    /// and cancel_policy. Synchronous and does not persist — first transition
-    /// (typically start_running) creates the row.
+    /// Add the child edge to an already accepted direct invocation before its
+    /// one pending-to-running transition. The provider header remains the
+    /// only source of the parent tool intent; this only supplies the runtime
+    /// child allocation owned by the subagent bridge.
+    pub(crate) fn with_subagent_bridge(
+        mut self,
+        await_mode: AwaitMode,
+        cancel_policy: CancelPolicy,
+        child_request_id: String,
+        spawn_target_did: String,
+    ) -> Self {
+        self.await_mode = await_mode;
+        self.cancel_policy = cancel_policy;
+        self.child_request_id = Some(child_request_id);
+        self.spawn_target_did = Some(spawn_target_did);
+        self
+    }
+
+    /// Construct an unbound subagent lifecycle value, not dispatch authority.
+    /// Canonical invocation must adopt the immutable published spawn admission
+    /// through `from_accepted`; this constructor does not create a tool row.
     #[allow(clippy::too_many_arguments)]
     pub fn new_subagent(
         node: Arc<EmbeddedNode>,
@@ -358,7 +502,7 @@ impl ToolCallLifecycle {
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
-        args: String,
+        _args: String,
         deadline_at: chrono::DateTime<chrono::Utc>,
         await_mode: AwaitMode,
         cancel_policy: CancelPolicy,
@@ -373,9 +517,13 @@ impl ToolCallLifecycle {
             agent_did,
             requester_did: None,
             tool_call_id,
+            call_id: None,
             message_sequence,
             tool_name,
-            args,
+            accepted_header_doc_id: None,
+            arguments: None,
+            execution_generation: None,
+            spawned_by_tool_call_doc_id: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -387,12 +535,14 @@ impl ToolCallLifecycle {
             cancel_policy,
             child_request_id: Some(child_request_id),
             spawn_target_did: Some(spawn_target_did),
+            spawn_behavior_id: None,
             unclaimed_deadline_at: None,
         }
     }
 
-    /// Constructor for an ordinary tool launched through the R6 background
-    /// bridge. The row is a bridge row even though it has no child request.
+    /// Construct an unbound legacy background lifecycle value. Canonical
+    /// background processes use `admit_spawned_background` on their accepted
+    /// spawn invocation instead; this constructor does not create a tool row.
     #[allow(clippy::too_many_arguments)]
     pub fn new_background_tool(
         node: Arc<EmbeddedNode>,
@@ -402,7 +552,7 @@ impl ToolCallLifecycle {
         tool_call_id: String,
         message_sequence: u32,
         tool_name: String,
-        args: String,
+        _args: String,
         deadline_at: chrono::DateTime<chrono::Utc>,
     ) -> Self {
         Self {
@@ -413,9 +563,13 @@ impl ToolCallLifecycle {
             agent_did,
             requester_did: None,
             tool_call_id,
+            call_id: None,
             message_sequence,
             tool_name,
-            args,
+            accepted_header_doc_id: None,
+            arguments: None,
+            execution_generation: None,
+            spawned_by_tool_call_doc_id: None,
             doc_id: None,
             deadline_at,
             state: ToolCallState::Pending,
@@ -427,6 +581,7 @@ impl ToolCallLifecycle {
             cancel_policy: CancelPolicy::Cascade,
             child_request_id: None,
             spawn_target_did: None,
+            spawn_behavior_id: None,
             unclaimed_deadline_at: None,
         }
     }
@@ -449,7 +604,17 @@ impl ToolCallLifecycle {
     }
 
     pub(crate) fn is_background_tool_bridge(&self) -> bool {
-        self.child_request_id.is_none() && self.await_mode == AwaitMode::Background
+        self.child_request_id.is_none()
+            && self.await_mode == AwaitMode::Background
+            && self.spawned_by_tool_call_doc_id.is_none()
+    }
+
+    pub(crate) fn is_spawned_background(&self) -> bool {
+        self.spawned_by_tool_call_doc_id.is_some()
+    }
+
+    pub(crate) fn spawned_by_tool_call_doc_id(&self) -> Option<&str> {
+        self.spawned_by_tool_call_doc_id.as_deref()
     }
 
     pub(crate) fn is_bridge(&self) -> bool {
@@ -457,7 +622,7 @@ impl ToolCallLifecycle {
     }
 
     pub(crate) fn terminal_persistence_status(&self, completion_reason: Option<&str>) -> String {
-        if self.is_background_tool_bridge() {
+        if self.is_background_tool_bridge() || self.is_spawned_background() {
             completion_reason
                 .map(|reason| format!("completionPending:{reason}"))
                 .unwrap_or_else(|| "completionPending".to_string())
@@ -500,6 +665,14 @@ impl ToolCallLifecycle {
 
     pub(crate) fn tool_call_id(&self) -> &str {
         &self.tool_call_id
+    }
+
+    pub(crate) fn accepted_header_doc_id(&self) -> Option<&str> {
+        self.accepted_header_doc_id.as_deref()
+    }
+
+    pub(crate) fn accepted_arguments(&self) -> Option<&gents_protocol::output::PayloadRef> {
+        self.arguments.as_ref()
     }
 
     pub(crate) fn is_running(&self) -> bool {

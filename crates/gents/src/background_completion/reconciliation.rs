@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context as _;
 
 #[derive(Debug, Deserialize)]
 struct UnclaimedBridgeRow {
@@ -110,10 +109,8 @@ pub async fn reconcile_unclaimed_cross_deployment_spawns(
             &[],
         );
         fail_running_subagent_tool_call(
-            node.as_ref(),
+            &node,
             &row.doc_id,
-            row.started_at.as_deref(),
-            row.deadline_at.as_deref(),
             &payload,
             FailureClass::ServiceUnavailable,
         )

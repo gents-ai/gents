@@ -1,4 +1,5 @@
 use super::*;
+use anyhow::Context;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct BackgroundCompletionClaimSnapshot {
@@ -160,16 +161,6 @@ async fn fetch_interrupt_and_ttl(
 }
 
 impl RequestLifecycle {
-    fn set_response_doc_id(&mut self, doc_id: &str) {
-        self.ensure_state(
-            &[LocalLifecycleState::Claimed, LocalLifecycleState::Streaming],
-            "set_response_doc_id",
-        )
-        .expect("response doc can only be attached after claim");
-        self.response_doc_id = Some(doc_id.to_string());
-        self.state = LocalLifecycleState::Streaming;
-    }
-
     pub async fn claim(&mut self) -> Result<ClaimOutcome> {
         self.claim_inner(false).await
     }
@@ -178,27 +169,75 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
-    /// The durable request transition and response creation commit together.
-    /// Cancellation before commit leaves Claimed/absent for lease recovery.
+    /// Commit the modeled claimed → processing boundary before allocating a
+    /// local stream buffer. Beginning creates no output document and does not
+    /// renew the lease. A committed begin is the durable replay fact.
     pub async fn begin_owned_execution(
         &mut self,
         stream_writer: &crate::streaming::DefraStreamWriter,
-    ) -> Result<String> {
+    ) -> Result<()> {
+        // Repeating an acknowledged begin is a read-only ownership check.
+        // In particular it must not reset buffered output on the live writer.
+        if self.state == LocalLifecycleState::Streaming {
+            return self.validate_owned_execution().await;
+        }
         self.ensure_state(&[LocalLifecycleState::Claimed], "begin_owned_execution")?;
-        let generation = self.execution_generation()?.to_string();
-        let doc_id = stream_writer
-            .begin_owned_response(
-                &self.request.session_id,
-                &self.request.request_id,
-                &self.request.doc_id,
-                &self.behavior_id,
-                self.request.requester_did.as_deref(),
-                &generation,
-                self.execution_lease_duration_secs,
-            )
+        let generation = self.execution_generation()?.to_owned();
+        let request_doc_id = self.request.doc_id.clone();
+        crate::config_client::ConfigAccess::transact_local_idempotent(
+            &self.node,
+            None,
+            crate::config_client::IdempotentTransactionRetry::Standard,
+            "lifecycle.begin_owned_execution",
+            move |txn| {
+                let generation = generation.clone();
+                let request_doc_id = request_doc_id.clone();
+                Box::pin(async move {
+                    let doc = escape_graphql_string(&request_doc_id);
+                    let response = txn.execute(&format!(r#"{{ AgentRequest(
+                        filter: {{ _docID: {{ _eq: "{doc}" }} }}, limit: 2
+                    ) {{ request_id lifecycle_state execution_generation execution_lease_expires_at }} }}"#)).await?;
+                    let rows = response["data"]["AgentRequest"].as_array()
+                        .context("execution begin omitted request rows")?;
+                    anyhow::ensure!(rows.len() == 1, "execution begin request is missing or ambiguous");
+                    let row: gents_protocol::row::AgentRequestRow = serde_json::from_value(rows[0].clone())?;
+                    let state = row.lifecycle_state.context("execution begin missing lifecycle")?;
+                    let observed_generation = row.execution_generation.as_deref()
+                        .context("execution begin missing generation")?;
+                    let expiry = row.execution_lease_expires_at.as_deref()
+                        .context("execution begin missing lease expiry")?;
+                    let observed = super::execution_policy::LeaseObservation {
+                        request: state,
+                        generation: observed_generation,
+                        deadline_ms: chrono::DateTime::parse_from_rfc3339(expiry)?.timestamp_millis(),
+                    };
+                    let now = chrono::Utc::now().timestamp_millis();
+                    // A lost acknowledgement must not reapply the transition
+                    // or reset its lease. It may acknowledge the exact live
+                    // generation's already committed processing state.
+                    if state == RequestLifecycleState::Processing {
+                        anyhow::ensure!(super::execution_policy::authorize_producer_decision(
+                            observed, &generation, now), "execution begin replay lost ownership");
+                        return Ok(());
+                    }
+                    anyhow::ensure!(super::execution_policy::authorize_begin(observed, &generation, now),
+                        "execution begin requires a live claimed generation");
+                    let response = txn.execute(&format!(r#"mutation {{ update_AgentRequest(
+                        filter: {{ _docID: {{ _eq: "{doc}" }}, lifecycle_state: {{ _eq: "claimed" }},
+                            execution_generation: {{ _eq: "{}" }}, execution_lease_expires_at: {{ _eq: "{}" }} }},
+                        input: {{ lifecycle_state: "processing" }}
+                    ) {{ _docID }} }}"#, escape_graphql_string(&generation), escape_graphql_string(expiry))).await?;
+                    anyhow::ensure!(response["data"]["update_AgentRequest"].as_array()
+                        .is_some_and(|rows| rows.len() == 1), "execution begin lost its request CAS");
+                    Ok(())
+                })
+            },
+        ).await?;
+        stream_writer
+            .initialize_request_buffer(&self.request.doc_id)
             .await?;
-        self.set_response_doc_id(&doc_id);
-        Ok(doc_id)
+        self.state = LocalLifecycleState::Streaming;
+        Ok(())
     }
 
     async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
@@ -310,19 +349,13 @@ impl RequestLifecycle {
     pub async fn reject_admission(&mut self, reason: &str) -> Result<()> {
         self.ensure_state(&[LocalLifecycleState::Pending], "reject_admission")?;
         let request_doc_id = escape_graphql_string(&self.request.doc_id);
-        let request_id = escape_graphql_string(&self.request.request_id);
         let agent_did = escape_graphql_string(&self.request.agent_did);
-        let behavior_id = escape_graphql_string(&self.behavior_id);
-        let session_id = escape_graphql_string(&self.request.session_id);
         let reason_text = reason.to_string();
         let reason = escape_graphql_string(&reason_text);
-        let content = escape_graphql_string(&format!("Error: {reason_text}"));
         let terminalized_at_value = chrono::Utc::now().to_rfc3339();
         let terminalized_at = escape_graphql_string(&terminalized_at_value);
-        let requester_did_field =
-            session::requester_did_create_field(self.request.requester_did.as_deref());
         let request_mutation = format!(
-            r#"mutation {{
+            r#"mutation($terminal_output: JSON) {{
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{request_doc_id}" }},
@@ -333,75 +366,45 @@ impl RequestLifecycle {
                         lifecycle_state: "failed",
                         failure_reason: "{reason}",
                         terminalized_at: "{terminalized_at}",
-                        terminal_redrive_attempts: 0
+                        terminal_redrive_attempts: 0,
+                        terminal_output: $terminal_output
                     }}
                 ) {{ _docID }}
             }}"#
         );
-        let response_mutation = format!(
-            r#"mutation {{
-                create_AgentResponse(input: {{
-                    response_key: "{request_id}",
-                    request_id: "{request_id}",
-                    request_doc_id: "{request_doc_id}",
-                    agent_did: "{agent_did}",
-                    {requester_did_field}
-                    behavior_id: "{behavior_id}",
-                    session_id: "{session_id}",
-                    content: "{content}",
-                    reasoning: "",
-                    status: "error",
-                    error_message: "{reason}",
-                    token_count: 0,
-                    progress_seq: 0,
-                    created_at: "{terminalized_at}",
-                    completed_at: "{terminalized_at}"
-                }}) {{ _docID }}
-            }}"#
-        );
-
         let request_mutation = &request_mutation;
-        let response_mutation = &response_mutation;
-        let updated = crate::config_client::ConfigAccess::transact_local_idempotent(
-            &self.node,
-            None,
-            crate::config_client::IdempotentTransactionRetry::Standard,
-            "lifecycle.reject_admission",
-            move |txn| {
-                Box::pin(async move {
-                    let response = txn.execute_local_response(&request_mutation).await?;
-                    let updated = response
-                        .data
-                        .as_ref()
-                        .and_then(|data| data.get("update_AgentRequest"))
-                        .is_some_and(response_has_documents);
-                    let response_doc_id = if updated {
-                        let response = txn.execute_local_response(&response_mutation).await?;
-                        Some(
-                            extract_single_doc_id(&response, "create_AgentResponse").ok_or_else(
-                                || {
-                                    anyhow::anyhow!(
-                                        "admission rejection created no AgentResponse document"
-                                    )
-                                },
-                            )?,
-                        )
-                    } else {
-                        None
-                    };
-                    Ok::<_, anyhow::Error>((updated, response_doc_id))
-                })
-            },
-        )
-        .await?;
+        let updated =
+            crate::config_client::ConfigAccess::transact_local_idempotent(
+                &self.node,
+                None,
+                crate::config_client::IdempotentTransactionRetry::Standard,
+                "lifecycle.reject_admission",
+                move |txn| {
+                    Box::pin(async move {
+                        let response = txn.execute_with_variables(
+                        request_mutation,
+                        &serde_json::json!({
+                            "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
+                        }),
+                    ).await?;
+                        let updated = response
+                            .get("data")
+                            .and_then(|data| data.get("update_AgentRequest"))
+                            .is_some_and(response_has_documents);
+                        Ok::<_, anyhow::Error>(updated)
+                    })
+                },
+            )
+            .await?;
 
-        let (updated, response_doc_id) = updated;
         if !updated {
             let request_view = self.request_view().await?;
-            if !request_view
-                .as_ref()
-                .is_some_and(|row| row.lifecycle_state == Some(RequestLifecycleState::Failed))
-            {
+            if !request_view.as_ref().is_some_and(|row| {
+                row.lifecycle_state == Some(RequestLifecycleState::Failed)
+                    && row.failure_reason.as_deref() == Some(reason_text.as_str())
+                    && row.terminal_output
+                        == Some(gents_protocol::output::TerminalOutput::NoMessage)
+            }) {
                 anyhow::bail!(
                     "request {} could not reject admission from lifecycle_state={}",
                     self.request.request_id,
@@ -413,7 +416,6 @@ impl RequestLifecycle {
                 );
             }
         }
-        self.response_doc_id = response_doc_id;
         self.failure_reason = Some(reason_text);
         self.state = LocalLifecycleState::Failed;
         Ok(())
@@ -462,8 +464,15 @@ impl RequestLifecycle {
         let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
         let execution_generation = uuid::Uuid::new_v4().to_string();
-        let execution_lease_expires_at =
-            now + chrono::Duration::seconds(self.execution_lease_duration_secs as i64);
+        let lease_secs = i64::try_from(self.execution_lease_duration_secs)
+            .context("execution lease duration out of range")?;
+        let lease_ms = lease_secs
+            .checked_mul(1000)
+            .filter(|value| *value > 0)
+            .context("execution lease duration must be positive and representable")?;
+        let execution_lease_expires_at = now
+            .checked_add_signed(chrono::Duration::milliseconds(lease_ms))
+            .context("execution lease expiry out of range")?;
         let synthesized_deadline_at =
             now + chrono::Duration::seconds(self.deadline_duration_secs as i64);
         let deadline_at = self
@@ -524,7 +533,7 @@ impl RequestLifecycle {
                         claimed_at: "{escaped_claimed_at}",
                         execution_generation: "{escaped_execution_generation}",
                         execution_lease_expires_at: "{escaped_execution_lease_expires_at}",
-                        execution_progress_seq: 0,
+                        execution_lease_secs: {lease_secs},
                         {budget_field}
                         {background_completion_snapshot_fields}
                         deadline: "{escaped_deadline}"
@@ -593,7 +602,13 @@ impl RequestLifecycle {
         self.background_completion_input_through_sequence =
             background_completion_input_through_sequence;
         self.valid_until_at_claim = valid_until_at_claim;
-        self.execution_lease = Some(RequestExecutionLease::new(execution_generation));
+        self.execution_lease = Some(RequestExecutionLease::new(execution_generation.clone()));
+        self.renewal_task = Some(super::execution_renewal::RenewalTask::start(
+            self.node.clone(),
+            self.request.doc_id.clone(),
+            execution_generation,
+            lease_ms as u64,
+        ));
 
         Ok(ClaimOutcome::Claimed)
     }
@@ -783,32 +798,32 @@ mod tests {
             "scheduled",
         )
         .await;
-        session::append_message_once_with_key_and_requester_did(
-            node.as_ref(),
+        // The claim owner observes already-published canonical history; this
+        // fixture tests snapshot isolation, not notification authorization.
+        session::import_history_observation(
+            &node,
+            "prior-request-doc",
             session_id,
             TEST_AGENT_DID,
             None,
-            "user",
             "first notification",
-            None,
-            Some(&request.request_id),
-            Some(&request.doc_id),
             "background-completion-notification:child-1:subagent",
-            Some(1),
+            1,
+            None,
         )
-        .await
-        .unwrap();
-        session::save_message(
-            node.as_ref(),
+        .await;
+        session::import_history_observation(
+            &node,
+            "prior-request-doc",
             session_id,
             TEST_AGENT_DID,
+            None,
+            "prior context",
+            "prior-context",
             2,
-            "assistant",
-            "prior response",
             None,
         )
-        .await
-        .unwrap();
+        .await;
 
         let request_doc_id = request.doc_id.clone();
         let mut lifecycle = RequestLifecycle::new_with_execution_binding(
@@ -857,17 +872,18 @@ mod tests {
             vec!["background-completion-notification:child-1:subagent"]
         );
 
-        session::save_message(
-            node.as_ref(),
+        session::import_history_observation(
+            &node,
+            "successor-request-doc",
             session_id,
             TEST_AGENT_DID,
-            3,
-            "user",
+            None,
             "successor notification",
+            "background-completion-notification:child-2:subagent",
+            3,
             None,
         )
-        .await
-        .unwrap();
+        .await;
         let history = session::load_history_through_sequence(
             node.as_ref(),
             session_id,

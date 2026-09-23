@@ -1,12 +1,8 @@
 import type { JSX } from "react";
 
 const IN_FLIGHT_STATES = new Set([
-  "streaming",
-  "pending",
-  "processing",
-  "claimed",
+  "running",
   "waitingForClaim",
-  "input_required",
 ]);
 
 export type CancelButtonProps = {

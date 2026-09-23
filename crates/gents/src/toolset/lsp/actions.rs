@@ -232,7 +232,7 @@ async fn run_file_action(
             return Err(ToolError::reported_failure(
                 FailureClass::ToolReturnedError,
                 err,
-            ))
+            ));
         }
     };
     if matches!(
@@ -710,7 +710,9 @@ fn format_diagnostics(value: &Value, omitted: usize) -> String {
     collect_diagnostics(value, None, &mut diagnostics, MAX_DIAGNOSTICS);
     if diagnostics.is_empty() {
         return if omitted > 0 {
-            format!("No diagnostics in the allowed workspace; omitted {omitted} outside-root location(s)")
+            format!(
+                "No diagnostics in the allowed workspace; omitted {omitted} outside-root location(s)"
+            )
         } else {
             "No diagnostics".into()
         };

@@ -1,6 +1,5 @@
 #[tokio::test]
 async fn single_turn_no_tools_yields_text_then_final() {
-    let (_node, hook) = test_hook().await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("Hello ".to_string()),
         RawStreamingChoice::Message("world".to_string()),
@@ -9,7 +8,7 @@ async fn single_turn_no_tools_yields_text_then_final() {
 
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -102,7 +101,6 @@ async fn unmet_output_obligation_blocks_terminal_and_continues_with_runtime_remi
 
 #[tokio::test]
 async fn exceeding_max_turns_terminates_with_error() {
-    let (_node, hook) = test_hook().await;
     let prompt = Message::user("loop");
 
     // max_turns = 0 permits one tool round-trip (2 completions, matching rig);
@@ -111,7 +109,7 @@ async fn exceeding_max_turns_terminates_with_error() {
     let model = ScriptedModel::new_turns(vec![echo_tool_turn(), echo_tool_turn()]);
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         prompt,
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -156,13 +154,16 @@ async fn exceeding_max_turns_terminates_with_error() {
 
 #[tokio::test]
 async fn managed_terminal_tool_result_terminates_loop() {
-    let (_node, hook) = test_hook().await;
+    let (_node, hook, writer, mut lifecycle) = owned_test_hook().await;
     let prompt = Message::user("run the slow tool");
 
     // With the typed outcome channel a tool CANNOT fabricate a managed
-    // terminal: run the loop with an already-expired request deadline so the
-    // dispatcher's own envelope produces `ToolOutcome::TimedOut`, and
-    // on_tool_result terminates the loop.
+    // terminal: run the loop under an already-expired tool-execution scope so
+    // the dispatcher's own envelope produces `ToolOutcome::TimedOut`, and
+    // on_tool_result terminates the loop. The owned driver is required because
+    // dispatch only happens after the accepted publication fold
+    // (`ProviderTurnReady` → StreamProcessor adoption), which a bare
+    // stream.next() driver never reaches.
     let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(FixedTool {
         name: "echo".to_string(),
         output: "unreachable".to_string(),
@@ -170,35 +171,49 @@ async fn managed_terminal_tool_result_terminates_loop() {
     let model = ScriptedModel::new_turns(vec![echo_tool_turn()]);
     let stream = run_loop_stream(
         model,
-        Some(hook),
+        Some(hook.clone()),
         prompt,
         Vec::new(),
         Arc::new(tools),
-        config(4),
+        owned_config(4),
     );
-    futures::pin_mut!(stream);
 
     // The daemon installs the tool runtime scope around stream polling; an
     // already-expired deadline makes the dispatcher's envelope resolve the
-    // tool call to `ToolOutcome::TimedOut`.
-    let items = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
+    // tool call to `ToolOutcome::TimedOut`. The collector stays inside the
+    // expired scope so the actual tool-envelope timeout drives the error.
+    let collected = crate::tool_call_lifecycle::runtime::scope_request_tool_execution(
         Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
         tokio_util::sync::CancellationToken::new(),
-        async {
-            let mut items = Vec::new();
-            while let Some(item) = stream.next().await {
-                items.push(item);
-            }
-            items
-        },
+        // `run_loop_stream` and the owned acceptance driver are both large
+        // generator futures. Keep the runtime-scope wrapper from embedding the
+        // entire driver inline in the Tokio test task's stack frame.
+        Box::pin(collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+        )),
     )
     .await;
 
-    let last = items.last().expect("stream should yield at least one item");
-    assert!(last.is_err(), "expected a terminal error; got {last:?}");
+    let error = collected
+        .error
+        .as_deref()
+        .expect("stream should end with a terminal error");
+    // The managed terminal travels as typed data: the hook's Terminate reason
+    // is carried through `PromptError::PromptCancelled` (loop_stream's sole
+    // terminal for hook Terminate actions), never threaded as tool output.
     assert!(
-        format!("{:?}", last.as_ref().err().unwrap()).contains("deadline"),
-        "expected a deadline/timeout terminate; got {last:?}"
+        error.contains("PromptCancelled"),
+        "expected the typed PromptCancelled terminal; got {error}"
+    );
+    // The reason must be the managed terminal's own deadline vocabulary, not
+    // an arbitrary error or tool output: on_tool_result maps
+    // `ToolOutcome::TimedOut` to exactly "tool call deadline exceeded".
+    assert!(
+        error.contains("tool call deadline exceeded"),
+        "expected the precise managed-timeout reason; got {error}"
     );
 }
 
@@ -209,8 +224,6 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
     // follow-up requests reference prior `msg_` ids). Turn 1 emits a MessageId
     // plus a tool call; the tool result drives turn 2, whose request history must
     // contain the assistant tool-call message tagged with that id.
-    let (_node, hook) = test_hook().await;
-
     let model = ScriptedModel::new_turns(vec![
         vec![
             RawStreamingChoice::MessageId("msg_abc123".to_string()),
@@ -229,7 +242,7 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
 
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("go"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),

@@ -553,3 +553,48 @@ async fn assert_bounded_capture_drain(retained_stream: &str) {
         "direct-child exit must promptly clear the active executor"
     );
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn managed_exec_bounds_continuously_writing_descendant_after_direct_child_exit() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let pid_file = temp.path().join("continuous-descendant.pid");
+    let script = format!("yes x & echo $! > '{}'; exit 7", pid_file.display());
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(2),
+        run_managed_exec(ManagedExecRequest {
+            argv: vec!["/bin/sh".to_string(), "-c".to_string(), script],
+            cwd: temp.path().to_path_buf(),
+            deadline_at: Some(Utc::now() + chrono::Duration::seconds(10)),
+            cancellation_token: CancellationToken::new(),
+            max_output_bytes: 1024,
+            stdin: Vec::new(),
+            environment: None,
+            tool_name: Some("continuous-descendant-pipe".to_string()),
+            live_output: None,
+        }),
+    )
+    .await;
+    let descendant_pid = std::fs::read_to_string(&pid_file)
+        .expect("descendant pid file")
+        .trim()
+        .parse::<i32>()
+        .expect("descendant pid");
+    unsafe {
+        libc::kill(descendant_pid, libc::SIGKILL);
+    }
+    let outcome = outcome.expect("continuous descendant must not hold capture forever");
+    match outcome {
+        ManagedExecOutcome::Exited {
+            code,
+            stdout,
+            stdout_truncated,
+            ..
+        } => {
+            assert_eq!(code, Some(7));
+            assert_eq!(stdout.len(), 1024);
+            assert!(stdout_truncated);
+        }
+        other => panic!("expected direct-child exited outcome, got {other:?}"),
+    }
+}

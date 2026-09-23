@@ -4,11 +4,11 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use gents_protocol::transcript::{present_persisted_message, PresentedMessageRole};
+use gents_protocol::transcript::{present_message, PresentedMessageRole};
 
 use crate::run_timeline::{
-    RunTimeline, RunTimelineEvent, TimelineRenderedRequestEvent, TimelineRequestEvent,
-    TimelineResponseEvent,
+    RunTimeline, RunTimelineEvent, TimelineMessageEvent, TimelineRenderedRequestEvent,
+    TimelineRequestEvent,
 };
 
 mod atif;
@@ -20,6 +20,7 @@ pub use atif::{
 
 pub const ADAPTER_PROJECTION_VERSION: &str = "v1";
 pub const RUN_TIMELINE_PROJECTION_ID: &str = "run_timeline";
+pub const EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID: &str = "external_adapter_capture";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -145,6 +146,9 @@ pub enum ProjectionSourceVersionStatus {
     /// Their exact composite versions are not pinned in this envelope.
     #[default]
     CurrentStateCapturedOnly,
+    /// A derived view of an external framework capture.  It is explicitly not
+    /// a claim about canonical DefraDB documents, headers, or execution state.
+    ExternalAdapterCapture,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,7 +291,8 @@ pub enum OpenAiCodexTraceItem {
         request_id: Option<String>,
         name: String,
         arguments: String,
-        output: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
         status: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         child_run_id: Option<String>,
@@ -295,18 +300,6 @@ pub enum OpenAiCodexTraceItem {
         started_at: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         completed_at: Option<String>,
-    },
-    Response {
-        id: String,
-        status: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reasoning: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        error: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        timestamp: Option<String>,
     },
 }
 
@@ -435,19 +428,17 @@ pub fn build_external_adapter_projection(
     context: &ProjectionContext,
 ) -> anyhow::Result<AdapterProjectionEnvelope> {
     use crate::external_adapter_capture::{
-        import_external_adapter_capture_to_timeline_rows, langgraph_state_history_projection,
+        import_external_adapter_capture_to_derived_view, langgraph_state_history_projection,
     };
-    let imported = import_external_adapter_capture_to_timeline_rows(capture)?;
+    let imported = import_external_adapter_capture_to_derived_view(capture)?;
     let mapping = capture.mapping.as_ref().expect("import validated mapping");
-    let rows = &imported.rows;
-    let timeline = crate::run_timeline::build_run_timeline(rows.clone());
-    let mut envelope = build_adapter_projection(imported.projection, &timeline, context);
-    envelope.output = match imported.projection {
+    let view = &imported.view;
+    let output = match imported.projection {
         AdapterProjectionKind::LangGraphStateHistory => {
             let mut projection = langgraph_state_history_projection(
                 capture,
                 mapping,
-                rows.request
+                view.request
                     .session_id
                     .as_deref()
                     .unwrap_or(&mapping.request_id),
@@ -475,31 +466,37 @@ pub fn build_external_adapter_projection(
             if participants.is_empty() {
                 push_participant(
                     &mut participants,
-                    redact_option(rows.request.agent_did.as_deref(), context),
-                    rows.request.behavior_id.clone(),
+                    redact_option(view.request.agent_did.as_deref(), context),
+                    view.request.behavior_id.clone(),
                     "owner",
                 );
             }
             AdapterProjection::MultiAgentTask(MultiAgentTaskProjection {
                 task_id: mapping.request_id.clone(),
-                context_id: rows.request.session_id.clone(),
-                status: rows
+                context_id: view.request.session_id.clone(),
+                status: view
                     .request
                     .lifecycle_state
                     .map(|state| state.as_str().to_string()),
                 participants,
-                messages: rows
+                messages: view
                     .messages
                     .iter()
-                    .map(|message| MultiAgentMessage {
-                        id: format!("{}:message:{}", message.session_id, message.sequence),
-                        request_id: message.request_id.clone(),
-                        role: message.role.clone(),
-                        content: redact_str(&message.content, context),
-                        reasoning: redact_option(message.reasoning.as_deref(), context),
+                    .map(|message| {
+                        let presented = present_message(&message.message);
+                        MultiAgentMessage {
+                            id: message.capture_message_label.clone(),
+                            request_id: message.request_id.clone(),
+                            role: presented_role_label(presented.role).to_string(),
+                            content: redact_str(&presented.body_markdown, context),
+                            reasoning: redact_option(
+                                presented.reasoning_markdown.as_deref(),
+                                context,
+                            ),
+                        }
                     })
                     .collect(),
-                delegations: rows
+                delegations: view
                     .requests
                     .iter()
                     .filter_map(|request| {
@@ -516,7 +513,7 @@ pub fn build_external_adapter_projection(
                         })
                     })
                     .collect(),
-                tool_events: rows
+                tool_events: view
                     .tool_calls
                     .iter()
                     .map(|tool| MultiAgentToolEvent {
@@ -534,7 +531,28 @@ pub fn build_external_adapter_projection(
         }
         _ => unreachable!("import rejects unsupported projections"),
     };
-    Ok(envelope)
+    Ok(AdapterProjectionEnvelope {
+        projection_id: imported.projection.id().to_string(),
+        projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
+        source_request_id: view.request.request_id.clone(),
+        // The mapping request/session labels are external capture metadata,
+        // not canonical physical document identities.
+        source_request_doc_id: None,
+        source_session_id: view.request.session_id.clone(),
+        source_agent_did: redact_option(view.request.agent_did.as_deref(), context),
+        source_behavior_id: view.request.behavior_id.clone(),
+        redaction_mode: context.redaction_mode,
+        provenance: ProjectionProvenance {
+            runtime: "gents".to_string(),
+            source_projection_id: EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID.to_string(),
+            source_projection_version: ADAPTER_PROJECTION_VERSION.to_string(),
+            actor_did: redact_option(imported.actor_did.as_deref(), context),
+            source_version_status: ProjectionSourceVersionStatus::ExternalAdapterCapture,
+            rendered_request_refs: Vec::new(),
+        },
+        rendered_captures: Vec::new(),
+        output,
+    })
 }
 
 pub fn build_adapter_projection(
@@ -616,12 +634,23 @@ pub fn validate_adapter_projection_contract(
         "provenance.runtime",
         envelope.provenance.runtime.as_str(),
     );
+    let external_source = envelope.provenance.source_version_status
+        == ProjectionSourceVersionStatus::ExternalAdapterCapture;
+    let expected_source = if external_source {
+        EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
+    } else {
+        RUN_TIMELINE_PROJECTION_ID
+    };
     require_eq(
         &mut violations,
         "provenance.source_projection_id",
         envelope.provenance.source_projection_id.as_str(),
-        RUN_TIMELINE_PROJECTION_ID,
+        expected_source,
     );
+    if external_source && envelope.source_request_doc_id.is_some() {
+        violations
+            .push("external adapter capture must not claim source_request_doc_id".to_string());
+    }
     for (index, reference) in envelope.provenance.rendered_request_refs.iter().enumerate() {
         require_nonempty(
             &mut violations,
@@ -951,37 +980,13 @@ pub fn adapter_projection_eval_jsonl_records(
                         id,
                         EvalRecordFields {
                             input: Some(arguments.clone()),
-                            output: Some(output.clone()),
+                            output: output.clone(),
                             tool_name: Some(name.clone()),
                             status: Some(status.clone()),
                             child_request_id: child_run_id.clone(),
                             metadata: metadata([
                                 ("started_at", started_at.clone()),
                                 ("completed_at", completed_at.clone()),
-                            ]),
-                            ..EvalRecordFields::default()
-                        },
-                    )),
-                    OpenAiCodexTraceItem::Response {
-                        id,
-                        status,
-                        output,
-                        reasoning,
-                        error,
-                        timestamp,
-                    } => records.push(eval_record(
-                        envelope,
-                        records.len(),
-                        "response",
-                        "openai_codex_trace_item",
-                        id,
-                        EvalRecordFields {
-                            output: output.clone(),
-                            status: status.clone(),
-                            metadata: metadata([
-                                ("reasoning", reasoning.clone()),
-                                ("error", error.clone()),
-                                ("timestamp", timestamp.clone()),
                             ]),
                             ..EvalRecordFields::default()
                         },
@@ -1647,9 +1652,13 @@ fn provenance_schema() -> Value {
         "required": ["runtime", "source_projection_id", "source_projection_version", "source_version_status"],
         "properties": {
             "runtime": { "const": "gents" },
-            "source_projection_id": { "const": RUN_TIMELINE_PROJECTION_ID },
+            "source_projection_id": {
+                "enum": [RUN_TIMELINE_PROJECTION_ID, EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID]
+            },
             "source_projection_version": { "const": ADAPTER_PROJECTION_VERSION },
-            "source_version_status": { "const": "current_state_captured_only" },
+            "source_version_status": {
+                "enum": ["current_state_captured_only", "external_adapter_capture"]
+            },
             "actor_did": optional_string_schema(),
             "rendered_request_refs": {
                 "type": "array",
@@ -1795,8 +1804,7 @@ fn openai_item_id(item: &OpenAiCodexTraceItem) -> String {
     match item {
         OpenAiCodexTraceItem::Request { id, .. }
         | OpenAiCodexTraceItem::Message { id, .. }
-        | OpenAiCodexTraceItem::ToolCall { id, .. }
-        | OpenAiCodexTraceItem::Response { id, .. } => id.clone(),
+        | OpenAiCodexTraceItem::ToolCall { id, .. } => id.clone(),
     }
 }
 
@@ -1812,9 +1820,7 @@ fn validate_openai_codex_projection(
     );
     for (index, item) in projection.items.iter().enumerate() {
         match item {
-            OpenAiCodexTraceItem::Request { id, .. }
-            | OpenAiCodexTraceItem::Message { id, .. }
-            | OpenAiCodexTraceItem::Response { id, .. } => {
+            OpenAiCodexTraceItem::Request { id, .. } | OpenAiCodexTraceItem::Message { id, .. } => {
                 require_nonempty(violations, &format!("items[{index}].id"), id);
             }
             OpenAiCodexTraceItem::ToolCall {
@@ -1979,13 +1985,14 @@ fn build_openai_codex_run_trace(
             RunTimelineEvent::Compaction(_) => {}
             RunTimelineEvent::ProviderContextReduction(_) => {}
             RunTimelineEvent::Message(event) => {
+                let presented = present_message(&event.message);
                 items.push(OpenAiCodexTraceItem::Message {
                     id: format!("{}:message:{}", event.session_id, event.sequence),
                     request_id: event.request_id.clone(),
-                    role: event.role.clone(),
-                    content: redact_str(&event.content, context),
-                    reasoning: redact_option(event.reasoning.as_deref(), context),
-                    timestamp: event.timestamp.clone(),
+                    role: presented_role_label(presented.role).to_string(),
+                    content: redact_str(&presented.body_markdown, context),
+                    reasoning: redact_option(presented.reasoning_markdown.as_deref(), context),
+                    timestamp: valid_header_timestamp(event),
                 });
             }
             RunTimelineEvent::ToolCall(event) => {
@@ -1994,7 +2001,10 @@ fn build_openai_codex_run_trace(
                     request_id: event.request_id.clone(),
                     name: event.tool_name.clone(),
                     arguments: redact_str(&event.args, context),
-                    output: redact_str(&event.result, context),
+                    output: event
+                        .result
+                        .as_deref()
+                        .map(|result| redact_str(result, context)),
                     status: event.status.clone(),
                     child_run_id: event.child_request_id.clone(),
                     started_at: event.started_at.clone(),
@@ -2002,17 +2012,6 @@ fn build_openai_codex_run_trace(
                 });
             }
             RunTimelineEvent::GoalTransition(_) => {}
-            RunTimelineEvent::Response(event) => {
-                items.push(OpenAiCodexTraceItem::Response {
-                    id: event.request_id.clone(),
-                    status: event.status.clone(),
-                    output: projected_response_output(timeline, event)
-                        .map(|output| redact_str(&output, context)),
-                    reasoning: redact_option(event.reasoning.as_deref(), context),
-                    error: redact_option(event.error_message.as_deref(), context),
-                    timestamp: event.timestamp.clone(),
-                });
-            }
         }
     }
 
@@ -2134,18 +2133,21 @@ fn build_langgraph_state_history(
                 Some(redact_str(&event.summary, context)),
                 None,
             ),
-            RunTimelineEvent::Message(event) => (
-                format!("message:{}:{}", event.session_id, event.sequence),
-                "message".to_string(),
-                event.request_id.clone(),
-                None,
-                None,
-                None,
-                None,
-                Some(event.role.clone()),
-                Some(redact_str(&event.content, context)),
-                redact_option(event.reasoning.as_deref(), context),
-            ),
+            RunTimelineEvent::Message(event) => {
+                let presented = present_message(&event.message);
+                (
+                    format!("message:{}:{}", event.session_id, event.sequence),
+                    "message".to_string(),
+                    event.request_id.clone(),
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(presented_role_label(presented.role).to_string()),
+                    Some(redact_str(&presented.body_markdown, context)),
+                    redact_option(presented.reasoning_markdown.as_deref(), context),
+                )
+            }
             RunTimelineEvent::ToolCall(event) => (
                 format!("tool_call:{}", event.tool_call_id),
                 "tool_call".to_string(),
@@ -2176,18 +2178,6 @@ fn build_langgraph_state_history(
                     context,
                 ),
                 None,
-            ),
-            RunTimelineEvent::Response(event) => (
-                format!("response:{}", event.request_id),
-                "response".to_string(),
-                Some(event.request_id.clone()),
-                None,
-                None,
-                None,
-                None,
-                event.status.clone(),
-                redact_option(event.content.as_deref(), context),
-                redact_option(event.reasoning.as_deref(), context),
             ),
         };
 
@@ -2382,12 +2372,13 @@ fn build_multi_agent_task(
             RunTimelineEvent::Compaction(_) => {}
             RunTimelineEvent::ProviderContextReduction(_) => {}
             RunTimelineEvent::Message(message) => {
+                let presented = present_message(&message.message);
                 messages.push(MultiAgentMessage {
                     id: format!("{}:message:{}", message.session_id, message.sequence),
                     request_id: message.request_id.clone(),
-                    role: message.role.clone(),
-                    content: redact_str(&message.content, context),
-                    reasoning: redact_option(message.reasoning.as_deref(), context),
+                    role: presented_role_label(presented.role).to_string(),
+                    content: redact_str(&presented.body_markdown, context),
+                    reasoning: redact_option(presented.reasoning_markdown.as_deref(), context),
                 });
             }
             RunTimelineEvent::ToolCall(tool) => {
@@ -2403,7 +2394,6 @@ fn build_multi_agent_task(
                 });
             }
             RunTimelineEvent::GoalTransition(_) => {}
-            RunTimelineEvent::Response(_) => {}
         }
     }
 
@@ -2433,56 +2423,36 @@ fn timeline_request_input(
     })
 }
 
-fn projected_response_output(
-    timeline: &RunTimeline,
-    response: &TimelineResponseEvent,
-) -> Option<String> {
-    nonempty_str(response.content.as_deref())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            let sequence = response.materialized_message_sequence?;
-            timeline.events.iter().find_map(|event| match event {
-                RunTimelineEvent::Message(message)
-                    if message.request_id.as_deref() == Some(response.request_id.as_str())
-                        && message.sequence == sequence =>
-                {
-                    presented_assistant_message(message.role.as_str(), message.content.as_str())
-                }
-                _ => None,
-            })
-        })
-}
-
 fn root_final_output(timeline: &RunTimeline) -> Option<String> {
-    if let Some(response) = timeline.events.iter().rev().find_map(|event| match event {
-        RunTimelineEvent::Response(response) if response.request_id == timeline.request_id => {
-            Some(response)
-        }
-        _ => None,
-    }) {
-        return projected_response_output(timeline, response);
-    }
-
     timeline.events.iter().rev().find_map(|event| match event {
         RunTimelineEvent::Message(message)
             if message.request_id.as_deref() == Some(timeline.request_id.as_str()) =>
         {
-            presented_assistant_message(message.role.as_str(), message.content.as_str())
+            presented_assistant_message(message)
         }
         _ => None,
     })
 }
 
-fn presented_assistant_message(role: &str, content: &str) -> Option<String> {
-    let role = if role.eq_ignore_ascii_case("agent") {
-        "assistant"
-    } else {
-        role
-    };
-    let presented = present_persisted_message(role, content);
+fn presented_assistant_message(message: &TimelineMessageEvent) -> Option<String> {
+    let presented = present_message(&message.message);
     (presented.role == PresentedMessageRole::Assistant)
         .then_some(presented.body_markdown)
         .and_then(|content| nonempty_str(Some(&content)).map(ToOwned::to_owned))
+}
+
+fn presented_role_label(role: PresentedMessageRole) -> &'static str {
+    match role {
+        PresentedMessageRole::User => "user",
+        PresentedMessageRole::Assistant => "assistant",
+        PresentedMessageRole::Tool => "tool",
+    }
+}
+
+fn valid_header_timestamp(message: &TimelineMessageEvent) -> Option<String> {
+    chrono::DateTime::parse_from_rfc3339(&message.header.created_at)
+        .is_ok()
+        .then(|| message.header.created_at.clone())
 }
 
 fn nonempty_str(value: Option<&str>) -> Option<&str> {

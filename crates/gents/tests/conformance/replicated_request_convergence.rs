@@ -145,7 +145,8 @@ async fn create_owned_request_with_times_and_requester(
                 execution_origin: "interactive",
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
-                max_retries: {max_retries}
+                max_retries: {max_retries},
+                subagent_depth: 0
                 {terminal_fields}
                 {execution_fields}
             }}) {{ _docID }}
@@ -216,7 +217,8 @@ async fn create_queue_request(
                 execution_origin: "{escaped_execution_origin}",
                 created_at: "{escaped_created_at}",
                 retry_count: 0,
-                max_retries: {max_retries}
+                max_retries: {max_retries},
+                subagent_depth: 0
             }}) {{ _docID }}
         }}"#,
         max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
@@ -467,7 +469,7 @@ pub(super) async fn terminal_redrive_window_advances_past_sixty_four_rows() {
     assert_eq!(old.terminal_redrive_attempts, Some(1));
 }
 
-pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() {
+pub(super) async fn canonical_recovery_repairs_expired_request_after_terminal_write_gap() {
     let db = test_db("convergence-terminal-repair").await;
     let request_id = "convergence-terminal-repair-request";
     let session_id = "convergence-terminal-repair-session";
@@ -475,24 +477,6 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         create_owned_request(&db.node, request_id, session_id, OWNER_DID, "processing").await;
     seed_owned_request_projection(&db.node, session_id, request_id).await;
     let request_commits_before_repair = composite_commit_count(&db.node, &request_doc_id).await;
-    let response_doc_id =
-        create_response_with_status(&db.node, request_id, request_id, session_id, "error").await;
-    let escaped_response_doc_id = escape_graphql_string(&response_doc_id);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentResponse(
-                filter: {{ _docID: {{ _eq: "{escaped_response_doc_id}" }} }},
-                input: {{ error_message: "provider failed durably" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = db.node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed terminal reason: {:?}",
-        response.errors
-    );
-
     let repaired = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
         .await
         .unwrap();
@@ -507,7 +491,7 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     assert_eq!(row.lifecycle_state, RequestLifecycleState::Failed);
     assert_eq!(
         row.failure_reason.as_deref(),
-        Some("provider failed durably")
+        Some("execution lease expired")
     );
     assert!(row.terminalized_at.is_some());
     assert_eq!(row.terminal_redrive_attempts, Some(0));
@@ -517,8 +501,8 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         .unwrap();
     assert_eq!(duplicate.repaired, 0, "duplicate observation is idempotent");
 
-    let provider_request_id = "convergence-provider-interrupted-message";
-    let provider_session_id = "convergence-provider-interrupted-session";
+    let provider_request_id = "convergence-no-interrupt-latch";
+    let provider_session_id = "convergence-no-interrupt-latch-session";
     create_owned_request(
         &db.node,
         provider_request_id,
@@ -528,43 +512,21 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     )
     .await;
     seed_owned_request_projection(&db.node, provider_session_id, provider_request_id).await;
-    let provider_response_doc_id = create_response_with_status(
-        &db.node,
-        provider_request_id,
-        provider_request_id,
-        provider_session_id,
-        "error",
-    )
-    .await;
-    let escaped_provider_response_doc_id = escape_graphql_string(&provider_response_doc_id);
-    let response = db
-        .node
-        .execute(&format!(
-            r#"mutation {{
-                update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_provider_response_doc_id}" }} }},
-                    input: {{ error_message: "interrupted" }}
-                ) {{ _docID }}
-            }}"#
-        ))
-        .await;
-    assert!(
-        !response.has_errors(),
-        "seed provider interrupted message: {:?}",
-        response.errors
-    );
-
     let provider_repair = RequestLifecycle::repair_terminal_requests(&db.node, OWNER_DID)
         .await
         .unwrap();
     assert_eq!(provider_repair.repaired, 1);
     let provider_row = fetch_convergence_row(&db.node, provider_request_id).await;
     assert_eq!(provider_row.lifecycle_state, RequestLifecycleState::Failed);
-    assert_eq!(provider_row.failure_reason.as_deref(), Some("interrupted"));
+    assert_eq!(
+        provider_row.failure_reason.as_deref(),
+        Some("execution lease expired"),
+        "without the request-owned interrupt latch, recovery remains Failed"
+    );
 
     let runtime_interrupt_request_id = "convergence-runtime-interrupt-stamp";
     let runtime_interrupt_session_id = "convergence-runtime-interrupt-session";
-    create_owned_request(
+    let runtime_interrupt_doc_id = create_owned_request(
         &db.node,
         runtime_interrupt_request_id,
         runtime_interrupt_session_id,
@@ -578,33 +540,21 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
         runtime_interrupt_request_id,
     )
     .await;
-    let runtime_interrupt_response_doc_id = create_response_with_status(
-        &db.node,
-        runtime_interrupt_request_id,
-        runtime_interrupt_request_id,
-        runtime_interrupt_session_id,
-        "error",
-    )
-    .await;
-    let escaped_runtime_interrupt_response_doc_id =
-        escape_graphql_string(&runtime_interrupt_response_doc_id);
+    let runtime_interrupt_doc_id = escape_graphql_string(&runtime_interrupt_doc_id);
     let response = db
         .node
         .execute(&format!(
             r#"mutation {{
-                update_AgentResponse(
-                    filter: {{ _docID: {{ _eq: "{escaped_runtime_interrupt_response_doc_id}" }} }},
-                    input: {{
-                        error_message: "interrupted",
-                        interrupted_at: "2026-07-10T00:00:00Z"
-                    }}
+                update_AgentRequest(
+                    filter: {{ _docID: {{ _eq: "{runtime_interrupt_doc_id}" }} }},
+                    input: {{ interrupt_requested_at: "2026-07-10T00:00:00Z" }}
                 ) {{ _docID }}
             }}"#
         ))
         .await;
     assert!(
         !response.has_errors(),
-        "seed runtime interrupt stamp: {:?}",
+        "seed request-owned interrupt latch: {:?}",
         response.errors
     );
 
@@ -619,7 +569,8 @@ pub(super) async fn durable_response_repairs_request_after_terminal_write_gap() 
     );
     assert_eq!(
         runtime_interrupt_row.failure_reason.as_deref(),
-        Some("interrupted")
+        Some("execution lease expired"),
+        "the durable interrupt latch selects Interrupted lifecycle, while the canonical recovery diagnostic records the expired ownership boundary that triggered repair"
     );
 }
 
@@ -640,15 +591,6 @@ pub(super) async fn recover_stuck_requests_recovers_claimed_lifecycle_state() {
         "convergence-stuck-claimed",
     )
     .await;
-    create_response_with_status(
-        &db.node,
-        "convergence-stuck-claimed",
-        "convergence-stuck-claimed",
-        "convergence-stuck-claimed-session",
-        "error",
-    )
-    .await;
-
     let report = RequestLifecycle::recover_all(&db.node, OWNER_DID)
         .await
         .unwrap();

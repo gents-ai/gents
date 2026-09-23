@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use crate::llm::message::{Message, ToolResult};
@@ -12,6 +12,7 @@ use tokio::sync::{watch, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::background_tools::LiveToolOutputRegistry;
+use crate::meta_tools::selected_remote_identity;
 use crate::session;
 use crate::tool_call_lifecycle::{
     AwaitMode, CancelCause, CascadeDispatch, ChildTerminal, ToolCallLifecycle,
@@ -94,8 +95,6 @@ struct BackgroundExecution {
 #[derive(Clone, Default)]
 struct BackgroundLiveOutputState {
     registry: LiveToolOutputRegistry,
-    flushed_seq: Arc<Mutex<HashMap<String, i64>>>,
-    flusher_running: Arc<AtomicBool>,
 }
 
 impl BackgroundLiveOutputState {
@@ -106,22 +105,18 @@ impl BackgroundLiveOutputState {
         self.registry.writer_for(tool_call_id).await
     }
 
-    async fn remove(&self, tool_call_id: &str) {
-        self.registry.remove(tool_call_id).await;
-        self.flushed_seq.lock().await.remove(tool_call_id);
+    async fn canonical_writer_for(
+        &self,
+        binding: crate::tool_call_lifecycle::delivery::ToolOutputBinding,
+    ) -> crate::background_tools::LiveToolOutputWriter {
+        let tool_call_doc_id = binding.tool_call_doc_id.clone();
+        self.registry
+            .canonical_writer_for(tool_call_doc_id, Arc::new(binding))
+            .await
     }
 
-    async fn record_flushed_seq_if_live(&self, tool_call_id: &str, seq: i64) {
-        self.flushed_seq
-            .lock()
-            .await
-            .insert(tool_call_id.to_string(), seq);
-        // Close the mutation/worker-cleanup race: if cleanup removed the live
-        // buffer while the durable write was in flight, do not resurrect its
-        // sequence marker after cleanup has already run.
-        if self.registry.snapshot(tool_call_id).await.is_none() {
-            self.flushed_seq.lock().await.remove(tool_call_id);
-        }
+    async fn remove(&self, tool_call_id: &str) {
+        self.registry.remove(tool_call_id).await;
     }
 }
 
@@ -472,6 +467,7 @@ pub struct DefraSessionHook {
     counters: Arc<HookCounters>,
     state: Arc<Mutex<SessionState>>,
     in_flight_lifecycles: Arc<Mutex<HashMap<String, ToolCallLifecycle>>>,
+    accepted_tool_calls: Arc<Mutex<HashMap<String, crate::streaming::AcceptedToolCall>>>,
     background_tool_registry: BackgroundToolRegistry,
     background_executions: BackgroundExecutionRegistry,
     background_live_outputs: BackgroundLiveOutputState,
@@ -488,6 +484,103 @@ enum PolicyDecision {
 }
 
 impl DefraSessionHook {
+    /// Register provider-published physical calls before dispatch.  The next
+    /// matching hook invocation adopts, rather than creates, that exact row.
+    pub(crate) async fn adopt_accepted_tool_calls(
+        &self,
+        calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
+    ) -> anyhow::Result<()> {
+        let mut pending = self.accepted_tool_calls.lock().await;
+        for (internal_id, call) in calls {
+            anyhow::ensure!(
+                pending.insert(internal_id.clone(), call).is_none(),
+                "duplicate accepted tool binding for internal call {internal_id}"
+            );
+        }
+        Ok(())
+    }
+
+    /// Bind a dispatch hook invocation to the exact provider-published tool
+    /// row. Rig's internal call key is deliberately only the map key: the
+    /// provider-native identity registered by `StreamProcessor` must agree
+    /// with the immutable accepted header before anything can run.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn adopt_accepted_tool_dispatch(
+        &self,
+        internal_call_id: &str,
+        provider_call_id: Option<&str>,
+        request_id: &str,
+        session_id: &str,
+        tool_name: &str,
+        args: &str,
+        deadline_at: DateTime<Utc>,
+        await_mode: AwaitMode,
+        cancel_policy: crate::tool_call_lifecycle::CancelPolicy,
+    ) -> anyhow::Result<ToolCallLifecycle> {
+        let registered = self
+            .state
+            .lock()
+            .await
+            .tool_result_identities
+            .get(internal_call_id)
+            .cloned()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "tool dispatch lacks StreamProcessor native identity for internal call {internal_call_id}"
+                )
+            })?;
+        let native_id = registered.result_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "tool dispatch lacks registered provider tool id for internal call {internal_call_id}"
+            )
+        })?;
+        if let Some(provider_call_id) = provider_call_id {
+            anyhow::ensure!(
+                Some(provider_call_id) == registered.call_id.as_deref(),
+                "dispatch provider call id does not match StreamProcessor identity"
+            );
+        }
+
+        let request_doc_id = self
+            .active_request_doc_id_for(request_id)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("accepted dispatch requires a physical request binding")
+            })?;
+        let accepted = self
+            .accepted_tool_calls
+            .lock()
+            .await
+            .remove(internal_call_id)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "tool dispatch lacks its provider-published AcceptedToolCall binding"
+                )
+            })?;
+        anyhow::ensure!(
+            accepted.id == native_id
+                && accepted.call_id == registered.call_id
+                && accepted.request_doc_id == request_doc_id
+                && accepted.session_id == session_id
+                && accepted.tool_name == tool_name,
+            "accepted tool binding does not match registered provider dispatch identity"
+        );
+        let selected = self
+            .remote_tools
+            .as_ref()
+            .and_then(|remote| selected_remote_identity(tool_name, args, remote));
+        Ok(ToolCallLifecycle::from_accepted(
+            self.node.clone(),
+            self.agent_did.clone(),
+            self.active_requester_did().await,
+            accepted,
+            deadline_at,
+            await_mode,
+            cancel_policy,
+        )?
+        .with_selected_tool_identity(selected))
+    }
+
     #[cfg(test)]
     pub fn with_identity(
         node: Arc<EmbeddedNode>,
@@ -519,6 +612,7 @@ impl DefraSessionHook {
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
+            accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -565,6 +659,7 @@ impl DefraSessionHook {
                 tool_result_identities: HashMap::new(),
             })),
             in_flight_lifecycles: Arc::new(Mutex::new(HashMap::new())),
+            accepted_tool_calls: Arc::new(Mutex::new(HashMap::new())),
             background_tool_registry: BackgroundToolRegistry::default(),
             background_executions,
             background_live_outputs,
@@ -759,217 +854,27 @@ impl DefraSessionHook {
         &self,
         internal_call_id: &str,
     ) -> crate::background_tools::LiveToolOutputWriter {
-        let writer = self
-            .background_live_outputs
+        let binding = self
+            .in_flight_lifecycles
+            .lock()
+            .await
+            .get(internal_call_id)
+            .and_then(|lifecycle| lifecycle.tool_output_binding().ok());
+        if let Some(binding) = binding {
+            return self
+                .background_live_outputs
+                .canonical_writer_for(binding)
+                .await;
+        }
+        // The caller will fail terminalization without a physical accepted
+        // binding; this registration has no payload fallback.
+        self.background_live_outputs
             .writer_for(internal_call_id)
-            .await;
-        self.ensure_live_output_flusher();
-        writer
+            .await
     }
 
     pub(crate) async fn release_live_output(&self, tool_call_id: &str) {
         self.background_live_outputs.remove(tool_call_id).await;
-    }
-
-    pub(crate) fn ensure_live_output_flusher(&self) {
-        use std::sync::atomic::Ordering;
-        if self
-            .background_live_outputs
-            .flusher_running
-            .swap(true, Ordering::AcqRel)
-        {
-            return;
-        }
-        let hook = self.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(2));
-            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            loop {
-                ticker.tick().await;
-                match hook.flush_live_output_tails().await {
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::debug!(error = %error, "live output flush failed");
-                    }
-                }
-                if hook
-                    .background_live_outputs
-                    .registry
-                    .live_ids()
-                    .await
-                    .is_empty()
-                {
-                    break;
-                }
-            }
-            hook.background_live_outputs
-                .flusher_running
-                .store(false, std::sync::atomic::Ordering::Release);
-            // Close the empty-check/stop race: a writer that arrived after
-            // the loop's last check saw the guard as running and did not spawn
-            // a replacement, so re-check after releasing the shared guard.
-            if !hook
-                .background_live_outputs
-                .registry
-                .live_ids()
-                .await
-                .is_empty()
-            {
-                hook.ensure_live_output_flusher();
-            }
-        });
-    }
-
-    pub(crate) async fn flush_live_output_tails(&self) -> anyhow::Result<usize> {
-        const TAIL_PERSIST_BYTES: usize = 4096;
-
-        let live_ids = self.background_live_outputs.registry.live_ids().await;
-        {
-            let mut flushed = self.background_live_outputs.flushed_seq.lock().await;
-            flushed.retain(|id, _| live_ids.contains(id));
-        }
-
-        let mut count = 0usize;
-        for tool_call_id in live_ids {
-            let Some(snapshot) = self
-                .background_live_outputs
-                .registry
-                .snapshot(&tool_call_id)
-                .await
-            else {
-                continue;
-            };
-            let seq = snapshot.combined.total_bytes_seen as i64;
-            if seq == 0 {
-                continue;
-            }
-            if self
-                .background_live_outputs
-                .flushed_seq
-                .lock()
-                .await
-                .get(&tool_call_id)
-                .copied()
-                == Some(seq)
-            {
-                continue;
-            }
-            let bytes = &snapshot.combined.bytes;
-            let start = bytes.len().saturating_sub(TAIL_PERSIST_BYTES);
-            let tail = String::from_utf8_lossy(&bytes[start..]).to_string();
-
-            let row_query = format!(
-                r#"{{
-                    AgentToolCall(
-                        filter: {{ tool_call_id: {{ _eq: "{id}" }} }},
-                        limit: 1
-                    ) {{
-                        lifecycle_state
-                        started_at
-                        deadline_at
-                        completed_at
-                        unclaimed_deadline_at
-                        cancel_cascade_intent_at
-                        stuck_since
-                    }}
-                }}"#,
-                id = crate::graphql::escape_graphql_string(&tool_call_id),
-            );
-            let row_response = self.node.execute(&row_query).await;
-            let Some(row_value) = row_response
-                .data
-                .as_ref()
-                .and_then(|data| data.get("AgentToolCall"))
-                .and_then(|value| value.as_array())
-                .and_then(|rows| rows.first())
-                .cloned()
-            else {
-                continue;
-            };
-            if row_value.get("lifecycle_state").and_then(|v| v.as_str()) != Some("running") {
-                continue;
-            }
-            let datetime_row: crate::background_completion::AgentToolCallDateTimeRow =
-                serde_json::from_value(row_value).unwrap_or_default();
-            let mut datetime_fields = Vec::new();
-            crate::background_completion::push_datetime_field(
-                &mut datetime_fields,
-                &[],
-                "started_at",
-                datetime_row.started_at.as_deref(),
-            );
-            crate::background_completion::push_datetime_field(
-                &mut datetime_fields,
-                &[],
-                "deadline_at",
-                datetime_row.deadline_at.as_deref(),
-            );
-            crate::background_completion::push_datetime_field(
-                &mut datetime_fields,
-                &[],
-                "completed_at",
-                datetime_row.completed_at.as_deref(),
-            );
-            crate::background_completion::push_datetime_field(
-                &mut datetime_fields,
-                &[],
-                "unclaimed_deadline_at",
-                datetime_row.unclaimed_deadline_at.as_deref(),
-            );
-            crate::background_completion::push_datetime_field(
-                &mut datetime_fields,
-                &[],
-                "cancel_cascade_intent_at",
-                datetime_row.cancel_cascade_intent_at.as_deref(),
-            );
-            crate::background_completion::push_datetime_field(
-                &mut datetime_fields,
-                &[],
-                "stuck_since",
-                datetime_row.stuck_since.as_deref(),
-            );
-            let datetime_fragment = if datetime_fields.is_empty() {
-                String::new()
-            } else {
-                format!(", {}", datetime_fields.join(", "))
-            };
-            // CAS on running: a straggler tick must never stamp telemetry
-            // onto a terminal row.
-            let mutation = format!(
-                r#"mutation {{
-                    update_AgentToolCall(
-                        filter: {{
-                            _and: [
-                                {{ tool_call_id: {{ _eq: "{id}" }} }},
-                                {{ lifecycle_state: {{ _eq: "running" }} }}
-                            ]
-                        }},
-                        input: {{ partial_output_tail: "{tail}", partial_output_seq: {seq}{datetimes} }}
-                    ) {{ _docID }}
-                }}"#,
-                id = crate::graphql::escape_graphql_string(&tool_call_id),
-                tail = crate::graphql::escape_graphql_string(&tail),
-                datetimes = datetime_fragment,
-            );
-            let response = crate::config_client::ConfigAccess::write_local_response(
-                &self.node,
-                "hook.flush_background_tool_output",
-                &mutation,
-            )
-            .await;
-            match response {
-                Ok(_) => {
-                    self.background_live_outputs
-                        .record_flushed_seq_if_live(&tool_call_id, seq)
-                        .await;
-                    count += 1;
-                }
-                Err(error) => {
-                    tracing::debug!(tool_call_id = %tool_call_id, %error, "live output tail flush failed; will retry next tick");
-                }
-            }
-        }
-        Ok(count)
     }
 
     pub(crate) async fn timeout_expired_tool_calls(&self) -> anyhow::Result<usize> {
@@ -1124,34 +1029,6 @@ impl DefraSessionHook {
         Ok(count)
     }
 
-    pub async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {
-        let (request_id, request_doc_id, session_id, requester_did) = {
-            let state = self.state.lock().await;
-            (
-                state.current_request_id.clone(),
-                state.current_request_doc_id.clone(),
-                state.session_id.clone(),
-                state.current_requester_did.clone(),
-            )
-        };
-        if request_id.is_none() {
-            return Ok(());
-        }
-        let request_doc_id = request_doc_id
-            .ok_or_else(|| anyhow::anyhow!("active response has no request document binding"))?;
-        let session_id =
-            session_id.ok_or_else(|| anyhow::anyhow!("active response has no session binding"))?;
-        session::mark_response_materialized(
-            &self.node,
-            &self.agent_did,
-            &session_id,
-            requester_did.as_deref(),
-            &request_doc_id,
-            sequence,
-        )
-        .await
-    }
-
     pub async fn close(&self) -> anyhow::Result<()> {
         let session_id = self.state.lock().await.session_id.clone();
         if let Some(id) = session_id {
@@ -1181,6 +1058,29 @@ impl DefraSessionHook {
                 PolicyDecision::Terminate(_) => Err(e),
             },
         }
+    }
+}
+
+#[async_trait::async_trait]
+impl
+    gents_loop::session_hook::CanonicalSessionHook<
+        crate::streaming::AcceptedToolCall,
+        crate::streaming::SpawnAdmissionPlan,
+    > for DefraSessionHook
+{
+    async fn preplan_spawn_admissions(
+        &self,
+        message: &Message,
+        internal_call_ids: &[String],
+    ) -> Vec<crate::streaming::SpawnAdmissionPlan> {
+        DefraSessionHook::preplan_spawn_admissions(self, message, internal_call_ids).await
+    }
+
+    async fn adopt_accepted_tool_calls(
+        &self,
+        calls: Vec<(String, crate::streaming::AcceptedToolCall)>,
+    ) -> anyhow::Result<()> {
+        DefraSessionHook::adopt_accepted_tool_calls(self, calls).await
     }
 }
 
@@ -1233,44 +1133,6 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
 
     async fn session_id(&self) -> Option<String> {
         DefraSessionHook::session_id(self).await
-    }
-
-    fn apply_persistence_policy(
-        &self,
-        result: anyhow::Result<()>,
-        context: &str,
-    ) -> anyhow::Result<()> {
-        DefraSessionHook::apply_persistence_policy(self, result, context)
-    }
-
-    async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
-        DefraSessionHook::persist_message(self, message).await
-    }
-
-    async fn persist_stream_tool_result_message(
-        &self,
-        tool_result: &ToolResult,
-        internal_call_id: &str,
-    ) -> anyhow::Result<()> {
-        DefraSessionHook::persist_stream_tool_result_message(self, tool_result, internal_call_id)
-            .await
-    }
-
-    async fn persist_stream_tool_result_progress(
-        &self,
-        tool_result: &ToolResult,
-        internal_call_id: &str,
-    ) -> anyhow::Result<bool> {
-        DefraSessionHook::persist_stream_tool_result_progress(self, tool_result, internal_call_id)
-            .await
-    }
-
-    async fn persist_inflight_assistant_turn(&self, message: &Message) -> anyhow::Result<u32> {
-        DefraSessionHook::persist_inflight_assistant_turn(self, message).await
-    }
-
-    async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()> {
-        DefraSessionHook::mark_current_response_materialized(self, sequence).await
     }
 
     async fn register_stream_tool_call_identity(

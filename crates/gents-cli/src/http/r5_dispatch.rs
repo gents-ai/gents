@@ -47,16 +47,14 @@ struct SubagentDispatchQueryEnvelope {
     bridges: Vec<BridgeRow>,
     #[serde(rename = "AgentRequest", default)]
     requests: Vec<AgentRequestRow>,
-    #[serde(rename = "AgentBehavior", default)]
-    behaviors: Vec<BehaviorRow>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 struct BridgeRow {
+    #[serde(rename = "_docID", default)]
+    doc_id: String,
     #[serde(default)]
     request_id: String,
-    #[serde(default)]
-    args: Option<String>,
     #[serde(default)]
     status: Option<String>,
     #[serde(default)]
@@ -65,20 +63,10 @@ struct BridgeRow {
     started_at: Option<String>,
     #[serde(default)]
     child_request_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct BehaviorRow {
     #[serde(default)]
-    behavior_id: String,
+    spawn_behavior_id: Option<String>,
     #[serde(default)]
-    agent_did: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct SpawnSubagentArgs {
-    #[serde(default)]
-    behavior_id: Option<String>,
+    spawn_target_did: Option<String>,
 }
 
 pub(crate) async fn subagent_dispatches_handler(
@@ -106,11 +94,7 @@ pub(crate) async fn load_subagent_dispatch_snapshot(
     let query = subagent_dispatch_query(parent_request_id.as_deref());
     let response = post_graphql(graphql, &query).await?;
     let envelope = decode_subagent_dispatch_query_response(response)?;
-    Ok(build_subagent_dispatch_snapshot(
-        generated_at,
-        parent_request_id,
-        envelope,
-    ))
+    build_subagent_dispatch_snapshot(generated_at, parent_request_id, envelope)
 }
 
 fn decode_subagent_dispatch_query_response(
@@ -167,13 +151,15 @@ fn subagent_dispatch_query(parent_request_id: Option<&str>) -> String {
                 filter: {tool_filter},
                 order: [{{ started_at: ASC }}, {{ child_request_id: ASC }}]
             ) {{
+                _docID
                 request_id
                 tool_call_id
-                args
                 status
                 lifecycle_state
                 started_at
                 child_request_id
+                spawn_behavior_id
+                spawn_target_did
             }}
             AgentRequest(
                 filter: {request_filter},
@@ -188,10 +174,6 @@ fn subagent_dispatch_query(parent_request_id: Option<&str>) -> String {
                 caused_by_parent_request_id
                 caused_by_parent_tool_call_id
             }}
-            AgentBehavior(order: {{ behavior_id: ASC }}) {{
-                behavior_id
-                agent_did
-            }}
         }}"#
     )
 }
@@ -200,7 +182,7 @@ fn build_subagent_dispatch_snapshot(
     generated_at: DateTime<Utc>,
     parent_request_id: Option<String>,
     envelope: SubagentDispatchQueryEnvelope,
-) -> SubagentDispatchSnapshot {
+) -> Result<SubagentDispatchSnapshot> {
     let requests_by_id = envelope
         .requests
         .into_iter()
@@ -209,35 +191,49 @@ fn build_subagent_dispatch_snapshot(
             (!request_id.is_empty()).then_some((request_id, request))
         })
         .collect::<BTreeMap<_, _>>();
-    let behavior_deployments = envelope
-        .behaviors
-        .into_iter()
-        .filter_map(|behavior| {
-            let behavior_id = clean_string(&behavior.behavior_id);
-            let deployment = clean_optional_string(behavior.agent_did.as_deref())?;
-            (!behavior_id.is_empty()).then_some((behavior_id, deployment))
-        })
-        .collect::<BTreeMap<_, _>>();
-
+    let mut physical_bridges = std::collections::BTreeSet::new();
     let mut dispatches = envelope
         .bridges
         .into_iter()
-        .filter_map(|bridge| {
+        .map(|bridge| -> Result<SubagentDispatchRow> {
+            let bridge_doc_id = clean_string(&bridge.doc_id);
+            anyhow::ensure!(
+                !bridge_doc_id.is_empty(),
+                "spawn bridge omitted physical identity"
+            );
+            anyhow::ensure!(
+                physical_bridges.insert(bridge_doc_id),
+                "duplicate physical spawn bridge row"
+            );
             let parent_request_id = clean_string(&bridge.request_id);
-            let child_request_id = clean_optional_string(bridge.child_request_id.as_deref())?;
-            if parent_request_id.is_empty() {
-                return None;
-            }
+            let child_request_id = clean_optional_string(bridge.child_request_id.as_deref())
+                .context("spawn bridge omitted child_request_id")?;
+            anyhow::ensure!(
+                !parent_request_id.is_empty(),
+                "spawn bridge omitted parent request"
+            );
 
             let child = requests_by_id.get(&child_request_id);
-            let behavior_id = child
-                .and_then(|child| clean_optional_string(child.behavior_id.as_deref()))
-                .or_else(|| target_behavior_id_from_args(bridge.args.as_deref()))
-                .unwrap_or_default();
-            let deployment = child
-                .and_then(|child| clean_optional_string(child.agent_did.as_deref()))
-                .or_else(|| behavior_deployments.get(&behavior_id).cloned())
-                .unwrap_or_default();
+            let behavior_id = clean_optional_string(bridge.spawn_behavior_id.as_deref())
+                .context("spawn bridge omitted immutable behavior pin")?;
+            let deployment = clean_optional_string(bridge.spawn_target_did.as_deref())
+                .context("spawn bridge omitted immutable target principal pin")?;
+            if let Some(child_behavior) =
+                child.and_then(|child| clean_optional_string(child.behavior_id.as_deref()))
+            {
+                anyhow::ensure!(
+                    child_behavior == behavior_id,
+                    "spawn bridge behavior pin disagrees with child request"
+                );
+            }
+            if let Some(child_deployment) =
+                child.and_then(|child| clean_optional_string(child.agent_did.as_deref()))
+            {
+                anyhow::ensure!(
+                    child_deployment == deployment,
+                    "spawn bridge target principal pin disagrees with child request"
+                );
+            }
             let dispatch_state = clean_optional_string(bridge.lifecycle_state.as_deref())
                 .or_else(|| clean_optional_string(bridge.status.as_deref()))
                 .or_else(|| {
@@ -257,7 +253,7 @@ fn build_subagent_dispatch_snapshot(
                 })
                 .unwrap_or_default();
 
-            Some(SubagentDispatchRow {
+            Ok(SubagentDispatchRow {
                 parent_request_id,
                 child_request_id,
                 deployment,
@@ -266,7 +262,7 @@ fn build_subagent_dispatch_snapshot(
                 started_at,
             })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
     dispatches.sort_by(|left, right| {
         (
@@ -281,21 +277,12 @@ fn build_subagent_dispatch_snapshot(
             ))
     });
 
-    SubagentDispatchSnapshot {
+    Ok(SubagentDispatchSnapshot {
         generated_at: generated_at.to_rfc3339(),
         source: SNAPSHOT_SOURCE.to_string(),
         parent_request_id,
         dispatches,
-    }
-}
-
-fn target_behavior_id_from_args(args: Option<&str>) -> Option<String> {
-    let args = args?.trim();
-    if args.is_empty() {
-        return None;
-    }
-    let parsed = serde_json::from_str::<SpawnSubagentArgs>(args).ok()?;
-    clean_optional_string(parsed.behavior_id.as_deref())
+    })
 }
 
 fn clean_optional_string(value: Option<&str>) -> Option<String> {
@@ -407,13 +394,16 @@ mod tests {
             "data": {
                 "AgentToolCall": [
                     {
+                        "_docID": "bridge-r5-api",
                         "request_id": "parent-r5-api",
                         "tool_call_id": "tool-r5-api",
                         "args": "{\"behavior_id\":\"child-behavior-r5\"}",
                         "status": "running",
                         "lifecycle_state": "running",
                         "started_at": "2026-05-20T12:00:00Z",
-                        "child_request_id": "child-r5-api"
+                        "child_request_id": "child-r5-api",
+                        "spawn_behavior_id": "child-behavior-r5",
+                        "spawn_target_did": "deployment-b"
                     }
                 ],
                 "AgentRequest": [
@@ -428,12 +418,6 @@ mod tests {
                         "caused_by_parent_tool_call_id": "tool-r5-api"
                     }
                 ],
-                "AgentBehavior": [
-                    {
-                        "behavior_id": "child-behavior-r5",
-                        "agent_did": "deployment-b"
-                    }
-                ]
             }
         })
     }
@@ -461,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_preserves_unclaimed_bridge_with_target_behavior_fallback() {
+    fn snapshot_preserves_unclaimed_bridge_with_immutable_route_pin() {
         let generated_at = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
@@ -470,20 +454,19 @@ mod tests {
             None,
             SubagentDispatchQueryEnvelope {
                 bridges: vec![BridgeRow {
+                    doc_id: "bridge-unclaimed".to_string(),
                     request_id: "parent-unclaimed".to_string(),
-                    args: Some(r#"{"behavior_id":"remote-worker"}"#.to_string()),
                     status: Some("running".to_string()),
                     lifecycle_state: Some("running".to_string()),
                     started_at: Some("2026-05-20T12:00:01Z".to_string()),
                     child_request_id: Some("child-unclaimed".to_string()),
+                    spawn_behavior_id: Some("remote-worker".to_string()),
+                    spawn_target_did: Some("deployment-remote".to_string()),
                 }],
                 requests: vec![],
-                behaviors: vec![BehaviorRow {
-                    behavior_id: "remote-worker".to_string(),
-                    agent_did: Some("deployment-remote".to_string()),
-                }],
             },
-        );
+        )
+        .unwrap();
 
         assert_eq!(snapshot.source, SNAPSHOT_SOURCE);
         assert_eq!(
@@ -497,6 +480,50 @@ mod tests {
                 started_at: "2026-05-20T12:00:01Z".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn snapshot_fails_closed_on_missing_or_mismatched_route_pin() {
+        let generated_at = DateTime::parse_from_rfc3339("2026-05-20T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        for bridge in [
+            json!({
+                "_docID": "bridge-missing",
+                "request_id": "parent",
+                "child_request_id": "child",
+                "spawn_target_did": "did:key:target"
+            }),
+            json!({
+                "_docID": "bridge-mismatch",
+                "request_id": "parent",
+                "child_request_id": "child",
+                "spawn_behavior_id": "pinned-behavior",
+                "spawn_target_did": "did:key:target"
+            }),
+        ] {
+            let requests = if bridge["_docID"] == "bridge-mismatch" {
+                vec![json!({
+                    "request_id": "child",
+                    "behavior_id": "different-behavior",
+                    "agent_did": "did:key:target",
+                    "lifecycle_state": "processing"
+                })]
+            } else {
+                Vec::new()
+            };
+            let envelope = serde_json::from_value(json!({
+                "AgentToolCall": [bridge],
+                "AgentRequest": requests
+            }))
+            .unwrap();
+            assert!(build_subagent_dispatch_snapshot(
+                generated_at,
+                Some("parent".to_string()),
+                envelope,
+            )
+            .is_err());
+        }
     }
 
     #[test]
@@ -526,7 +553,10 @@ mod tests {
             let requests = if child.is_null() { vec![] } else { vec![child] };
             let envelope = serde_json::from_value(serde_json::json!({
                 "AgentToolCall": [{
+                    "_docID": "bridge",
                     "request_id": "parent", "child_request_id": "child",
+                    "spawn_behavior_id": "remote-worker",
+                    "spawn_target_did": "deployment-remote",
                     "lifecycle_state": " ", "status": null, "started_at": " "
                 }],
                 "AgentRequest": requests,
@@ -536,7 +566,8 @@ mod tests {
                 generated_at,
                 Some("parent".to_string()),
                 envelope,
-            );
+            )
+            .unwrap();
             assert_eq!(snapshot.dispatches.len(), 1);
             assert_eq!(snapshot.dispatches[0].dispatch_state, expected_state);
             assert_eq!(snapshot.dispatches[0].started_at, expected_start);
@@ -549,6 +580,9 @@ mod tests {
         assert!(query.contains(r#"tool_name: { _eq: "spawn_subagent" }"#));
         assert!(query.contains(r#"child_request_id: { _ne: "" }"#));
         assert!(query.contains(r#"lifecycle_state: { _eq: "running" }"#));
+        assert!(query.contains("spawn_behavior_id"));
+        assert!(query.contains("spawn_target_did"));
+        assert!(!query.contains("AgentBehavior"));
     }
 
     #[tokio::test]

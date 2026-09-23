@@ -212,7 +212,7 @@ impl CallToolTool {
                     tool_name,
                     format!("MCP catalog unavailable: {error:#}"),
                     true,
-                ))
+                ));
             }
         };
 

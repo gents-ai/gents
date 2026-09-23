@@ -33,7 +33,7 @@ pub use process::{
     spawn_server_with_ready_json, wait_for_port, ServeProcess,
 };
 pub use waits::{
-    insert_terminal_response, wait_for_completed_inference_behaviors,
+    canonical_tool_result_text, wait_for_completed_inference_behaviors,
     wait_for_completed_tool_calls, wait_for_connected_peer, wait_for_request,
     wait_for_request_lifecycle_state, wait_for_runtime_quiescence, wait_for_runtime_ready,
     wait_for_runtime_state_graphql, wait_for_tool_call,

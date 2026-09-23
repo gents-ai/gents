@@ -1,9 +1,7 @@
 use chrono::{Duration, Utc};
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{
-    create_subagent_request_with_request_id,
-    create_subagent_request_with_trusted_parent_request_id, AwaitMode, CancelPolicy,
-    ToolCallLifecycle,
+    create_subagent_request_with_request_id, create_subagent_request_with_trusted_parent_request_id,
 };
 use gents::{
     resolve_descendant_edge, resolve_descendant_graph, resolve_session_descendant_edge,
@@ -73,7 +71,6 @@ async fn create_nested_bridge(
     requester_did: &str,
     worker_did: &str,
 ) -> String {
-    let args = escape_graphql_string(r#"{"name":"reviewer","behavior_id":"reviewer"}"#);
     let now = Utc::now().to_rfc3339();
     let deadline = (Utc::now() + Duration::minutes(5)).to_rfc3339();
     let response = node
@@ -89,9 +86,6 @@ async fn create_nested_bridge(
                     message_sequence: 1,
                     tool_name: "spawn_subagent",
                     tool_call_id: "call-reviewer",
-                    args: "{args}",
-                    result: "",
-                    status: "called",
                     lifecycle_state: "running",
                     started_at: "{now}",
                     deadline_at: "{deadline}",
@@ -135,24 +129,19 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         create_request(db.node.as_ref(), root_id, root_session, root_did, "default").await;
 
     let deadline = Utc::now() + Duration::minutes(5);
-    let mut worker_bridge = ToolCallLifecycle::new_subagent(
-        db.node.clone(),
-        root_id.to_string(),
-        root_session.to_string(),
-        root_did.to_string(),
-        "call-worker".to_string(),
+    let worker_bridge_doc = seed_running_spawn_bridge(
+        db.node.as_ref(),
+        root_id,
+        &root_doc,
+        root_session,
+        root_did,
+        "call-worker",
         1,
-        "spawn_subagent".to_string(),
-        r#"{"name":"fast-worker","behavior_id":"fast-worker"}"#.to_string(),
-        deadline,
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        "request-worker".to_string(),
-        worker_did.clone(),
+        "request-worker",
+        &Utc::now().to_rfc3339(),
+        &deadline.to_rfc3339(),
     )
-    .with_request_doc_id(Some(root_doc.clone()));
-    worker_bridge.start_running().await.unwrap();
-    let worker_bridge_doc = worker_bridge.doc_id().unwrap().to_string();
+    .await;
 
     let pending = resolve_descendant_graph(
         DescendantGraphAccess::Local(db.node.as_ref()),
@@ -234,7 +223,7 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
     assert_eq!(later.edges[0].immediate_parent_request_id, root_id);
     assert!(later.edges[0].controllable());
     let listed = gents::__test_internals::handle_list_subagents(
-        db.node.as_ref(),
+        &db.node,
         "later-user-turn",
         serde_json::from_value(serde_json::json!({"status":"all"})).unwrap(),
     )
@@ -296,7 +285,7 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         db.node.as_ref(),
         &worker_doc,
         &worker_session,
-        &worker_did,
+        root_did,
         &worker_did,
     )
     .await;
@@ -316,10 +305,15 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
     .await
     .unwrap();
 
-    worker_bridge
-        .bridge_complete("durable worker result".to_string())
-        .await
-        .unwrap();
+    seed_closed_bridge_output(
+        db.node.as_ref(),
+        &root_doc,
+        root_session,
+        root_did,
+        &worker_bridge_doc,
+    )
+    .await;
+    assert!(bridge_terminal(db.node.as_ref(), &worker_bridge_doc).await);
 
     let all = resolve_descendant_graph(
         DescendantGraphAccess::Local(db.node.as_ref()),
@@ -419,23 +413,19 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
     // A later turn can spawn another child: enumeration is the union of the
     // owning requests, with a stable cursor that survives a new user turn.
     let later_doc = crate::support::exact_request_doc_id(db.node.as_ref(), "later-user-turn").await;
-    let mut later_bridge = ToolCallLifecycle::new_subagent(
-        db.node.clone(),
-        "later-user-turn".into(),
-        root_session.into(),
-        root_did.into(),
-        "later-worker-call".into(),
+    seed_running_spawn_bridge(
+        db.node.as_ref(),
+        "later-user-turn",
+        &later_doc,
+        root_session,
+        root_did,
+        "later-worker-call",
         1,
-        "spawn_subagent".into(),
-        r#"{"name":"later-worker"}"#.into(),
-        deadline,
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        "later-child".into(),
-        root_did.into(),
+        "later-child",
+        &Utc::now().to_rfc3339(),
+        &deadline.to_rfc3339(),
     )
-    .with_request_doc_id(Some(later_doc));
-    later_bridge.start_running().await.unwrap();
+    .await;
     create_request(
         db.node.as_ref(),
         "third-user-turn",
@@ -471,6 +461,147 @@ async fn canonical_graph_preserves_pending_remote_terminal_nested_and_paging_edg
         .all(|edge| edge.cursor != page1.edges[0].cursor));
 }
 
+/// Seed a structurally valid, already-committed canonical spawn bridge row.
+/// This is an observation-owner fixture: it makes no claim about provider
+/// acceptance or dispatch behavior for this row. The document uses the
+/// canonical protocol row shape (physical request/child links, lifecycle state
+/// only, no legacy args/result/status fields) purely to exercise descendant
+/// graph projection and paging. The row is never dispatched.
+#[allow(clippy::too_many_arguments)]
+async fn seed_running_spawn_bridge(
+    node: &gents::defra_node::EmbeddedNode,
+    request_id: &str,
+    request_doc_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    tool_call_id: &str,
+    message_sequence: u32,
+    child_request_id: &str,
+    started_at: &str,
+    deadline_at: &str,
+) -> String {
+    let tool_call_key = format!("{request_doc_id}:spawn:{tool_call_id}");
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{tool_call_key}",
+                    request_id: "{request_id}",
+                    request_doc_id: "{request_doc_id}",
+                    session_id: "{session_id}",
+                    agent_did: "{agent_did}",
+                    message_sequence: {message_sequence},
+                    tool_name: "spawn_subagent",
+                    tool_call_id: "{tool_call_id}",
+                    lifecycle_state: "running",
+                    started_at: "{started_at}",
+                    deadline_at: "{deadline_at}",
+                    await_mode: "background",
+                    cancel_policy: "cascade",
+                    child_request_id: "{child_request_id}"
+                }}) {{ _docID }}
+            }}"#,
+            tool_call_key = escape_graphql_string(&tool_call_key),
+            request_id = escape_graphql_string(request_id),
+            request_doc_id = escape_graphql_string(request_doc_id),
+            session_id = escape_graphql_string(session_id),
+            agent_did = escape_graphql_string(agent_did),
+            tool_call_id = escape_graphql_string(tool_call_id),
+            started_at = escape_graphql_string(started_at),
+            deadline_at = escape_graphql_string(deadline_at),
+            child_request_id = escape_graphql_string(child_request_id),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    gents::graphql::single_mutation_document(&response, "create_AgentToolCall")
+        .expect("mutation envelope")
+        .expect("created bridge")["_docID"]
+        .as_str()
+        .expect("spawn bridge doc id")
+        .to_string()
+}
+
+// Seed the canonical output fact observed by the graph; this fixture exercises
+// projection of committed records, not publication or dispatch authority.
+async fn seed_closed_bridge_output(
+    node: &gents::defra_node::EmbeddedNode,
+    request_doc_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    tool_call_doc_id: &str,
+) {
+    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload,
+    };
+
+    let payload = "durable worker result";
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: None,
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.into(),
+        source: OutputSource::ToolCall {
+            tool_call_doc_id: tool_call_doc_id.into(),
+        },
+        writer: OutputWriter::ToolExecution {
+            tool_call_doc_id: tool_call_doc_id.into(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: payload.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: payload.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![payload.len() as u64],
+        }),
+        created_at: Utc::now().to_rfc3339(),
+    };
+    let response = node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                .with_variables(output_segment_create_variables(&segment).unwrap()),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+}
+
+/// Move a committed bridge row to a terminal lifecycle state in place. This is
+/// the committed-row analogue of a background completion; it dispatches
+/// nothing and claims nothing about provider behavior.
+async fn bridge_terminal(node: &gents::defra_node::EmbeddedNode, bridge_doc_id: &str) -> bool {
+    let doc_id = escape_graphql_string(bridge_doc_id);
+    let now = Utc::now().to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentToolCall(
+                    filter: {{ _docID: {{ _eq: "{doc_id}" }}, lifecycle_state: {{ _eq: "running" }} }},
+                    input: {{ lifecycle_state: "completed", completed_at: "{now}" }}
+                ) {{ _docID }}
+            }}"#,
+            now = escape_graphql_string(&now),
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    response.data.expect("bridge update data")["update_AgentToolCall"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty())
+}
+
 #[tokio::test]
 async fn running_page_cursor_survives_anchor_becoming_terminal() {
     let db = crate::support::test_db("descendant-running-cursor-terminal-transition").await;
@@ -479,43 +610,38 @@ async fn running_page_cursor_survives_anchor_becoming_terminal() {
     let root_did = "did:test:cursor-root";
     let root_doc =
         create_request(db.node.as_ref(), root_id, root_session, root_did, "default").await;
-    let deadline = Utc::now() + Duration::minutes(5);
+    let deadline = (Utc::now() + Duration::minutes(5)).to_rfc3339();
+    let started_at = Utc::now().to_rfc3339();
 
-    let mut first = ToolCallLifecycle::new_subagent(
-        db.node.clone(),
-        root_id.to_string(),
-        root_session.to_string(),
-        root_did.to_string(),
-        "cursor-call-a".to_string(),
+    // Observation-owner fixture: these are structurally valid, already
+    // committed canonical tool rows seeded to exercise graph projection. No
+    // claim is made about provider acceptance or dispatch behavior for them.
+    let first_doc = seed_running_spawn_bridge(
+        db.node.as_ref(),
+        root_id,
+        &root_doc,
+        root_session,
+        root_did,
+        "cursor-call-a",
         1,
-        "spawn_subagent".to_string(),
-        r#"{"name":"worker-a","behavior_id":"worker-a"}"#.to_string(),
-        deadline,
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        "cursor-child-a".to_string(),
-        root_did.to_string(),
+        "cursor-child-a",
+        &started_at,
+        &deadline,
     )
-    .with_request_doc_id(Some(root_doc.clone()));
-    first.start_running().await.unwrap();
-
-    let mut second = ToolCallLifecycle::new_subagent(
-        db.node.clone(),
-        root_id.to_string(),
-        root_session.to_string(),
-        root_did.to_string(),
-        "cursor-call-b".to_string(),
+    .await;
+    let second_doc = seed_running_spawn_bridge(
+        db.node.as_ref(),
+        root_id,
+        &root_doc,
+        root_session,
+        root_did,
+        "cursor-call-b",
         2,
-        "spawn_subagent".to_string(),
-        r#"{"name":"worker-b","behavior_id":"worker-b"}"#.to_string(),
-        deadline,
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        "cursor-child-b".to_string(),
-        root_did.to_string(),
+        "cursor-child-b",
+        &started_at,
+        &deadline,
     )
-    .with_request_doc_id(Some(root_doc));
-    second.start_running().await.unwrap();
+    .await;
 
     let first_page = resolve_descendant_graph(
         DescendantGraphAccess::Local(db.node.as_ref()),
@@ -533,14 +659,8 @@ async fn running_page_cursor_survives_anchor_becoming_terminal() {
     let after = first_page.next_cursor.expect("running page cursor");
 
     let terminalized = match anchor_child.as_str() {
-        "cursor-child-a" => first
-            .bridge_complete("worker a complete".to_string())
-            .await
-            .unwrap(),
-        "cursor-child-b" => second
-            .bridge_complete("worker b complete".to_string())
-            .await
-            .unwrap(),
+        "cursor-child-a" => bridge_terminal(db.node.as_ref(), &first_doc).await,
+        "cursor-child-b" => bridge_terminal(db.node.as_ref(), &second_doc).await,
         other => panic!("unexpected cursor anchor {other}"),
     };
     assert!(terminalized);
