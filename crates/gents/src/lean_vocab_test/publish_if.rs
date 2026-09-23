@@ -19,6 +19,10 @@ pub(crate) struct LeanPublishIfExpectation {
 
 /// `Publication.lean` `publishIf`: applied iff every expectation equals the
 /// prior desired fields; otherwise the prior state is returned unchanged.
+/// The Lean model compares whole desired fields (content and refs), but the
+/// `expected` rows project `content` only, because the Rust digest domain at
+/// this refinement boundary is the document content; reference closure is a
+/// separate gate with its own cases.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanPublishIfCase {
     pub(crate) name: String,
