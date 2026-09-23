@@ -196,3 +196,40 @@ each PR targeting its parent; M3 stays a side branch off the runner.
   user-visible "(M5)"/"M7" strings and plan-id doc comments; then linearize the MVP chain.
   Ruling: fix-wave commits stay at each stack's tip PR (a scratch trial of redistributing M4's
   found hand conflicts); PR descriptions carry the layer maps.
+
+## The MVP chain (linearized 2026-09-23; 160 commits over `main` @ `0deb7659c`, verified linear, no trailers)
+
+| # | Branch | Head | Parent |
+|---|---|---|---|
+| 1 | `feat/guarded-publication-lean` | `551a4ce9f` | `main` |
+| 2 | `feat/guarded-publication-conformance` | `918ccf21f` | 1 |
+| 3 | `feat/guarded-publication-cas` | `254444088` | 2 |
+| 4 | `feat/eval-outcome-lean` | `6a9f266e6` | 3 |
+| 5 | `feat/eval-outcome-conformance` | `11b3d7b0c` | 4 |
+| 6 | `feat/eval-definition-collection` | `669b48935` | 5 |
+| 7 | `feat/eval-runtime-collections` | `f3334e3fc` | 6 |
+| 8 | `feat/eval-contract` | `be0ec3123` | 7 |
+| 9 | `feat/eval-protected-collections` | `21d6b6c59` | 8 |
+| 10 | `feat/eval-runner-support` | `227a0f6b2` | 9 |
+| 11 | `feat/eval-runner-core` | `b19edaa6a` | 10 |
+| 12 | `feat/eval-runner-loop` | `e85fb5824` | 11 |
+| 13 | `feat/eval-runner-embedded` | `7f950985e` | 12 |
+| 14 | `feat/optimization-policy-lean` | `099c14980` | 13 |
+| 15 | `feat/optimization-policy-conformance` | `4bac1f652` | 14 |
+| 16 | `feat/optimization-policy` | `ecfd69276` | 15 |
+| 17 | `feat/optimization-job` | `801ad0347` | 16 |
+| 18 | `feat/optimization-proposer` | `446661c94` | 17 |
+| 19 | `feat/optimization-driver` | `20311420c` | 18 |
+| 20 | `feat/optimization-promote` | `f357c9603` | 19 |
+| 21 | `feat/eval-report` | `b2085ef1b` | 20 |
+| 22 | `feat/eval-cli` | `facdab9d8` | 21 |
+| 23 | `feat/optimization-cli` | `e50bc198e` | 22 |
+| 24 | `feat/eval-watch-gc` | `b352a35aa` | 23 |
+| 25 | `feat/eval-compare-breakdowns` | `b43d5085f` | 24 (tip; includes the milestone-string fix) |
+
+Side branches (off the chain): `test/monitor-eval-cases` `46962dfab` on 6; `feat/eval-stage-captures`
+`d5472672f` → `feat/eval-mailbox-checks` `e334f960a` → `test/monitor-findings-definition` `c9d2c83cc` on 13.
+`optimization/19-base` is obsolete and local only. Chain-tip gates: fmt; `cargo test -p gents` 0
+failures (one `e2e_triggers` runtime-snapshot timeout on the first run, passed on rerun: a flake to
+file); `-p gents-cli` only the 20 known environmental; conformance 269/269; workspace check; `lake
+build` at the eval-core and policy tips. Report: `.superpowers/sdd/mvp-chain/report.md`.

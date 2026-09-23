@@ -194,6 +194,8 @@ the LLM proposer and its evidence projection.
   - Possible flake (M4 PR 3 gate): `cli_runtime cli_chat::chat_buffers_final_response_and_shows_tool_progress`
     failed once posting GraphQL to a local port, passed alone and in a sequential re-run; likely a
     build-overlap port race; untouched by the stack.
+  - Flake (MVP-chain gate): an `e2e_triggers` runtime-snapshot timeout failed once and passed on
+    rerun. Filing is the user's call.
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.
