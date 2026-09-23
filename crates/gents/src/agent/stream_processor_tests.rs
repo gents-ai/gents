@@ -474,6 +474,312 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
+#[tokio::test]
+async fn failed_spawn_preplan_closes_owned_prefix_before_propagating_error() {
+    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::{OutputOutcome, OutputSource, SourceClose, TerminalOutput};
+
+    let data_path =
+        std::env::temp_dir().join(format!("processor-spawn-preplan-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("spawn child"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.unwrap();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "spawn child");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "general",
+        "did:test:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+
+    // Only the hook's parent lookup is broken. The real request and its
+    // execution lease remain intact so the canonical Partial close is allowed.
+    hook.set_active_request_binding(
+        Some("missing-parent".to_string()),
+        Some("missing-parent-doc".to_string()),
+        None,
+    )
+    .await;
+    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
+    processor
+        .process_item(text_item("retained prefix"))
+        .await
+        .unwrap();
+    processor
+        .process_item(tool_call_item(
+            crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+            r#"{"name":"child","prompt":"work"}"#,
+            "spawn-call",
+        ))
+        .await
+        .unwrap();
+    processor.flush_pending().await.unwrap();
+    let before_failure = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!before_failure.has_errors(), "{:?}", before_failure.errors);
+    let committed = before_failure.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert!(
+        committed.iter().any(|row| row.segment.ordinal.is_some()),
+        "the provider prefix must be durable before preplanning fails"
+    );
+    assert!(
+        committed.iter().all(|row| row.segment.close.is_none()),
+        "the committed prefix must still be open before preplanning fails"
+    );
+    let message = processor.assistant_turn.clone().take_message().unwrap();
+    let error = match processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message,
+        }))
+        .await
+    {
+        Ok(_) => panic!("failed parent lookup must reject provider turn"),
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("preplan spawn admission for parent request missing-parent"),
+        "unexpected preplan error: {error:#}"
+    );
+    drop(processor);
+
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    let closures = rows
+        .iter()
+        .filter(|row| row.segment.close.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(closures.len(), 1, "rejected turn must close exactly once");
+    assert!(matches!(
+        closures[0].segment.close.as_ref(),
+        Some(SourceClose::Closed {
+            outcome: OutputOutcome::Partial,
+            ..
+        })
+    ));
+    let TerminalOutput::Message { message_doc_id } = writer.terminal_output(&doc_id).await else {
+        panic!("retained prefix must be selectable after rejected spawn intent")
+    };
+    let (header, native) = crate::session::load_canonical_message_from_node(
+        node.as_ref(),
+        &message_doc_id,
+        "did:test:test",
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(header.outcome, OutputOutcome::Partial);
+    assert_eq!(native, Message::assistant("retained prefix"));
+    let tool_calls = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!tool_calls.has_errors(), "{:?}", tool_calls.errors);
+    assert!(
+        tool_calls.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "failed preplanning must not publish a pending tool call"
+    );
+
+    // A second rejected turn exercises the same path after the fixture loses
+    // its lease. Its committed prefix may remain open for recovery, but the
+    // old owner must not write a closure, header, or tool admission.
+    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 1,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
+    processor
+        .process_item(text_item("expired prefix"))
+        .await
+        .unwrap();
+    processor
+        .process_item(tool_call_item(
+            crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+            r#"{"name":"child","prompt":"work"}"#,
+            "expired-spawn-call",
+        ))
+        .await
+        .unwrap();
+    processor.flush_pending().await.unwrap();
+    let expired_message = processor.assistant_turn.clone().take_message().unwrap();
+    let committed = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!committed.has_errors(), "{:?}", committed.errors);
+    assert!(
+        committed.data.as_ref().unwrap()["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(decode_output_segment_row)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap()
+            .iter()
+            .any(|row| {
+                row.segment.ordinal.is_some()
+                    && matches!(
+                        &row.segment.source,
+                        OutputSource::ProviderTurn { attempt: 1, .. }
+                    )
+            }),
+        "the second source must have committed data before lease expiry"
+    );
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id),
+            crate::graphql::escape_graphql_string(&expired)
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "expire fixture lease: {:?}",
+        response.errors
+    );
+    let error = match processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 1,
+            message: expired_message,
+        }))
+        .await
+    {
+        Ok(_) => panic!("expired owner must not close rejected turn"),
+        Err(error) => error,
+    };
+    let error_chain = format!("{error:#}");
+    assert!(
+        error_chain.contains("preplan spawn admission for parent request missing-parent")
+            && error_chain.contains("failed to close rejected provider turn"),
+        "both preplan and fenced cleanup failures must remain visible: {error_chain}"
+    );
+    drop(processor);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row.segment.close.is_some())
+            .count(),
+        1,
+        "expired owner must not close its second source"
+    );
+    let headers = node
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!headers.has_errors(), "{:?}", headers.errors);
+    assert_eq!(
+        headers.data.as_ref().unwrap()["AgentMessage"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1,
+        "expired owner must not publish a second header"
+    );
+    let tool_calls = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id)
+        ))
+        .await;
+    assert!(!tool_calls.has_errors(), "{:?}", tool_calls.errors);
+    assert!(
+        tool_calls.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "expired owner must not admit a tool"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(data_path);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers for the tail-reset integration test
 // ---------------------------------------------------------------------------
