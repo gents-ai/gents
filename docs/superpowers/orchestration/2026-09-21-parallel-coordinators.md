@@ -170,3 +170,19 @@ Filled in by the orchestrator at spin-up.
 
 Planned MVP chain (one linear stack, after `m4` completes): Track 0 → M1 → M2 → M6a → M6b → M4,
 each PR targeting its parent; M3 stays a side branch off the runner.
+
+## Workflow amendments (2026-09-23, user-approved; bind every coordinator from now on)
+
+1. **Review by reading.** The implementer's report carries its test log and commit hash. A reviewer
+   re-runs only a test it suspects (vacuous, wrong assertion), never the task's whole set, never a
+   workspace check.
+2. **Two worktrees per PR, ping-pong.** Batch N+1's implementer works in worktree B while batch N's
+   reviewer reads in worktree A; both worktrees set `CARGO_TARGET_DIR` to one shared directory
+   (`<worktree A>/target`) so nothing builds cold. Create B with `make worktree` from the same base
+   and rebase it onto A's tip before each batch.
+3. **Small fixes land unreviewed.** A fix diff under ~30 lines confined to what the finding named is
+   committed and ledgered without a re-review; larger fixes get a read-only scoped re-review.
+4. **Builds only at gates.** The full `cargo test -p gents` (and `-p gents-cli` where touched) plus
+   `cargo check --workspace --all-targets` run at a PR's gate and at the final gate only. Per task:
+   the pertinent tests plus `cargo check -p <crate> --tests`.
+5. **Final review stays**, with one read-only re-review of its fix wave and one gate.
