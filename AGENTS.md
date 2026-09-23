@@ -128,7 +128,8 @@ reads.
   `graphql_with_transaction_retry` (embedded) or `ConfigAccess::execute`
   (local/HTTP). Never call `EmbeddedNode::execute*`, `runner()`, or raw DefraDB
   HTTP GraphQL from feature code, and never add another retry loop or access
-  wrapper. `write_owner_structure.rs` fences this; its read allowlist only shrinks.
+  wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
+  access, not complete enforcement; its allowlist only shrinks.
 - Use `tracing`, never `println!`.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are

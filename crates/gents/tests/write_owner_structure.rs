@@ -18,9 +18,12 @@ const READ_OWNER_FILES: &[&str] = &[
 ];
 
 /// Production files that still call `EmbeddedNode` GraphQL execution directly,
-/// with their current site counts. This is a ratchet: a new file or a higher
-/// count fails, and so does a lower count until the entry is lowered or
-/// removed. Migrate sites to the `config_client`/`graphql` owners; never raise.
+/// with their current site counts. This is a syntactic ratchet over direct node
+/// access, not complete access enforcement: receivers are recognized from
+/// declared `EmbeddedNode` types, the `node` naming convention, and local
+/// aliases of those. A new file or a higher count fails, and so does a lower
+/// count until the entry is lowered or removed. Migrate sites to the
+/// `config_client`/`graphql` owners; never raise.
 #[rustfmt::skip]
 const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 1),
@@ -314,11 +317,8 @@ fn production_defradb_writes_have_one_owner() {
         if OWNER_FILES.contains(&relative.as_str()) {
             continue;
         }
-        let mut visitor = WriteVisitor::default();
-        visitor.visit_file(&syntax);
         violations.extend(
-            visitor
-                .violations
+            write_violations(&syntax)
                 .into_iter()
                 .map(|violation| format!("{relative}: {violation}")),
         );
@@ -337,7 +337,26 @@ fn toml_file(path: &Path) -> toml::Table {
         .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
 }
 
-fn dependency_names(manifest: &toml::Table) -> BTreeSet<String> {
+fn package_name(key: &str, specification: &toml::Value, inherited: &toml::Table) -> String {
+    let renamed = |value: &toml::Value| {
+        value
+            .get("package")
+            .and_then(toml::Value::as_str)
+            .map(str::to_string)
+    };
+    renamed(specification)
+        .or_else(|| {
+            specification
+                .get("workspace")
+                .and_then(toml::Value::as_bool)
+                .filter(|inherits| *inherits)
+                .and_then(|_| inherited.get(key))
+                .and_then(renamed)
+        })
+        .unwrap_or_else(|| key.to_string())
+}
+
+fn dependency_names(manifest: &toml::Table, inherited: &toml::Table) -> BTreeSet<String> {
     let mut tables = vec![manifest.get("dependencies")];
     if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
         tables.extend(targets.values().map(|target| target.get("dependencies")));
@@ -346,12 +365,18 @@ fn dependency_names(manifest: &toml::Table) -> BTreeSet<String> {
         .into_iter()
         .flatten()
         .filter_map(toml::Value::as_table)
-        .flat_map(|table| table.keys().cloned())
+        .flat_map(|table| table.iter())
+        .map(|(key, specification)| package_name(key, specification, inherited))
         .collect()
 }
 
 fn defradb_member_directories(root: &Path) -> Vec<PathBuf> {
     let workspace = toml_file(&root.join("Cargo.toml"));
+    let inherited = workspace["workspace"]
+        .get("dependencies")
+        .and_then(toml::Value::as_table)
+        .cloned()
+        .unwrap_or_default();
     let members = workspace["workspace"]["members"]
         .as_array()
         .expect("workspace members")
@@ -363,7 +388,7 @@ fn defradb_member_directories(root: &Path) -> Vec<PathBuf> {
                 .as_str()
                 .expect("package name")
                 .to_string();
-            (name, (directory, dependency_names(&manifest)))
+            (name, (directory, dependency_names(&manifest, &inherited)))
         })
         .collect::<BTreeMap<_, _>>();
     let mut reaching = BTreeSet::from(["defra-node".to_string()]);
@@ -409,8 +434,15 @@ fn path_attribute(attributes: &[syn::Attribute]) -> Option<String> {
     })
 }
 
-fn test_module_paths(
-    file: &Path,
+fn test_module_paths(file: &Path, items: &[syn::Item], output: &mut Vec<PathBuf>) {
+    let parent = file.parent().expect("source has a parent");
+    test_module_paths_in(parent, &module_directory(file), items, output);
+}
+
+/// `#[path]` resolves against the file's directory at the top level and
+/// against the inline module directory inside `mod name { ... }`.
+fn test_module_paths_in(
+    path_base: &Path,
     directory: &Path,
     items: &[syn::Item],
     output: &mut Vec<PathBuf>,
@@ -422,11 +454,12 @@ fn test_module_paths(
         let name = module.ident.to_string();
         match &module.content {
             Some((_, nested)) if !cfg_test(&module.attrs) => {
-                test_module_paths(file, &directory.join(&name), nested, output)
+                let inline = directory.join(&name);
+                test_module_paths_in(&inline, &inline, nested, output)
             }
             Some(_) => {}
             None if cfg_test(&module.attrs) => match path_attribute(&module.attrs) {
-                Some(path) => output.push(file.parent().expect("parent").join(path)),
+                Some(path) => output.push(path_base.join(path)),
                 None => {
                     output.push(directory.join(format!("{name}.rs")));
                     output.push(directory.join(name));
@@ -449,12 +482,7 @@ fn parse_production(root: &Path, sources: Vec<PathBuf>) -> Vec<(String, syn::Fil
         .collect::<Vec<_>>();
     let mut test_modules = Vec::new();
     for (path, syntax) in &parsed {
-        test_module_paths(
-            path,
-            &module_directory(path),
-            &syntax.items,
-            &mut test_modules,
-        );
+        test_module_paths(path, &syntax.items, &mut test_modules);
     }
     parsed
         .into_iter()
@@ -536,11 +564,34 @@ impl<'ast> Visit<'ast> for NodeNames {
 struct ReadVisitor<'names> {
     workspace: &'names NodeNames,
     file: NodeNames,
+    aliases: Vec<BTreeSet<String>>,
     node_impl: Vec<bool>,
     sites: usize,
 }
 
-impl ReadVisitor<'_> {
+impl<'names> ReadVisitor<'names> {
+    fn new(workspace: &'names NodeNames, syntax: &syn::File) -> Self {
+        let mut file = NodeNames::conventional();
+        file.visit_file(syntax);
+        Self {
+            workspace,
+            file,
+            aliases: vec![BTreeSet::new()],
+            node_impl: Vec::new(),
+            sites: 0,
+        }
+    }
+
+    fn bound_node(&self, name: &str) -> bool {
+        self.file.bindings.contains(name) || self.aliases.iter().any(|scope| scope.contains(name))
+    }
+
+    fn scoped(&mut self, visit: impl FnOnce(&mut Self)) {
+        self.aliases.push(BTreeSet::new());
+        visit(self);
+        self.aliases.pop();
+    }
+
     fn node_receiver(&self, expression: &Expr) -> bool {
         match expression {
             Expr::Reference(reference) => self.node_receiver(&reference.expr),
@@ -552,7 +603,11 @@ impl ReadVisitor<'_> {
             Expr::Path(path) => path
                 .path
                 .get_ident()
-                .is_some_and(|ident| self.file.bindings.contains(&ident.to_string())),
+                .is_some_and(|ident| self.bound_node(&ident.to_string())),
+            Expr::Call(call) if call.args.len() == 1 => {
+                path_name(call).is_some_and(|name| name.ends_with("::clone"))
+                    && self.node_receiver(&call.args[0])
+            }
             Expr::Field(field) => match &field.member {
                 syn::Member::Named(ident) => self.workspace.fields.contains(&ident.to_string()),
                 syn::Member::Unnamed(_) => false,
@@ -579,7 +634,33 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
 
     fn visit_item_fn(&mut self, item: &'ast ItemFn) {
         if !cfg_test(&item.attrs) {
-            visit::visit_item_fn(self, item);
+            self.scoped(|visitor| visit::visit_item_fn(visitor, item));
+        }
+    }
+
+    fn visit_impl_item_fn(&mut self, item: &'ast syn::ImplItemFn) {
+        if !cfg_test(&item.attrs) {
+            self.scoped(|visitor| visit::visit_impl_item_fn(visitor, item));
+        }
+    }
+
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        visit::visit_local(self, local);
+        let binding = match &local.pat {
+            syn::Pat::Ident(binding) => Some(&binding.ident),
+            syn::Pat::Type(typed) => match typed.pat.as_ref() {
+                syn::Pat::Ident(binding) => Some(&binding.ident),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let (Some(binding), Some(init)) = (binding, &local.init) {
+            if self.node_receiver(&init.expr) {
+                self.aliases
+                    .last_mut()
+                    .expect("function scope")
+                    .insert(binding.to_string());
+            }
         }
     }
 
@@ -616,6 +697,18 @@ impl<'ast> Visit<'ast> for ReadVisitor<'_> {
     }
 }
 
+fn node_execution_sites(workspace: &NodeNames, syntax: &syn::File) -> usize {
+    let mut visitor = ReadVisitor::new(workspace, syntax);
+    visitor.visit_file(syntax);
+    visitor.sites
+}
+
+fn write_violations(syntax: &syn::File) -> Vec<String> {
+    let mut visitor = WriteVisitor::default();
+    visitor.visit_file(syntax);
+    visitor.violations
+}
+
 #[test]
 fn production_defradb_node_execution_only_shrinks() {
     let root = repo_root();
@@ -639,17 +732,9 @@ fn production_defradb_node_execution_only_shrinks() {
         if READ_OWNER_FILES.contains(&relative.as_str()) {
             continue;
         }
-        let mut file = NodeNames::conventional();
-        file.visit_file(syntax);
-        let mut visitor = ReadVisitor {
-            workspace: &workspace,
-            file,
-            node_impl: Vec::new(),
-            sites: 0,
-        };
-        visitor.visit_file(syntax);
-        if visitor.sites > 0 {
-            actual.insert(relative.clone(), visitor.sites);
+        let sites = node_execution_sites(&workspace, syntax);
+        if sites > 0 {
+            actual.insert(relative.clone(), sites);
         }
     }
 
@@ -682,5 +767,126 @@ fn production_defradb_node_execution_only_shrinks() {
         violations.is_empty(),
         "direct DefraDB node execution ratchet failed:\n{}\n\ncurrent sites:\n{current}",
         violations.join("\n")
+    );
+}
+
+fn snippet_sites(source: &str) -> usize {
+    let syntax = syn::parse_file(source).expect("parse snippet");
+    let mut workspace = NodeNames::conventional();
+    workspace.visit_file(&syntax);
+    node_execution_sites(&workspace, &syntax)
+}
+
+#[test]
+fn read_fence_counts_direct_node_execution() {
+    for source in [
+        "fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+        "fn f(db: &EmbeddedNode, q: &str) { db.execute(q); }",
+        "fn f(db: Arc<defra_node::EmbeddedNode>, q: &str) { db.as_ref().execute(q); }",
+        "impl S { fn f(&self, q: &str) { self.node.execute(q); } }",
+        "struct S { store: Arc<EmbeddedNode> } impl S { fn f(&self, q: &str) { self.store.execute(q); } }",
+        "fn f(node: &EmbeddedNode, q: &str) { node.clone().execute(q); }",
+        "fn f(node: &EmbeddedNode, q: &str) { (&*node).execute(q); }",
+        "fn f(core: &Core, q: &str) { core.node().execute(q); }",
+        "fn f(node: &EmbeddedNode, q: &str) { EmbeddedNode::execute(&node, q); }",
+        "fn f(node: &EmbeddedNode, q: &str) { let db = node.clone(); db.execute(q); }",
+        "fn f(node: Arc<EmbeddedNode>, q: &str) { let db = Arc::clone(&node); db.execute(q); }",
+        "impl S { fn f(&self, q: &str) { let db = &self.node; db.execute(q); } }",
+        "impl EmbeddedNodeExt for EmbeddedNode { fn f(&self, q: &str) { self.execute(q); } }",
+        "fn f(x: &X) { x.runner(); }",
+        "fn f(x: &X, q: &str, p: P) { x.execute_with_retry(q, p); }",
+    ] {
+        assert_eq!(snippet_sites(source), 1, "{source}");
+    }
+}
+
+#[test]
+fn read_fence_ignores_owner_wrappers_and_tests() {
+    for source in [
+        "fn f(executor: &Executor, q: &str) { executor.execute(q); }",
+        "fn f(access: &ConfigAccess, q: &str) { access.execute(q); }",
+        "fn f(access: &ConfigAccess, q: &str) { ConfigAccess::execute(access, q); }",
+        "fn f(txn: &ConfigApplyTxn, q: &str) { txn.execute(q); }",
+        "impl ConfigAccess { fn f(&self, q: &str) { self.execute(q); } }",
+        "fn f(node: &EmbeddedNode) {} fn g(access: &ConfigAccess, q: &str) { let db = access; db.execute(q); }",
+        "fn f(node: &EmbeddedNode) { let db = node; } fn g(db: &Access, q: &str) { db.execute(q); }",
+        "#[cfg(test)] mod tests { fn f(node: &EmbeddedNode, q: &str) { node.execute(q); } }",
+        "#[cfg(test)] fn f(node: &EmbeddedNode, q: &str) { node.execute(q); }",
+    ] {
+        assert_eq!(snippet_sites(source), 0, "{source}");
+    }
+}
+
+#[test]
+fn write_fence_flags_macro_mutations() {
+    for source in [
+        r#"fn f(node: &EmbeddedNode, id: &str) { node.execute(&format!("mutation {{ delete_X(docID: \"{id}\") {{ _docID }} }}")); }"#,
+        r#"fn f(node: &EmbeddedNode) { node.execute(concat!("mutation ", "{ delete_X { _docID } }")); }"#,
+    ] {
+        let syntax = syn::parse_file(source).expect("parse snippet");
+        assert_eq!(write_violations(&syntax).len(), 1, "{source}");
+    }
+    let query = syn::parse_file(r#"fn f(node: &EmbeddedNode, id: &str) { node.execute(&format!("{{ X(docID: \"{id}\") {{ _docID }} }}")); }"#)
+        .expect("parse snippet");
+    assert!(write_violations(&query).is_empty());
+}
+
+#[test]
+fn test_modules_resolve_by_rust_module_rules() {
+    let source = syn::parse_file(
+        r#"
+        #[cfg(test)] mod tests;
+        #[cfg(test)] #[path = "top_fixture.rs"] mod top;
+        mod inner {
+            #[cfg(test)] mod nested_tests;
+            #[cfg(test)] #[path = "inner_fixture.rs"] mod fixture;
+            mod production;
+        }
+        #[cfg(test)] mod inline { fn f() {} }
+        mod live;
+        "#,
+    )
+    .expect("parse snippet");
+    let mut modules = Vec::new();
+    test_module_paths(
+        Path::new("crate/src/feature.rs"),
+        &source.items,
+        &mut modules,
+    );
+    let expected = [
+        "crate/src/feature/tests.rs",
+        "crate/src/feature/tests",
+        "crate/src/top_fixture.rs",
+        "crate/src/feature/inner/nested_tests.rs",
+        "crate/src/feature/inner/nested_tests",
+        "crate/src/feature/inner/inner_fixture.rs",
+    ]
+    .map(PathBuf::from);
+    assert_eq!(modules, expected);
+
+    let mut modules = Vec::new();
+    test_module_paths(Path::new("crate/src/lib.rs"), &source.items, &mut modules);
+    assert!(modules.contains(&PathBuf::from("crate/src/top_fixture.rs")));
+    assert!(modules.contains(&PathBuf::from("crate/src/inner/inner_fixture.rs")));
+}
+
+#[test]
+fn dependency_reachability_resolves_renamed_packages() {
+    let inherited: toml::Table = r#"store = { git = "x", package = "defra-node" }"#
+        .parse()
+        .expect("parse workspace dependencies");
+    let manifest: toml::Table = r#"
+        [dependencies]
+        db = { package = "defra-node", version = "1" }
+        store = { workspace = true }
+        plain = "1"
+        [target.'cfg(unix)'.dependencies]
+        gents = { path = "../gents" }
+    "#
+    .parse()
+    .expect("parse manifest");
+    assert_eq!(
+        dependency_names(&manifest, &inherited),
+        BTreeSet::from(["defra-node", "gents", "plain"].map(str::to_string))
     );
 }
