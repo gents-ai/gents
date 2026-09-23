@@ -50,11 +50,26 @@ export function workerNow(
   const turn = w?.summary?.turnState ?? null;
   const node = w?.node?.lifecycleState ?? null;
   const edge = w?.edge?.lifecycleState ?? null;
-  const state = turn ?? node ?? edge ?? tool.statusKind ?? null;
   const failure = firstLine(
     tool.presentation.kind === "subagent" ? tool.presentation.output : null,
   );
-  if (state && WAITING.has(state.toLowerCase()))
+  const state = turn ?? node ?? edge;
+  if (!state) {
+    /* no session or lineage fact: only the parent's tool call speaks, and its
+       status (tool_status_kind: success, error, running, unknown) is about
+       the call, so it never makes a worker look live on its own */
+    switch (tool.statusKind) {
+      case "running":
+        return { tone: "running", text: "starting" };
+      case "success":
+        return { tone: "done", text: "finished" };
+      case "error":
+        return { tone: "failed", text: "failed", detail: failure };
+      default:
+        return { tone: "unknown", text: "state unknown" };
+    }
+  }
+  if (WAITING.has(state.toLowerCase()))
     return { tone: "running", text: "waiting for the agent to pick it up" };
   if (isLive(state)) {
     /* the request the parent spawned ended, yet the session works on: both
@@ -83,7 +98,7 @@ export function workerNow(
     case "superseded":
       return { tone: "stopped", text: state };
     default:
-      return { tone: "unknown", text: state ?? "unknown" };
+      return { tone: "unknown", text: state };
   }
 }
 
@@ -309,7 +324,7 @@ export function WorkerStep({
           name={name}
           state={
             firstLine(p.output) ??
-            (tool.statusKind === "completed" ? "delivered" : tool.statusKind)
+            (tool.statusKind === "success" ? "delivered" : tool.statusKind)
           }
           detail={p.description?.replace(/^\[interrupt\]\s*/, "")}
           sessionId={sessionId}

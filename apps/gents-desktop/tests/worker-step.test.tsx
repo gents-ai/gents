@@ -13,7 +13,7 @@ import { WorkerStep, workerNow } from "../src/ui/screens/WorkerStep";
 import type { WorkerState, Workers } from "../src/ui/screens/workers";
 import { WorkerActionsContext } from "../src/ui/screens/WorkerActions";
 
-const spawn = (statusKind = "completed"): RenderedToolCallView =>
+const spawn = (statusKind = "success"): RenderedToolCallView =>
   ({
     itemKey: "tool-1",
     toolName: "spawn_subagent",
@@ -128,6 +128,41 @@ describe("worker state", () => {
       expect(source, file).not.toMatch(/has not replicated to this desktop/);
       expect(source, file).not.toMatch(/not synced to this desktop/);
       expect(source, file).not.toMatch(/messageCount == null/);
+    }
+  });
+
+  it("never reads the tool call's own status as a live worker", () => {
+    expect(workerNow(spawn("success"), null)).toEqual({
+      tone: "done",
+      text: "finished",
+    });
+    expect(workerNow(spawn("error"), null).tone).toBe("failed");
+    expect(workerNow(spawn("unknown"), null)).toEqual({
+      tone: "unknown",
+      text: "state unknown",
+    });
+    expect(workerNow(spawn("running"), null)).toEqual({
+      tone: "running",
+      text: "starting",
+    });
+  });
+
+  it("offers no Stop without a live fact about the worker", () => {
+    for (const status of ["success", "unknown", "error"]) {
+      const workers: Workers = {
+        byChildRequest: () => null,
+        byToolCall: () => null,
+        loaded: false,
+      };
+      const view = render(
+        <WorkerActionsContext.Provider
+          value={{ parentRequestId: "parent", cancel: vi.fn() }}
+        >
+          <WorkerStep tool={spawn(status)} workers={workers} />
+        </WorkerActionsContext.Provider>,
+      );
+      expect(screen.queryByRole("button", { name: /^Stop / }), status).toBeNull();
+      view.unmount();
     }
   });
 });
