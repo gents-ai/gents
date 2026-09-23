@@ -27,7 +27,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents::config_client::ConfigAccess;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::run_timeline::{child_bridge_is_corroborated, TimelineRequestRow, TimelineToolCallRow};
 use gents::tool_call_lifecycle::load_tool_call_arguments;
 use serde::de::DeserializeOwned;
@@ -412,8 +412,12 @@ pub(super) async fn project_subagents(
         parent_session_id,
         parent.requester_did.as_deref(),
     );
-    let response = node.execute(&child_requests_query(parent_doc_id)).await;
-    ensure_no_errors(&response, "grok shim subagent child request query")?;
+    let response = graphql_with_transaction_retry(
+        node,
+        &child_requests_query(parent_doc_id),
+        "grok shim subagent child request query",
+    )
+    .await?;
     let parent_timeline = TimelineRequestRow::from(parent.clone());
     // Durable child chronology: `created_at`, then the child request id,
     // computed after decoding so equal-timestamp rows and any query
@@ -427,10 +431,12 @@ pub(super) async fn project_subagents(
         });
     }
 
-    let spawn_response = node
-        .execute(&spawn_tools_query(parent_doc_id, &parent_scope))
-        .await;
-    ensure_no_errors(&spawn_response, "grok shim subagent spawn tool query")?;
+    let spawn_response = graphql_with_transaction_retry(
+        node,
+        &spawn_tools_query(parent_doc_id, &parent_scope),
+        "grok shim subagent spawn tool query",
+    )
+    .await?;
     let mut spawn_tools = decode_spawn_rows(&spawn_response)?;
     for tool in &spawn_tools {
         anyhow::ensure!(
@@ -511,12 +517,20 @@ pub(super) async fn project_subagents(
         });
     }
 
-    let usage_response = node.execute(&child_usage_query(&children)).await;
-    ensure_no_errors(&usage_response, "grok shim subagent inference usage query")?;
+    let usage_response = graphql_with_transaction_retry(
+        node,
+        &child_usage_query(&children),
+        "grok shim subagent inference usage query",
+    )
+    .await?;
     let child_usage = decode_inference_call_rows(&usage_response)?;
 
-    let tools_response = node.execute(&child_tools_query(&children)).await;
-    ensure_no_errors(&tools_response, "grok shim subagent child tool query")?;
+    let tools_response = graphql_with_transaction_retry(
+        node,
+        &child_tools_query(&children),
+        "grok shim subagent child tool query",
+    )
+    .await?;
     let child_tools = decode_child_tool_rows(&tools_response)?;
     for row in &child_usage {
         anyhow::ensure!(

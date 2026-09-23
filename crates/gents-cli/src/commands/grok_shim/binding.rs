@@ -75,10 +75,9 @@ impl BehaviorConnection {
         let behavior = profile.unwrap_or(&self.inputs.behavior_id).to_owned();
         let escaped = gents::graphql::escape_graphql_string(&behavior);
         let owner = gents::graphql::escape_graphql_string(&self.inputs.agent_did);
-        let response = self.inputs.node.execute(&format!(
+        let response = gents::graphql::graphql_with_transaction_retry(&self.inputs.node, &format!(
             "{{AgentBehavior(filter:{{behavior_id:{{_eq:\"{escaped}\"}},agent_did:{{_eq:\"{owner}\"}}}},limit:2){{agent_did enabled}}}}"
-        )).await;
-        gents::graphql::ensure_no_errors(&response, "select Grok behavior")?;
+        ), "select Grok behavior").await?;
         let rows = response
             .data
             .as_ref()

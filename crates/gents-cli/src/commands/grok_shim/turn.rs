@@ -64,7 +64,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
 use tokio::sync::{oneshot, Mutex};
 
@@ -831,8 +831,12 @@ impl TurnManager {
             escape_graphql_string(after),
             fields = gents::SIGNED_REQUEST_FIELDS,
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "Grok shim session request discovery")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "Grok shim session request discovery",
+        )
+        .await?;
         let rows = response
             .data
             .as_ref()
@@ -1355,8 +1359,9 @@ impl TurnManager {
             escape_graphql_string(request),
             escape_graphql_string(session)
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "read observed human prompt")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "read observed human prompt")
+                .await?;
         let rows = response
             .data
             .as_ref()
@@ -1791,8 +1796,9 @@ impl TurnManager {
             escape_graphql_string(request),
             gents::SIGNED_REQUEST_FIELDS
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "load scoped projection request")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "load scoped projection request")
+                .await?;
         let rows = response
             .data
             .as_ref()
@@ -2357,8 +2363,12 @@ impl TurnManager {
                 "{{AgentRequest(filter: {{{scope}}}, order: {{request_id: ASC}}, limit: 128, offset: {offset}) {{{}}}}}",
                 gents::SIGNED_REQUEST_FIELDS
             );
-            let response = self.node.execute(&query).await;
-            ensure_no_errors(&response, "read scoped child session requests")?;
+            let response = graphql_with_transaction_retry(
+                &self.node,
+                &query,
+                "read scoped child session requests",
+            )
+            .await?;
             let rows = response
                 .data
                 .as_ref()
@@ -2463,8 +2473,9 @@ impl TurnManager {
                 {{request_id lifecycle_state interrupt_requested_at failure_reason}}
         }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "grok shim turn terminal query")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "grok shim turn terminal query")
+                .await?;
         let request_rows = response
             .data
             .as_ref()
@@ -2731,6 +2742,7 @@ pub(super) fn parse_cancel_notification(params: &Value) -> Result<CancelNotifica
 mod tests {
     use super::super::projection::ProjectionSequencer;
     use super::*;
+    use gents::graphql::ensure_no_errors;
 
     #[test]
     fn request_update_timing_is_stable_per_segment_and_strict_across_same_ms_resets() {

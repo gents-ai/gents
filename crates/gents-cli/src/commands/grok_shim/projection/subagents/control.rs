@@ -114,12 +114,12 @@ pub(crate) async fn authorized_children(
         // every physically scoped request admitted for this principal's
         // session; choosing only the latest loses still-live descendants.
         let scope = gents::session::session_scope_filter(principal, session, Some(principal));
-        let response = node
-            .execute(&format!(
-                "{{ AgentRequest(filter: {{ {scope} }}) {{ request_id }} }}"
-            ))
-            .await;
-        ensure_no_errors(&response, "Grok subagent session callers")?;
+        let response = gents::graphql::graphql_with_transaction_retry(
+            node,
+            &format!("{{ AgentRequest(filter: {{ {scope} }}) {{ request_id }} }}"),
+            "Grok subagent session callers",
+        )
+        .await?;
         let callers = response
             .data
             .as_ref()
@@ -208,8 +208,7 @@ async fn snapshot(
     // then validate its logical/session labels below. Including mutable
     // projection labels in the lookup turns a replicated-label mismatch into
     // a false not-found and hides a broken physical edge.
-    let response = node.execute(&format!(r#"{{ child: AgentRequest(filter: {{ agent_did: {{_eq: "{owner}"}}, requester_did: {{_eq: {requester}}}, _docID: {{_eq: "{}"}} }}, limit: 2) {{ {CHILD_REQUEST_FIELDS} }} }}"#, escape_graphql_string(physical))).await;
-    ensure_no_errors(&response, "Grok subagent snapshot")?;
+    let response = gents::graphql::graphql_with_transaction_retry(node, &format!(r#"{{ child: AgentRequest(filter: {{ agent_did: {{_eq: "{owner}"}}, requester_did: {{_eq: {requester}}}, _docID: {{_eq: "{}"}} }}, limit: 2) {{ {CHILD_REQUEST_FIELDS} }} }}"#, escape_graphql_string(physical)), "Grok subagent snapshot").await?;
     let children = decode_rows::<ChildRequestRow>(&response, "child", "child snapshot")?;
     anyhow::ensure!(children.len() <= 1, "duplicate physical child snapshot");
     let child = children
@@ -223,8 +222,12 @@ async fn snapshot(
             && child.request_id == edge.child_request_id,
         "child snapshot crossed validated physical scope"
     );
-    let usage_response = node.execute(&child_usage_query(&children)).await;
-    ensure_no_errors(&usage_response, "Grok subagent inference usage")?;
+    let usage_response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &child_usage_query(&children),
+        "Grok subagent inference usage",
+    )
+    .await?;
     let usage = decode_inference_call_rows(&usage_response)?;
     for row in &usage {
         anyhow::ensure!(
@@ -235,8 +238,12 @@ async fn snapshot(
         );
     }
     let usage = usage.iter().collect::<Vec<_>>();
-    let tool_response = node.execute(&child_tools_query(&children)).await;
-    ensure_no_errors(&tool_response, "Grok subagent tools")?;
+    let tool_response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &child_tools_query(&children),
+        "Grok subagent tools",
+    )
+    .await?;
     let tools = decode_child_tool_rows(&tool_response)?;
     for row in &tools {
         anyhow::ensure!(
