@@ -110,7 +110,9 @@ impl BackgroundLiveOutputState {
         binding: crate::tool_call_lifecycle::delivery::ToolOutputBinding,
     ) -> crate::background_tools::LiveToolOutputWriter {
         let tool_call_doc_id = binding.tool_call_doc_id.clone();
-        self.registry.canonical_writer_for(tool_call_doc_id, Arc::new(binding)).await
+        self.registry
+            .canonical_writer_for(tool_call_doc_id, Arc::new(binding))
+            .await
     }
 
     async fn remove(&self, tool_call_id: &str) {
@@ -1060,10 +1062,12 @@ impl DefraSessionHook {
 }
 
 #[async_trait::async_trait]
-impl gents_loop::session_hook::CanonicalSessionHook<
-    crate::streaming::AcceptedToolCall,
-    crate::streaming::SpawnAdmissionPlan,
-> for DefraSessionHook {
+impl
+    gents_loop::session_hook::CanonicalSessionHook<
+        crate::streaming::AcceptedToolCall,
+        crate::streaming::SpawnAdmissionPlan,
+    > for DefraSessionHook
+{
     async fn preplan_spawn_admissions(
         &self,
         message: &Message,
@@ -1130,7 +1134,6 @@ impl gents_loop::session_hook::SessionHook for DefraSessionHook {
     async fn session_id(&self) -> Option<String> {
         DefraSessionHook::session_id(self).await
     }
-
 
     async fn register_stream_tool_call_identity(
         &self,

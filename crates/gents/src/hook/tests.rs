@@ -118,10 +118,7 @@ async fn client_output_snapshot_reads_full_retained_window_without_widening_mode
     let binding = lifecycle
         .tool_output_binding()
         .expect("canonical output binding");
-    let writer = registry
-        .live_outputs
-        .canonical_writer_for(binding)
-        .await;
+    let writer = registry.live_outputs.canonical_writer_for(binding).await;
     let text = format!("BEGIN\n{}\nEND ✅", "abcdefghij".repeat(10_000));
     writer
         .append(

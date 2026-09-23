@@ -63,7 +63,7 @@ async fn pre_stream_rate_limit_server_and_connect_failures_share_retry_budget() 
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),

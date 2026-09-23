@@ -425,8 +425,9 @@ async fn start_managed_server_locked<R: Runtime>(
 const RESET_CONSEQUENCE: &str = "Existing local conversations and configuration will be archived in a timestamped backup and will not be imported into the new store.";
 
 #[tauri::command]
-pub async fn desktop_managed_server_reset(
+pub async fn desktop_managed_server_reset<R: Runtime>(
     request: ManagedServerResetRequest,
+    app: AppHandle<R>,
     state: State<'_, DesktopAppState>,
 ) -> Result<ManagedServerResetResult, BridgeError> {
     ensure_allowed(&state)?;
@@ -437,15 +438,18 @@ pub async fn desktop_managed_server_reset(
             "managed server requires a local agent home",
         )
     })?;
-    reset_incompatible_managed_store(&state, agent_home, request.confirmation.as_deref()).await
+    reset_incompatible_managed_store(&app, &state, agent_home, request.confirmation.as_deref())
+        .await
 }
 
-async fn reset_incompatible_managed_store(
+async fn reset_incompatible_managed_store<R: Runtime>(
+    app: &AppHandle<R>,
     state: &DesktopAppState,
     configured_home: &Path,
     confirmation: Option<&str>,
 ) -> Result<ManagedServerResetResult, BridgeError> {
-    ensure_managed_runtime_stopped(state.managed_server.lock().await.server.is_some())?;
+    let native = run_native(native_service(app, state)?, |service| service.status()).await?;
+    ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
     reject_symlink(configured_home, "managed home")?;
     let home = std::fs::canonicalize(configured_home).map_err(|error| {
         BridgeError::new(

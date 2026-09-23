@@ -63,7 +63,9 @@ pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
         attempt: u32,
         message: &Message,
         spawn_admissions: &[Self::SpawnAdmissionPlan],
-    ) -> impl std::future::Future<Output = anyhow::Result<CanonicalPublishedTurn<Self::AcceptedToolCall>>> + Send;
+    ) -> impl std::future::Future<
+        Output = anyhow::Result<CanonicalPublishedTurn<Self::AcceptedToolCall>>,
+    > + Send;
 }
 
 pub trait StreamWriter: Send + Sync {

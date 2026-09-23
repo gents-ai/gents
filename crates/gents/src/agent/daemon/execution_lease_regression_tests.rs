@@ -540,6 +540,8 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let request = create_routed_request(&node, &behavior, &agent_did).await;
     let request_id = request.request_id.clone();
+    let request_doc_id = request.doc_id.clone();
+    let requester_did = request.requester_did.clone();
     let session = gents_protocol::session::AgentSession {
         session_id: request.session_id.clone(),
         agent_did: agent_did.clone(),
@@ -576,24 +578,24 @@ async fn nonempty_stream_outlives_multiple_short_leases_with_default_batching() 
     let result = node
         .execute(&format!(
             r#"{{
-                AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state execution_progress_seq }}
-                AgentMessage(filter: {{ request_id: {{ _eq: "{request_id}" }}, role: {{ _eq: "assistant" }} }}) {{ content }}
+                AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state terminal_output }}
             }}"#
         ))
         .await;
     assert!(!result.has_errors(), "{:?}", result.errors);
     let data = result.data.unwrap();
     assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "completed");
-    assert!(
-        data["AgentRequest"][0]["execution_progress_seq"]
-            .as_i64()
-            .unwrap()
-            >= 4,
-        "durable nonempty snapshots must renew the lease: {data}"
-    );
-    let content = data["AgentMessage"][0]["content"]
-        .as_str()
-        .unwrap_or_default();
+    let selected: gents_protocol::output::TerminalOutput =
+        serde_json::from_value(data["AgentRequest"][0]["terminal_output"].clone()).unwrap();
+    let gents_protocol::output::TerminalOutput::Message { message_doc_id } = selected else {
+        panic!("completed streaming request must select its canonical message: {data}");
+    };
+    let (header, message) = crate::session::load_canonical_message_from_node(
+        &node, &message_doc_id, &agent_did, requester_did.as_deref(),
+    ).await.unwrap();
+    assert_eq!(header.request_doc_id.as_deref(), Some(request_doc_id.as_str()));
+    assert_eq!(header.outcome, gents_protocol::output::OutputOutcome::Complete);
+    let content = gents_protocol::transcript::present_message(&message).body_markdown;
     assert!(
         content.contains("chunk-8"),
         "final output was truncated: {data}"

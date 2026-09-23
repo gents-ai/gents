@@ -954,6 +954,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
+    let notification_request = lifecycle.request().clone();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
@@ -1031,7 +1032,7 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     .await;
     crate::lifecycle::queue::persist_background_completion_with_message(
         &node,
-        processor.lifecycle.request(),
+        &notification_request,
         "<tool-notification status=\"completed\" />",
         "background-completion-notification:concurrent-tool:tool",
         "Review background completion",

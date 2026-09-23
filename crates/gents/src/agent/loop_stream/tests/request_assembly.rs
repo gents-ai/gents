@@ -147,7 +147,7 @@ async fn every_request_in_a_tool_loop_satisfies_provider_invariants() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("run the tools"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -228,7 +228,7 @@ async fn dirty_caller_history_is_sanitized_at_loop_entry() {
     ]);
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("continue"),
         dirty_history,
         Arc::new(Vec::new()),

@@ -38,6 +38,7 @@ impl rig::completion::CompletionModel for RootReadModel {
     {
         use std::sync::atomic::Ordering;
 
+        crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
         if !request.tools.iter().any(|tool| tool.name == "read_file") {
             let stream: rig::streaming::StreamingResult<()> = Box::pin(futures::stream::iter([
                 Ok(rig::streaming::RawStreamingChoice::Message(
@@ -3639,9 +3640,18 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
         )
         .await
         .expect("run the persisted request through the production owned loop");
+        let escaped_request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
+        let observed = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc}"}}}}) {{lifecycle_state failure_reason terminal_output}} }}"#
+            ))
+            .await;
+        assert!(!observed.has_errors(), "{label}: {:?}", observed.errors);
+        let data = observed.data.as_ref().expect("owned-loop observations");
         assert!(
             turns.load(std::sync::atomic::Ordering::SeqCst) >= 2,
-            "{label}: provider did not receive the tool-result turn"
+            "{label}: provider did not receive the tool-result turn; request: {}",
+            data["AgentRequest"][0]
         );
         assert!(
             provider_inputs
@@ -3664,14 +3674,6 @@ async fn descendant_root_preview_apply_reconcile_reaches_fresh_request_file_tool
             );
         }
 
-        let escaped_request_doc = crate::graphql::escape_graphql_string(&request_doc_id);
-        let observed = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc}"}}}}) {{lifecycle_state}} }}"#
-            ))
-            .await;
-        assert!(!observed.has_errors(), "{label}: {:?}", observed.errors);
-        let data = observed.data.as_ref().expect("owned-loop observations");
         assert_eq!(
             data["AgentRequest"][0]["lifecycle_state"], "completed",
             "{label}: fresh owned request did not complete"

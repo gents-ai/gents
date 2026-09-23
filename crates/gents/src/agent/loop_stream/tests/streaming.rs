@@ -8,7 +8,7 @@ async fn single_turn_no_tools_yields_text_then_final() {
 
     let stream = run_loop_stream(
         model,
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -109,7 +109,7 @@ async fn exceeding_max_turns_terminates_with_error() {
     let model = ScriptedModel::new_turns(vec![echo_tool_turn(), echo_tool_turn()]);
     let stream = run_loop_stream(
         model,
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         prompt,
         Vec::new(),
         Arc::new(vec![echo_tool()]),
@@ -242,7 +242,7 @@ async fn threaded_assistant_turn_carries_provider_message_id() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("go"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),

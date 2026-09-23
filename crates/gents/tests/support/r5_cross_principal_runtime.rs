@@ -32,13 +32,34 @@ pub struct R5AcceptedRuntime {
     pub parent_session_id: String,
     pub parent_behavior_id: String,
     pub child_agent_did: String,
-    _child_endpoint: MockModelEndpoint,
+    child_endpoint: ChildEndpoint,
 }
 
 impl R5AcceptedRuntime {
+    pub fn child_provider_observed_requests(&self, marker: &str) -> usize {
+        match &self.child_endpoint {
+            ChildEndpoint::Immediate(_) => 0,
+            ChildEndpoint::Paused(backend) => backend.observed_requests(marker),
+        }
+    }
+
     pub async fn shutdown(self) {
         self.parent.shutdown().await;
         self.child.shutdown().await;
+    }
+}
+
+enum ChildEndpoint {
+    Immediate(MockModelEndpoint),
+    Paused(super::streaming_backend::MockStreamingBackend),
+}
+
+impl ChildEndpoint {
+    fn endpoint(&self) -> &str {
+        match self {
+            Self::Immediate(endpoint) => endpoint.endpoint(),
+            Self::Paused(backend) => backend.endpoint(),
+        }
     }
 }
 
@@ -51,6 +72,8 @@ pub struct R5AcceptedSpec<'a> {
     pub prompt: &'a str,
     /// Immutable depth of the accepted parent request whose tool call is delegated.
     pub parent_subagent_depth: u32,
+    /// Hold the worker's provider response until cancellation has been observed.
+    pub hold_child_provider: bool,
 }
 
 struct R5SnapshotProbe {
@@ -185,7 +208,26 @@ pub async fn boot_cross_principal_accepted_turn(spec: R5AcceptedSpec<'_>) -> R5A
     let child_identity: Arc<dyn AgentIdentity> = child_db.node_identity.clone();
     let child_agent_did = child_identity.did().to_owned();
     let default_behavior_id = default_behavior_id_for_agent(&child_agent_did);
-    let child_endpoint = MockModelEndpoint::start("default").expect("R5 child mock endpoint");
+    let child_endpoint = if spec.hold_child_provider {
+        let child_prompt = format!("child prompt for {}", spec.name);
+        ChildEndpoint::Paused(
+            super::streaming_backend::MockStreamingBackend::start_with_plans(
+                "default",
+                vec![StreamPlan::current_authored_user(
+                    &child_prompt,
+                    vec![StreamResponse::Stream(StreamScript::paused_before(
+                        &child_prompt,
+                        vec![StreamChunk::text("child complete")],
+                    ))],
+                )],
+            )
+            .expect("R5 paused child backend"),
+        )
+    } else {
+        ChildEndpoint::Immediate(
+            MockModelEndpoint::start("default").expect("R5 child mock endpoint"),
+        )
+    };
     bind_default_behavior_backend(
         child_db.node.as_ref(),
         &child_agent_did,
@@ -369,7 +411,7 @@ pub async fn boot_cross_principal_accepted_turn(spec: R5AcceptedSpec<'_>) -> R5A
         parent_session_id: spec.parent_session_id.to_owned(),
         parent_behavior_id,
         child_agent_did,
-        _child_endpoint: child_endpoint,
+        child_endpoint,
     }
 }
 

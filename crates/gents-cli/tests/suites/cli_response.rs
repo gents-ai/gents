@@ -347,7 +347,8 @@ fn response_wait_failure(
 /// A terminal request with a selection the canonical reader rejects (header
 /// scope mismatch, wrong role, or unreadable dependencies) surfaces the
 /// `Invalid` observation: `show` prints the nonterminal `invalid` envelope and
-/// `wait` reports the same failure without timing out.
+/// `wait` rejects that observation before terminal materialization, without
+/// timing out.
 async fn assert_invalid_terminal_selection(
     runtime: &ResponseTestRuntime,
     request_id: &str,
@@ -360,9 +361,13 @@ async fn assert_invalid_terminal_selection(
     );
 
     let wait_error = response_wait_failure(runtime, request_id, "5")?;
-    assert!(wait_error.contains("canonical terminal output for request"));
+    assert!(
+        wait_error.contains(&format!(
+            "canonical output for request {request_id} is invalid"
+        )),
+        "wait must report the invalid canonical observation: {wait_error}"
+    );
     assert!(wait_error.contains(request_id));
-    assert!(wait_error.contains("is invalid"));
     assert!(!wait_error.contains("timed out"));
     Ok(())
 }

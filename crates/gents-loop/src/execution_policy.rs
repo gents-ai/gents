@@ -42,11 +42,7 @@ pub struct LeaseObservation<'a> {
 /// passed. Expiry is inclusive — `now == deadline` is already expired, so the
 /// old owner cannot append, publish, dispatch, finalize or renew there even if
 /// its generation still matches.
-pub fn is_live(
-    observed: LeaseObservation<'_>,
-    expected_generation: &str,
-    now_ms: i64,
-) -> bool {
+pub fn is_live(observed: LeaseObservation<'_>, expected_generation: &str, now_ms: i64) -> bool {
     now_ms >= 0 && observed.generation == expected_generation && observed.deadline_ms > now_ms
 }
 

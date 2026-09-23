@@ -51,7 +51,12 @@ pub(crate) struct ToolOutputBinding {
 }
 
 impl gents_loop::live_output::CanonicalOutputAppender for ToolOutputBinding {
-    fn append<'a>(&'a self, text: &'a str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<std::ops::Range<u64>>> + Send + 'a>> {
+    fn append<'a>(
+        &'a self,
+        text: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<std::ops::Range<u64>>> + Send + 'a>,
+    > {
         Box::pin(async move { append_tool_output(self, text).await })
     }
 }

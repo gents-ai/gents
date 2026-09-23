@@ -88,14 +88,14 @@ where
         p2p_reconcile::enrollment_authority_channel().1,
     );
     let mut daemon = daemon::BehaviorDaemon::new(
-        node,
+        node.clone(),
         behavior,
         Arc::new(model),
         preamble,
         loop_tools,
         prompt_builder,
         FailurePolicy::default(),
-        None,
+        Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
         crate::hook::BackgroundToolRegistry::default(),
         crate::hook::BackgroundExecutionRegistry::default(),
         Arc::new(runtime::StartupBarrier::ready_for_test()),

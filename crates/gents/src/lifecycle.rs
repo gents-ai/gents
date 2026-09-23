@@ -521,7 +521,6 @@ impl gents_loop::request_lifecycle::RequestLifecycleControl for RequestLifecycle
     async fn validate_owned_execution(&self) -> anyhow::Result<()> {
         RequestLifecycle::validate_owned_execution(self).await
     }
-
 }
 
 #[cfg(test)]

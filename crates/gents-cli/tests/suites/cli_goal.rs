@@ -228,10 +228,8 @@ async fn goal_resume_request_reuses_signed_predecessor_and_returns_same_child() 
         ],
     )?;
     assert_eq!(
-        submitted
-            .pointer("/response/status")
-            .and_then(Value::as_str),
-        Some("complete")
+        submitted.pointer("/output/kind").and_then(Value::as_str),
+        Some("terminal_message")
     );
     let predecessor = submitted
         .get("request_id")

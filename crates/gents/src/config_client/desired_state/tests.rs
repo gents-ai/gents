@@ -14,7 +14,9 @@ where
     S: tracing::Subscriber,
 {
     fn on_event(&self, event: &tracing::Event<'_>, _: LayerContext<'_, S>) {
-        if event.metadata().target() == "gents::openai_wire" {
+        // The warning owner lives in gents-loop; gents::openai_wire only
+        // re-exports its type and does not change the event's module target.
+        if event.metadata().target() == "gents_loop::openai_wire" {
             self.0
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())

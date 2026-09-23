@@ -360,9 +360,12 @@ pub async fn wait_for_tool_call(graphql: &str, session_id: &str, tool_name: &str
                         order: {{ started_at: DESC }},
                         limit: 1
                     ) {{
+                        _docID
+                        agent_did
+                        requester_did
+                        request_doc_id
+                        session_id
                         tool_name
-                        args
-                        result
                         status
                     }}
                 }}"#,
@@ -407,9 +410,12 @@ pub async fn wait_for_completed_tool_calls(
                         }},
                         order: {{ started_at: ASC }}
                     ) {{
+                        _docID
+                        agent_did
+                        requester_did
+                        request_doc_id
+                        session_id
                         tool_name
-                        args
-                        result
                         status
                     }}
                 }}"#,
@@ -439,6 +445,39 @@ pub async fn wait_for_completed_tool_calls(
             );
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Read the exact invocation reply through the runtime's canonical
+/// physical-tool-document owner. A completed tool can precede replicated
+/// delivery briefly, so wait for the addressed reply to become visible.
+pub async fn canonical_tool_result_text(graphql: &str, call: &Value) -> Result<String> {
+    use gents::config_client::ConfigAccess;
+    use gents::tool_call_lifecycle::{load_tool_call_result, render_tool_result};
+
+    let required = |field: &str| -> Result<&str> {
+        call.get(field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow!("completed tool row missing {field}: {call}"))
+    };
+    let tool_doc_id = required("_docID")?;
+    let agent_did = required("agent_did")?;
+    let session_id = required("session_id")?;
+    required("request_doc_id")?;
+    let requester_did = call.get("requester_did").and_then(Value::as_str);
+    let access = ConfigAccess::Graphql(graphql.to_owned());
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match load_tool_call_result(&access, tool_doc_id, agent_did, session_id, requester_did)
+            .await
+        {
+            Ok(message) => return render_tool_result(&message),
+            Err(error) if Instant::now() < deadline => {
+                let _ = error;
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 

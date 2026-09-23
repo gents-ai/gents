@@ -56,6 +56,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &root_request_id,
         &root_doc_id,
         &first_child_request_id,
+        1,
         "2026-05-20T12:00:01Z",
     )
     .await?;
@@ -80,6 +81,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &root_request_id,
         &root_doc_id,
         &second_child_request_id,
+        2,
         "2026-05-20T12:00:02Z",
     )
     .await?;
@@ -104,6 +106,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &first_child_request_id,
         &first_child_doc_id,
         &grandchild_request_id,
+        1,
         "2026-05-20T12:00:03Z",
     )
     .await?;
@@ -410,18 +413,31 @@ async fn seed_request(
     doc_id_from_create(&response, "add_AgentRequest")
 }
 
-/// Seed the durable spawn bridge (`AgentToolCall` with `child_request_id`)
-/// that the descendant graph walks; `subagent list --root` discovers children
-/// exclusively through these since #1136. Returns `(tool_call_id, _docID)`
-/// for stamping the child's `caused_by_parent_tool_call*` fields.
+/// Seed the durable spawn bridge and its accepted canonical tool-call header.
+/// The descendant graph requires both the physical child link and the exact
+/// accepted invocation; neither a bare tool row nor nearby transcript content
+/// grants lineage. Returns `(tool_call_id, _docID)` for the child provenance.
 async fn seed_spawn_bridge(
     graphql: &str,
     agent_did: &str,
     parent_request_id: &str,
     parent_doc_id: &str,
     child_request_id: &str,
+    message_sequence: u32,
     started_at: &str,
 ) -> Result<(String, String)> {
+    use gents::config_client::ConfigAccess;
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadRef, SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
+        TranscriptMessage,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
     let tool_call_id = format!("spawn-{child_request_id}");
     let session_id = format!("session-{parent_request_id}");
     let response = graphql_query(
@@ -434,7 +450,8 @@ async fn seed_spawn_bridge(
                     request_doc_id: "{parent_doc_id}",
                     session_id: "{session_id}",
                     agent_did: "{agent_did}",
-                    tool_name: "task",
+                    message_sequence: {message_sequence},
+                    tool_name: "spawn_subagent",
                     tool_call_id: "{tool_call_id}",
                     status: "pending",
                     lifecycle_state: "pending",
@@ -455,6 +472,93 @@ async fn seed_spawn_bridge(
     )
     .await?;
     let doc_id = doc_id_from_create(&response, "add_AgentToolCall")?;
+    let access = ConfigAccess::Graphql(graphql.to_owned());
+    let generation = format!("subagent-list:{parent_doc_id}:{message_sequence}");
+    let arguments = "{}";
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: None,
+        session_id: session_id.clone(),
+        request_doc_id: parent_doc_id.into(),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: u64::from(message_sequence),
+            },
+            turn_index: 0,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.clone(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: arguments.len() as u32,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::ToolArguments {
+                    id: tool_call_id.clone(),
+                    call_id: Some(tool_call_id.clone()),
+                    name: "spawn_subagent".into(),
+                },
+            }),
+        }],
+        payload: arguments.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![arguments.len() as u64],
+        }),
+        created_at: started_at.into(),
+    };
+    let segment_response = crate::support::graphql::graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &output_segment_create_variables(&segment)?,
+    )
+    .await?;
+    let close_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
+    let header = TranscriptMessage {
+        message_key: gents::session::sequence_message_key(
+            agent_did,
+            &session_id,
+            None,
+            message_sequence,
+        ),
+        session_id,
+        agent_did: agent_did.into(),
+        requester_did: None,
+        request_doc_id: Some(parent_doc_id.into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation,
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: message_sequence,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: doc_id.clone(),
+            id: tool_call_id.clone(),
+            call_id: Some(tool_call_id.clone()),
+            name: "spawn_subagent".into(),
+            arguments: PayloadRef {
+                close_doc_id,
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+        created_at: started_at.into(),
+    };
+    crate::support::graphql::graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&header)?,
+    )
+    .await?;
     Ok((tool_call_id, doc_id))
 }
 

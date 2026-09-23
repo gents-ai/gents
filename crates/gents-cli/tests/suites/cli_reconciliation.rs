@@ -202,7 +202,7 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         ],
     )?;
     let response = result
-        .pointer("/response/content")
+        .pointer("/output/presentation/body_markdown")
         .and_then(Value::as_str)
         .ok_or_else(|| {
             anyhow!("request submit result did not include response content: {result}")
@@ -279,12 +279,10 @@ async fn reconciled_runtime_sends_generation_two_tools_and_completes_tool_loop()
         tool_call.get("status").and_then(Value::as_str),
         Some("completed")
     );
+    let tool_result = canonical_tool_result_text(&graphql, &tool_call).await?;
     assert!(
-        tool_call
-            .get("result")
-            .and_then(Value::as_str)
-            .is_some_and(|result| result.contains(&token)),
-        "expected persisted tool result to contain token {token}: {tool_call}"
+        tool_result.contains(&token),
+        "expected persisted tool result to contain token {token}: {tool_result}"
     );
 
     Ok(())

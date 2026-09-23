@@ -274,5 +274,4 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
         &["hi".to_string()],
         "the echo tool must have been dispatched exactly once"
     );
-
 }

@@ -3,7 +3,7 @@
 //! and do not claim database/gate/timer conformance.
 #[path = "../../gents/src/session/canonical_rows.rs"]
 mod canonical_rows;
-#[path = "../../gents/src/lifecycle/execution_policy.rs"]
+#[path = "../../gents-loop/src/execution_policy.rs"]
 mod execution_policy;
 #[path = "../../gents/src/lean_vocab_test/request_execution_lease.rs"]
 mod runtime_contract;

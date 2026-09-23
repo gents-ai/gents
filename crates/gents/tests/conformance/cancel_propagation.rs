@@ -68,6 +68,7 @@ async fn drive_declarative_cancel_propagation() {
         target_behavior_id: "cancel-propagation-worker",
         prompt: "parent work",
         parent_subagent_depth: 0,
+        hold_child_provider: true,
     })
     .await;
     let coord_node = runtime.parent_db.node.clone();
@@ -98,6 +99,24 @@ async fn drive_declarative_cancel_propagation() {
             .await
             .is_none(),
         "coordinator parent request must not replicate to the host"
+    );
+    let child_prompt = "child prompt for cancel-propagation";
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while runtime.child_provider_observed_requests(child_prompt) == 0 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("worker did not reach its paused provider response before cancellation");
+    let owned_child = fetch_request(host_node.as_ref(), &child_request_id)
+        .await
+        .expect("worker child request exists before cancellation");
+    assert!(
+        matches!(
+            owned_child.lifecycle_state,
+            Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
+        ),
+        "worker must own the child request while its provider is paused"
     );
     let coord_bridge_before_cancel = wait_for_bridge(
         coord_node.as_ref(),

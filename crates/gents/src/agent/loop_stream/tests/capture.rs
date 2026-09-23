@@ -21,7 +21,7 @@ async fn rendered_request_sink_runs_before_provider_stream() {
 
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),

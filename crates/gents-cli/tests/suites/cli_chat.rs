@@ -240,11 +240,13 @@ async fn chat_supports_message_file_json_output_and_output_file() -> Result<()> 
         "chat json output should include session_id: {output}"
     );
     assert_eq!(
-        output.pointer("/response/status").and_then(Value::as_str),
-        Some("complete")
+        output.pointer("/output/kind").and_then(Value::as_str),
+        Some("terminal_message")
     );
     assert_eq!(
-        output.pointer("/response/content").and_then(Value::as_str),
+        output
+            .pointer("/output/presentation/body_markdown")
+            .and_then(Value::as_str),
         Some(expected_reply.as_str())
     );
 

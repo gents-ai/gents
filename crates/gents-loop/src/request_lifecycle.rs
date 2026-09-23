@@ -10,5 +10,4 @@ pub trait RequestLifecycleControl: Send + Sync {
     /// Called between provider turns so a superseded execution stops before
     /// it writes anything else.
     async fn validate_owned_execution(&self) -> anyhow::Result<()>;
-
 }

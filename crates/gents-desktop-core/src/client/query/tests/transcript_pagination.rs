@@ -82,7 +82,7 @@ async fn transcript_pages_bound_canonical_headers_and_keep_stable_cursors() {
 }
 
 #[tokio::test]
-async fn transcript_pages_preserve_acp_scope_and_sequence_atomicity() {
+async fn transcript_pages_preserve_acp_scope_and_sequence_cursors() {
     let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
     ensure_runtime_schemas(node.as_ref())
         .await
@@ -149,7 +149,7 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_atomicity() {
     }));
 
     let equal = [
-        canonical_header("equal_a", "equal:a", "equal", "did:test:agent", None, 2),
+        canonical_header("equal_a", "equal:a", "equal", "did:test:agent", None, 3),
         canonical_header("equal_b", "equal:b", "equal", "did:test:agent", None, 2),
         canonical_header("equal_old", "equal:old", "equal", "did:test:agent", None, 1),
     ]
@@ -158,13 +158,46 @@ async fn transcript_pages_preserve_acp_scope_and_sequence_atomicity() {
     assert!(!response.has_errors(), "{:?}", response.errors);
     let page = load_session_transcript_page(node.as_ref(), "equal", None, None, None, Some(2))
         .await
-        .expect("equal-sequence page");
+        .expect("newest sequence page");
     assert_eq!(page.store.transcript_messages.len(), 2);
-    assert!(page
-        .store
-        .transcript_messages
-        .iter()
-        .all(|row| row.message.sequence == 2));
+    assert_eq!(
+        page.store
+            .transcript_messages
+            .iter()
+            .map(|row| row.message.sequence)
+            .collect::<Vec<_>>(),
+        vec![3, 2]
+    );
+
+    let older =
+        load_session_transcript_page(node.as_ref(), "equal", None, None, Some("equal:b"), Some(2))
+            .await
+            .expect("older sequence page");
+    assert_eq!(older.store.transcript_messages.len(), 1);
+    assert_eq!(older.store.transcript_messages[0].message.sequence, 1);
+}
+
+#[tokio::test]
+async fn transcript_page_rejects_same_session_sequence_twins() {
+    let node = Arc::new(NodeBuilder::default().build().await.expect("node"));
+    ensure_runtime_schemas(node.as_ref())
+        .await
+        .expect("schemas");
+    let twins = [
+        canonical_header("first", "twins:first", "twins", "did:test:agent", None, 2),
+        canonical_header("second", "twins:second", "twins", "did:test:agent", None, 2),
+    ]
+    .join("\n");
+    let response = node.execute(&format!("mutation {{ {twins} }}")).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+
+    let error = load_session_transcript_page(node.as_ref(), "twins", None, None, None, Some(2))
+        .await
+        .err()
+        .expect("same-session sequence twins must conflict");
+    assert!(error
+        .to_string()
+        .contains("canonical header origin: Conflict"));
 }
 
 #[tokio::test]

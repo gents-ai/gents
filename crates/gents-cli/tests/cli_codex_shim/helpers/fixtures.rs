@@ -73,7 +73,7 @@ async fn seed_canonical_tool_transcript(
         source: OutputSource::ProviderTurn {
             scope: CaptureScope {
                 kind: CaptureScopeKind::Inference,
-                seq: sequence,
+                seq: u64::from(sequence),
             },
             turn_index: 0,
             attempt: 0,

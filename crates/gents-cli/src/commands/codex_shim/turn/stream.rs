@@ -1316,6 +1316,7 @@ mod tests {
         progress_marker, suffix_prefix_overlap, ContentCursor, ReasoningCursor,
         ReasoningObservation,
     };
+    use gents_codex_protocol as codex;
     use serde_json::json;
 
     #[test]
@@ -1390,18 +1391,14 @@ mod tests {
         let mut projection =
             TurnProjection::new(&state, "thread", "turn", temp.path().to_path_buf(), None);
         let mut cursor = ReasoningCursor::default();
+        let source = reasoning_source(0);
         let first_tail = "a".repeat(gents::MAX_LIVE_REASONING_BYTES);
         let second_tail = "b".repeat(gents::MAX_LIVE_REASONING_BYTES);
         let durable_text = format!("{first_tail} omitted middle {second_tail}");
         assert!(durable_text.len() > gents::MAX_LIVE_REASONING_BYTES);
 
         let first = cursor
-            .observe(
-                "request-1",
-                &first_tail,
-                Some("1".to_string()),
-                Some("1".to_string()),
-            )
+            .observe("request-1", &first_tail, &source)
             .delta
             .expect("first bounded-tail delta");
         projection
@@ -1416,12 +1413,7 @@ mod tests {
         // prefix). Terminal materialization, however, must complete the new
         // segment with the exact durable text.
         let second = cursor
-            .observe(
-                "request-1",
-                &second_tail,
-                Some("1".to_string()),
-                Some("2".to_string()),
-            )
+            .observe("request-1", &second_tail, &source)
             .delta
             .expect("unrecoverable bounded-tail delta");
         assert_eq!(second.item_id, "gents-reasoning-request-1-segment-1");

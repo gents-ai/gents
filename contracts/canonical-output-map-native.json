@@ -113,10 +113,10 @@
       "fixture_status": "not_exported",
       "native_owner_paths": [
         "crates/gents/src/provider_input.rs",
-        "crates/gents/src/provider_input/budget.rs",
+        "crates/gents-loop/src/provider_input_budget.rs",
         "crates/gents/src/compaction.rs",
         "crates/gents/src/agent/daemon/request.rs",
-        "crates/gents/src/agent/loop_stream/request_assembly.rs"
+        "crates/gents-loop/src/loop_stream/request_assembly.rs"
       ],
       "consumer_paths": [
         "crates/gents/src/provider_input/tests.rs",

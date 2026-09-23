@@ -2608,6 +2608,7 @@ mod tests {
         let turns = Arc::new(TurnManager::new(
             node.clone(),
             super::super::turn::TurnManagerConfig {
+                actor: identity::Did::new(agent_did.clone()).expect("fixture creator DID"),
                 agent_did: agent_did.clone(),
                 behavior_id: behavior_id.clone(),
                 graphql,

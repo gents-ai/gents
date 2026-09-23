@@ -531,8 +531,9 @@ pub(super) async fn collect_owned_scripted_stream<S, R>(
 where
     S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
 {
-    let context = crate::rendered_request::RenderedRequestContext::for_request(
+    let context = crate::rendered_request::context_for_claimed_request(
         lifecycle.request(),
+        "",
         "test-model".into(),
     );
     let scope = crate::rendered_request::scope::test_scope(

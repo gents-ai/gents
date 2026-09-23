@@ -543,7 +543,14 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         attempt: u32,
         capture_scope: gents_protocol::rendered_request::CaptureScope,
     ) {
-        DefraStreamWriter::start_provider_attempt(self, request_doc_id, turn, attempt, capture_scope).await
+        DefraStreamWriter::start_provider_attempt(
+            self,
+            request_doc_id,
+            turn,
+            attempt,
+            capture_scope,
+        )
+        .await
     }
 
     async fn flush_native_partial(
@@ -562,8 +569,12 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         close: gents_loop::stream_writer::ProviderAttemptClose,
     ) -> Result<()> {
         let close = match close {
-            gents_loop::stream_writer::ProviderAttemptClose::Retracted => canonical::ProviderAttemptClose::Retracted,
-            gents_loop::stream_writer::ProviderAttemptClose::Partial => canonical::ProviderAttemptClose::Partial,
+            gents_loop::stream_writer::ProviderAttemptClose::Retracted => {
+                canonical::ProviderAttemptClose::Retracted
+            }
+            gents_loop::stream_writer::ProviderAttemptClose::Partial => {
+                canonical::ProviderAttemptClose::Partial
+            }
         };
         DefraStreamWriter::close_provider_attempt(self, lifecycle, turn, attempt, close).await
     }
@@ -577,8 +588,14 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
         spawn_admissions: &[SpawnAdmissionPlan],
     ) -> Result<gents_loop::stream_writer::CanonicalPublishedTurn<AcceptedToolCall>> {
         let published = DefraStreamWriter::publish_native_turn_with_spawn_admissions(
-            self, lifecycle, turn, attempt, message, spawn_admissions,
-        ).await?;
+            self,
+            lifecycle,
+            turn,
+            attempt,
+            message,
+            spawn_admissions,
+        )
+        .await?;
         Ok(gents_loop::stream_writer::CanonicalPublishedTurn {
             message_doc_id: published.message_doc_id,
             accepted_tools: published.accepted_tools,

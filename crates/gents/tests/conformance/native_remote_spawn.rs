@@ -29,6 +29,7 @@ pub(super) async fn generated_remote_spawn_contract_drives_native_seam() {
         target_behavior_id: &case.target_behavior_id,
         prompt: "publish one real remote spawn_subagent call",
         parent_subagent_depth: 0,
+        hold_child_provider: false,
     })
     .await;
 

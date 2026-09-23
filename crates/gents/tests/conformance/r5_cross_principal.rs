@@ -82,6 +82,7 @@ async fn drive_cross_principal_case(case: &LeanR5CrossPrincipalCase) {
             target_behavior_id: &case.target_behavior_id,
             prompt: "spawn the configured child",
             parent_subagent_depth: 0,
+            hold_child_provider: false,
         },
     )
     .await;
@@ -226,6 +227,7 @@ async fn drive_same_principal_case(case: &LeanR5CrossPrincipalCase) {
             target_behavior_id: &case.target_behavior_id,
             prompt: "spawn the local configured child",
             parent_subagent_depth: 0,
+            hold_child_provider: false,
         },
     )
     .await;

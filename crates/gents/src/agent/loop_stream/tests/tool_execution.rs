@@ -103,7 +103,7 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
     })];
     let stream = run_loop_stream(
         model,
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("use the echo tool then stall"),
         Vec::new(),
         Arc::new(tools),
@@ -146,7 +146,7 @@ async fn tool_definition_receives_prompt_rag_text() {
     ]);
     let stream = run_loop_stream(
         model,
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("teach me rust"),
         Vec::new(),
         Arc::new(vec![tool]),
@@ -178,7 +178,7 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     ]);
     let stream = run_loop_stream(
         model.clone(),
-        None,
+        None::<gents_loop::session_hook::NoopSessionHook>,
         Message::user("use the echo tool"),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
