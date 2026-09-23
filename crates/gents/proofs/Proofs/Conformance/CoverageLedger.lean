@@ -1127,6 +1127,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::delegation_depth_matches_runtime_limit"
       "This consumer compares the runtime depth limit only. Generated path acyclicity, boundedness and cascade witnesses need actual delegation/control traces; asserting their expected flags is not implementation coverage.")
       "background-tools" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "delegated_child_resolution_cases"
+      "DelegatedChildResolutionCases"
+      "Accepted canonical remote rows feed the Workspace child-resolution owner and existing subagent depth bound. Native binding still requires a same-transaction parent workspace provenance check and a generated-case consumer that invokes the real child materialization owners; the exported expected result is model execution, not native coverage.")
+      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"
       "DescendantGraphCases"

@@ -61,29 +61,6 @@ inductive Step where
   | commitWhileSiblingWaits (operation : Operation)
   | replicate (record : Segment)
 
-/-- Executable provider-native `spawn_subagent` input. Its argument stream is
-the exact JSON consumed by the Rust publication owner, unlike the older
-abstract `child`/`nativeCommand` witnesses. -/
-def realSpawnArguments : String :=
-  "{\"name\":\"lean-behavior-8\",\"prompt\":\"work\",\"await_mode\":\"background\"}"
-
-def realSpawnArgumentBytes : List UInt8 := realSpawnArguments.toUTF8.data.toList
-
-def realSpawnProviderTurn : Segment :=
-  { providerTurn with
-    flush := some ⟨0,
-      [⟨0, realSpawnArgumentBytes.length, some
-        { block := 0, part := 0, kind := .arguments,
-          tool := some ⟨"native-call", none, "spawn_subagent"⟩ }⟩],
-      realSpawnArgumentBytes⟩
-    close := some (.closed .complete 1 [realSpawnArgumentBytes.length]) }
-
-def realSpawnProviderMessage : MessageEnvelope :=
-  { providerMessage with
-    header := { providerMessage.header with refs := [⟨500, 0⟩] }
-    blocks := [.toolCall 600 "native-call" none "spawn_subagent"
-      ⟨⟨500, 0⟩, .full⟩ none none] }
-
 def Input.step : Input → Step
   | .acceptForeground =>
       .commit (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
@@ -455,6 +432,12 @@ def publicationCases : List Case :=
         .acceptTurn regressedProviderClose regressedProviderMessage [foregroundAdmission]]
   , mkCase "real_spawn_same_route_replay_is_idempotent"
       (routedWorld 5) [.realSpawnAccept, .realSpawnAccept]
+  , mkCase "real_spawn_depth_two_copies_parent_depth"
+      (routedDepthWorld 2) [.realSpawnAccept]
+  , mkCase "real_spawn_depth_three_copies_parent_depth"
+      (routedDepthWorld Subagent.maxSubagentDepth) [.realSpawnAccept]
+  , mkCase "real_spawn_fresh_parent_workspace_mismatch_rejected"
+      (routedWorld 5) [.realSpawnWorkspaceDrift]
   , mkCase "real_spawn_route_behavior_drift_rejected_on_replay"
       (routedWorld 5) [.realSpawnAccept, .realSpawnBehaviorDrift]
   , mkCase "real_spawn_route_workspace_drift_rejected_on_replay"
@@ -538,14 +521,17 @@ def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
       ",\"child_request_id\":" ++ jsonOptionalNat context.childRequestId ++
       ",\"spawn_behavior_id\":" ++ jsonOptionalNat context.spawnBehaviorId
 
-def admissionJson (value : ToolAdmission) : String :=
-  "{" ++ "\"document\":" ++ toString value.document ++ "," ++
-    contextFieldsJson value.context ++ ",\"delegated_workspace\":" ++
-    (value.delegatedWorkspace.map (fun workspace =>
+def delegatedWorkspaceJson (value : Option DelegatedWorkspace) : String :=
+  (value.map (fun workspace =>
       "{\"workspace_id\":" ++ toString workspace.workspaceId ++
       ",\"workspace_owner_agent_did\":" ++ toString workspace.ownerAgent ++
       ",\"workspace_seal_hash\":" ++ jsonOptionalNat workspace.sealHash ++
-      ",\"workspace_authority\":" ++ jsonString workspace.authority.toDefraDB ++ "}")).getD "null" ++ "}"
+      ",\"workspace_authority\":" ++ jsonString workspace.authority.toDefraDB ++ "}")).getD "null"
+
+def admissionJson (value : ToolAdmission) : String :=
+  "{" ++ "\"document\":" ++ toString value.document ++ "," ++
+    contextFieldsJson value.context ++ ",\"delegated_workspace\":" ++
+    delegatedWorkspaceJson value.delegatedWorkspace ++ "}"
 
 def spawnedAdmissionJson (value : SpawnedToolAdmission) : String :=
   "{" ++ "\"document\":" ++ toString value.document ++ ","
@@ -565,6 +551,8 @@ def seedJson (value : World) : String :=
   "{" ++ "\"request_id\":" ++ toString value.requestId ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
     ++ "\"principal\":" ++ toString value.principal ++ ","
+    ++ "\"subagent_depth\":" ++ toString value.subagentDepth ++ ","
+    ++ "\"workspace\":" ++ delegatedWorkspaceJson value.workspace ++ ","
     ++ "\"remote_routes\":" ++ jsonArray (value.remoteRoutes.map fun (call, target, behavior) =>
       "{\"call\":" ++ toString call ++ ",\"target\":" ++ toString target ++
         ",\"behavior\":" ++ toString behavior ++ "}") ++ ","

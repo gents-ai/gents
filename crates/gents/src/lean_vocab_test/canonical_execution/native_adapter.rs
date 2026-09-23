@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
+use gents_protocol::output::reconstruction::{ObservedSegment, reconstruct_message};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation, PayloadRef,
     PresentedPayload, SourceClose, TranscriptMessage,
@@ -63,6 +63,7 @@ pub(crate) struct NativeCanonicalExecution {
     request_doc_id: String,
     request_id: u64,
     principal_id: u64,
+    subagent_depth: u64,
     query_document: u64,
     remote_routes: Vec<crate::lean_vocab_test::LeanCanonicalRemoteRoute>,
     transcript_session_id: u64,
@@ -1091,6 +1092,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             let now = fixture_time(seed.lease.now)?;
             let request_id = format!("lean-request-{}", seed.request_id);
             let session_id = format!("lean-session-{}", seed.session_id);
+            anyhow::ensure!(
+                seed.subagent_depth == 0 && seed.workspace.is_none(),
+                "signed native admission for delegated depth or workspace provenance is not implemented"
+            );
             let key_dir = tempfile::tempdir().context("native fixture identity directory")?;
             let identity =
                 crate::KeyIdentity::load_or_create(key_dir.path().join("agent.key"), None)?;
@@ -1229,6 +1234,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 request_doc_id,
                 request_id: seed.request_id,
                 principal_id: seed.principal,
+                subagent_depth: seed.subagent_depth,
                 query_document: 0,
                 remote_routes: seed.remote_routes.clone(),
                 transcript_session_id: seed.transcript_session_id,
@@ -2041,7 +2047,7 @@ impl NativeCanonicalExecution {
             let response = self
                 .node
                 .execute(&format!(
-                    r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state child_request_id spawn_target_did spawn_behavior_id delegated_workspace await_mode }} }}"#,
+                    r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_doc_id lifecycle_state child_request_id spawn_target_did spawn_behavior_id delegated_workspace delegated_input await_mode }} }}"#,
                     crate::graphql::escape_graphql_string(&accepted.tool_call_doc_id),
                 ))
                 .await;
@@ -2076,6 +2082,15 @@ impl NativeCanonicalExecution {
                 .find(|plan| plan.tool_call_id == accepted.id)
             {
                 let stored = &rows[0];
+                if plan.spawn_target_did != self.principal {
+                    let copied: gents_protocol::output::DelegatedToolInput =
+                        serde_json::from_value(stored["delegated_input"].clone())
+                            .context("accepted remote tool omitted delegated input")?;
+                    anyhow::ensure!(
+                        u64::from(copied.parent_subagent_depth) == self.subagent_depth,
+                        "accepted remote tool changed modeled parent depth"
+                    );
+                }
                 anyhow::ensure!(
                     stored["child_request_id"].as_str() == Some(plan.child_request_id.as_str())
                         && stored["spawn_target_did"].as_str()
@@ -2503,6 +2518,127 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
 }
 
 #[tokio::test]
+async fn generated_remote_depth_crosses_publication_and_child_creation_boundaries() {
+    let contracts = crate::lean_vocab_test::lean_contract_snapshot();
+    for (modeled_name, native_name) in [
+        (
+            "remote_depth_two_inherit_at_bound",
+            "real_spawn_depth_two_copies_parent_depth",
+        ),
+        (
+            "remote_depth_three_rejects_child",
+            "real_spawn_depth_three_copies_parent_depth",
+        ),
+    ] {
+        let modeled = contracts
+            .delegated_child_resolution_cases
+            .iter()
+            .find(|case| case.name == modeled_name)
+            .expect("Lean exports the delegated child boundary");
+        let source = modeled
+            .delegated_input
+            .as_ref()
+            .expect("accepted Lean bridge has copied input");
+        let native_case = contracts
+            .canonical_execution_gate_cases
+            .iter()
+            .find(|case| {
+                matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == native_name)
+            })
+            .expect("Lean exports the matching real spawn publication");
+        let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution {
+            seed,
+            query_document,
+            operations,
+            ..
+        } = native_case
+        else {
+            unreachable!()
+        };
+        assert_eq!(seed.subagent_depth, u64::from(modeled.parent_depth));
+        let mut adapter = NativeCanonicalExecutionAdapter;
+        let mut native = adapter.initialize(seed).await.unwrap();
+        let observed = adapter
+            .apply(&mut native, *query_document, &operations[0])
+            .await
+            .unwrap();
+        assert!(observed.accepted, "{native_name} did not publish");
+        let tool_doc_id = native
+            .tool_ids
+            .iter()
+            .find_map(|(doc_id, modeled_id)| (*modeled_id == 600).then(|| doc_id.clone()))
+            .expect("accepted native spawn has a physical tool row");
+        let response = native
+            .node
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ delegated_input delegated_workspace }} }}"#,
+                crate::graphql::escape_graphql_string(&tool_doc_id),
+            ))
+            .await;
+        assert!(!response.has_errors(), "{:#?}", response.errors);
+        let rows = response.data.unwrap()["AgentToolCall"]
+            .as_array()
+            .expect("accepted bridge rows");
+        assert_eq!(rows.len(), 1, "accepted bridge must be physically unique");
+        let copied: gents_protocol::output::DelegatedToolInput =
+            serde_json::from_value(rows[0]["delegated_input"].clone()).unwrap();
+        assert_eq!(copied.parent_subagent_depth, source.parent_subagent_depth);
+        assert_eq!(copied.arguments, source.arguments);
+        assert_eq!(u64::from(copied.source.stream), source.source_stream);
+        assert_eq!(
+            native.segment_ids.get(&copied.source.close_doc_id),
+            Some(&source.source_close_doc_id)
+        );
+        let parent_stamp = seed
+            .workspace
+            .as_ref()
+            .expect("modeled boundary has a parent workspace stamp");
+        let expected_workspace_id = format!("lean-workspace-{}", parent_stamp.workspace_id);
+        let expected_owner = format!(
+            "did:test:lean:principal-{}",
+            parent_stamp.workspace_owner_agent_did
+        );
+        assert_eq!(
+            rows[0]["delegated_workspace"]["workspace_id"].as_str(),
+            Some(expected_workspace_id.as_str())
+        );
+        assert_eq!(
+            rows[0]["delegated_workspace"]["workspace_owner_agent_did"].as_str(),
+            Some(expected_owner.as_str())
+        );
+        assert_eq!(
+            rows[0]["delegated_workspace"]["workspace_authority"].as_str(),
+            Some(parent_stamp.workspace_authority.as_str())
+        );
+        if modeled.expected.is_none() {
+            let error =
+                crate::tool_call_lifecycle::create_subagent_request_with_trusted_parent_request_id(
+                    &native.node,
+                    format!("lean-boundary-child-{modeled_name}"),
+                    format!("lean-request-{}", seed.request_id),
+                    native.request_doc_id.clone(),
+                    "native-call".to_owned(),
+                    tool_doc_id,
+                    copied.parent_subagent_depth,
+                    "did:test:lean:principal-2".to_owned(),
+                    "lean-behavior-8".to_owned(),
+                    "work".to_owned(),
+                    None,
+                    native.principal.clone(),
+                )
+                .await
+                .expect_err("modeled maximum parent depth must reject child creation");
+            assert!(matches!(
+                error.downcast_ref::<crate::tool_call_lifecycle::IllegalToolCallTransition>(),
+                Some(crate::tool_call_lifecycle::IllegalToolCallTransition::SubagentDepthExceeded)
+            ));
+        }
+    }
+}
+
+#[tokio::test]
 async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     let case = crate::lean_vocab_test::lean_contract_snapshot()
         .canonical_execution_gate_cases
@@ -2558,7 +2694,7 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
 #[tokio::test]
 async fn canonical_tool_output_uses_modeled_physical_source_facts() {
     use crate::session::canonical_rows::{
-        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, output_segment_create_variables,
     };
 
     let witness = crate::lean_vocab_test::lean_r4c_background_work_case(
