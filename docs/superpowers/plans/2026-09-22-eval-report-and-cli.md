@@ -12,7 +12,7 @@
 
 ## The M4 base
 
-Ruling U11/U12: **the M4 base is M6b's FINAL tip — `optimization/23-promote` after M6b's plan completes.** All five M4 PRs stack on it, one after another; there are no cherry-picks and no second base. The orchestrator supplies the hash at spin-up and the coordinator records it in the ledger as `<M4-BASE>`; every command below that says `<M4-BASE>` means that hash. The code this plan cites was read at `optimization/22-driver` @ `e4f3373b5` ("docs(optimization): token_totals states how missing usage feeds the cost gate"), which 23-promote contains; M6b PR 4 adds `promote`, `revert`, `Promotion`, `PromoteRefused` and `promote_refused` on top, which this plan cites from M6b's plan (PR 4 Task 1) and Task 1 Step 0 and Task 12 Step 0 re-verify against the code at dispatch.
+Ruling U11/U12: **the M4 base is M6b's FINAL tip — `optimization/23-promote` after M6b's plan completes.** All five M4 PRs stack on it, one after another; there are no cherry-picks and no second base. The orchestrator supplies the hash at spin-up and the coordinator records it in the ledger as `<M4-BASE>`; every command below that says `<M4-BASE>` means that hash. The code this plan cites was read at `optimization/22-driver` @ `e4f3373b5` ("docs(optimization): token_totals states how missing usage feeds the cost gate"), which 23-promote contains; M6b PR 4 adds `promote`, `revert`, `Promotion`, `PromoteRefused` and `promote_refused` on top; ruling F11 records that `optimization/23-promote` @ `144be2916` ("feat(optimization): operator-only promote and a terminal revert") matches Task 12's interface block, and `JobState`'s variants (`Running`, `ReadyToPromote`, `NothingToPromote`, `Exhausted`, `Failed { reason }`, `Promoted`, `Stale`, `Reverted`) and the three post-`execute_run` sites in `driver.rs` Task 4a edits were read at that branch (`/Users/iron-arch-mage/Repos/Source/gents-optimization-23-promote`, tip `75e753741`). Task 1 Step 0 and Task 12 Step 0 still re-verify at dispatch.
 
 | PR | Branch | Base |
 |---|---|---|
@@ -126,13 +126,13 @@ Branch `eval/50-report`, base `<M4-BASE>`. Worktree: `make worktree BRANCH=eval/
 | `crates/gents/src/eval/runner/embedded/executor.rs` | Stage start and end reported from `run_stages` |
 | `crates/gents/src/optimization/driver/matrix.rs` | Two doc comments made true again by the §9 fix |
 
-### Task 1: `report::build` and the slot classification
+### Task 1: The report's types and the test fixtures
 
 **Files:**
-- Create: `crates/gents/src/eval/report/build.rs`
+- Create: `crates/gents/src/eval/report/build.rs` (the types; Task 1b adds `build`)
 - Create: `crates/gents/src/eval/report/fixtures.rs`
 - Modify: `crates/gents/src/eval/report/mod.rs` (whole file, 13 lines today)
-- Modify: `crates/gents/src/eval/report/evidence.rs:82` (`fn counted_slots<'a>(` → `pub(crate) fn counted_slots<'a>(`)
+- Modify: `crates/gents/src/eval/report/evidence.rs` (`CellUsage` derives `serde::Serialize`)
 
 **Interfaces:**
 - Consumes (read at `e4f3373b5`, contained in `<M4-BASE>`):
@@ -173,7 +173,7 @@ Branch `eval/50-report`, base `<M4-BASE>`. Worktree: `make worktree BRANCH=eval/
       invalidated: Option<Invalidation>, trials_per_case: u32, seed_base: i64, concurrency: u32,
       max_infra_retries: u32, breaker_threshold: u32, source_commit: String, source_dirty: bool }
   pub struct CellReport { cell_id, label, subject: SubjectRef, slots: Vec<SlotReport>, cases: Vec<CaseReport>,
-      headline_bp: Option<u32>, usage: TrialUsage, usage_trials: u32, usage_missing: u32, attempts: u32, counts: SlotCounts }
+      headline_bp: Option<u32>, usage: TrialUsage, cell_usage: CellUsage, attempts: u32, counts: SlotCounts }
   pub struct SlotReport { case_id, trial_index: u32, class: SlotClass, attempts: u32, score_bp: Option<u32>,
       counted: SlotScore, latest: Option<AttemptSummary> }
   pub enum SlotClass { Pass, Fail, Unknown, NotEvidence, Abandoned, Planned }
@@ -183,8 +183,6 @@ Branch `eval/50-report`, base `<M4-BASE>`. Worktree: `make worktree BRANCH=eval/
       evidence_digest: Option<String>, stages: Vec<StageCompletion>, usage: TrialUsage }
   pub struct CaseReport { case_id, reducer: EvalReducer, mean_bp: Option<u32>, counts: SlotCounts }
   pub struct SlotCounts { pass: u32, fail: u32, unknown: u32, not_evidence: u32, abandoned: u32, planned: u32 }
-  pub fn build(run: &RunRecord, trials: &[TrialRecord], verdicts: &[VerdictRecord],
-      definition: &EvalDefinition, peers: &[RunHeader]) -> Result<EvalReport>;
   // crates/gents/src/eval/report/fixtures.rs (#[cfg(test)] pub(crate))
   pub(crate) const RUN: &str = "run";
   pub(crate) fn definition(cases: &[&str]) -> EvalDefinition;
@@ -197,6 +195,7 @@ Branch `eval/50-report`, base `<M4-BASE>`. Worktree: `make worktree BRANCH=eval/
   pub(crate) struct Rows { pub trials: Vec<TrialRecord>, pub verdicts: Vec<VerdictRecord> }
   impl Rows { pub(crate) fn add(self, run_id: &str, at: At, outcome: Outcome) -> Self; pub(crate) fn unmetered(self) -> Self }
   ```
+  `CellUsage` (M6b's `evidence.rs`, `{ tokens: u64, trials: u64, missing: u64 }`) gains `serde::Serialize` here.
   All report types derive `Clone, Debug, PartialEq, Eq, Serialize`; `SlotClass`, `SlotScore` and `SlotCounts` are also `Copy`, and `SlotCounts` is `Default`. Enums serialize `snake_case`; `SlotScore` is `#[serde(tag = "kind", content = "bp")]`.
 
 - [ ] **Step 0: Verify the base**
@@ -446,16 +445,357 @@ impl Rows {
 }
 ```
 
-Create `crates/gents/src/eval/report/build.rs` holding, for now, only its test module (Step 3 adds the code above it):
+Create `crates/gents/src/eval/report/build.rs` holding only its test module:
 
 ```rust
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::document_config::EvalSplit;
     use crate::eval::report::fixtures::{
         at, definition, fail, pass, record, trial_id, Outcome, Rows, RUN,
     };
+
+    #[test]
+    fn slot_scores_map_to_what_pairing_reads_and_serialize_by_name() {
+        assert_eq!(SlotScore::Absent.trial_score(), None);
+        assert_eq!(
+            SlotScore::NotEvidence.trial_score(),
+            Some(CaseTrialScore::NotEvidence)
+        );
+        assert_eq!(SlotScore::Unknown.trial_score(), Some(CaseTrialScore::Unknown));
+        assert_eq!(
+            SlotScore::Scored(7).trial_score(),
+            Some(CaseTrialScore::Scored(7))
+        );
+        assert_eq!(
+            serde_json::to_value(SlotScore::Scored(10_000)).unwrap(),
+            json!({"kind": "scored", "bp": 10_000})
+        );
+        assert_eq!(
+            serde_json::to_value(SlotScore::Absent).unwrap(),
+            json!({"kind": "absent"})
+        );
+        assert_eq!(
+            serde_json::to_value(SlotClass::NotEvidence).unwrap(),
+            json!("not_evidence")
+        );
+        let mut counts = SlotCounts::default();
+        for class in [
+            SlotClass::Pass,
+            SlotClass::Fail,
+            SlotClass::Unknown,
+            SlotClass::NotEvidence,
+            SlotClass::Abandoned,
+            SlotClass::Planned,
+        ] {
+            counts.add(class);
+        }
+        assert_eq!(
+            counts,
+            SlotCounts {
+                pass: 1,
+                fail: 1,
+                unknown: 1,
+                not_evidence: 1,
+                abandoned: 1,
+                planned: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn the_fixtures_build_one_row_per_attempt_and_one_verdict_per_completion() {
+        let rows = Rows::default()
+            .add(RUN, at("base", "disk", 0, 1), fail())
+            .add(RUN, at("base", "disk", 0, 2), pass())
+            .unmetered()
+            .add(RUN, at("base", "disk", 1, 1), Outcome::Open);
+        assert_eq!(rows.trials.len(), 3);
+        assert_eq!(rows.verdicts.len(), 2);
+        assert_eq!(
+            rows.verdicts[1].trial_id,
+            trial_id(RUN, at("base", "disk", 0, 2))
+        );
+        let usage = &rows.trials[1].completion.as_ref().unwrap().usage;
+        assert_eq!((usage.input_tokens, usage.output_tokens), (None, None));
+        assert!(rows.trials[2].completion.is_none());
+        let definition = definition(&["disk"]);
+        let run = record(RUN, &definition, &["base"], 1);
+        assert_eq!(run.origin.case_ids, vec!["disk".to_owned()]);
+    }
+}
+```
+
+Replace `crates/gents/src/eval/report/mod.rs` with:
+
+```rust
+//! Pure projections from eval documents to comparable numbers.
+//!
+//! Unfrozen by design (ruling R3). `evidence` is the verdict-to-evidence
+//! projection the optimizer and the operator share; `build` is spec 4a's
+//! versioned report over it. `build`, `compare` and the breakdowns are pure;
+//! `store` (Task 3) is the module's one I/O boundary, loading rows for an
+//! owner, alongside `evidence::load_run_rows` (ruling U9). Reports are derived on demand and never stored,
+//! so a regrade changes a report with no migration. `compare` (Task 2)
+//! reuses the optimizer's pure statistics so an operator's p-value is the
+//! optimizer's; nothing here reads or writes an optimization document.
+
+pub mod build;
+pub mod evidence;
+#[cfg(test)]
+pub(crate) mod fixtures;
+
+pub use build::{
+    AttemptSummary, CaseReport, CellReport, EvalReport, RunSummary, SlotClass, SlotCounts,
+    SlotReport, SlotScore, REPORT_VERSION,
+};
+pub use evidence::{
+    cell_trial_scores, cell_usage, concat_paired, counted_verdicts, latest_attempts, load_run_rows,
+    paired_evidence, CellUsage, RunRows,
+};
+
+/// Documents a report cannot be built or compared from, and why.
+#[derive(Debug)]
+pub struct ReportRefused(pub String);
+
+impl std::fmt::Display for ReportRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ReportRefused {}
+
+pub fn report_refused(error: &anyhow::Error) -> Option<&ReportRefused> {
+    error.downcast_ref::<ReportRefused>()
+}
+
+pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Error {
+    anyhow::Error::from(ReportRefused(reason.into()))
+}
+```
+
+In `crates/gents/src/eval/report/evidence.rs`, change `#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]` on `pub struct CellUsage` to `#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]`.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report::build > "$LOG/t1.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t1.log" | head -20`
+Expected: compile errors `cannot find type `SlotScore``, `SlotClass`, `SlotCounts`.
+
+- [ ] **Step 3: Write the implementation**
+
+Insert above the test module in `crates/gents/src/eval/report/build.rs`:
+
+```rust
+//! `build`: one run's documents as the operator reads them (spec 4a §1).
+//!
+//! Pure. The unit is the slot `(cell, case, trial_index)`, classified by its
+//! latest attempt; attempts are a separate total, so a retry never inflates
+//! what completed. A slot's score is read at its latest *completed* attempt
+//! through `evidence::counted_slots`, the selection the optimizer pairs on,
+//! so a report and a decision never disagree about what a slot scored.
+
+use serde::Serialize;
+
+use crate::document_config::{EvalReducer, EvalSplit};
+use crate::eval::report::evidence::CellUsage;
+use crate::eval::{
+    CaseTrialScore, DefinitionRef, Invalidation, StageCompletion, SubjectRef, TrialUsage,
+};
+
+/// Bumped when a field's meaning changes; an added field does not bump it.
+pub const REPORT_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct EvalReport {
+    pub report_version: u32,
+    pub run: RunSummary,
+    pub cells: Vec<CellReport>,
+    /// Non-invalidated runs of this definition version on this split,
+    /// this one included.
+    pub exposure: usize,
+    /// The installed definition no longer digests to the one the run froze
+    /// (or is gone). `build` never sets it; `report::store` does, from the
+    /// run's frozen copy (ruling U2).
+    pub definition_changed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RunSummary {
+    pub run_id: String,
+    pub definition: DefinitionRef,
+    pub split: EvalSplit,
+    pub purpose: String,
+    pub created_at: String,
+    pub invalidated: Option<Invalidation>,
+    pub trials_per_case: u32,
+    pub seed_base: i64,
+    pub concurrency: u32,
+    pub max_infra_retries: u32,
+    pub breaker_threshold: u32,
+    pub source_commit: String,
+    pub source_dirty: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CellReport {
+    pub cell_id: String,
+    pub label: String,
+    pub subject: SubjectRef,
+    pub slots: Vec<SlotReport>,
+    pub cases: Vec<CaseReport>,
+    pub headline_bp: Option<u32>,
+    /// Summed over each slot's counted attempt.
+    pub usage: TrialUsage,
+    /// `evidence::cell_usage` for this cell: the numbers the cost gate reads
+    /// (ruling F5), so `compare` and the optimizer share one tally.
+    pub cell_usage: CellUsage,
+    /// Trial rows of this cell, every attempt included.
+    pub attempts: u32,
+    pub counts: SlotCounts,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SlotReport {
+    pub case_id: String,
+    pub trial_index: u32,
+    pub class: SlotClass,
+    pub attempts: u32,
+    pub score_bp: Option<u32>,
+    /// What pairing reads for this slot.
+    pub counted: SlotScore,
+    /// The latest row, completed or not.
+    pub latest: Option<AttemptSummary>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SlotClass {
+    Pass,
+    Fail,
+    Unknown,
+    NotEvidence,
+    /// The latest row has a null completion: crashed or cancelled.
+    Abandoned,
+    /// No row yet.
+    Planned,
+}
+
+/// A slot's counted case-trial score, or `Absent` when no attempt completed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind", content = "bp")]
+pub enum SlotScore {
+    Absent,
+    NotEvidence,
+    Unknown,
+    Scored(u32),
+}
+
+impl SlotScore {
+    fn of(score: Option<CaseTrialScore>) -> Self {
+        match score {
+            None => Self::Absent,
+            Some(CaseTrialScore::NotEvidence) => Self::NotEvidence,
+            Some(CaseTrialScore::Unknown) => Self::Unknown,
+            Some(CaseTrialScore::Scored(bp)) => Self::Scored(bp),
+        }
+    }
+
+    /// The score `pair_trials` reads, or `None` for a slot it never saw.
+    pub fn trial_score(self) -> Option<CaseTrialScore> {
+        match self {
+            Self::Absent => None,
+            Self::NotEvidence => Some(CaseTrialScore::NotEvidence),
+            Self::Unknown => Some(CaseTrialScore::Unknown),
+            Self::Scored(bp) => Some(CaseTrialScore::Scored(bp)),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct AttemptSummary {
+    pub trial_id: String,
+    pub attempt: u32,
+    pub trial_agent_did: String,
+    pub session_id: String,
+    /// Relative to `<launching home>/eval/runs`. A locator, never identity.
+    pub home_hint: Option<String>,
+    pub evidence_digest: Option<String>,
+    /// Empty while the attempt is open.
+    pub stages: Vec<StageCompletion>,
+    pub usage: TrialUsage,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CaseReport {
+    pub case_id: String,
+    pub reducer: EvalReducer,
+    pub mean_bp: Option<u32>,
+    pub counts: SlotCounts,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct SlotCounts {
+    pub pass: u32,
+    pub fail: u32,
+    pub unknown: u32,
+    pub not_evidence: u32,
+    pub abandoned: u32,
+    pub planned: u32,
+}
+
+impl SlotCounts {
+    fn add(&mut self, class: SlotClass) {
+        match class {
+            SlotClass::Pass => self.pass += 1,
+            SlotClass::Fail => self.fail += 1,
+            SlotClass::Unknown => self.unknown += 1,
+            SlotClass::NotEvidence => self.not_evidence += 1,
+            SlotClass::Abandoned => self.abandoned += 1,
+            SlotClass::Planned => self.planned += 1,
+        }
+    }
+}
+
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t1.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t1.log" | tail -30`
+Expected: the two type tests pass, and M6b's `evidence::tests` still pass.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents/src/eval/report/
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): the report's types and hand-built eval documents for its tests (#1515)"
+```
+
+### Task 1b: `report::build` and the slot classification
+
+**Files:**
+- Modify: `crates/gents/src/eval/report/build.rs` (imports; `build`, `cell_report`, `slot_class`, `attempt_summary`, `sum`; tests)
+- Modify: `crates/gents/src/eval/report/mod.rs` (add `build` to the `pub use build::{…}` list)
+- Modify: `crates/gents/src/eval/report/evidence.rs:74` (`fn counted_slots<'a>(` → `pub(crate) fn counted_slots<'a>(`)
+
+**Interfaces:**
+- Consumes: Task 1's types and fixtures; `evidence::{counted_slots, cell_usage, RunRows}`; the frozen `eval::scoring` and `eval::outcome` functions and `freeze::definition_ref`, as listed in Task 1.
+- Produces:
+  ```rust
+  pub fn build(run: &RunRecord, trials: &[TrialRecord], verdicts: &[VerdictRecord],
+      definition: &EvalDefinition, peers: &[RunHeader]) -> Result<EvalReport>;
+  ```
+
+- [ ] **Step 1: Write the failing tests**
+
+Append inside the test module in `crates/gents/src/eval/report/build.rs` (created in Task 1; it already imports `super::*` and the fixtures, so only these imports are new):
+
+```rust
+    use crate::document_config::EvalSplit;
+    use crate::eval::report::evidence::CellUsage;
     use crate::eval::report::report_refused;
     use crate::eval::{OutcomeKind, RunHeader, TrialUsage, VerdictRecord};
 
@@ -633,7 +973,14 @@ mod tests {
                 output_tokens: Some(10),
             }
         );
-        assert_eq!((cell.usage_trials, cell.usage_missing), (2, 1));
+        assert_eq!(
+            cell.cell_usage,
+            CellUsage {
+                tokens: 20,
+                trials: 2,
+                missing: 1,
+            }
+        );
     }
 
     #[test]
@@ -690,85 +1037,27 @@ mod tests {
             elsewhere.trials[0].identity.trial_id
         );
     }
-}
 ```
 
-Replace `crates/gents/src/eval/report/mod.rs` with:
-
-```rust
-//! Pure projections from eval documents to comparable numbers.
-//!
-//! Unfrozen by design (ruling R3). `evidence` is the verdict-to-evidence
-//! projection the optimizer and the operator share; `build` is spec 4a's
-//! versioned report over it. `build`, `compare` and the breakdowns are pure;
-//! `store` (Task 3) is the module's one I/O boundary, loading rows for an
-//! owner, alongside `evidence::load_run_rows` (ruling U9). Reports are derived on demand and never stored,
-//! so a regrade changes a report with no migration. `compare` (Task 2)
-//! reuses the optimizer's pure statistics so an operator's p-value is the
-//! optimizer's; nothing here reads or writes an optimization document.
-
-pub mod build;
-pub mod evidence;
-#[cfg(test)]
-pub(crate) mod fixtures;
-
-pub use build::{
-    build, AttemptSummary, CaseReport, CellReport, EvalReport, RunSummary, SlotClass, SlotCounts,
-    SlotReport, SlotScore, REPORT_VERSION,
-};
-pub use evidence::{
-    cell_trial_scores, cell_usage, concat_paired, counted_verdicts, latest_attempts, load_run_rows,
-    paired_evidence, CellUsage, RunRows,
-};
-
-/// Documents a report cannot be built or compared from, and why.
-#[derive(Debug)]
-pub struct ReportRefused(pub String);
-
-impl std::fmt::Display for ReportRefused {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-
-impl std::error::Error for ReportRefused {}
-
-pub fn report_refused(error: &anyhow::Error) -> Option<&ReportRefused> {
-    error.downcast_ref::<ReportRefused>()
-}
-
-pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::from(ReportRefused(reason.into()))
-}
-```
-
-In `crates/gents/src/eval/report/evidence.rs`, change `fn counted_slots<'a>(` to `pub(crate) fn counted_slots<'a>(`.
+Add `build` to the `pub use build::{…}` list in `crates/gents/src/eval/report/mod.rs`, and in `crates/gents/src/eval/report/evidence.rs` change `fn counted_slots<'a>(` to `pub(crate) fn counted_slots<'a>(`.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report::build > "$LOG/t1.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t1.log" | head -20`
-Expected: compile errors `cannot find function `build`` and `cannot find type `EvalReport``.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report::build > "$LOG/t1b.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t1b.log" | head -20`
+Expected: compile errors `cannot find function `build``.
 
 - [ ] **Step 3: Write the implementation**
 
-Insert above the test module in `crates/gents/src/eval/report/build.rs`:
+In `crates/gents/src/eval/report/build.rs`, replace the `use` block from Task 1 with:
 
 ```rust
-//! `build`: one run's documents as the operator reads them (spec 4a §1).
-//!
-//! Pure. The unit is the slot `(cell, case, trial_index)`, classified by its
-//! latest attempt; attempts are a separate total, so a retry never inflates
-//! what completed. A slot's score is read at its latest *completed* attempt
-//! through `evidence::counted_slots`, the selection the optimizer pairs on,
-//! so a report and a decision never disagree about what a slot scored.
-
 use std::collections::BTreeMap;
 
 use anyhow::Result;
 use serde::Serialize;
 
 use crate::document_config::{EvalDefinition, EvalReducer, EvalSplit, EvalTier};
-use crate::eval::report::evidence::{counted_slots, RunRows};
+use crate::eval::report::evidence::{cell_usage, counted_slots, CellUsage, RunRows};
 use crate::eval::report::refused;
 use crate::eval::runner::freeze::definition_ref;
 use crate::eval::{
@@ -776,162 +1065,11 @@ use crate::eval::{
     DefinitionRef, EvidenceClass, Invalidation, RunHeader, RunRecord, StageCompletion,
     SubjectRef, TrialRecord, TrialScore, TrialUsage, VerdictRecord,
 };
+```
 
-/// Bumped when a field's meaning changes; an added field does not bump it.
-pub const REPORT_VERSION: u32 = 1;
+and insert, after the `impl SlotCounts { … }` block and above the test module:
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct EvalReport {
-    pub report_version: u32,
-    pub run: RunSummary,
-    pub cells: Vec<CellReport>,
-    /// Non-invalidated runs of this definition version on this split,
-    /// this one included.
-    pub exposure: usize,
-    /// The installed definition no longer digests to the one the run froze
-    /// (or is gone). `build` never sets it; `report::store` does, from the
-    /// run's frozen copy (ruling U2).
-    pub definition_changed: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct RunSummary {
-    pub run_id: String,
-    pub definition: DefinitionRef,
-    pub split: EvalSplit,
-    pub purpose: String,
-    pub created_at: String,
-    pub invalidated: Option<Invalidation>,
-    pub trials_per_case: u32,
-    pub seed_base: i64,
-    pub concurrency: u32,
-    pub max_infra_retries: u32,
-    pub breaker_threshold: u32,
-    pub source_commit: String,
-    pub source_dirty: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct CellReport {
-    pub cell_id: String,
-    pub label: String,
-    pub subject: SubjectRef,
-    pub slots: Vec<SlotReport>,
-    pub cases: Vec<CaseReport>,
-    pub headline_bp: Option<u32>,
-    /// Summed over each slot's counted attempt.
-    pub usage: TrialUsage,
-    /// Slots with a counted attempt, and how many of those reported no usage:
-    /// the cost gate's missing-usage share.
-    pub usage_trials: u32,
-    pub usage_missing: u32,
-    /// Trial rows of this cell, every attempt included.
-    pub attempts: u32,
-    pub counts: SlotCounts,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct SlotReport {
-    pub case_id: String,
-    pub trial_index: u32,
-    pub class: SlotClass,
-    pub attempts: u32,
-    pub score_bp: Option<u32>,
-    /// What pairing reads for this slot.
-    pub counted: SlotScore,
-    /// The latest row, completed or not.
-    pub latest: Option<AttemptSummary>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SlotClass {
-    Pass,
-    Fail,
-    Unknown,
-    NotEvidence,
-    /// The latest row has a null completion: crashed or cancelled.
-    Abandoned,
-    /// No row yet.
-    Planned,
-}
-
-/// A slot's counted case-trial score, or `Absent` when no attempt completed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case", tag = "kind", content = "bp")]
-pub enum SlotScore {
-    Absent,
-    NotEvidence,
-    Unknown,
-    Scored(u32),
-}
-
-impl SlotScore {
-    fn of(score: Option<CaseTrialScore>) -> Self {
-        match score {
-            None => Self::Absent,
-            Some(CaseTrialScore::NotEvidence) => Self::NotEvidence,
-            Some(CaseTrialScore::Unknown) => Self::Unknown,
-            Some(CaseTrialScore::Scored(bp)) => Self::Scored(bp),
-        }
-    }
-
-    /// The score `pair_trials` reads, or `None` for a slot it never saw.
-    pub fn trial_score(self) -> Option<CaseTrialScore> {
-        match self {
-            Self::Absent => None,
-            Self::NotEvidence => Some(CaseTrialScore::NotEvidence),
-            Self::Unknown => Some(CaseTrialScore::Unknown),
-            Self::Scored(bp) => Some(CaseTrialScore::Scored(bp)),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct AttemptSummary {
-    pub trial_id: String,
-    pub attempt: u32,
-    pub trial_agent_did: String,
-    pub session_id: String,
-    /// Relative to `<launching home>/eval/runs`. A locator, never identity.
-    pub home_hint: Option<String>,
-    pub evidence_digest: Option<String>,
-    /// Empty while the attempt is open.
-    pub stages: Vec<StageCompletion>,
-    pub usage: TrialUsage,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct CaseReport {
-    pub case_id: String,
-    pub reducer: EvalReducer,
-    pub mean_bp: Option<u32>,
-    pub counts: SlotCounts,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct SlotCounts {
-    pub pass: u32,
-    pub fail: u32,
-    pub unknown: u32,
-    pub not_evidence: u32,
-    pub abandoned: u32,
-    pub planned: u32,
-}
-
-impl SlotCounts {
-    fn add(&mut self, class: SlotClass) {
-        match class {
-            SlotClass::Pass => self.pass += 1,
-            SlotClass::Fail => self.fail += 1,
-            SlotClass::Unknown => self.unknown += 1,
-            SlotClass::NotEvidence => self.not_evidence += 1,
-            SlotClass::Abandoned => self.abandoned += 1,
-            SlotClass::Planned => self.planned += 1,
-        }
-    }
-}
-
+```rust
 /// Build `run`'s report from its rows.
 ///
 /// `peers` are the owner's run headers, this run's included; they feed only
@@ -1071,8 +1209,7 @@ fn cell_report(
         cases: Vec::new(),
         headline_bp: None,
         usage: TrialUsage::default(),
-        usage_trials: 0,
-        usage_missing: 0,
+        cell_usage: cell_usage(rows, &cell.cell_id),
         attempts: in_cell.len() as u32,
         counts: SlotCounts::default(),
     };
@@ -1109,11 +1246,7 @@ fn cell_report(
                     score: counted_here.score,
                 });
                 if let Some(completion) = &counted_here.record.completion {
-                    report.usage_trials += 1;
                     let usage = &completion.usage;
-                    if usage.input_tokens.is_none() && usage.output_tokens.is_none() {
-                        report.usage_missing += 1;
-                    }
                     report.usage = TrialUsage {
                         input_tokens: sum(report.usage.input_tokens, usage.input_tokens),
                         output_tokens: sum(report.usage.output_tokens, usage.output_tokens),
@@ -1196,8 +1329,8 @@ fn sum(total: Option<u64>, one: Option<u64>) -> Option<u64> {
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t1.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t1.log" | tail -30`
-Expected: the seven `build::tests` pass, and M6b's `evidence::tests` still pass.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t1b.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t1b.log" | tail -30`
+Expected: the seven classification tests and Task 1's two pass; M6b's `evidence::tests` still pass.
 
 - [ ] **Step 5: Format and commit**
 
@@ -1207,18 +1340,20 @@ git add crates/gents/src/eval/report/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): report::build classifies every slot from the documents (#1515)"
 ```
 
-### Task 2: `report::compare` and the policy outcome
+### Task 2: `report::compare`
 
 **Files:**
 - Create: `crates/gents/src/eval/report/compare.rs`
 - Modify: `crates/gents/src/eval/report/mod.rs` (add `pub mod compare;` after `pub mod build;` and a `pub use compare::{…}` line)
+- Modify: `crates/gents/src/optimization/evidence.rs` (ruling F5: `token_totals` delegates to a new pure `totals`; a test)
+- Modify: `crates/gents/src/optimization/mod.rs` (`totals` in the `pub use evidence::{…}` list)
 
 **Interfaces:**
 - Consumes:
   ```rust
-  // Task 1
+  // Task 1 / 1b
   pub struct EvalReport { pub run: RunSummary, pub cells: Vec<CellReport>, .. }
-  pub struct CellReport { pub cell_id, pub slots: Vec<SlotReport>, pub cases: Vec<CaseReport>, pub usage: TrialUsage, pub usage_trials: u32, pub usage_missing: u32, .. }
+  pub struct CellReport { pub cell_id, pub slots: Vec<SlotReport>, pub cases: Vec<CaseReport>, pub cell_usage: CellUsage, .. }
   impl SlotScore { pub fn trial_score(self) -> Option<CaseTrialScore> }
   pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Error;
   // crates/gents/src/eval/scoring.rs (frozen)
@@ -1227,44 +1362,43 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   // crates/gents/src/optimization/policy.rs (M6a)
   pub fn evidence_from_pairs(paired: &PairedEvidence, expected_cases: &[String], tokens: Option<TokenTotals>) -> Evidence;
   pub fn decide(mode: Mode, policy: &PolicyV2, evidence: &Evidence, seed: u64) -> DecisionReport;
-  pub fn sufficient(policy: &PolicyV2, evidence: &Evidence) -> bool;
-  pub fn no_case_regression(policy: &PolicyV2, evidence: &Evidence) -> bool;
-  pub fn cost_ok(policy: &PolicyV2, tokens: &TokenTotals) -> bool;
   pub fn permutation_p_ppm(diffs: &[i128], samples: u32, seed: u64) -> u64;   // test only
   pub struct DecisionReport { pub decision: Decision, pub policy_version: String, pub improved: u32, pub tied: u32,
       pub worsened: u32, pub mean_diff_bp: Option<i64>, pub p_ppm: Option<u64>, pub alpha_effective_ppm: u64, pub cost_skipped: bool }
   pub struct CaseEvidence { pub case_id: String, pub pairs: u64, pub sum_baseline_bp: u64, pub sum_candidate_bp: u64 }
   pub struct TokenTotals { pub baseline_tokens: u64, pub baseline_trials: u64, pub candidate_tokens: u64, pub candidate_trials: u64 }
-  impl PolicyV2 { pub fn uncalibrated() -> Self }   // PolicyV2: PartialEq; fields min_effect_bp: u64, max_missing_usage_bp: u64, monte_carlo_samples: u32
+  impl PolicyV2 { pub fn uncalibrated() -> Self }   // PolicyV2: PartialEq; fields max_missing_usage_bp: u64, monte_carlo_samples: u32
   // crates/gents/src/optimization/evidence.rs (M6b)
   pub fn decision_seed(run_ids: &[String]) -> u64;
-  pub fn decision_evidence(definition: &EvalDefinition, runs: &[RunRows], max_missing_usage_bp: u64) -> Evidence;  // test only
-  pub const BASELINE_CELL: &str = "baseline";  pub const CANDIDATE_CELL: &str = "candidate";   // test only
+  pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals>;   // refactored here onto `totals`
+  pub struct CellUsage { pub tokens: u64, pub trials: u64, pub missing: u64 }             // eval::report::evidence
   ```
 - Produces:
   ```rust
+  // crates/gents/src/optimization/evidence.rs
+  /// The cost gate's totals for two cells' usage: unknown usage is not free; past
+  /// the tolerated missing share, or with a cell that reported nothing, `None`.
+  pub fn totals(baseline: CellUsage, candidate: CellUsage, max_missing_usage_bp: u64) -> Option<TokenTotals>;
+  // crates/gents/src/eval/report/compare.rs
   pub struct Comparison {
       pub comparability: DefinitionRef,
       pub baseline_run: String, pub baseline_cell: String, pub candidate_run: String, pub candidate_cell: String,
       pub cases: Vec<CaseComparison>,
       pub improved: u32, pub tied: u32, pub worsened: u32, pub mean_diff_bp: Option<i64>,
       pub pairs: usize, pub dropped_baseline: usize, pub dropped_candidate: usize, pub imputed: usize,
-      pub p_ppm: Option<u64>, pub policy: Option<PolicyOutcome>,
-      /* #[serde(skip)] private: paired, case_ids, usage, seed */
+      pub p_ppm: Option<u64>,
+      /* #[serde(skip)] private: paired, case_ids, usage: [CellUsage; 2], seed */
   }
   pub struct CaseComparison { pub case_id: String, pub pairs: u64, pub baseline_mean_bp: Option<u32>,
       pub candidate_mean_bp: Option<u32>, pub diff_bp: Option<i64> }
-  pub struct PolicyOutcome { pub report: DecisionReport, pub gates: GateView, pub calibrated: bool }
-  pub struct GateView { pub sufficient: bool, pub no_case_regression: bool, pub cost_ok: Option<bool>,
-      pub significant: bool, pub min_effect: bool }
   pub fn compare(baseline: &EvalReport, candidate: &EvalReport, baseline_cell: &str, candidate_cell: &str) -> Result<Comparison>;
   impl Comparison {
-      pub fn with_policy(self, policy: &PolicyV2) -> Self;
-      pub fn evidence(&self, policy: &PolicyV2) -> Evidence;
-      pub fn seed(&self) -> u64;
+      pub fn evidence(&self, policy: &PolicyV2) -> Evidence;   // pairs, the baseline's case list, `totals` of the two cells
+      pub fn seed(&self) -> u64;                                // decision_seed over the DISTINCT run ids (ruling F4)
+      pub(crate) fn restate(&mut self, policy: &PolicyV2) -> DecisionReport;
   }
   ```
-  All four structs derive `Clone, Debug, PartialEq, Eq, Serialize`.
+  Both structs derive `Clone, Debug, PartialEq, Eq, Serialize`. Task 2b adds `policy: Option<PolicyOutcome>` and `with_policy`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1280,8 +1414,7 @@ mod tests {
     use crate::eval::report::fixtures::{at, definition, fail, pass, record, Outcome, Rows, RUN};
     use crate::eval::report::report_refused;
     use crate::eval::OutcomeKind;
-    use crate::optimization::evidence::{decision_evidence, BASELINE_CELL, CANDIDATE_CELL};
-    use crate::optimization::policy::{permutation_p_ppm, Decision};
+    use crate::optimization::policy::permutation_p_ppm;
 
     fn report(definition: &EvalDefinition, rows: &Rows, cells: &[&str], trials: u32) -> EvalReport {
         let run = record(RUN, definition, cells, trials);
@@ -1403,8 +1536,9 @@ mod tests {
             )
         );
         // One pair per case, so the common scale is 1 and the per-case
-        // differences in case order a, b, c, d are the raw ones.
-        let seed = decision_seed(&[RUN.to_owned(), RUN.to_owned()]);
+        // differences in case order a, b, c, d are the raw ones. One run:
+        // its id once, as `optimization show` seeds a one-run decision (F4).
+        let seed = decision_seed(&[RUN.to_owned()]);
         assert_eq!(comparison.seed(), seed);
         assert_eq!(
             comparison.p_ppm,
@@ -1436,103 +1570,110 @@ mod tests {
         let reason = refusal(compare(&report, &report, "baseline", "ghost"));
         assert_eq!(reason, "run run has no cell \"ghost\"");
     }
-
-    /// Six cases, two trials each: the baseline fails and the candidate
-    /// passes every one. The last `unmetered` candidate trials report no
-    /// usage.
-    fn six_improving(unmetered: usize) -> (EvalDefinition, Rows) {
-        let cases = ["a", "b", "c", "d", "e", "f"];
-        let definition = definition(&cases);
-        let mut rows = Rows::default();
-        let mut left = 12 - unmetered;
-        for case in cases {
-            for index in 0..2 {
-                rows = rows.add(RUN, at(BASELINE_CELL, case, index, 1), fail());
-                rows = rows.add(RUN, at(CANDIDATE_CELL, case, index, 1), pass());
-                if left == 0 {
-                    rows = rows.unmetered();
-                } else {
-                    left -= 1;
-                }
-            }
-        }
-        (definition, rows)
-    }
-
-    /// The comparison's policy outcome and `decide` on the optimizer's own
-    /// evidence for the same documents.
-    fn against_the_optimizer(unmetered: usize, policy: &PolicyV2) -> (Comparison, DecisionReport) {
-        let (definition, rows) = six_improving(unmetered);
-        let report = report(&definition, &rows, &[BASELINE_CELL, CANDIDATE_CELL], 2);
-        let comparison = compare(&report, &report, BASELINE_CELL, CANDIDATE_CELL)
-            .unwrap()
-            .with_policy(policy);
-        let expected = decide(
-            Mode::Improve,
-            policy,
-            &decision_evidence(
-                &definition,
-                &[run_rows(&definition, &rows)],
-                policy.max_missing_usage_bp,
-            ),
-            decision_seed(&[RUN.to_owned(), RUN.to_owned()]),
-        );
-        (comparison, expected)
-    }
-
-    #[test]
-    fn the_policy_outcome_is_decide_on_the_optimizers_evidence() {
-        let policy = PolicyV2::uncalibrated();
-        let (comparison, expected) = against_the_optimizer(0, &policy);
-        let outcome = comparison.policy.as_ref().expect("with_policy sets it");
-        assert_eq!(outcome.report, expected);
-        assert_eq!(expected.decision, Decision::Accept);
-        assert!(!expected.cost_skipped);
-        assert!(!outcome.calibrated, "the placeholder defaults are uncalibrated");
-        assert_eq!(
-            outcome.gates,
-            GateView {
-                sufficient: true,
-                no_case_regression: true,
-                cost_ok: Some(true),
-                significant: true,
-                min_effect: true,
-            }
-        );
-        assert_eq!(comparison.p_ppm, expected.p_ppm);
-    }
-
-    #[test]
-    fn the_cost_gate_is_skipped_exactly_when_the_optimizer_skips_it() {
-        // Five of 24 trials unmetered is past the 2000 bp tolerance.
-        let policy = PolicyV2::uncalibrated();
-        let (comparison, expected) = against_the_optimizer(5, &policy);
-        let outcome = comparison.policy.as_ref().unwrap();
-        assert_eq!(outcome.report, expected);
-        assert!(expected.cost_skipped);
-        assert_eq!(outcome.gates.cost_ok, None);
-    }
-
-    #[test]
-    fn a_policy_other_than_the_defaults_is_calibrated() {
-        let policy = PolicyV2 {
-            min_pairs: 1,
-            ..PolicyV2::uncalibrated()
-        };
-        let (comparison, expected) = against_the_optimizer(0, &policy);
-        let outcome = comparison.policy.unwrap();
-        assert_eq!(outcome.report, expected);
-        assert!(outcome.calibrated);
-    }
 }
+```
+
+Append inside `mod tests` in `crates/gents/src/optimization/evidence.rs`:
+
+```rust
+    #[test]
+    fn totals_skip_the_cost_gate_past_the_missing_share_and_for_a_silent_cell() {
+        let usage = |tokens, trials, missing| CellUsage {
+            tokens,
+            trials,
+            missing,
+        };
+        assert_eq!(
+            totals(usage(100, 10, 0), usage(120, 10, 0), 2000),
+            Some(TokenTotals {
+                baseline_tokens: 100,
+                baseline_trials: 10,
+                candidate_tokens: 120,
+                candidate_trials: 10,
+            })
+        );
+        assert_eq!(
+            totals(usage(100, 10, 3), usage(120, 10, 2), 2000),
+            None,
+            "5 of 20 trials missing is past 2000 bp"
+        );
+        assert_eq!(
+            totals(usage(0, 2, 2), usage(120, 10, 0), 5000),
+            None,
+            "a cell whose every trial is unmetered has no mean"
+        );
+        assert_eq!(totals(usage(0, 0, 0), usage(0, 0, 0), 2000), None);
+    }
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report::compare > "$LOG/t2.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t2.log" | head -20`
-Expected: compile errors: `compare`, `Comparison`, `GateView` not found (the module is not yet declared in `mod.rs`, so first add `pub mod compare;` from Step 3's `mod.rs` edit, then run).
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report::compare > "$LOG/t2.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t2.log" | head -20` (after adding `pub mod compare;` to `report/mod.rs`)
+Expected: compile errors: `compare`, `Comparison` and `totals` not found.
 
 - [ ] **Step 3: Write the implementation**
+
+In `crates/gents/src/optimization/evidence.rs`, replace `token_totals` and `reported` with (the doc comment on `token_totals` stays as it is):
+
+```rust
+pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals> {
+    let (mut baseline, mut candidate) = (CellUsage::default(), CellUsage::default());
+    for rows in runs {
+        add(&mut baseline, cell_usage(rows, BASELINE_CELL));
+        add(&mut candidate, cell_usage(rows, CANDIDATE_CELL));
+    }
+    totals(baseline, candidate, max_missing_usage_bp)
+}
+
+fn add(total: &mut CellUsage, one: CellUsage) {
+    total.tokens += one.tokens;
+    total.trials += one.trials;
+    total.missing += one.missing;
+}
+
+/// The cost gate's token totals for two cells, by the rule [`token_totals`]
+/// documents. Pure: `eval::report::compare` calls it too, so an operator's
+/// comparison and the optimizer skip the cost gate on exactly the same data
+/// (ruling F5).
+pub fn totals(
+    baseline: CellUsage,
+    candidate: CellUsage,
+    max_missing_usage_bp: u64,
+) -> Option<TokenTotals> {
+    let counted = u128::from(baseline.trials + candidate.trials);
+    let missing = u128::from(baseline.missing + candidate.missing);
+    if counted == 0 || missing * 10_000 > u128::from(max_missing_usage_bp) * counted {
+        tracing::info!(
+            counted = counted as u64,
+            missing = missing as u64,
+            "optimization cost gate skipped: too many trials reported no usage"
+        );
+        return None;
+    }
+    let (baseline_reported, candidate_reported) = (reported(&baseline), reported(&candidate));
+    if baseline_reported == 0 || candidate_reported == 0 {
+        tracing::info!(
+            baseline_reported,
+            candidate_reported,
+            "optimization cost gate skipped: a cell has no trial that reported usage"
+        );
+        return None;
+    }
+    Some(TokenTotals {
+        baseline_tokens: baseline.tokens,
+        baseline_trials: baseline_reported,
+        candidate_tokens: candidate.tokens,
+        candidate_trials: candidate_reported,
+    })
+}
+
+/// The trials of one cell that reported usage: the mean's denominator.
+fn reported(usage: &CellUsage) -> u64 {
+    usage.trials.saturating_sub(usage.missing)
+}
+```
+
+and add `totals` to the `pub use evidence::{…}` list in `crates/gents/src/optimization/mod.rs`.
 
 Insert above the test module in `crates/gents/src/eval/report/compare.rs`:
 
@@ -1541,11 +1682,11 @@ Insert above the test module in `crates/gents/src/eval/report/compare.rs`:
 //!
 //! The pairs are the optimizer's: each report's counted slot scores joined by
 //! `pair_trials` on `(case_id, trial_index)`. The statistics are
-//! `optimization::policy::decide`'s own numbers on those pairs, so the p-value
-//! an operator reads is the one the optimizer would compute. Without a policy
+//! `optimization::policy::decide`'s own numbers on those pairs, seeded as
+//! `optimization show` seeds a decision over the same runs, so the p-value an
+//! operator reads is the one the optimizer would compute. Without a policy
 //! they are computed under the placeholder defaults, whose only influence on
-//! them is the Monte Carlo sample count above twenty cases. A policy verdict
-//! appears only through [`Comparison::with_policy`].
+//! them is the Monte Carlo sample count above twenty cases.
 
 use std::collections::BTreeMap;
 
@@ -1553,12 +1694,12 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::eval::report::build::{CellReport, EvalReport};
+use crate::eval::report::evidence::CellUsage;
 use crate::eval::report::refused;
 use crate::eval::{pair_trials, CaseTrialScore, DefinitionRef, PairedEvidence, TrialScore};
-use crate::optimization::evidence::decision_seed;
+use crate::optimization::evidence::{decision_seed, totals};
 use crate::optimization::policy::{
-    cost_ok, decide, evidence_from_pairs, no_case_regression, sufficient, CaseEvidence,
-    DecisionReport, Evidence, Mode, PolicyV2, TokenTotals,
+    decide, evidence_from_pairs, CaseEvidence, DecisionReport, Evidence, Mode, PolicyV2,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1569,36 +1710,6 @@ pub struct CaseComparison {
     pub candidate_mean_bp: Option<u32>,
     /// Mean paired difference, candidate minus baseline, truncated.
     pub diff_bp: Option<i64>,
-}
-
-/// Each gate `decide` applies, as far as it can be read from outside it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct GateView {
-    pub sufficient: bool,
-    pub no_case_regression: bool,
-    /// `None` when too many trials reported no usage and the gate is skipped.
-    pub cost_ok: Option<bool>,
-    /// `p_ppm <= alpha_effective_ppm`.
-    pub significant: bool,
-    /// `mean_diff_bp >= min_effect_bp`.
-    pub min_effect: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct PolicyOutcome {
-    pub report: DecisionReport,
-    pub gates: GateView,
-    /// False while the policy equals the placeholder defaults, which only the
-    /// A/A calibration (M5) replaces.
-    pub calibrated: bool,
-}
-
-/// Token usage of one cell's counted slots.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct UsageTally {
-    tokens: u64,
-    reported: u64,
-    missing: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1619,13 +1730,12 @@ pub struct Comparison {
     /// Pairs in which an unknown side was imputed worst-case.
     pub imputed: usize,
     pub p_ppm: Option<u64>,
-    pub policy: Option<PolicyOutcome>,
     #[serde(skip)]
     paired: PairedEvidence,
     #[serde(skip)]
     case_ids: Vec<String>,
     #[serde(skip)]
-    usage: [UsageTally; 2],
+    usage: [CellUsage; 2],
     #[serde(skip)]
     seed: u64,
 }
@@ -1663,6 +1773,12 @@ pub fn compare(
     let cand = cell(candidate, candidate_cell)?;
     let (base_scores, cand_scores) = (trial_scores(base), trial_scores(cand));
     let paired = pair_trials(&base_scores, &cand_scores);
+    // Ruling F4: the distinct run ids, as `optimization show` seeds a
+    // decision over the runs it read.
+    let mut seed_runs = vec![left.run_id.clone()];
+    if right.run_id != left.run_id {
+        seed_runs.push(right.run_id.clone());
+    }
     let mut comparison = Comparison {
         comparability: left.definition.clone(),
         baseline_run: left.run_id.clone(),
@@ -1679,11 +1795,10 @@ pub fn compare(
         dropped_candidate: paired.dropped_candidate,
         imputed: imputed(&base_scores, &cand_scores),
         p_ppm: None,
-        policy: None,
         paired,
         case_ids: base.cases.iter().map(|case| case.case_id.clone()).collect(),
-        usage: [tally(base), tally(cand)],
-        seed: decision_seed(&[left.run_id.clone(), right.run_id.clone()]),
+        usage: [base.cell_usage, cand.cell_usage],
+        seed: decision_seed(&seed_runs),
     };
     let defaults = PolicyV2::uncalibrated();
     comparison.cases = comparison
@@ -1698,44 +1813,23 @@ pub fn compare(
 
 impl Comparison {
     /// The evidence `decide` reads under `policy`: the pairs, the baseline
-    /// run's case list, and token totals by the optimizer's missing-usage rule.
+    /// run's case list, and the two cells' token totals by
+    /// `optimization::evidence::totals`.
     pub fn evidence(&self, policy: &PolicyV2) -> Evidence {
         evidence_from_pairs(
             &self.paired,
             &self.case_ids,
-            self.tokens(policy.max_missing_usage_bp),
+            totals(self.usage[0], self.usage[1], policy.max_missing_usage_bp),
         )
     }
 
-    /// The Monte Carlo seed: `decision_seed` over the two run ids.
+    /// The Monte Carlo seed: `decision_seed` over the distinct run ids.
     pub fn seed(&self) -> u64 {
         self.seed
     }
 
-    /// Decide under `policy` and restate the statistics under it.
-    pub fn with_policy(mut self, policy: &PolicyV2) -> Self {
-        let evidence = self.evidence(policy);
-        let report = self.restate(policy);
-        let gates = GateView {
-            sufficient: sufficient(policy, &evidence),
-            no_case_regression: no_case_regression(policy, &evidence),
-            cost_ok: evidence.tokens.as_ref().map(|tokens| cost_ok(policy, tokens)),
-            significant: report
-                .p_ppm
-                .is_some_and(|p| p <= report.alpha_effective_ppm),
-            min_effect: report.mean_diff_bp.is_some_and(|mean| {
-                mean >= i64::try_from(policy.min_effect_bp).unwrap_or(i64::MAX)
-            }),
-        };
-        self.policy = Some(PolicyOutcome {
-            report,
-            gates,
-            calibrated: *policy != PolicyV2::uncalibrated(),
-        });
-        self
-    }
-
-    fn restate(&mut self, policy: &PolicyV2) -> DecisionReport {
+    /// Decide under `policy` and restate the statistics from that decision.
+    pub(crate) fn restate(&mut self, policy: &PolicyV2) -> DecisionReport {
         let report = decide(Mode::Improve, policy, &self.evidence(policy), self.seed);
         self.improved = report.improved;
         self.tied = report.tied;
@@ -1743,27 +1837,6 @@ impl Comparison {
         self.mean_diff_bp = report.mean_diff_bp;
         self.p_ppm = report.p_ppm;
         report
-    }
-
-    /// `optimization::evidence::token_totals`' rule over two cells: a trial
-    /// with no usage is unknown, not free; past the tolerated missing share,
-    /// or with a cell that reported nothing, the cost gate is skipped.
-    fn tokens(&self, max_missing_usage_bp: u64) -> Option<TokenTotals> {
-        let [base, cand] = self.usage;
-        let counted = u128::from(base.reported + base.missing + cand.reported + cand.missing);
-        let missing = u128::from(base.missing + cand.missing);
-        if counted == 0 || missing * 10_000 > u128::from(max_missing_usage_bp) * counted {
-            return None;
-        }
-        if base.reported == 0 || cand.reported == 0 {
-            return None;
-        }
-        Some(TokenTotals {
-            baseline_tokens: base.tokens,
-            baseline_trials: base.reported,
-            candidate_tokens: cand.tokens,
-            candidate_trials: cand.reported,
-        })
     }
 }
 
@@ -1809,15 +1882,6 @@ fn imputed(baseline: &[TrialScore], candidate: &[TrialScore]) -> usize {
         .count()
 }
 
-fn tally(cell: &CellReport) -> UsageTally {
-    let missing = u64::from(cell.usage_missing);
-    UsageTally {
-        tokens: cell.usage.input_tokens.unwrap_or(0) + cell.usage.output_tokens.unwrap_or(0),
-        reported: u64::from(cell.usage_trials).saturating_sub(missing),
-        missing,
-    }
-}
-
 fn case_comparison(case: &CaseEvidence) -> CaseComparison {
     let paired = case.pairs > 0;
     let mean = |sum: u64| paired.then(|| (sum / case.pairs) as u32);
@@ -1836,20 +1900,20 @@ fn case_comparison(case: &CaseEvidence) -> CaseComparison {
 In `crates/gents/src/eval/report/mod.rs`, add `pub mod compare;` after `pub mod build;`, and after the `pub use build::{…};` block:
 
 ```rust
-pub use compare::{compare, CaseComparison, Comparison, GateView, PolicyOutcome};
+pub use compare::{compare, CaseComparison, Comparison};
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t2.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t2.log" | tail -30`
-Expected: six `compare::tests` pass; Task 1's and M6b's report tests still pass.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t2.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t2.log" | tail -30` then `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization > "$LOG/t2-opt.log" 2>&1; grep -E "test result|FAILED|panicked" "$LOG/t2-opt.log"`
+Expected: three `compare::tests` pass; the `totals` test and every existing optimization test (the `token_totals` tests and the matrix) still pass.
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
 cargo fmt --all && cargo fmt --all --check
-git add crates/gents/src/eval/report/
-git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): report::compare reads the optimizer's pairs and statistics (#1515)"
+git add crates/gents/src/eval/report/ crates/gents/src/optimization/evidence.rs crates/gents/src/optimization/mod.rs
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): report::compare reads the optimizer's pairs, totals and seed (#1515)"
 ```
 
 ### Task 2a: Freeze materializes the definition (ruling U2)
@@ -2030,6 +2094,233 @@ Expected: both new tests and every existing runner test pass.
 cargo fmt --all && cargo fmt --all --check
 git add crates/gents/src/eval/runner/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): freeze writes the run's definition beside it and resume reads that copy (#1515)"
+```
+
+### Task 2b: `Comparison::with_policy` and the policy outcome
+
+**Files:**
+- Modify: `crates/gents/src/eval/report/compare.rs` (`GateView`, `PolicyOutcome`, the `policy` field, `with_policy`, tests)
+- Modify: `crates/gents/src/eval/report/mod.rs` (extend the `compare` re-export)
+
+**Interfaces:**
+- Consumes (Task 2, and `optimization::policy`):
+  ```rust
+  impl Comparison { pub fn evidence(&self, policy: &PolicyV2) -> Evidence; pub(crate) fn restate(&mut self, policy: &PolicyV2) -> DecisionReport }
+  pub fn sufficient(policy: &PolicyV2, evidence: &Evidence) -> bool;
+  pub fn no_case_regression(policy: &PolicyV2, evidence: &Evidence) -> bool;
+  pub fn cost_ok(policy: &PolicyV2, tokens: &TokenTotals) -> bool;
+  pub fn decision_evidence(definition: &EvalDefinition, runs: &[RunRows], max_missing_usage_bp: u64) -> Evidence;   // test only
+  pub const BASELINE_CELL: &str = "baseline";  pub const CANDIDATE_CELL: &str = "candidate";                        // test only
+  ```
+- Produces:
+  ```rust
+  pub struct PolicyOutcome { pub report: DecisionReport, pub gates: GateView, pub calibrated: bool }
+  pub struct GateView { pub sufficient: bool, pub no_case_regression: bool, pub cost_ok: Option<bool>,
+      pub significant: bool, pub min_effect: bool }
+  // Comparison gains `pub policy: Option<PolicyOutcome>` after `p_ppm`
+  impl Comparison { pub fn with_policy(self, policy: &PolicyV2) -> Self }
+  ```
+
+- [ ] **Step 1: Write the failing tests**
+
+Append inside `mod tests` in `crates/gents/src/eval/report/compare.rs`:
+
+```rust
+    use crate::optimization::evidence::{decision_evidence, BASELINE_CELL, CANDIDATE_CELL};
+    use crate::optimization::policy::Decision;
+
+    const SIX: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
+
+    /// Twenty-one case ids, for the Monte Carlo branch above twenty cases.
+    const MANY: [&str; 21] = [
+        "c00", "c01", "c02", "c03", "c04", "c05", "c06", "c07", "c08", "c09", "c10", "c11", "c12",
+        "c13", "c14", "c15", "c16", "c17", "c18", "c19", "c20",
+    ];
+
+    /// `cases`, two trials each: the baseline fails and the candidate passes
+    /// every one. The last `unmetered` candidate trials report no usage.
+    fn improving(cases: &[&'static str], unmetered: usize) -> (EvalDefinition, Rows) {
+        let definition = definition(cases);
+        let mut rows = Rows::default();
+        let mut left = cases.len() * 2 - unmetered;
+        for &case in cases {
+            for index in 0..2 {
+                rows = rows.add(RUN, at(BASELINE_CELL, case, index, 1), fail());
+                rows = rows.add(RUN, at(CANDIDATE_CELL, case, index, 1), pass());
+                if left == 0 {
+                    rows = rows.unmetered();
+                } else {
+                    left -= 1;
+                }
+            }
+        }
+        (definition, rows)
+    }
+
+    /// The comparison's policy outcome and `decide` on the optimizer's own
+    /// evidence for the same documents.
+    fn against_the_optimizer(
+        cases: &[&'static str],
+        unmetered: usize,
+        policy: &PolicyV2,
+    ) -> (Comparison, DecisionReport) {
+        let (definition, rows) = improving(cases, unmetered);
+        let report = report(&definition, &rows, &[BASELINE_CELL, CANDIDATE_CELL], 2);
+        let comparison = compare(&report, &report, BASELINE_CELL, CANDIDATE_CELL)
+            .unwrap()
+            .with_policy(policy);
+        let expected = decide(
+            Mode::Improve,
+            policy,
+            &decision_evidence(
+                &definition,
+                &[run_rows(&definition, &rows)],
+                policy.max_missing_usage_bp,
+            ),
+            decision_seed(&[RUN.to_owned()]),
+        );
+        (comparison, expected)
+    }
+
+    #[test]
+    fn the_policy_outcome_is_decide_on_the_optimizers_evidence() {
+        let policy = PolicyV2::uncalibrated();
+        let (comparison, expected) = against_the_optimizer(&SIX, 0, &policy);
+        let outcome = comparison.policy.as_ref().expect("with_policy sets it");
+        assert_eq!(outcome.report, expected);
+        assert_eq!(expected.decision, Decision::Accept);
+        assert!(!expected.cost_skipped);
+        assert!(!outcome.calibrated, "the placeholder defaults are uncalibrated");
+        assert_eq!(
+            outcome.gates,
+            GateView {
+                sufficient: true,
+                no_case_regression: true,
+                cost_ok: Some(true),
+                significant: true,
+                min_effect: true,
+            }
+        );
+        assert_eq!(comparison.p_ppm, expected.p_ppm);
+    }
+
+    #[test]
+    fn the_cost_gate_is_skipped_exactly_when_the_optimizer_skips_it() {
+        // Five of 24 trials unmetered is past the 2000 bp tolerance.
+        let policy = PolicyV2::uncalibrated();
+        let (comparison, expected) = against_the_optimizer(&SIX, 5, &policy);
+        let outcome = comparison.policy.as_ref().unwrap();
+        assert_eq!(outcome.report, expected);
+        assert!(expected.cost_skipped);
+        assert_eq!(outcome.gates.cost_ok, None);
+    }
+
+    #[test]
+    fn a_policy_other_than_the_defaults_is_calibrated() {
+        let policy = PolicyV2 {
+            min_pairs: 1,
+            ..PolicyV2::uncalibrated()
+        };
+        let (comparison, expected) = against_the_optimizer(&SIX, 0, &policy);
+        let outcome = comparison.policy.unwrap();
+        assert_eq!(outcome.report, expected);
+        assert!(outcome.calibrated);
+    }
+
+    /// Ruling F4: above twenty cases `decide` samples, so the seed matters.
+    /// The comparison of one run's two cells seeds as `optimization show`
+    /// recomputes that run's decision: over the run id once.
+    #[test]
+    fn above_twenty_cases_the_p_value_is_the_one_optimization_show_computes() {
+        let policy = PolicyV2::uncalibrated();
+        let (comparison, expected) = against_the_optimizer(&MANY, 0, &policy);
+        assert_eq!(comparison.policy.as_ref().unwrap().report, expected);
+        assert_eq!(comparison.p_ppm, expected.p_ppm);
+        assert!(expected.p_ppm.is_some());
+    }
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report::compare > "$LOG/t2b.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t2b.log" | head -20`
+Expected: compile errors: no method `with_policy`; `GateView` not found.
+
+- [ ] **Step 3: Write the implementation**
+
+In `crates/gents/src/eval/report/compare.rs`, extend the `crate::optimization::policy::{…}` import with `cost_ok, no_case_regression, sufficient`; add after `CaseComparison`:
+
+```rust
+/// Each gate `decide` applies, as far as it can be read from outside it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GateView {
+    pub sufficient: bool,
+    pub no_case_regression: bool,
+    /// `None` when too many trials reported no usage and the gate is skipped.
+    pub cost_ok: Option<bool>,
+    /// `p_ppm <= alpha_effective_ppm`.
+    pub significant: bool,
+    /// `mean_diff_bp >= min_effect_bp`.
+    pub min_effect: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PolicyOutcome {
+    pub report: DecisionReport,
+    pub gates: GateView,
+    /// False while the policy equals the placeholder defaults, which only the
+    /// A/A calibration (M5) replaces.
+    pub calibrated: bool,
+}
+```
+
+add the field after `pub p_ppm: Option<u64>,` in `Comparison`:
+
+```rust
+    /// Only after [`Comparison::with_policy`]: the optimizer decides by
+    /// default, never a comparison.
+    pub policy: Option<PolicyOutcome>,
+```
+
+add `policy: None,` after `p_ppm: None,` in `compare`'s constructor, and in `impl Comparison`:
+
+```rust
+    /// Decide under `policy` and restate the statistics under it.
+    pub fn with_policy(mut self, policy: &PolicyV2) -> Self {
+        let evidence = self.evidence(policy);
+        let report = self.restate(policy);
+        let gates = GateView {
+            sufficient: sufficient(policy, &evidence),
+            no_case_regression: no_case_regression(policy, &evidence),
+            cost_ok: evidence.tokens.as_ref().map(|tokens| cost_ok(policy, tokens)),
+            significant: report
+                .p_ppm
+                .is_some_and(|p| p <= report.alpha_effective_ppm),
+            min_effect: report.mean_diff_bp.is_some_and(|mean| {
+                mean >= i64::try_from(policy.min_effect_bp).unwrap_or(i64::MAX)
+            }),
+        };
+        self.policy = Some(PolicyOutcome {
+            report,
+            gates,
+            calibrated: *policy != PolicyV2::uncalibrated(),
+        });
+        self
+    }
+```
+
+In `crates/gents/src/eval/report/mod.rs`, change the compare re-export to `pub use compare::{compare, CaseComparison, Comparison, GateView, PolicyOutcome};`.
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t2b.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t2b.log" | tail -30`
+Expected: the four policy tests pass with Task 2's three.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents/src/eval/report/
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): Comparison::with_policy decides on the optimizer's evidence, labelled (#1515)"
 ```
 
 ### Task 3: `report::store`, the one reader
@@ -2234,6 +2525,27 @@ mod tests {
         );
     }
 
+    /// Ruling F9: a run frozen before `definition.json` existed still
+    /// reports while the installed definition digests to the run's.
+    #[tokio::test]
+    async fn a_run_without_the_frozen_file_reports_from_a_matching_installed_definition() {
+        let launching = Launching::new().await;
+        let pack = launching.pack("pack", "Off");
+        scripted(&launching, &request(&launching, &pack, "run-old")).await;
+        std::fs::remove_file(
+            launching
+                .runs_dir()
+                .join("run-old")
+                .join(crate::eval::runner::DEFINITION_FILE),
+        )
+        .unwrap();
+        let report = load_report(&launching.access, OWNER, &launching.runs_dir(), "run-old")
+            .await
+            .unwrap();
+        assert!(!report.definition_changed);
+        assert_eq!(report.cells[0].slots.len(), 2);
+    }
+
     #[tokio::test]
     async fn an_unknown_run_is_refused() {
         let launching = Launching::new().await;
@@ -2384,7 +2696,7 @@ pub use store::{load_report, load_report_among, load_runs, run_header};
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::report > "$LOG/t3.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t3.log" | tail -30`
-Expected: four `store::tests` pass; the rest of `eval::report` still passes.
+Expected: five `store::tests` pass; the rest of `eval::report` still passes.
 
 - [ ] **Step 5: Format and commit**
 
@@ -2419,6 +2731,8 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   pub const CANCEL_MARKER: &str = "cancel";
   pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf>;          // FreezeRefused for a run id that is not one path component
   pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf>;   // FreezeRefused "run {run_id} has no directory {dir}"
+  // RunOutcome gains (ruling F1):
+  pub cancelled: bool,   // the caller's token or the marker stopped this pass
   ```
   Behavior: the loop treats the marker as cancellation at the top of each pass, before each launch and after each pass (Task 6a adds a timer while a batch is in flight); a marker cancels a child of the caller's token; `resume` and `run` remove the marker before planning (spec §3, ruling U8).
 
@@ -2495,6 +2809,7 @@ Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs`, after `cance
             (1, 0),
             "the trial that was running finishes; the next is never launched"
         );
+        assert!(outcome.cancelled, "the pass says why it stopped (F1)");
         assert!(
             !caller.is_cancelled(),
             "the marker stops this run, never the caller's other work"
@@ -2557,6 +2872,7 @@ Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs`, after `cance
             outcome,
             RunOutcome {
                 run_id: "run-early".into(),
+                cancelled: true,
                 ..RunOutcome::default()
             }
         );
@@ -2588,6 +2904,7 @@ Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs`, after `cance
         .await
         .unwrap();
         assert_eq!(outcome.completed, 1);
+        assert!(!outcome.cancelled);
         assert!(!marker.exists());
     }
 
@@ -2724,7 +3041,24 @@ fn clear_cancel(run_dir: &Path) -> Result<()> {
         }
 ```
 
-5. In `execute_trial`, replace `if stop.load(Ordering::Relaxed) || cancel.is_cancelled() {` with `if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {`. Leave the `if cancel.is_cancelled()` after `executor.execute(…)` as it is: by then the trial's evidence is in hand and only the token decides whether it is kept (deviation D7).
+5. Ruling F1: add to `RunOutcome`, after `breaker_tripped`,
+
+```rust
+    /// The caller's token or a cancel marker stopped this pass before the run
+    /// owed nothing. A caller that decides on the run (the optimizer) must not
+    /// read a cancelled pass as a finished one.
+    pub cancelled: bool,
+```
+
+   set it at the end of `execute_frozen`, just before the closing `tracing::info!(…, "eval run pass finished")`:
+
+```rust
+    outcome.cancelled = cancel.is_cancelled();
+```
+
+   and in the existing test `a_two_cell_run_completes_every_slot_and_writes_verdicts_before_completion`, add `cancelled: false,` to its `RunOutcome { … }` literal.
+
+6. In `execute_trial`, replace `if stop.load(Ordering::Relaxed) || cancel.is_cancelled() {` with `if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {`. Leave the `if cancel.is_cancelled()` after `executor.execute(…)` as it is: by then the trial's evidence is in hand and only the token decides whether it is kept (deviation D7).
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -2737,6 +3071,453 @@ Expected: the four new tests pass, and every existing runner test, including `ca
 cargo fmt --all && cargo fmt --all --check
 git add crates/gents/src/eval/runner/mod.rs
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): a cancel marker in the run directory stops the loop at its next check (#1515)"
+```
+
+### Task 4a: The optimizer stops at a cancelled run (ruling F1)
+
+**Files:**
+- Modify: `crates/gents/src/optimization/driver.rs` (the three `execute_run(` call sites in `run_job`)
+- Modify: `crates/gents/src/optimization/driver/matrix.rs` (imports; one executor wrapper; one test)
+
+**Interfaces:**
+- Consumes (read at `optimization/23-promote`, tip `75e753741`):
+  ```rust
+  pub(crate) async fn execute_run(access, request: &JobRequest, origin: &JobOrigin, plan: &RunPlan, executor: &dyn TrialExecutor,
+      registry: &CheckRegistry, cancel: CancellationToken) -> Result<RunOutcome>;   // driver.rs:255
+  // run_job calls it at driver.rs:1111 (train), 1222 (validation) and 1312 (held-out); each call is
+  //   `execute_run(…, cancel.clone()).await?;` followed by `if cancel.is_cancelled() { return stopped(&job); }`
+  let stopped = |job: &JobRecord| -> Result<JobOutcome> { Ok(outcome(job, JobState::Running)) };   // driver.rs:1056
+  pub struct RunOutcome { .., pub cancelled: bool }                                                 // Task 4
+  // matrix.rs (#[cfg(test)]): Harness::new, Harness::request(job_id, definition_id, budgets), script, base_executor, fail,
+  //   budgets, repeating_proposer, drive, settle, journal, VALIDATION_CASES, DEFINITION, CANDIDATE_PROMPT
+  // Validation and held-out runs have cells labelled "baseline" and "candidate"; a train run has only "baseline".
+  // A trial's `TrialSpec::home_dir` is `<run dir>/trials/<trial_id>`.
+  ```
+- Produces: `run_job` treats `RunOutcome::cancelled` after `execute_run` as "stopped, no decision": it journals nothing further and returns the job `Running`, so a resume continues. `eval cancel` on a job's run therefore stops the job at that run.
+
+- [ ] **Step 1: Write the failing test**
+
+In `crates/gents/src/optimization/driver/matrix.rs`, change `use std::path::PathBuf;` to `use std::path::{Path, PathBuf};`, add `use std::sync::atomic::{AtomicBool, Ordering};`, and add `CANCEL_MARKER` to the `crate::eval::runner::{…}` import. Then add, after `struct CancellingExecutor`'s `impl`:
+
+```rust
+/// Writes its run's cancel marker the first time it runs a candidate trial:
+/// an operator's `gents eval cancel` on the job's first validation run.
+struct CancelsFirstValidationRun<'a> {
+    inner: &'a ScriptedExecutor,
+    marked: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl TrialExecutor for CancelsFirstValidationRun<'_> {
+    fn isolation(&self) -> Isolation {
+        self.inner.isolation()
+    }
+
+    fn wants_script_key(&self) -> bool {
+        self.inner.wants_script_key()
+    }
+
+    async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
+        self.inner.provision(spec).await
+    }
+
+    async fn discard(&self, trial_id: &str) {
+        self.inner.discard(trial_id).await;
+    }
+
+    async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
+        let candidate = spec
+            .script_key
+            .as_ref()
+            .is_some_and(|key| key.cell_label == "candidate");
+        if candidate && !self.marked.swap(true, Ordering::SeqCst) {
+            let run_dir = spec
+                .home_dir
+                .parent()
+                .and_then(Path::parent)
+                .expect("a trial home is <run dir>/trials/<trial_id>");
+            std::fs::write(run_dir.join(CANCEL_MARKER), b"").unwrap();
+        }
+        self.inner.execute(spec, cancel).await
+    }
+
+    async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence> {
+        self.inner.recollect(at, captures).await
+    }
+}
+```
+
+and, among the tests:
+
+```rust
+/// Ruling F1: the marker stops only the run's own child token, so before
+/// the fix the driver decided on half a validation run.
+#[tokio::test]
+async fn a_cancelled_validation_run_journals_no_decision_and_the_job_resumes() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    let request = harness.request("job-cancelled", DEFINITION, budgets(1_000));
+    let marking = CancelsFirstValidationRun {
+        inner: &executor,
+        marked: AtomicBool::new(false),
+    };
+    let stopped = drive(
+        &harness,
+        &request,
+        &marking,
+        &repeating_proposer(CANDIDATE_PROMPT),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stopped.state, JobState::Running);
+    let entries = journal(&harness, "job-cancelled").await;
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            JournalEntry::RunStarted {
+                split: EvalSplit::Validation,
+                ..
+            }
+        )),
+        "{entries:#?}"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, JournalEntry::Decided { .. })),
+        "a cancelled run is never decided on: {entries:#?}"
+    );
+
+    let resumed = settle(
+        &harness,
+        &request,
+        &executor,
+        &repeating_proposer(CANDIDATE_PROMPT),
+    )
+    .await;
+    assert_eq!(resumed.state, JobState::ReadyToPromote, "{resumed:#?}");
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::driver::matrix::a_cancelled_validation_run > "$LOG/t4a.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t4a.log"`
+Expected: FAIL on "a cancelled run is never decided on": the driver decided on the partial run.
+
+- [ ] **Step 3: Write the implementation**
+
+In `crates/gents/src/optimization/driver.rs`, at each of the three call sites in `run_job` (train at line 1111, validation at 1222, held-out at 1312), bind the outcome and widen the check that follows. Each site reads
+
+```rust
+        execute_run(
+            access,
+            request,
+            &origin,
+            &<plan>,
+            executor,
+            registry,
+            cancel.clone(),
+        )
+        .await?;
+        if cancel.is_cancelled() {
+            return stopped(&job);
+        }
+```
+
+(indentation varies by site; `<plan>` is `train` or `plan`). Change `execute_run(` to `let ran = execute_run(` and the `if` to:
+
+```rust
+        // Ruling F1: a run its cancel marker stopped is unfinished. The job
+        // stops at it, journals nothing more, and a resume continues it.
+        if cancel.is_cancelled() || ran.cancelled {
+            return stopped(&job);
+        }
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization > "$LOG/t4a.log" 2>&1; grep -E "test result|FAILED|panicked" "$LOG/t4a.log"`
+Expected: the new test and the whole matrix (including every resume twin) pass.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents/src/optimization/driver.rs crates/gents/src/optimization/driver/matrix.rs
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "fix(optimization): a run stopped by its cancel marker leaves the job running and undecided (#1515)"
+```
+
+### Task 4b: `optimization::references` (rulings F2, F8)
+
+Moved into PR 1 (ruling F8) so PR 2's `eval rm` can refuse a run a live job still needs.
+
+**Files:**
+- Create: `crates/gents/src/optimization/references.rs`
+- Modify: `crates/gents/src/optimization/mod.rs` (`pub mod references;` between `pub mod proposer;` and `pub mod show;`, and a `pub use references::{…};` line)
+
+**Interfaces:**
+- Consumes (M6b, at `<M4-BASE>`):
+  ```rust
+  pub async fn load_job(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<Option<JobRecord>>;
+  pub fn derive_state(journal: &[JournalEntry]) -> JobState;
+  pub enum JobState { Running, ReadyToPromote, NothingToPromote, Exhausted, Failed { reason: String }, Promoted, Stale, Reverted }   // Clone, PartialEq, Debug
+  pub enum JournalEntry { RunStarted { run_id: String, round: Option<u32>, split: EvalSplit }, Decided { round, attempt, run_ids: Vec<String>, mode,
+      decision, policy_version: String, summary: DecisionSummary }, Frozen, Reverted { by: String }, .. }
+  // the OptimizationJob collection's owner field is `owner_agent_did` (job.rs `filter`)
+  // crates/gents/src/optimization/driver/matrix.rs (#[cfg(test)] pub(crate))
+  pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest);   // Harness::access(&self) -> &ConfigAccess; the job ends ReadyToPromote
+  ```
+- Produces (re-exported from `gents::optimization`):
+  ```rust
+  pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String>;
+  pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>>;
+  pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>>;
+  pub fn removable(state: &JobState) -> bool;   // NothingToPromote | Exhausted | Failed | Stale | Promoted | Reverted
+  pub async fn held_runs(access: &ConfigAccess, owner: &str) -> Result<BTreeMap<String, (String, JobState)>>;   // run_id -> (job_id, state) of non-removable jobs
+  ```
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `crates/gents/src/optimization/references.rs` with only:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document_config::EvalSplit;
+    use crate::eval::runner::freeze::tests::OWNER;
+    use crate::optimization::driver::matrix::accepting_harness;
+    use crate::optimization::job::{load_job, DecisionSummary, JobState};
+    use crate::optimization::policy::{Decision, Mode};
+
+    #[test]
+    fn a_journal_names_every_run_it_started_or_decided_on() {
+        let journal = vec![
+            JournalEntry::Frozen,
+            JournalEntry::RunStarted {
+                run_id: "train".into(),
+                round: Some(1),
+                split: EvalSplit::Train,
+            },
+            JournalEntry::Decided {
+                round: Some(1),
+                attempt: 0,
+                run_ids: vec!["val-a".into(), "val-b".into()],
+                mode: Mode::Improve,
+                decision: Decision::Accept,
+                policy_version: "v2".into(),
+                summary: DecisionSummary {
+                    improved: 0,
+                    tied: 0,
+                    worsened: 0,
+                    mean_diff_bp: None,
+                    p_ppm: None,
+                    alpha_effective_ppm: 0,
+                    cost_skipped: true,
+                },
+            },
+            JournalEntry::Reverted {
+                by: "did:key:owner".into(),
+            },
+        ];
+        assert_eq!(
+            journal_run_ids(&journal),
+            BTreeSet::from(["train".to_owned(), "val-a".to_owned(), "val-b".to_owned()])
+        );
+    }
+
+    #[tokio::test]
+    async fn every_run_of_an_owners_jobs_is_referenced() {
+        let (harness, request) = accepting_harness("refs").await;
+        let referenced = referenced_run_ids(harness.access(), OWNER).await.unwrap();
+        let job = load_job(harness.access(), OWNER, &request.job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!referenced.is_empty());
+        assert_eq!(referenced, journal_run_ids(&job.journal));
+        assert_eq!(job_ids(harness.access(), OWNER).await.unwrap(), vec!["refs".to_owned()]);
+        assert!(referenced_run_ids(harness.access(), "did:key:someone-else")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn removable_states_are_the_settled_ones_that_need_nothing_more() {
+        let failed = JobState::Failed {
+            reason: "held_out_regression".into(),
+        };
+        for state in [
+            JobState::NothingToPromote,
+            JobState::Exhausted,
+            failed,
+            JobState::Stale,
+            JobState::Promoted,
+            JobState::Reverted,
+        ] {
+            assert!(removable(&state), "{state:?}");
+        }
+        assert!(!removable(&JobState::Running));
+        assert!(
+            !removable(&JobState::ReadyToPromote),
+            "promote rebuilds the checkpoint from the job's directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_ready_jobs_runs_are_held_and_a_foreign_owner_holds_none() {
+        let (harness, request) = accepting_harness("held").await;
+        let held = held_runs(harness.access(), OWNER).await.unwrap();
+        let job = load_job(harness.access(), OWNER, &request.job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            held.keys().cloned().collect::<BTreeSet<_>>(),
+            journal_run_ids(&job.journal)
+        );
+        assert!(held
+            .values()
+            .all(|(job_id, state)| job_id == "held" && *state == JobState::ReadyToPromote));
+        assert!(held_runs(harness.access(), "did:key:someone-else")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::references > "$LOG/t4b.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t4b.log" | head` (after adding `pub mod references;` to `optimization/mod.rs`)
+Expected: compile errors: `journal_run_ids`, `referenced_run_ids`, `job_ids`, `removable`, `held_runs` not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Insert above the test module in `crates/gents/src/optimization/references.rs`:
+
+```rust
+//! Which eval runs an optimization job's journal names: its train,
+//! validation, re-run and held-out runs. `gents eval gc` keeps them (spec 4b
+//! §7), so a job's evidence and M5's calibration never lose their homes to
+//! a side effect.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use anyhow::Result;
+
+use crate::config_client::ConfigAccess;
+use crate::graphql::escape_graphql_string;
+use crate::optimization::job::{derive_state, load_job, JobState, JournalEntry};
+
+/// Every run `journal` started and every run one of its decisions read.
+pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for entry in journal {
+        match entry {
+            JournalEntry::RunStarted { run_id, .. } => {
+                ids.insert(run_id.clone());
+            }
+            JournalEntry::Decided { run_ids, .. } => ids.extend(run_ids.iter().cloned()),
+            _ => {}
+        }
+    }
+    ids
+}
+
+/// The ids of every job `owner` has, sorted.
+pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
+    let query = format!(
+        r#"{{ OptimizationJob(filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }}) {{ job_id }} }}"#,
+        owner = escape_graphql_string(owner),
+    );
+    let response = access
+        .transact("optimization.job_ids", |txn| {
+            let query = &query;
+            Box::pin(async move { txn.execute(query).await })
+        })
+        .await?;
+    let mut ids: Vec<String> = response["data"]["OptimizationJob"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row["job_id"].as_str().map(str::to_owned))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    Ok(ids)
+}
+
+/// Every run any of `owner`'s jobs names.
+pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>> {
+    let mut ids = BTreeSet::new();
+    for job_id in job_ids(access, owner).await? {
+        if let Some(job) = load_job(access, owner, &job_id).await? {
+            ids.extend(journal_run_ids(&job.journal));
+        }
+    }
+    Ok(ids)
+}
+
+/// Ruling F2: a job whose directory, and the directories of whose runs, may
+/// go without `--force`. `ReadyToPromote` is not: `promote` rebuilds the
+/// checkpoint from the baseline copy in the job's directory.
+pub fn removable(state: &JobState) -> bool {
+    matches!(
+        state,
+        JobState::NothingToPromote
+            | JobState::Exhausted
+            | JobState::Failed { .. }
+            | JobState::Stale
+            | JobState::Promoted
+            | JobState::Reverted
+    )
+}
+
+/// Ruling F8: every run a job that is not [`removable`] still names, with
+/// that job's id and state. `gents eval rm` refuses these without `--force`.
+pub async fn held_runs(
+    access: &ConfigAccess,
+    owner: &str,
+) -> Result<BTreeMap<String, (String, JobState)>> {
+    let mut held = BTreeMap::new();
+    for job_id in job_ids(access, owner).await? {
+        let Some(job) = load_job(access, owner, &job_id).await? else {
+            continue;
+        };
+        let state = derive_state(&job.journal);
+        if removable(&state) {
+            continue;
+        }
+        for run_id in journal_run_ids(&job.journal) {
+            held.entry(run_id)
+                .or_insert_with(|| (job.job_id.clone(), state.clone()));
+        }
+    }
+    Ok(held)
+}
+```
+
+In `crates/gents/src/optimization/mod.rs` add `pub mod references;` between `pub mod proposer;` and `pub mod show;`, and after the `pub use proposer::{…};` line:
+
+```rust
+pub use references::{held_runs, job_ids, journal_run_ids, referenced_run_ids, removable};
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::references > "$LOG/t4b.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t4b.log"`
+Expected: four tests pass.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents/src/optimization/
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(optimization): which runs a job names, and which jobs still hold them (#1515)"
 ```
 
 ### Task 5: Abandoned attempts spend no infrastructure retry (spec §9)
@@ -3048,6 +3829,8 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
   pub struct Progress { pub slots: BTreeMap<String, InFlight> }       // keyed by trial id
   pub fn read_progress(run_dir: &Path) -> Option<Progress>;             // None when absent or unreadable
+  pub fn host_alive(pid: u32) -> bool;                                   // ruling F3: libc::kill(pid, 0) on unix; true elsewhere
+  pub fn is_fresh(slot: &InFlight, window: std::time::Duration) -> bool; // host alive and written_at within `window`
   #[derive(Clone, Default)] pub struct StageProgress { .. }              // Debug; PartialEq/Eq always equal
   impl StageProgress { pub fn stage_started(&self, stage_id: &str); pub fn stage_ended(&self, stage_id: &str) }
   // TrialSpec gains: #[serde(skip)] pub progress: StageProgress
@@ -3111,6 +3894,36 @@ mod tests {
         assert_eq!(read_progress(dir.path()), Some(Progress::default()));
         assert_eq!(StageProgress::default(), StageProgress::for_trial(&writer, "t1"));
         assert_eq!(read_progress(&dir.path().join("absent")), None);
+    }
+
+    #[test]
+    fn this_process_is_alive_and_an_impossible_pid_is_not() {
+        assert!(host_alive(std::process::id()));
+        assert!(!host_alive(0));
+        assert!(!host_alive(u32::MAX), "never kill(-1, 0)");
+        let mut slot = in_flight(None);
+        slot.pid = std::process::id();
+        slot.written_at = now_millis();
+        assert!(is_fresh(&slot, Duration::from_secs(3)));
+        slot.written_at = "2026-01-01T00:00:00.000Z".into();
+        assert!(!is_fresh(&slot, Duration::from_secs(3)), "too old");
+        slot.written_at = "not a time".into();
+        assert!(!is_fresh(&slot, Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn a_heartbeat_writes_at_most_once_per_gap() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = ProgressWriter::new(dir.path());
+        writer.slot_started("t1", in_flight(None));
+        let written = || read_progress(dir.path()).unwrap().slots["t1"].written_at.clone();
+        writer.heartbeat(Duration::from_secs(60));
+        let first = written();
+        std::thread::sleep(Duration::from_millis(5));
+        writer.heartbeat(Duration::from_secs(60));
+        assert_eq!(written(), first, "inside the gap nothing is written");
+        writer.heartbeat(Duration::ZERO);
+        assert!(written() > first);
     }
 }
 ```
@@ -3218,6 +4031,7 @@ Insert above the test module in `crates/gents/src/eval/runner/progress.rs`:
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -3257,6 +4071,37 @@ pub fn read_progress(run_dir: &Path) -> Option<Progress> {
     serde_json::from_slice(&bytes).ok()
 }
 
+/// Ruling F3: whether process `pid` still exists. Signal 0 delivers nothing
+/// and only checks; `EPERM` means it exists under another user.
+#[cfg(unix)]
+pub fn host_alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    if pid <= 0 {
+        return false;
+    }
+    // SAFETY: `kill` with signal 0 sends no signal; it only checks `pid`.
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Without a portable liveness check, age alone decides (ruling F3).
+#[cfg(not(unix))]
+pub fn host_alive(_pid: u32) -> bool {
+    true
+}
+
+/// An entry a live process refreshed within `window` (rulings U4, F3, F7).
+/// An unreadable `written_at` is not fresh; one from the future is.
+pub fn is_fresh(slot: &InFlight, window: Duration) -> bool {
+    let Ok(written) = chrono::DateTime::parse_from_rfc3339(&slot.written_at) else {
+        return false;
+    };
+    let age = chrono::Utc::now().signed_duration_since(written.with_timezone(&chrono::Utc));
+    host_alive(slot.pid) && age.to_std().map_or(true, |age| age <= window)
+}
+
 fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -3270,6 +4115,7 @@ fn now_millis() -> String {
 pub(crate) struct ProgressWriter {
     path: PathBuf,
     state: Mutex<Progress>,
+    last_heartbeat: Mutex<Option<Instant>>,
 }
 
 impl ProgressWriter {
@@ -3278,6 +4124,7 @@ impl ProgressWriter {
         let writer = Arc::new(Self {
             path: run_dir.join(PROGRESS_FILE),
             state: Mutex::new(Progress::default()),
+            last_heartbeat: Mutex::new(None),
         });
         writer.update(|_| {});
         writer
@@ -3293,8 +4140,19 @@ impl ProgressWriter {
     }
 
     /// Refresh every entry's `written_at`: the loop is alive and its slots
-    /// are still in flight. Called on the loop's marker timer (Task 6a).
-    pub(crate) fn heartbeat(&self) {
+    /// are still in flight. Called on the loop's marker timer (Task 6a); it
+    /// writes at most once per `min_gap` (ruling F16).
+    pub(crate) fn heartbeat(&self, min_gap: Duration) {
+        {
+            let mut last = self
+                .last_heartbeat
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if last.is_some_and(|at| at.elapsed() < min_gap) {
+                return;
+            }
+            *last = Some(Instant::now());
+        }
         let idle = self
             .state
             .lock()
@@ -3435,7 +4293,9 @@ In `crates/gents/src/eval/runner/mod.rs`:
 - add `pub mod progress;` between `pub mod plan;` and `pub mod record;`, and after the `pub use plan::{…};` block:
 
 ```rust
-pub use progress::{read_progress, InFlight, Progress, StageProgress, PROGRESS_FILE};
+pub use progress::{
+    host_alive, is_fresh, read_progress, InFlight, Progress, StageProgress, PROGRESS_FILE,
+};
 ```
 
 - add `use std::sync::Arc;` beside `use std::sync::atomic::{AtomicBool, Ordering};`, and `use crate::eval::runner::progress::ProgressWriter;` beside `use crate::eval::runner::freeze::thaw;`;
@@ -3508,7 +4368,7 @@ git add crates/gents/src/eval/runner/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): the loop keeps an atomic progress.json of in-flight slots and stages (#1515)"
 ```
 
-### Task 6a: The marker and the heartbeat while a batch is in flight (rulings U4, U5)
+### Task 6a: The marker and the heartbeat while a batch is in flight or backing off (rulings U4, U5, F6, F16)
 
 **Files:**
 - Modify: `crates/gents/src/eval/runner/mod.rs` (`marker_poll`; the `tokio::select!` in `execute_frozen`; tests)
@@ -3525,7 +4385,7 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   // the batch loop in execute_frozen: `tokio::select! { biased; _ = cancel.cancelled() => { … continue; } next = running.next() => next }`
   pub struct RunOptions { pub poll_backoff_base: Duration, pub poll_backoff_cap: Duration }
   ```
-- Produces: `fn marker_poll(options: &RunOptions) -> Duration` (the backoff base, capped at one second, at least one millisecond). While a batch is in flight the loop wakes every `marker_poll`, refreshes `progress.json` and checks the marker; seeing it cancels the child token, so in-flight executors are interrupted mid-request and their trials are abandoned for a resume.
+- Produces: `fn marker_poll(options: &RunOptions) -> Duration` (the backoff base, capped at one second, at least one millisecond). While a batch is in flight the loop wakes every `marker_poll`, refreshes `progress.json` (at most once per `max(marker_poll, 250 ms)`, ruling F16) and checks the marker; while it waits out a backoff between passes it checks the marker on the same interval (ruling F6); seeing it cancels the child token, so in-flight executors are interrupted mid-request and their trials are abandoned for a resume.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3602,7 +4462,8 @@ Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs`:
         assert!(trials[0].completion.is_none(), "left open for a resume");
     }
 
-    /// Reads its own `progress.json` entry twice, 50 ms apart.
+    /// Reads its own `progress.json` entry twice, 600 ms apart: longer than
+    /// the 250 ms floor on the heartbeat (ruling F16).
     struct WatchesHeartbeat {
         run_dir: PathBuf,
         seen: Mutex<Vec<String>>,
@@ -3630,7 +4491,7 @@ Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs`:
                     .unwrap_or_default()
             };
             let first = written_at();
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::sleep(Duration::from_millis(600)).await;
             let second = written_at();
             self.seen.lock().unwrap().extend([first, second]);
             passed()
@@ -3643,6 +4504,53 @@ Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs`:
         ) -> Option<TrialEvidence> {
             None
         }
+    }
+
+    /// Ruling F6: a marker written while the loop waits out a 30 s backoff
+    /// ends the wait at the next `marker_poll` tick.
+    #[tokio::test]
+    async fn a_marker_written_during_the_backoff_ends_the_wait() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-backoff");
+        one_slot(&mut request);
+        let slow = RunOptions {
+            poll_backoff_base: Duration::from_secs(30),
+            poll_backoff_cap: Duration::from_secs(30),
+        };
+        let runs_dir = launching.runs_dir();
+        let access = &launching.access;
+        // Writes the marker once the slot's first (not-evidence) attempt is
+        // recorded, which is when the loop starts its backoff.
+        let operator = async {
+            loop {
+                let trials = load_trials(access, OWNER, "run-backoff").await.unwrap();
+                if trials.iter().any(|trial| trial.completion.is_some()) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            request_cancel(&runs_dir, "run-backoff").unwrap();
+        };
+        let started = std::time::Instant::now();
+        let (outcome, ()) = tokio::join!(
+            run(
+                access,
+                &request,
+                &ScriptedExecutor::new().with_default(ScriptedExecutor::not_evidence("did:key:trial")),
+                &CheckRegistry::builtin(),
+                CancellationToken::new(),
+                &slow,
+            ),
+            operator,
+        );
+        let outcome = outcome.unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the 30 s backoff was cut short: {:?}",
+            started.elapsed()
+        );
+        assert!(outcome.cancelled);
+        assert_eq!(outcome.completed, 1);
     }
 
     #[tokio::test]
@@ -3693,7 +4601,39 @@ fn marker_poll(options: &RunOptions) -> Duration {
 }
 ```
 
-In `execute_frozen`, replace
+In `execute_frozen`, replace the wait between passes (ruling F6)
+
+```rust
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = tokio::time::sleep(backoff) => {}
+            }
+```
+
+with
+
+```rust
+            // Ruling F6: the marker is looked for during the wait too.
+            let wait = tokio::time::sleep(backoff);
+            tokio::pin!(wait);
+            let mut watch = tokio::time::interval(marker_poll(options));
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = watch.tick() => {
+                        if cancel_requested(&frozen.run_dir, &cancel) {
+                            break;
+                        }
+                    }
+                    _ = &mut wait => break,
+                }
+            }
+            if cancel.is_cancelled() {
+                break;
+            }
+```
+
+and replace
 
 ```rust
             let mut observed_cancel = false;
@@ -3719,6 +4659,8 @@ with
             let mut observed_cancel = false;
             let mut watch = tokio::time::interval(marker_poll(options));
             watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Ruling F16: the file is rewritten at most this often.
+            let heartbeat_gap = marker_poll(options).max(Duration::from_millis(250));
             loop {
                 let next = if observed_cancel {
                     running.next().await
@@ -3734,7 +4676,7 @@ with
                             // The in-flight entries are alive (U4); a marker
                             // written mid-batch cancels the child token, which
                             // interrupts the executors' current requests (U5).
-                            progress.heartbeat();
+                            progress.heartbeat(heartbeat_gap);
                             cancel_requested(&frozen.run_dir, &cancel);
                             continue;
                         }
@@ -3746,7 +4688,7 @@ with
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::runner > "$LOG/t6a.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t6a.log" | tail -50`
-Expected: both new tests pass (the mid-trial one well under a second), and every earlier runner test still passes, including Task 4's `a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it` (its scripted trial returns within the same poll that wrote the marker, before any tick can observe it).
+Expected: the three new tests pass (the mid-trial and backoff ones well under ten seconds), and every earlier runner test still passes, including Task 4's `a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it` (its scripted trial returns within the same poll that wrote the marker, before any tick can observe it).
 
 Then `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization > "$LOG/t6a-opt.log" 2>&1; grep -E "test result|FAILED|panicked" "$LOG/t6a-opt.log"` — the matrix still passes.
 
@@ -3756,6 +4698,149 @@ Then `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization > "$LOG/t6a-opt.
 cargo fmt --all && cargo fmt --all --check
 git add crates/gents/src/eval/runner/mod.rs
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): the loop sees a cancel marker mid-batch and keeps in-flight progress fresh (#1515)"
+```
+
+### Task 6b: What "finished" means for `rm` and `gc` (ruling F7)
+
+**Files:**
+- Modify: `crates/gents/src/eval/runner/mod.rs` (`slots_owed`, `running_elsewhere`, `run_finished`; imports; a test)
+
+**Interfaces:**
+- Consumes:
+  ```rust
+  pub fn plan(origin: &RunOrigin, run_id: &str, existing: &[TrialRecord], max_infra_retries: u32) -> Vec<PlannedTrial>;   // Task 5's rule
+  fn marker_poll(options: &RunOptions) -> Duration;               // Task 6a; one second for RunOptions::default()
+  pub fn read_progress(run_dir: &Path) -> Option<Progress>;      // Task 6
+  pub fn is_fresh(slot: &InFlight, window: Duration) -> bool;    // Task 6
+  pub(crate) struct ProgressWriter; fn new(run_dir) -> Arc<Self>; fn slot_started(&self, trial_id, InFlight)   // Task 6
+  ```
+- Produces:
+  ```rust
+  /// How many slots the run still owes, by the planner's own rule.
+  pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize;
+  /// A live process refreshed one of the run's slots within three runner poll periods.
+  pub fn running_elsewhere(run_dir: &Path) -> bool;
+  /// Finished for `rm` without `--force` and for `gc`: nothing owed and nothing fresh in flight.
+  pub fn run_finished(record: &RunRecord, trials: &[TrialRecord], run_dir: &Path) -> bool;
+  ```
+  This replaces spec 4b §7's "no Planned or Abandoned slots" (see Deviations, F7): a slot whose not-evidence attempts spent the retry cap owes nothing, and an abandoned slot past the ten-abandonment bound owes nothing, though both show in the report.
+
+- [ ] **Step 1: Write the failing test**
+
+Append inside `mod tests` in `crates/gents/src/eval/runner/mod.rs` (adding `use crate::eval::load_run;`):
+
+```rust
+    #[tokio::test]
+    async fn a_run_is_finished_when_it_owes_nothing_and_no_live_process_holds_a_slot() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-fin");
+        one_slot(&mut request);
+        let frozen = freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let record = load_run(&launching.access, OWNER, "run-fin")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(slots_owed(&record, &[]), 1);
+        assert!(!run_finished(&record, &[], &frozen.run_dir));
+
+        run(
+            &launching.access,
+            &request,
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        let trials = load_trials(&launching.access, OWNER, "run-fin").await.unwrap();
+        assert_eq!(slots_owed(&record, &trials), 0);
+        assert!(run_finished(&record, &trials, &frozen.run_dir));
+
+        // This process holds a slot of the run: not finished.
+        let writer = ProgressWriter::new(&frozen.run_dir);
+        writer.slot_started(
+            "held",
+            InFlight {
+                cell_id: "base".into(),
+                case_id: "case-a".into(),
+                trial_index: 0,
+                attempt: 2,
+                stage_id: None,
+                started_at: String::new(),
+                pid: 0,
+                written_at: String::new(),
+            },
+        );
+        assert!(running_elsewhere(&frozen.run_dir));
+        assert!(!run_finished(&record, &trials, &frozen.run_dir));
+
+        // The same entry from a process that no longer exists does not hold it.
+        let mut progress = read_progress(&frozen.run_dir).unwrap();
+        progress.slots.get_mut("held").unwrap().pid = u32::MAX;
+        std::fs::write(
+            frozen.run_dir.join(PROGRESS_FILE),
+            serde_json::to_vec(&progress).unwrap(),
+        )
+        .unwrap();
+        assert!(!running_elsewhere(&frozen.run_dir));
+    }
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::runner::tests::a_run_is_finished > "$LOG/t6b.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t6b.log" | head`
+Expected: compile errors: `slots_owed`, `running_elsewhere`, `run_finished` not found.
+
+- [ ] **Step 3: Write the implementation**
+
+In `crates/gents/src/eval/runner/mod.rs`, add `RunRecord, TrialRecord` to the `use crate::eval::{…}` import, and below `fn marker_poll`:
+
+```rust
+/// How many slots the run still owes, by the planner's own rule (ruling
+/// F7): a slot that spent its retries or its abandonment bound owes nothing.
+pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize {
+    plan(
+        &record.origin,
+        &record.run_id,
+        trials,
+        record.origin.max_infra_retries,
+    )
+    .len()
+}
+
+/// A live process refreshed one of the run's slots within three runner
+/// poll periods (ruling F7).
+pub fn running_elsewhere(run_dir: &Path) -> bool {
+    let window = marker_poll(&RunOptions::default()) * 3;
+    read_progress(run_dir).is_some_and(|progress| {
+        progress
+            .slots
+            .values()
+            .any(|slot| is_fresh(slot, window))
+    })
+}
+
+/// Finished, for `gents eval rm` without `--force` and for `gents eval gc`:
+/// the run owes nothing and no live process is running a slot of it.
+pub fn run_finished(record: &RunRecord, trials: &[TrialRecord], run_dir: &Path) -> bool {
+    slots_owed(record, trials) == 0 && !running_elsewhere(run_dir)
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib eval::runner > "$LOG/t6b.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t6b.log" | tail -20`
+Expected: the new test passes with every runner test.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents/src/eval/runner/mod.rs
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(eval): a run is finished when it owes nothing and no live process holds a slot (#1515)"
 ```
 
 ### PR 1 gate

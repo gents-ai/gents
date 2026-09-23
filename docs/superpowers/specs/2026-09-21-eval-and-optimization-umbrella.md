@@ -169,6 +169,13 @@ the LLM proposer and its evidence projection.
     `skipped_prerequisite` verdict rows at score 0. `RunOutcome.completed` includes NotEvidence
     attempts and `not_evidence` is computed only on a planning pass (0 on the breaker and cancel
     error paths); spec 4a settles the count semantics the CLI prints.
+  - Integration order (2026-09-22): M3 (`eval/40..42`) and M6b (`optimization/19..23`) both root at
+    `eval/13`. M3's PR 1 makes the runner read `EvalStage.capture` per stage; M6b's driver passes
+    request-level captures as a fallback. At integration, stage captures win; `freeze.rs` is touched
+    by M3 PR 1, M6b, and M4 PR 1 (`definition.json`), so expect one conflict resolution there.
+  - Promotion (M6b T41-4): a concurrent edit to a read-only, non-target closure document during the
+    promote transaction is caught only if DefraDB detects read-write conflicts at commit; the target
+    itself is always digest-guarded. Verify in M5 or as a Track 0 follow-up test.
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.
