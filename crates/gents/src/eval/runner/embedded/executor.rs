@@ -3,8 +3,8 @@
 //! Provisioning creates the home and the workspace the trial will run in, so
 //! the run can record where a trial lives before it runs. Execution installs
 //! the frozen pack, the trial's inference binding and its fixtures into that
-//! home, boots a runtime on it, submits one request per stage, and reads the
-//! captures back out. Nothing the trial is told names a check, a tier, a split
+//! home, boots a runtime on it, submits one request per stage, and reads each
+//! stage's captures back out when it ends. Nothing the trial is told names a check, a tier, a split
 //! or a case: grading happens afterwards, from the evidence alone.
 //!
 //! Neither [`TrialExecutor::provision`] nor [`TrialExecutor::execute`] returns
@@ -57,6 +57,13 @@ const GRACE: Duration = Duration::from_secs(30);
 
 /// How often a pending request's row is read while a stage runs.
 const POLL: Duration = Duration::from_millis(250);
+
+/// The variable a subject pack's config reads for the trial's workspace, for
+/// example as its Tools `host.root` (`${GENTS_EVAL_WORKSPACE_ROOT:-.}`). While a
+/// trial installs its pack, this name resolves to the absolute path of the
+/// trial's workspace: the directory its fixtures land in and the one published
+/// as its `WorkspaceRoot`. Every other name reads the process environment.
+pub const WORKSPACE_ROOT_VARIABLE: &str = "GENTS_EVAL_WORKSPACE_ROOT";
 
 /// Runs each trial in its own embedded home under `runs_dir`.
 pub struct EmbeddedExecutor {
@@ -408,6 +415,10 @@ fn infrastructure(trial_id: &str, locator: TrialLocator, error: &anyhow::Error) 
 /// Steps 1 and 2: the pack the run froze, the trial's inference binding, its
 /// workspace root and its fixtures, all into this trial's own home.
 async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Result<()> {
+    // One absolute path for the pack's Tools root, the published
+    // `WorkspaceRoot` and the fixtures, so all three name the same directory.
+    let workspace = &std::path::absolute(workspace)
+        .with_context(|| format!("resolving the trial workspace {}", workspace.display()))?;
     let (manifest, assets) = read_pack(&spec.pack_dir)?;
     let digest = digest_declared_assets(&manifest, |path| {
         assets
@@ -434,7 +445,7 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
                 .cloned()
                 .with_context(|| format!("pack has no asset {path:?}"))
         },
-        &|name| std::env::var(name).ok(),
+        &trial_environment(workspace)?,
     )?;
     let config = bind_inference_slots(&manifest, &config, &spec.inference)
         .context("binding the pack's inference slots to the frozen profile")?;
@@ -458,6 +469,26 @@ async fn install(spec: &TrialSpec, home: &EmbeddedHome, workspace: &Path) -> Res
 
     install_workspace_root(&home.node, workspace).await?;
     install_fixtures(&access, &home.node, &spec.fixtures, workspace).await
+}
+
+/// The environment a trial's pack config is interpolated against:
+/// [`WORKSPACE_ROOT_VARIABLE`] names the trial's workspace, made absolute, and
+/// every other name defers to the process environment. A workspace path that is
+/// not UTF-8 is refused rather than converted lossily.
+fn trial_environment(workspace: &Path) -> Result<impl Fn(&str) -> Option<String>> {
+    let absolute = std::path::absolute(workspace)
+        .with_context(|| format!("resolving the trial workspace {}", workspace.display()))?;
+    let root = absolute
+        .to_str()
+        .with_context(|| format!("{} is not UTF-8", absolute.display()))?
+        .to_owned();
+    Ok(move |name: &str| {
+        if name == WORKSPACE_ROOT_VARIABLE {
+            Some(root.clone())
+        } else {
+            std::env::var(name).ok()
+        }
+    })
 }
 
 /// Bind every inference slot the pack declares to the profile the run froze.
@@ -704,7 +735,7 @@ async fn run_stage(
             &home.node,
             &locator.trial_agent_did,
             workspace,
-            &spec.captures,
+            &stage.captures,
         )
         .await,
     }
@@ -1227,6 +1258,46 @@ fn count(total: usize) -> u32 {
 mod tests {
     use super::*;
 
+    /// The subject's config reads its Tools root from the trial's workspace,
+    /// and every other variable from the process environment as before.
+    #[test]
+    fn trial_environment_resolves_the_workspace_root_and_defers_the_rest() {
+        let workspace = tempfile::tempdir().unwrap();
+        let environment = trial_environment(workspace.path()).unwrap();
+        assert_eq!(
+            environment(WORKSPACE_ROOT_VARIABLE).as_deref(),
+            workspace.path().to_str()
+        );
+        assert_eq!(WORKSPACE_ROOT_VARIABLE, "GENTS_EVAL_WORKSPACE_ROOT");
+        assert_eq!(environment("PATH"), std::env::var("PATH").ok());
+        assert_eq!(
+            environment("GENTS_EVAL_TEST_UNSET_3F1C9A7E2B"),
+            None,
+            "an unset name stays unset"
+        );
+    }
+
+    /// A relative workspace resolves to the absolute directory the fixtures
+    /// land in; a non-UTF-8 one is refused rather than converted lossily.
+    #[test]
+    fn trial_environment_is_absolute_and_never_lossy() {
+        let environment = trial_environment(Path::new("trials/t1/workspace")).unwrap();
+        let resolved = environment(WORKSPACE_ROOT_VARIABLE).unwrap();
+        assert!(Path::new(&resolved).is_absolute(), "{resolved}");
+        assert!(resolved.ends_with("trials/t1/workspace"), "{resolved}");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let invalid = Path::new(std::ffi::OsStr::from_bytes(b"/tmp/work\xffspace"));
+            let error = match trial_environment(invalid) {
+                Ok(_) => panic!("a non-UTF-8 workspace must be refused"),
+                Err(error) => error,
+            };
+            assert!(format!("{error:#}").contains("is not UTF-8"), "{error:#}");
+        }
+    }
+
     #[test]
     fn provider_reason_from_failure_maps_the_table() {
         assert_eq!(
@@ -1648,23 +1719,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("submit-failure").await.unwrap();
         seed_request(&home, "seeded").await;
 
-        let mut spec = TrialSpec::empty_for_tests("t1");
-        spec.captures = vec![
-            Capture::Documents {
-                name: "requests".to_string(),
-                collection: "AgentRequest".to_string(),
-                filter: json!({"request_id": {"_eq": "seeded"}}),
-                fields: vec!["behavior_id".to_string()],
-            },
-            // No such collection in this home, so the read fails rather than
-            // returning nothing.
-            Capture::Documents {
-                name: "unreadable".to_string(),
-                collection: "NoSuchCollection".to_string(),
-                filter: json!({}),
-                fields: Vec::new(),
-            },
-        ];
+        let spec = TrialSpec::empty_for_tests("t1");
         // Nothing has registered a signing identity for this DID, so building
         // the stage's signed request fails before anything is written.
         let locator = TrialLocator {
@@ -1676,6 +1731,22 @@ mod tests {
             stage_id: "only".to_string(),
             prompt: "hello".to_string(),
             deadline_secs: 1,
+            captures: vec![
+                Capture::Documents {
+                    name: "requests".to_string(),
+                    collection: "AgentRequest".to_string(),
+                    filter: json!({"request_id": {"_eq": "seeded"}}),
+                    fields: vec!["behavior_id".to_string()],
+                },
+                // No such collection in this home, so the read fails rather
+                // than returning nothing.
+                Capture::Documents {
+                    name: "unreadable".to_string(),
+                    collection: "NoSuchCollection".to_string(),
+                    filter: json!({}),
+                    fields: Vec::new(),
+                },
+            ],
         };
 
         let evidence = run_stage(

@@ -381,14 +381,13 @@ async fn execute_trial(
 }
 
 /// `<run dir>/trials/<trial_id>/evidence.json`: the trial's evidence digest
-/// and the anchor it covers.
+/// and the anchor it covers, beside the retained home.
 ///
-/// `TrialCompletion` has no field for the digest, and widening it is an M1
-/// amendment this milestone does not make, so the runner keeps it beside the
-/// retained home instead — the same directory the trial's own home lives in.
-/// It is a record, not an input: nothing the loop decides reads it back, so a
-/// write that fails is reported and the trial still counts. A spec with no
-/// home directory (the scripted executor's) has nowhere to put it.
+/// `TrialCompletion.evidence_digest` is the record; this file is kept for one
+/// release so tooling that reads it keeps working, then goes. Nothing the loop
+/// decides reads it back, so a write that fails is reported and the trial
+/// still counts. A spec with no home directory (the scripted executor's) has
+/// nowhere to put it.
 fn write_evidence_sidecar(home_dir: &Path, evidence: &TrialEvidence) {
     #[derive(serde::Serialize)]
     struct EvidenceSidecar<'a> {
@@ -441,16 +440,7 @@ fn trial_spec(
             frozen.definition.fixtures.as_ref(),
             case.fixtures.as_ref(),
         )?,
-        stages: case
-            .stages
-            .iter()
-            .map(|stage| StageSpec {
-                stage_id: stage.stage_id.clone(),
-                prompt: stage.prompt.clone(),
-                deadline_secs: stage.deadline_secs,
-            })
-            .collect(),
-        captures: frozen.captures.clone(),
+        stages: stage_specs(case, &frozen.captures),
         home_dir: frozen.run_dir.join("trials").join(&planned.trial_id),
         script_key: wants_script_key.then(|| ScriptKey {
             cell_label: planned.cell_label.clone(),
@@ -459,6 +449,25 @@ fn trial_spec(
             attempt: planned.attempt,
         }),
     })
+}
+
+/// The stages a trial submits, each with the captures read when it ends: the
+/// stage's own `capture` list, or the run's request-level list when the stage
+/// declares none.
+fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpec> {
+    case.stages
+        .iter()
+        .map(|stage| StageSpec {
+            stage_id: stage.stage_id.clone(),
+            prompt: stage.prompt.clone(),
+            deadline_secs: stage.deadline_secs,
+            captures: if stage.capture.is_empty() {
+                fallback.to_vec()
+            } else {
+                stage.capture.iter().map(Capture::from).collect()
+            },
+        })
+        .collect()
 }
 
 /// The definition's fixtures, then the case's: a case adds to what every case
@@ -480,6 +489,14 @@ fn fixtures(
         for asset in &declared.assets {
             fixtures.files.push(asset_file(pack_dir, asset)?);
         }
+        // Inline files are authored with the case, so they never need the
+        // subject pack to carry test data.
+        fixtures
+            .files
+            .extend(declared.files.iter().map(|file| FixtureFile {
+                path: file.path.clone(),
+                contents: file.contents.clone().into_bytes(),
+            }));
     }
     Ok(fixtures)
 }
@@ -582,7 +599,9 @@ fn completion(case: &EvalCase, evidence: &TrialEvidence) -> TrialCompletion {
         stages,
         usage: evidence.usage.clone(),
         anchor: evidence.anchor.clone(),
-        evidence_digest: Some(evidence.evidence_digest.clone()),
+        // Nothing observed, nothing to digest: a trial that never ran carries
+        // no evidence digest rather than the digest of an empty record.
+        evidence_digest: (!evidence.stages.is_empty()).then(|| evidence.evidence_digest.clone()),
     }
 }
 
@@ -609,9 +628,12 @@ mod tests {
 
     use super::*;
     use crate::document_config::EvalFixtureDocument;
+    use crate::document_config::EvalFixtureFile;
     use crate::eval::checks::{Check, CheckVerdict};
     use crate::eval::runner::freeze::tests::{Launching, OWNER};
-    use crate::eval::{invalidate_run, load_trials, load_verdicts, TrialRecord, VerdictRecord};
+    use crate::eval::{
+        invalidate_run, load_run, load_trials, load_verdicts, TrialRecord, VerdictRecord,
+    };
     use crate::Collection;
 
     /// Two validation cases and one train case, each one stage with one
@@ -686,6 +708,15 @@ mod tests {
         request.cells.truncate(1);
         request.case_ids = Some(vec!["case-a".into()]);
         request.trials_per_case = 1;
+    }
+
+    /// One cell, one trial per case, retries to spare, and a breaker that
+    /// trips on the second trial in a row with no evidence.
+    fn breaker_of_two(request: &mut RunRequest) {
+        request.cells.truncate(1);
+        request.trials_per_case = 1;
+        request.max_infra_retries = 3;
+        request.breaker_threshold = 2;
     }
 
     fn cell(cell_id: &str, pack: &Path) -> CellRequest {
@@ -1033,6 +1064,7 @@ mod tests {
         let shared = EvalFixtures {
             assets: vec!["seed.json".into()],
             documents: Vec::new(),
+            files: Vec::new(),
             schemas: vec!["type A {}".into()],
         };
         let per_case = EvalFixtures {
@@ -1040,6 +1072,10 @@ mod tests {
             documents: vec![EvalFixtureDocument {
                 collection: "A".into(),
                 document: json!({"id": 1}),
+            }],
+            files: vec![EvalFixtureFile {
+                path: "inventory/edge-07.json".into(),
+                contents: "{\"disk\": \"84%\"}\n".into(),
             }],
             schemas: vec!["type B {}".into()],
         };
@@ -1049,10 +1085,16 @@ mod tests {
         assert_eq!(merged.documents.len(), 1);
         assert_eq!(
             merged.files,
-            [FixtureFile {
-                path: "seed.json".into(),
-                contents: b"{}".to_vec(),
-            }]
+            [
+                FixtureFile {
+                    path: "seed.json".into(),
+                    contents: b"{}".to_vec(),
+                },
+                FixtureFile {
+                    path: "inventory/edge-07.json".into(),
+                    contents: b"{\"disk\": \"84%\"}\n".to_vec(),
+                },
+            ]
         );
 
         let escaping = EvalFixtures {
@@ -1131,8 +1173,7 @@ mod tests {
             .iter()
             .all(|verdict| verdict.kind == OutcomeKind::Passed && verdict.feedback.is_none()));
 
-        // `TrialCompletion` has no field for the evidence digest, so the loop
-        // records it beside each trial's retained home.
+        // The digest is on the completion and, for one release, beside the home.
         for trial in &trials {
             let path = frozen
                 .run_dir
@@ -1144,6 +1185,14 @@ mod tests {
                     .expect("the evidence record parses");
             assert_eq!(recorded["evidence_digest"], passed().evidence_digest);
             assert_eq!(recorded["anchor"]["requests"], 1, "{recorded}");
+            assert_eq!(
+                trial
+                    .completion
+                    .as_ref()
+                    .and_then(|completion| completion.evidence_digest.as_deref()),
+                Some(passed().evidence_digest.as_str()),
+                "the completion carries the digest evidence.json records"
+            );
         }
 
         let calls = recorder.log();
@@ -1445,10 +1494,7 @@ mod tests {
         let (launching, pack) = launching("captured_rows_count").await;
         let registry = CheckRegistry::builtin();
         let mut request = request(&launching, &pack, "run-1");
-        request.cells.truncate(1);
-        request.trials_per_case = 1;
-        request.max_infra_retries = 3;
-        request.breaker_threshold = 2;
+        breaker_of_two(&mut request);
 
         let executor =
             ScriptedExecutor::new().with_default(ScriptedExecutor::not_evidence("did:key:x"));
@@ -1509,6 +1555,67 @@ mod tests {
             0,
             "both slots learned something"
         );
+    }
+
+    /// The breaker threshold is a fact of the frozen origin, so a run whose
+    /// `run.json` is gone still stops where it was told to.
+    #[tokio::test]
+    async fn resume_reads_the_breaker_threshold_from_the_origin_without_run_json() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let registry = CheckRegistry::builtin();
+        let mut request = request(&launching, &pack, "run-1");
+        breaker_of_two(&mut request);
+        let executor =
+            ScriptedExecutor::new().with_default(ScriptedExecutor::not_evidence("did:key:x"));
+
+        let error = run(
+            &launching.access,
+            &request,
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap_err();
+        assert!(provider_down(&error).is_some(), "{error:#}");
+        let record = load_run(&launching.access, OWNER, "run-1")
+            .await
+            .unwrap()
+            .expect("the frozen run");
+        assert_eq!(record.origin.breaker_threshold, 2);
+
+        std::fs::remove_file(launching.runs_dir().join("run-1").join("run.json")).unwrap();
+        let error = resume(
+            &launching.access,
+            OWNER,
+            "run-1",
+            &launching.runs_dir(),
+            &executor,
+            &registry,
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap_err();
+        let down =
+            provider_down(&error).unwrap_or_else(|| panic!("expected ProviderDown: {error:#}"));
+        assert_eq!(down.consecutive_not_evidence, 2);
+    }
+
+    /// The digest is a record of what was observed; a trial that observed
+    /// nothing has nothing to digest.
+    #[test]
+    fn a_completion_carries_the_evidence_digest_only_when_a_stage_ran() {
+        let case: EvalCase =
+            serde_json::from_value(case("case-a", "validation", "captured_rows_count")).unwrap();
+        let ran = passed();
+        assert_eq!(
+            completion(&case, &ran).evidence_digest,
+            Some(ran.evidence_digest.clone())
+        );
+        let nothing = ScriptedExecutor::not_evidence("did:key:x");
+        assert_eq!(completion(&case, &nothing).evidence_digest, None);
     }
 
     /// The guarantee freezing gave — an embedded trial never runs a pack that
@@ -1742,5 +1849,63 @@ mod tests {
         let (parallel_trials, parallel_verdicts) = run_at(4).await;
         assert_eq!(serial_trials, parallel_trials);
         assert_eq!(serial_verdicts, parallel_verdicts);
+    }
+
+    /// A stage reads what it declares; a stage that declares nothing reads what
+    /// the run requested, which is how an M2 definition keeps its captures.
+    #[test]
+    fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
+        let case: EvalCase = serde_json::from_value(json!({
+            "case_id": "k",
+            "split": "train",
+            "stages": [
+                {
+                    "stage_id": "declared",
+                    "prompt": "p",
+                    "deadline_secs": 60,
+                    "capture": [
+                        {
+                            "kind": "documents",
+                            "name": "items",
+                            "collection": "MailboxItem",
+                            "filter": {"requester_did": {"_eq": "$trial"}},
+                            "fields": ["title", "status"]
+                        },
+                        {"kind": "file", "name": "notes", "glob": "**/*.txt"}
+                    ]
+                },
+                {"stage_id": "bare", "prompt": "p", "deadline_secs": 60}
+            ]
+        }))
+        .unwrap();
+        let fallback = vec![Capture::Documents {
+            name: "rows".into(),
+            collection: "Row".into(),
+            filter: json!({}),
+            fields: Vec::new(),
+        }];
+
+        let stages = stage_specs(&case, &fallback);
+
+        assert_eq!(
+            (stages[0].stage_id.as_str(), stages[0].deadline_secs),
+            ("declared", 60)
+        );
+        assert_eq!(
+            stages[0].captures,
+            vec![
+                Capture::Documents {
+                    name: "items".into(),
+                    collection: "MailboxItem".into(),
+                    filter: json!({"requester_did": {"_eq": "$trial"}}),
+                    fields: vec!["title".into(), "status".into()],
+                },
+                Capture::File {
+                    name: "notes".into(),
+                    glob: "**/*.txt".into(),
+                },
+            ]
+        );
+        assert_eq!(stages[1].captures, fallback);
     }
 }

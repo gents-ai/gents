@@ -75,8 +75,9 @@ pub struct RunRequest {
     pub purpose: String,
     pub source_commit: String,
     pub source_dirty: bool,
-    /// What to read out of each finished trial home. Not comparability data,
-    /// so it rides beside the run rather than in its origin.
+    /// The request-level captures: what a stage reads out of its trial home
+    /// when it declares no captures of its own. Not comparability data, so it
+    /// rides beside the run rather than in its origin.
     pub captures: Vec<Capture>,
     /// `<launching home>/eval/runs`.
     pub runs_dir: PathBuf,
@@ -100,9 +101,10 @@ pub struct FrozenRun {
     pub run_dir: PathBuf,
     pub definition: EvalDefinition,
     pub cells: Vec<FrozenCell>,
+    /// The request-level captures: what a stage reads when it declares none.
     pub captures: Vec<Capture>,
     /// How many consecutive trials may produce no evidence before the loop
-    /// stops the run. Frozen beside the run in `run.json`.
+    /// stops the run. Always the frozen origin's.
     pub breaker_threshold: u32,
 }
 
@@ -126,10 +128,9 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
     anyhow::Error::from(FreezeRefused(reason.into()))
 }
 
-/// The run-level settings that have no slot on the frozen [`RunOrigin`]:
-/// `breaker_threshold` (an M1 amendment to request) and the request's captures
-/// (M3 moves them onto the definition). Neither is comparability data, so both
-/// live beside the run rather than widening the replicating row.
+/// Written beside the run for one release: the breaker threshold (now also on
+/// the origin, which wins) and the request-level captures, the fallback for a
+/// stage that declares none.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct RunSidecar {
     breaker_threshold: u32,
@@ -213,6 +214,7 @@ pub async fn freeze(
             .await?
         }
     };
+    let breaker_threshold = record.origin.breaker_threshold;
     tracing::info!(
         run_id = %record.run_id,
         cells = validated.len(),
@@ -225,7 +227,7 @@ pub async fn freeze(
         definition,
         cells: validated.into_iter().map(|(cell, _)| cell).collect(),
         captures: request.captures.clone(),
-        breaker_threshold: request.breaker_threshold,
+        breaker_threshold,
     })
 }
 
@@ -253,12 +255,21 @@ pub(crate) async fn thaw(
         return Err(refused(format!("run {run_id} is invalidated")));
     }
     let run_dir = runs_dir.join(run_id);
-    let sidecar = read_sidecar(&run_dir)?.ok_or_else(|| {
-        refused(format!(
-            "run {run_id} has no {}",
-            sidecar_path(&run_dir).display()
-        ))
-    })?;
+    // The origin is authoritative for the breaker. `run.json` is kept for one
+    // release and read only for the request-level captures it still carries,
+    // so a run without one resumes with none.
+    let sidecar = read_sidecar(&run_dir)?;
+    if let Some(found) = sidecar
+        .as_ref()
+        .filter(|found| found.breaker_threshold != record.origin.breaker_threshold)
+    {
+        tracing::warn!(
+            run_id,
+            run_json = found.breaker_threshold,
+            origin = record.origin.breaker_threshold,
+            "eval run.json disagrees with the frozen origin; the origin's breaker threshold wins"
+        );
+    }
 
     let definition_id = &record.origin.definition.definition_id;
     let definition: EvalDefinition =
@@ -302,25 +313,14 @@ pub(crate) async fn thaw(
         });
     }
 
-    // The origin carries the breaker threshold now. A row frozen before the
-    // field existed reads the documented default, so only there does
-    // `run.json` still decide: an origin that holds anything but the default
-    // was frozen with the field, and one that holds the default either agrees
-    // with `run.json` or predates the field.
-    let breaker_threshold =
-        if record.origin.breaker_threshold != crate::eval::documents::default_breaker_threshold() {
-            record.origin.breaker_threshold
-        } else {
-            sidecar.breaker_threshold
-        };
-
     tracing::info!(run_id, cells = cells.len(), "eval run thawed for resume");
+    let breaker_threshold = record.origin.breaker_threshold;
     Ok(FrozenRun {
         record,
         run_dir,
         definition,
         cells,
-        captures: sidecar.captures,
+        captures: sidecar.map(|found| found.captures).unwrap_or_default(),
         breaker_threshold,
     })
 }
@@ -1161,6 +1161,8 @@ pub(crate) mod tests {
             .join("agent_behaviors/monitor/system_prompt.md")
             .exists());
         assert_eq!(sidecar(&frozen.run_dir)["breaker_threshold"], 5);
+        assert_eq!(frozen.record.origin.breaker_threshold, 5);
+        assert_eq!(frozen.breaker_threshold, 5);
 
         let again = freeze(&launching.access, &request, Isolation::Embedded)
             .await

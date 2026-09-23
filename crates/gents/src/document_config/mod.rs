@@ -40,8 +40,9 @@ pub use callback::{
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
 pub use eval_definition::{
-    EvalCase, EvalCheckRef, EvalDefinition, EvalFixtureDocument, EvalFixtures, EvalReducer,
-    EvalSplit, EvalStage, EvalSubject, EvalSubjectKind, EvalTier, LLM_JUDGE_CHECK,
+    EvalCapture, EvalCase, EvalCheckRef, EvalDefinition, EvalFixtureDocument, EvalFixtureFile,
+    EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind, EvalTier,
+    LLM_JUDGE_CHECK,
 };
 pub use graph_definition::{GraphDefinition, GraphDefinitionObservation};
 pub use installation::{

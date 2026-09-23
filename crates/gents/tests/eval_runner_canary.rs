@@ -150,12 +150,12 @@ async fn the_canary_runs_two_cases_end_to_end_on_an_embedded_home_with_a_scripte
         .unwrap();
     assert_eq!(anchors(&trials), anchors(&repeated));
 
-    // `TrialCompletion` carries no evidence digest, so the loop records each
-    // trial's own beside its home. The digest covers the trial's request ids
-    // and its messages' timestamps, both new in every run, so two runs of one
-    // case digest differently by construction. What has to agree across runs
-    // is the anchor the digest was taken over; what the digest itself pins is
-    // that it follows the evidence, so two trials of one run differ in it.
+    // Each trial's evidence digest is on its completion and, for one release,
+    // in evidence.json beside its home. The digest covers the trial's request
+    // ids and its messages' timestamps, both new in every run, so two runs of
+    // one case digest differently by construction. What has to agree across
+    // runs is the anchor the digest was taken over; what the digest itself pins
+    // is that it follows the evidence, so two trials of one run differ in it.
     for (run_id, runs_dir, trials) in [
         (&request.run_id, canary.runs_dir(), &trials),
         (&repeat.run_id, again.runs_dir(), &repeated),
