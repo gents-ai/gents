@@ -766,6 +766,62 @@ mod tests {
         }
     }
 
+    /// Every event-source filter a bundled pack ships is a query DefraDB
+    /// accepts against the runtime and pack schemas, so no pack is refused at
+    /// apply for naming a field its collection lacks.
+    #[tokio::test]
+    async fn every_bundled_event_source_filter_is_a_valid_query() {
+        for manifest in pack_catalog().unwrap() {
+            if manifest.metadata.kind != PackKind::Documents {
+                continue;
+            }
+            let pack = resolve_pack(&manifest.name).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            materialize(
+                &PackSource::Bundled(resolve_pack(&manifest.name).unwrap()),
+                root.path(),
+            )
+            .unwrap();
+            let node = std::sync::Arc::new(
+                gents::defra_node::EmbeddedNode::builder()
+                    .build()
+                    .await
+                    .unwrap(),
+            );
+            gents::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+            let access = gents::config_client::ConfigAccess::Local(node.clone());
+            crate::commands::schema::apply_pack_schemas_if_present(&access, root.path())
+                .await
+                .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
+            let config = gents::pack::load_pack_config(
+                &pack.manifest,
+                &gents::pack::PackInstallOptions {
+                    agent_did: "did:key:zPackCatalogValidationOwner".into(),
+                },
+                &|path| pack.asset(path).map(Vec::from),
+                &|_| None,
+            )
+            .unwrap_or_else(|error| panic!("{}: {error:#}", manifest.name));
+            for source in &config.event_sources {
+                let Some(filter) = source.filter.as_deref() else {
+                    continue;
+                };
+                let query = format!(
+                    "{{ {}(filter: {filter}, limit: 1) {{ _docID }} }}",
+                    source.source_collection
+                );
+                let response = node.execute(&query).await;
+                assert!(
+                    !response.has_errors(),
+                    "{} event source {}: {:?}",
+                    manifest.name,
+                    source.event_source_id,
+                    response.errors
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn resolution_prefers_a_pack_compiled_into_this_binary() {
         // An unroutable registry: if resolution incorrectly fell through to
