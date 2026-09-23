@@ -152,3 +152,21 @@ Filled in by the orchestrator at spin-up.
   timeouts. Artifacts in `.superpowers/sdd/2026-09-22-optimization-driver/` (ledger, gate reports,
   final review, `pr-descriptions.md` with the layer map for redistributing the fix-wave commits at
   push). **M4 base: `optimization/23-promote` @ `6164d34d6`.**
+
+## Branch names (renamed 2026-09-23; user rule: `feat/`, `test/`, `perf/`, no internal milestone names or numbered prefixes)
+
+| Old | New | Stack |
+|---|---|---|
+| `design/optimization-substrate` | `feat/eval-optimization-design` | design docs |
+| `optimization/01-lean` · `02-conformance` · `03-cas` | `feat/guarded-publication-lean` · `-conformance` · `-cas` | Track 0 |
+| `eval/01-lean` · `02-conformance` · `03-definition` · `04-runtime-collections` · `05-contract` · `06-protected` | `feat/eval-outcome-lean` · `feat/eval-outcome-conformance` · `feat/eval-definition-collection` · `feat/eval-runtime-collections` · `feat/eval-contract` · `feat/eval-protected-collections` | M1 |
+| `eval/10-runner-support` · `11-runner-core` · `12-runner-loop` · `13-runner-embedded` | `feat/eval-runner-support` · `-core` · `-loop` · `-embedded` | M2 |
+| `optimization/10-lean` · `11-conformance` · `12-policy` | `feat/optimization-policy-lean` · `-conformance` · `feat/optimization-policy` | M6a |
+| `optimization/20-job` · `21-proposer` · `22-driver` · `23-promote` | `feat/optimization-job` · `-proposer` · `-driver` · `-promote` | M6b |
+| `optimization/19-base` | unchanged, local only; disappears when the MVP chain is linearized | M6b base |
+| `eval/30-monitor-prework` | `test/monitor-eval-cases` | M3 pre-work |
+| `eval/40-capture` · `41-checks` · `42-definition` | `feat/eval-stage-captures` · `feat/eval-mailbox-checks` · `test/monitor-findings-definition` | M3 |
+| `eval/50-report` · `51-cli` · `52-optimization-cli` · `53-watch-gc` · `54-compare-breakdowns` | `feat/eval-report` · `feat/eval-cli` · `feat/optimization-cli` · `feat/eval-watch-gc` · `feat/eval-compare-breakdowns` (renamed when `m4` completes) | M4 |
+
+Planned MVP chain (one linear stack, after `m4` completes): Track 0 → M1 → M2 → M6a → M6b → M4,
+each PR targeting its parent; M3 stays a side branch off the runner.
