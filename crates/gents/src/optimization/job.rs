@@ -165,7 +165,7 @@ pub enum JournalEntry {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct JobRecord {
     pub job_id: String,
     pub owner: String,
@@ -175,7 +175,7 @@ pub struct JobRecord {
 
 /// The retained checkpoint: the candidate of the last round the policy
 /// accepted. Never the best candidate the job ever saw.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Checkpoint {
     pub round: u32,
     pub text: String,

@@ -4,6 +4,7 @@
 pub mod checks;
 pub mod documents;
 pub mod outcome;
+pub mod report;
 pub mod runner;
 pub mod scoring;
 

@@ -122,7 +122,7 @@ pub fn freeze_refused(error: &anyhow::Error) -> Option<&FreezeRefused> {
     error.downcast_ref::<FreezeRefused>()
 }
 
-fn refused(reason: impl Into<String>) -> anyhow::Error {
+pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Error {
     anyhow::Error::from(FreezeRefused(reason.into()))
 }
 
@@ -151,7 +151,7 @@ pub async fn freeze(
     validate_purpose(&request.purpose)?;
     validate_evaluator(&request.evaluator_did)?;
     validate_cell_identity(request)?;
-    let definition = load_definition(access, request).await?;
+    let definition = load_definition(access, &request.owner, &request.definition_id).await?;
     let case_ids = select_cases(request, &definition)?;
 
     let run_dir = request.runs_dir.join(&request.run_id);
@@ -161,11 +161,7 @@ pub async fn freeze(
     }
 
     let origin = RunOrigin {
-        definition: DefinitionRef {
-            definition_id: definition.definition_id.clone(),
-            comparability_version: definition.comparability_version,
-            digest: desired_state_document_digest(&serde_json::to_value(&definition)?)?,
-        },
+        definition: definition_ref(&definition)?,
         split: request.split,
         case_ids,
         cells: validated
@@ -269,8 +265,7 @@ pub(crate) async fn thaw(
                     "run {run_id} names no eval definition {definition_id:?}"
                 ))
             })?;
-    let digest = desired_state_document_digest(&serde_json::to_value(&definition)?)?;
-    if digest != record.origin.definition.digest {
+    if definition_ref(&definition)?.digest != record.origin.definition.digest {
         return Err(refused(format!(
             "eval definition {definition_id:?} changed since run {run_id} froze it"
         )));
@@ -352,8 +347,9 @@ fn validate_evaluator(evaluator_did: &str) -> Result<()> {
 }
 
 /// A run id and a cell id each name one directory the run owns, so each has to
-/// be one ordinary path component: anything else writes outside the run.
-fn directory_name(kind: &str, value: &str) -> Result<()> {
+/// be one ordinary path component: anything else writes outside the run. An
+/// optimization job id names its job's directory under the same rule.
+pub(crate) fn directory_name(kind: &str, value: &str) -> Result<()> {
     let mut components = Path::new(value).components();
     let one_normal = matches!(components.next(), Some(std::path::Component::Normal(_)))
         && components.next().is_none();
@@ -408,20 +404,18 @@ async fn read_document<T: serde::de::DeserializeOwned>(
         .transpose()
 }
 
-async fn load_definition(access: &ConfigAccess, request: &RunRequest) -> Result<EvalDefinition> {
-    let definition: EvalDefinition = read_document(
-        access,
-        Collection::EvalDefinition,
-        &request.owner,
-        &request.definition_id,
-    )
-    .await?
-    .ok_or_else(|| {
-        refused(format!(
-            "no eval definition {:?} for {}",
-            request.definition_id, request.owner
-        ))
-    })?;
+/// The installed definition `definition_id` of `owner`, validated. The one
+/// read of a definition: freezing a run and an optimization job both use it,
+/// so they agree on what a case is.
+pub(crate) async fn load_definition(
+    access: &ConfigAccess,
+    owner: &str,
+    definition_id: &str,
+) -> Result<EvalDefinition> {
+    let definition: EvalDefinition =
+        read_document(access, Collection::EvalDefinition, owner, definition_id)
+            .await?
+            .ok_or_else(|| refused(format!("no eval definition {definition_id:?} for {owner}")))?;
     definition.validate().map_err(|error| {
         refused(format!(
             "eval definition {:?}: {error:#}",
@@ -429,6 +423,16 @@ async fn load_definition(access: &ConfigAccess, request: &RunRequest) -> Result<
         ))
     })?;
     Ok(definition)
+}
+
+/// A definition's identity as a run's origin records it, and as `thaw`
+/// checks it again. The one owner of a definition's digest.
+pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRef> {
+    Ok(DefinitionRef {
+        definition_id: definition.definition_id.clone(),
+        comparability_version: definition.comparability_version,
+        digest: desired_state_document_digest(&serde_json::to_value(definition)?)?,
+    })
 }
 
 /// The cases this run compares, sorted, each once.
@@ -942,7 +946,7 @@ pub(crate) mod tests {
 
         /// Remove one document the way an operator editing configuration
         /// later would, leaving whatever still references it dangling.
-        async fn delete(&self, collection: Collection, id: &str) {
+        pub(crate) async fn delete(&self, collection: Collection, id: &str) {
             self.access
                 .transact("freeze.test_delete", |txn| {
                     Box::pin(async move {
