@@ -180,6 +180,10 @@ the LLM proposer and its evidence projection.
     (M6b open item); M4's PR 1 runner task adds a checked add and a freeze-time refusal.
   - `DecisionView.recomputed` is `Option<Decision>` after M6b's FW-2; M4's `optimization show`
     renders the `None` case ("not recomputable: definition changed / runs invalidated").
+  - Flaky on this machine (M4 PR 2 gate): `cli_config_tools::tools_set_persists_host_root_and_export_round_trips_it`
+    failed once with DefraDB "directory is already locked" and passed alone; pre-existing, untouched
+    by the stack. Filing is the user's call. Also: `gents-cli --lib` has 18 failures from toolchains
+    missing on this machine (wasm32-wasip1, javy, pyodide/wasm-opt), not code.
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.
