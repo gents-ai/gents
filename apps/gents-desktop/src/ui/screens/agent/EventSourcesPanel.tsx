@@ -307,16 +307,7 @@ export function EventSourcesPanel({
                 }),
               )
             }
-            warning={(() => {
-              const n = deployment.triggers.filter(
-                (x) =>
-                  x.config.source.kind === "event" &&
-                  x.config.source.event_source_id === s.event_source_id,
-              ).length;
-              return n
-                ? `${n} ${n === 1 ? "automation uses" : "automations use"} it.`
-                : undefined;
-            })()}
+            warning={dependentsWarning(deployment, "event-source", s.event_source_id)}
           />
         ),
       }))}

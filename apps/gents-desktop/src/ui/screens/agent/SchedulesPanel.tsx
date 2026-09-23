@@ -258,16 +258,7 @@ export function SchedulesPanel({
                 }),
               )
             }
-            warning={(() => {
-              const n = deployment.triggers.filter(
-                (x) =>
-                  x.config.source.kind === "schedule" &&
-                  x.config.source.schedule_id === s.schedule_id,
-              ).length;
-              return n
-                ? `${n} ${n === 1 ? "automation uses" : "automations use"} it.`
-                : undefined;
-            })()}
+            warning={dependentsWarning(deployment, "schedule", s.schedule_id)}
           />
         ),
       }))}

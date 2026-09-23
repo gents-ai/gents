@@ -5,6 +5,7 @@
    of it behind. A new trigger starts off unless the person turns it on
    here. Existing schedules, sources and tasks can be reused instead of
    made. */
+import { behaviorReadiness } from "@/lib/behavior-readiness";
 import { useRef, useState } from "react";
 import type {
   ConfigComponentsApplyRequest,
@@ -177,7 +178,11 @@ export function NewAutomationDialog({
       : deployment.tasks.find((t) => t.taskId === taskId)?.behaviorId;
   const behavior =
     deployment.behaviors.find((b) => b.behaviorId === runningBehaviorId) ?? null;
-  const behaviorOff = behavior !== null && !behavior.enabled;
+  /* whether the behavior can run is the bridge's readiness decision */
+  const readiness = behavior
+    ? behaviorReadiness(deployment, behavior.behaviorId)
+    : null;
+  const behaviorOff = readiness !== null && !readiness.ready;
 
   const create = async () => {
     setError(null);
@@ -480,9 +485,10 @@ export function NewAutomationDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                {behaviorOff && (
+                {behaviorOff && behavior && (
                   <FieldDescription>
-                    {behavior.displayName} is off, so the automation is created off too.
+                    {behavior.displayName} can’t run ({readiness?.reason}), so the
+                    automation is created off.
                   </FieldDescription>
                 )}
               </Field>

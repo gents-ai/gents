@@ -497,14 +497,7 @@ export function ToolsPanel({
                 }),
               )
             }
-            warning={(() => {
-              const n = deployment.contexts.filter(
-                (c) => c.tools_id === t.tools_id,
-              ).length;
-              return n
-                ? `${n} ${n === 1 ? "context uses" : "contexts use"} it.`
-                : undefined;
-            })()}
+            warning={dependentsWarning(deployment, "tools", t.tools_id)}
           />
         ),
       }))}

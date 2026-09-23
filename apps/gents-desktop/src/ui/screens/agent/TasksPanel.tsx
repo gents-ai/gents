@@ -523,14 +523,7 @@ export function TasksPanel({
                     }),
                   )
                 }
-                warning={(() => {
-                  const n = deployment.triggers.filter(
-                    (x) => x.config.task_id === t.taskId,
-                  ).length;
-                  return n
-                    ? `${n} ${n === 1 ? "automation runs" : "automations run"} it.`
-                    : undefined;
-                })()}
+                warning={dependentsWarning(deployment, "task", t.taskId)}
               />
             ),
           };

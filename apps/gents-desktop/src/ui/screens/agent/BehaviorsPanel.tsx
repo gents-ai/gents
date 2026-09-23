@@ -70,7 +70,7 @@ import { EditorSheet } from "./EditorSheet";
 import { ToolsEditor } from "./ToolsPanel";
 import { ProfileEditor, modelSentence } from "./ProfilesPanel";
 import { newId, useDraft } from "./draft";
-import { DeleteButton, ListDetail } from "./ListDetail";
+import { ConfirmDelete, DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
 import { rememberContextOrigin } from "./contextOrigin";
 import { clearPromptFocus, promptFocusRequested } from "./promptFocus";
@@ -480,19 +480,9 @@ export function BehaviorEditor({
     ...contextFields(context),
     inferenceProfileId: behavior.inferenceProfileId ?? "",
   };
-  const deleteContext = async (c: AgentContext) => {
-    try {
-      await shell.applyConfig((api) =>
-        api.deleteContextConfig({
-          contextId: c.context_id,
-          agentDid: deployment.agentDid,
-        }),
-      );
-      toast(`Deleted ${nameOf(c)}`);
-    } catch (e) {
-      toast(`Delete failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
+  /* an unused context offered for deletion after a save: the typed-name
+     confirmation every delete goes through */
+  const [confirmUnused, setConfirmUnused] = useState<AgentContext | null>(null);
   /* the inline create dialogs' resolvers while one is open */
   const [newProfile, setNewProfile] = useState<((id: string | null) => void) | null>(
     null,
@@ -549,31 +539,80 @@ export function BehaviorEditor({
         tags: next.tags.length ? next.tags : null,
         created_at: behavior.createdAt,
       };
-      const contextDocument: AgentContext | null = creating
-        ? {
-            context_id: contextId,
-            agent_did: deployment.agentDid,
-            display_name: newName,
-            description: null,
-            ...fields,
-            tags: null,
-          }
-        : target && edited
-          ? { ...target, ...fields }
-          : null;
-      await shell.applyConfig((api) =>
-        /* the context and the behavior that points at it land together or not
-         at all: one component apply is one transaction */
-        contextDocument
-          ? api.applyConfigComponents({
-              document: {
-                agent_principal: { agent_did: deployment.agentDid },
-                contexts: [contextDocument],
-                agent_behaviors: [behaviorDocument],
+      /* only the context fields this edit changed, so a concurrent edit to
+         another field of a shared context is not overwritten */
+      const before = target ? contextFields(target) : null;
+      const changedFields: Partial<typeof fields> = {};
+      if (before) {
+        if (before.systemPrompt !== next.systemPrompt)
+          changedFields.system_prompt = fields.system_prompt;
+        if (before.toolsId !== next.toolsId) changedFields.tools_id = fields.tools_id;
+        if (before.compactionId !== next.compactionId)
+          changedFields.compaction_id = fields.compaction_id;
+        if (JSON.stringify(before.skillIds) !== JSON.stringify(next.skillIds))
+          changedFields.skill_ids = fields.skill_ids;
+      }
+      await shell.applyConfig((api) => {
+        /* a new context and the behavior that points at it land together or
+           not at all: one component apply is one transaction */
+        if (creating)
+          return api.applyConfigComponents({
+            document: {
+              agent_principal: { agent_did: deployment.agentDid },
+              contexts: [
+                {
+                  context_id: contextId,
+                  agent_did: deployment.agentDid,
+                  display_name: newName,
+                  description: null,
+                  ...fields,
+                  tags: null,
+                },
+              ],
+              agent_behaviors: [behaviorDocument],
+            },
+          });
+        if (target && edited && !draftMode)
+          /* an existing behavior and its existing context: one patch call, one
+             transaction, changed fields only */
+          return api.patchConfigComponents({
+            agentDid: deployment.agentDid,
+            patches: [
+              {
+                collection: "AgentContext",
+                id: target.context_id,
+                changes: changedFields,
               },
+              {
+                collection: "AgentBehavior",
+                id: behavior.behaviorId,
+                changes: {
+                  display_name: behaviorDocument.display_name,
+                  description: behaviorDocument.description,
+                  context_id: behaviorDocument.context_id,
+                  inference_profile_id: behaviorDocument.inference_profile_id,
+                  tags: behaviorDocument.tags,
+                },
+              },
+            ],
+          });
+        if (target && edited)
+          /* a new behavior on an edited existing context: the behavior has no
+             document to patch yet, so the context is patched with it applied */
+          return api
+            .patchConfigComponents({
+              agentDid: deployment.agentDid,
+              patches: [
+                {
+                  collection: "AgentContext",
+                  id: target.context_id,
+                  changes: changedFields,
+                },
+              ],
             })
-          : api.saveBehaviorConfig({ document: behaviorDocument }),
-      );
+            .then(() => api.saveBehaviorConfig({ document: behaviorDocument }));
+        return api.saveBehaviorConfig({ document: behaviorDocument });
+      });
       if (creating) pendingContextId.current = null;
       /* say what happened to the contexts; offer to clear one left unused */
       const said: string[] = [];
@@ -596,7 +635,7 @@ export function BehaviorEditor({
       return {
         savedToast: `Saved. ${said.join(" ")}`,
         savedAction: unused
-          ? { label: "Delete it", onClick: () => void deleteContext(unused) }
+          ? { label: "Delete it", onClick: () => setConfirmUnused(unused) }
           : undefined,
       };
     },
@@ -1225,6 +1264,25 @@ export function BehaviorEditor({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      {confirmUnused && (
+        <ConfirmDelete
+          label={nameOf(confirmUnused)}
+          noun="context"
+          open
+          onOpenChange={(open) => {
+            if (!open) setConfirmUnused(null);
+          }}
+          warning={dependentsWarning(deployment, "context", confirmUnused.context_id)}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteContextConfig({
+                contextId: confirmUnused.context_id,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+        />
+      )}
       <DraftActions
         dirty={d.dirty}
         saving={d.saving}

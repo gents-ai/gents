@@ -48,5 +48,23 @@ describe("trigger readiness", () => {
       />,
     );
     expect(screen.queryByText("Ready")).toBeNull();
+    /* nothing to say is said with nothing, not an empty line */
+    const header = screen.getByRole("heading", { name: "Trigger A" }).parentElement!;
+    for (const line of header.querySelectorAll("p"))
+      expect(line.textContent?.trim()).not.toBe("");
+  });
+});
+
+describe("dependents", () => {
+  it("counts subagent targets that point at a behavior", async () => {
+    const { dependents } = await import("../src/ui/screens/agent/dependents");
+    const withTarget = {
+      ...deployment,
+      subagentTargets: [
+        ...deployment.subagentTargets,
+        { behavior_id: "ops" } as DeploymentView["subagentTargets"][number],
+      ],
+    };
+    expect(dependents(withTarget, "behavior", "ops")).toContain("1 subagent target");
   });
 });

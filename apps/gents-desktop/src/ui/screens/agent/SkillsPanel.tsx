@@ -258,14 +258,7 @@ export function SkillsPanel({
                 }),
               )
             }
-            warning={(() => {
-              const n = deployment.contexts.filter((c) =>
-                c.skill_ids?.includes(s.skillId),
-              ).length;
-              return n
-                ? `${n} ${n === 1 ? "context uses" : "contexts use"} it.`
-                : undefined;
-            })()}
+            warning={dependentsWarning(deployment, "skill", s.skillId)}
           />
         ),
       }))}

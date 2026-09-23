@@ -720,6 +720,64 @@ describe("configuration panels", () => {
     );
   });
 
+  it("patches only the changed context field and the behavior in one call", async () => {
+    const { api, shell } = harness();
+    render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
+    const user = userEvent.setup();
+    const prompt = screen.getByLabelText("System prompt");
+    await user.clear(prompt);
+    await user.type(prompt, "Watch the fleet");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+    const { patches } = api.patchConfigComponents.mock.calls[0][0];
+    expect(patches[0]).toEqual({
+      collection: "AgentContext",
+      id: "context-b",
+      changes: { system_prompt: "Watch the fleet" },
+    });
+    expect(patches[1]).toEqual(
+      expect.objectContaining({ collection: "AgentBehavior", id: "ops" }),
+    );
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+  });
+
+  it("says when the runtime's execution defaults cannot be read", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockRejectedValue(new Error("no catalog"));
+    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    expect(
+      await screen.findByText(
+        /Couldn’t read the runtime’s execution defaults: no catalog/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("creates an automation off when the bridge says its behavior cannot run", async () => {
+    const { shell } = harness();
+    const blocked = {
+      ...deployment,
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: [
+          {
+            state: "unavailable",
+            behaviorId: "default",
+            reason: "credentials_required",
+          },
+          { state: "ready", behaviorId: "ops" },
+        ],
+      },
+    } as typeof deployment;
+    render(<TasksPanel shell={shell} deployment={blocked} item="task-a" />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+    const dialog = await screen.findByRole("dialog", { name: "When it runs" });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Turn it on now" }),
+    ).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("coalesces repeated create activation while the operator write is pending", async () => {
     const { api, shell } = harness();
     let finish: (() => void) | undefined;
@@ -1325,6 +1383,10 @@ describe("configuration panels", () => {
     await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
     await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
     const dialog = screen.getByRole("alertdialog");
+    /* the row's warning is the same owner's wording as the Danger zone's */
+    expect(
+      within(dialog).getByText(/Used by 1 trigger; they lose this reference\./),
+    ).toBeVisible();
     const button = within(dialog).getByRole("button", { name: /^Delete / });
     expect(button).toBeDisabled();
     await user.type(within(dialog).getByRole("textbox"), name);

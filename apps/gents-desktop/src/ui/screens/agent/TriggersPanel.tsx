@@ -225,11 +225,13 @@ export function TriggerEditor({
           {sourceInWords(deployment, trigger) ?? "No source"} ·{" "}
           {actionInWords(deployment, trigger)}
         </p>
-        <p
-          className={`mt-1 text-sm ${readiness.ok ? "text-muted-foreground" : "text-destructive"}`}
-        >
-          {readiness.ok ? readiness.note : `Won’t fire: ${readiness.reason}`}
-        </p>
+        {(!readiness.ok || readiness.note) && (
+          <p
+            className={`mt-1 text-sm ${readiness.ok ? "text-muted-foreground" : "text-destructive"}`}
+          >
+            {readiness.ok ? readiness.note : `Won’t fire: ${readiness.reason}`}
+          </p>
+        )}
       </header>
       <Group title="Trigger">
         <FactRow label="Trigger ID" mono>

@@ -886,14 +886,7 @@ export function InferencePanel({
                     }),
                   )
                 }
-                warning={(() => {
-                  const n = deployment.inferenceProfiles.filter(
-                    (p) => p.backend_id === b.backendId,
-                  ).length;
-                  return n
-                    ? `${n} ${n === 1 ? "profile uses" : "profiles use"} it.`
-                    : undefined;
-                })()}
+                warning={dependentsWarning(deployment, "backend", b.backendId)}
               >
                 {/* another local server or a second key, yes; a second subscription, no:
                     a principal_oauth backend has no account of its own, it uses the

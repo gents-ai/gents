@@ -369,15 +369,24 @@ export function ProfileEditor({
   const [executionDefaults, setExecutionDefaults] = useState<
     Record<string, number | null | undefined>
   >({});
+  const [executionDefaultsError, setExecutionDefaultsError] = useState<string | null>(
+    null,
+  );
   useEffect(() => {
     let canceled = false;
     if (shell.api.getInferenceSetupCatalog)
-      void shell.api
-        .getInferenceSetupCatalog()
-        .then((catalog) => {
-          if (!canceled) setExecutionDefaults(catalog.executionDefaults ?? {});
-        })
-        .catch(() => {});
+      void shell.api.getInferenceSetupCatalog().then(
+        (catalog) => {
+          if (!canceled) {
+            setExecutionDefaults(catalog.executionDefaults ?? {});
+            setExecutionDefaultsError(null);
+          }
+        },
+        (e: unknown) => {
+          if (!canceled)
+            setExecutionDefaultsError(e instanceof Error ? e.message : String(e));
+        },
+      );
     return () => {
       canceled = true;
     };
@@ -692,6 +701,11 @@ export function ProfileEditor({
         </p>
       ) : null}
       <Group title="Execution">
+        {executionDefaultsError && (
+          <p role="alert" className="px-4 py-3 text-sm text-destructive">
+            Couldn’t read the runtime’s execution defaults: {executionDefaultsError}
+          </p>
+        )}
         <TextRow
           id={id("execution")}
           label="Execution document ID"
@@ -916,14 +930,7 @@ export function ProfilesPanel({
               }),
             )
           }
-          warning={(() => {
-            const n = deployment.behaviors.filter(
-              (x) => x.inferenceProfileId === p.profile_id,
-            ).length;
-            return n
-              ? `${n} ${n === 1 ? "behavior loses" : "behaviors lose"} its profile.`
-              : undefined;
-          })()}
+          warning={dependentsWarning(deployment, "profile", p.profile_id)}
         />
       ),
     };

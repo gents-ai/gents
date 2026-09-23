@@ -34,6 +34,11 @@ export function dependents(
       if (deployment.agentPrincipal.defaultBehaviorId === id)
         parts.push("the agent's default behavior");
       add(deployment.tasks.filter((t) => t.behaviorId === id).length, "task", "tasks");
+      add(
+        deployment.subagentTargets.filter((t) => t.behavior_id === id).length,
+        "subagent target",
+        "subagent targets",
+      );
       break;
     case "context":
       add(

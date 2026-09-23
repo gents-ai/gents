@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { dependentsWarning } from "./dependents";
 import { ArrowLeft } from "lucide-react";
 import type { AgentContext, DeploymentView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
@@ -340,14 +341,7 @@ export function ContextsPanel({
                   }),
                 )
               }
-              warning={(() => {
-                const n = deployment.behaviors.filter(
-                  (b) => b.contextId === c.context_id,
-                ).length;
-                return n
-                  ? `${n} ${n === 1 ? "behavior loses" : "behaviors lose"} its instructions.`
-                  : undefined;
-              })()}
+              warning={dependentsWarning(deployment, "context", c.context_id)}
             />
           ),
         }))}
