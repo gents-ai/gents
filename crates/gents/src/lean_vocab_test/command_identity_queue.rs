@@ -89,18 +89,93 @@ pub(crate) struct LeanPendingUserTurnCase {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanQueuedSteeringTraceCase {
     pub(crate) name: String,
+    pub(crate) actions: Vec<LeanQueuedSteeringAction>,
     #[serde(rename = "requestId")]
     pub(crate) request_id: u64,
     #[serde(rename = "requestDocId")]
     pub(crate) request_doc_id: u64,
     #[serde(rename = "contentToken")]
     pub(crate) content_token: u64,
+    pub(crate) entry: LeanQueuedSteeringEntry,
+    #[serde(rename = "interruptAt")]
+    pub(crate) interrupt_at: Option<u64>,
+    #[serde(rename = "preparedCandidate")]
+    pub(crate) prepared_candidate: Option<LeanQueuedSteeringCandidate>,
+    pub(crate) capture: LeanQueuedSteeringCapture,
     #[serde(rename = "lifecycleState")]
     pub(crate) lifecycle_state: String,
     #[serde(rename = "admissionVisible")]
     pub(crate) admission_visible: bool,
     #[serde(rename = "canonicalAuthoredCount")]
     pub(crate) canonical_authored_count: u64,
+    #[serde(rename = "providerSendPermitted")]
+    pub(crate) provider_send_permitted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LeanQueuedSteeringAction {
+    Enqueue,
+    ClaimWithoutBegin,
+    ClaimAndBegin,
+    InterruptBeforeClaim,
+    AdmissionReject,
+    FailBeforeStream,
+    DedupLose,
+    Expire,
+    InterruptClaimed,
+    InterruptProcessing,
+    Fail,
+    Finish,
+    BindWorkspace,
+    Claim,
+    BeginInference,
+    ContinueProcessing,
+    Publish,
+    PrepareFails,
+    Capture,
+    Send,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueuedSteeringEntry {
+    #[serde(rename = "requestId")]
+    pub(crate) request_id: u64,
+    #[serde(rename = "createdAt")]
+    pub(crate) created_at: u64,
+    pub(crate) source: String,
+    pub(crate) policy: String,
+    #[serde(rename = "queueKey")]
+    pub(crate) queue_key: Option<u64>,
+    #[serde(rename = "queuedAfter")]
+    pub(crate) queued_after: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueuedSteeringCandidate {
+    pub(crate) closing: super::canonical_output::LeanCanonicalSegment,
+    pub(crate) message:
+        super::canonical_output::LeanCanonicalMessage<super::canonical_output::LeanPayloadSpec>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanQueuedSteeringCapture {
+    #[serde(rename = "agentDid")]
+    pub(crate) agent_did: u64,
+    #[serde(rename = "sessionId")]
+    pub(crate) session_id: u64,
+    #[serde(rename = "requestDocId")]
+    pub(crate) request_doc_id: u64,
+    #[serde(rename = "turnIndex")]
+    pub(crate) turn_index: u64,
+    pub(crate) attempt: u64,
+    #[serde(rename = "bodyToken")]
+    pub(crate) body_token: u64,
+    #[serde(rename = "priorBodyToken")]
+    pub(crate) prior_body_token: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

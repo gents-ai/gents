@@ -644,6 +644,23 @@ def caseCoverage : List CoverageEntry :=
       "conformance::live_overlay::pending_user_turn_cases_match_lean_table")
       "client-shell" [Surface.operatorUi]
   , tagged (consumerWithFollowUp
+      "queued_steering_trace_cases"
+      "QueuedSteeringTraceCases"
+      "lifecycle::queue::tests::steering::generated_pending_steering_terminals_retain_signed_admission_without_output"
+      "Native binding covers only the two true-pending interruptBeforeClaim and admissionReject scripts: signed raw content/input survive and no canonical output rows appear. The claimed pre-start failure, prepublication send denial, failed preparation, conflicting capture, and exact replay scripts remain model-derived/decoder-checked, not native-bound. Pending-turn UI visibility is not observed by this native test.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "queued_steering_trace_cases"
+      "QueuedSteeringTraceCases"
+      "agent::loop_stream::tests::generated_authored_input_is_durable_before_provider_stream_entry"
+      "Native binding covers only the publication-before-provider-stream-entry script: it reconstructs the generated prepared prompt from its canonical candidate and observes the durable authored header before the provider stream opens. It does not execute generated steering queue ingress, inspect the UI admissionVisible projection or serialized capture body, or prove native lease authorization; the other five scripts remain model-derived/decoder-checked.")
+      "prompt-assembly" [Surface.agentFacing]
+  , tagged (followUpCoverage
+      "queued_steering_guard_cases"
+      "QueuedSteeringGuardCases"
+      "Both wrong-head claim and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. Bind each to the native queue/owned-execution rejection path before claiming native conformance.")
+      "request-lifecycle" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "aggregate_token_budget_cases"
       "AggregateTokenBudgetCases"
       "agent::loop_stream::tests::generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger"

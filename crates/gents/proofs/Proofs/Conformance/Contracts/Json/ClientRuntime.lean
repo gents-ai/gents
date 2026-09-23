@@ -39,17 +39,6 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
     ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
     ++ "}"
 
-def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString witness.name ++ ","
-    ++ "\"requestId\":" ++ toString witness.requestId ++ ","
-    ++ "\"requestDocId\":" ++ toString witness.requestDocId ++ ","
-    ++ "\"contentToken\":" ++ toString witness.contentToken ++ ","
-    ++ "\"lifecycleState\":" ++ jsonString witness.lifecycleState ++ ","
-    ++ "\"admissionVisible\":" ++ boolString witness.admissionVisible ++ ","
-    ++ "\"canonicalAuthoredCount\":" ++ toString witness.canonicalAuthoredCount
-    ++ "}"
-
 def queuedSteeringGuardJson (witness : QueuedSteering.GuardObservation) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
@@ -203,6 +192,59 @@ def canonicalMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
     ",\"native_id\":" ++ optionalStringJson message.nativeId ++ ",\"blocks\":" ++
     jsonArray (message.blocks.map (messageBlockJson payloadSpecJson)) ++
     ",\"created_at\":" ++ toString message.createdAt ++ "}"
+
+private def queuedSteeringActionJson : QueuedSteering.Action → String
+  | .enqueue => jsonString "enqueue"
+  | .claimWithoutBegin => jsonString "claimWithoutBegin"
+  | .claimAndBegin => jsonString "claimAndBegin"
+  | .terminate .interruptBeforeClaim => jsonString "interruptBeforeClaim"
+  | .terminate .admissionReject => jsonString "admissionReject"
+  | .terminate .failBeforeStream => jsonString "failBeforeStream"
+  | .terminate .dedupLose => jsonString "dedupLose"
+  | .terminate .expire => jsonString "expire"
+  | .terminate .interruptClaimed => jsonString "interruptClaimed"
+  | .terminate .interruptProcessing => jsonString "interruptProcessing"
+  | .terminate .fail => jsonString "fail"
+  | .terminate .finish => jsonString "finish"
+  | .terminate .bindWorkspace => jsonString "bindWorkspace"
+  | .terminate .claim => jsonString "claim"
+  | .terminate .beginInference => jsonString "beginInference"
+  | .terminate .continueProcessing => jsonString "continueProcessing"
+  | .publish => jsonString "publish"
+  | .prepareFails => jsonString "prepareFails"
+  | .capture => jsonString "capture"
+  | .send => jsonString "send"
+
+def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String :=
+  let script := witness.caseScript
+  let candidate := script.candidate.map fun prepared =>
+    "{\"closing\":" ++ canonicalSegmentJson prepared.closing ++
+      ",\"message\":" ++ canonicalMessageJson prepared.message ++ "}"
+  let key := script.capture.key
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"actions\":" ++ jsonArray (script.actions.map queuedSteeringActionJson) ++
+    ",\"requestId\":" ++ toString witness.requestId ++
+    ",\"requestDocId\":" ++ toString witness.requestDocId ++
+    ",\"contentToken\":" ++ toString witness.contentToken ++
+    ",\"entry\":{\"requestId\":" ++ toString script.entry.requestId ++
+    ",\"createdAt\":" ++ toString script.entry.createdAt ++
+    ",\"source\":" ++ jsonString script.entry.source.toDefraDB ++
+    ",\"policy\":" ++ jsonString script.entry.policy.toDefraDB ++
+    ",\"queueKey\":" ++ optionalNatJson script.entry.queueKey ++
+    ",\"queuedAfter\":" ++ optionalNatJson script.entry.queuedAfter ++ "}" ++
+    ",\"interruptAt\":" ++ optionalNatJson script.interruptAt ++
+    ",\"preparedCandidate\":" ++ candidate.getD "null" ++
+    ",\"capture\":{\"agentDid\":" ++ toString key.agentDid ++
+    ",\"sessionId\":" ++ toString key.sessionId ++
+    ",\"requestDocId\":" ++ toString key.requestId ++
+    ",\"turnIndex\":" ++ toString key.turnIndex ++
+    ",\"attempt\":" ++ toString key.attempt ++
+    ",\"bodyToken\":" ++ toString script.capture.request.value ++
+    ",\"priorBodyToken\":" ++ optionalNatJson (script.capture.priorBinding.map (·.value)) ++ "}" ++
+    ",\"lifecycleState\":" ++ jsonString witness.lifecycleState ++
+    ",\"admissionVisible\":" ++ boolString witness.admissionVisible ++
+    ",\"canonicalAuthoredCount\":" ++ toString witness.canonicalAuthoredCount ++
+    ",\"providerSendPermitted\":" ++ boolString witness.providerSendPermitted ++ "}"
 
 private def streamsJson (streams : CanonicalOutput.Streams) : String :=
   jsonArray (streams.map fun stream => "{\"declaration\":" ++ declarationJson stream.1 ++

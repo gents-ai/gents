@@ -43,21 +43,24 @@ fn pending_user_turn_cases_match_lean_table() {
 #[test]
 fn queued_steering_traces_are_derived_from_connected_owners() {
     let cases = lean_queued_steering_trace_cases();
-    assert_eq!(cases.len(), 2);
-    let interrupted = &cases[0];
-    assert_eq!(interrupted.lifecycle_state, "interrupted");
-    assert!(interrupted.admission_visible);
-    assert_eq!(interrupted.canonical_authored_count, 0);
-    assert_eq!(interrupted.request_id, 11);
-    assert_eq!(interrupted.request_doc_id, 101);
-    assert_eq!(interrupted.content_token, 501);
-    let published = &cases[1];
-    assert_eq!(published.lifecycle_state, "processing");
-    assert!(!published.admission_visible);
-    assert_eq!(published.canonical_authored_count, 1);
-    assert_eq!(published.request_id, interrupted.request_id);
-    assert_eq!(published.request_doc_id, interrupted.request_doc_id);
-    assert_eq!(published.content_token, interrupted.content_token);
+    assert_eq!(
+        cases.len(),
+        8,
+        "the connected owner traces must be exported"
+    );
+    for case in cases {
+        assert_eq!(case.request_id, case.entry.request_id, "{}", case.name);
+        assert_eq!(
+            case.capture.request_doc_id, case.request_doc_id,
+            "{}",
+            case.name
+        );
+        assert!(
+            !case.actions.is_empty(),
+            "{} has no generated script",
+            case.name
+        );
+    }
 }
 
 #[test]

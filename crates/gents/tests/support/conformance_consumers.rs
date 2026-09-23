@@ -126,6 +126,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "pending_user_turn_cases_match_lean_table",
         },
         ConformanceConsumer::RustTest {
+            id: "lifecycle::queue::tests::steering::generated_pending_steering_terminals_retain_signed_admission_without_output",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/queue/tests/steering.rs",
+            module_path: "lifecycle::queue::tests::steering",
+            function: "generated_pending_steering_terminals_retain_signed_admission_without_output",
+        },
+        ConformanceConsumer::RustTest {
+            id: "agent::loop_stream::tests::generated_authored_input_is_durable_before_provider_stream_entry",
+            package: "gents",
+            source_path: "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",
+            module_path: "agent::loop_stream::tests",
+            function: "generated_authored_input_is_durable_before_provider_stream_entry",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/budgeting.rs",

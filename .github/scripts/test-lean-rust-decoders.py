@@ -69,6 +69,13 @@ class DecoderTests(unittest.TestCase):
         self.assertIn("unknown field `extra`", "\n".join(
             self.errors(lambda case: case.__setitem__("extra", 1))))
 
+    def test_camel_case_variant_names(self):
+        self.items = decoders.parse_items(RUST.replace('"snake_case"', '"camelCase"'))
+        payload = copy.deepcopy(VALID)
+        payload["cases"][0]["steps"][0]["operation"] = "renewLease"
+        self.assertEqual(decoders.validate(self.items, payload, GROUPS), [])
+        self.assertIn("unknown variant `renew_lease`", "\n".join(self.errors()))
+
     def test_missing_required_field_rejected(self):
         self.assertIn("missing field `name`", "\n".join(
             self.errors(lambda case: case.pop("name"))))

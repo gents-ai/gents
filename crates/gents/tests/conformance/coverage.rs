@@ -503,6 +503,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "RequestExecutionLeaseTraceCases".to_string(),
         ));
     }
+    if !snapshot.queued_steering_trace_cases.is_empty() {
+        emitted.insert((
+            "queued_steering_trace_cases".into(),
+            "QueuedSteeringTraceCases".into(),
+        ));
+    }
+    if !snapshot.queued_steering_guard_cases.is_empty() {
+        emitted.insert((
+            "queued_steering_guard_cases".into(),
+            "QueuedSteeringGuardCases".into(),
+        ));
+    }
     if !snapshot.provider_eof_cases.is_empty() {
         emitted.insert((
             "provider_eof_cases".to_string(),
