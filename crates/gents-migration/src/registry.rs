@@ -582,6 +582,21 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::EVAL_DEFINITION,
         "bafyreie2n4xfxrbadduyjodpb2g5moodnyzc4ihqmjeokckkmah6yqxuqi"
     ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_RUN_NAME,
+        gents_protocol::schemas::EVAL_RUN,
+        "bafyreid6ovsdkyjzsmi2uetxhpxvpv7wtexxzf53gdacvtswg5enpmz434"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_TRIAL_NAME,
+        gents_protocol::schemas::EVAL_TRIAL,
+        "bafyreidz3fglzddswftftr3ywj3s2kvkfhziyaaz6ac5v7qib63izz62ku"
+    ),
+    baseline_entry!(
+        gents_protocol::schemas::EVAL_VERDICT_NAME,
+        gents_protocol::schemas::EVAL_VERDICT,
+        "bafyreihws7qjvg343nfbbsdyublcowmk3f5lqieruniy3gze7wykbtsjfy"
+    ),
 ];
 
 /// Future schema evolution starts here, after the canonical baseline lands.
