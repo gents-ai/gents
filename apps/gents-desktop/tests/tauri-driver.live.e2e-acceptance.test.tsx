@@ -247,9 +247,9 @@ describeLive("Tauri app native e2e acceptance (live fixture runtime)", () => {
         `timeline assistant messages missing sentinel: ${JSON.stringify(assistantTexts)}`,
       ).toBe(true);
       expect(session.pendingTurn ?? null).toBeNull();
-      expect(
-        session.timelineItems.some((item) => item.kind === "liveAssistant"),
-      ).toBe(false);
+      expect(session.timelineItems.some((item) => item.kind === "liveAssistant")).toBe(
+        false,
+      );
 
       // (7) Session reload: re-fetch the session through the same adapter
       // path the UI uses on reload and re-drive the UI into the session.

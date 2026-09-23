@@ -52,9 +52,7 @@ export function useDesktopClientLifecycle({
     ? "checking-managed-server"
     : "loading-configuration";
   const startupPhaseRef = useRef<DesktopStartupPhase>(initialStartupPhase);
-  const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(
-    null,
-  );
+  const startClientInFlight = useRef<Promise<DesktopClientSnapshot> | null>(null);
   const initializationInFlight = useRef<Promise<void> | null>(null);
   const [snapshot, setSnapshot] = useState<DesktopClientSnapshot | null>(null);
   const snapshotPublicationRef = useRef<
@@ -174,7 +172,9 @@ export function useDesktopClientLifecycle({
               setStartupPhase("managed-server-error");
               return;
             } catch (previewError) {
-              setError(`${String(error)} Reset inspection failed: ${String(previewError)}`);
+              setError(
+                `${String(error)} Reset inspection failed: ${String(previewError)}`,
+              );
             }
           }
         }

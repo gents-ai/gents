@@ -154,9 +154,16 @@ const clientSourcePath = join(
   "packages/gents-desktop-client/src/client.ts",
 );
 const clientSource = readFileSync(clientSourcePath, "utf8");
-const clientPackageVersion = clientSource.match(
-  /export const PACKAGE_VERSION = "([^"]+)";/,
+const fingerprintPath = join(
+  root,
+  "packages/gents-desktop-client/src/generated/BridgeContractFingerprint.ts",
+);
+const clientPackageVersion = readFileSync(fingerprintPath, "utf8").match(
+  /export const BRIDGE_PACKAGE_VERSION = "([^"]+)";/,
 )?.[1];
+if (!/export const PACKAGE_VERSION = BRIDGE_PACKAGE_VERSION;/.test(clientSource)) {
+  failures.push(`${relative(root, clientSourcePath)} must use the generated bridge package version`);
+}
 if (clientPackageVersion !== workspaceVersion) {
   failures.push(
     `${relative(root, clientSourcePath)} PACKAGE_VERSION ${clientPackageVersion ?? "<missing>"} != ${workspaceVersion}`,

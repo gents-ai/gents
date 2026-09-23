@@ -86,8 +86,7 @@ describeLive("Tauri app live interrupt flow", () => {
               (item) => item.kind === "liveAssistant",
             );
             expect(
-              (retained?.content ?? "").length +
-                (retained?.reasoning ?? "").length,
+              (retained?.content ?? "").length + (retained?.reasoning ?? "").length,
             ).toBeGreaterThan(0);
           }
           logTurn(`interrupt latched: cause=${cancelCause.cause}`);

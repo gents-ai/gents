@@ -20,8 +20,7 @@ function deferred<T>() {
 
 function usePeerRoute(
   api: DesktopApiAdapter,
-  ensureDesktopClientStarted = async () =>
-    ({ client: {} }) as DesktopClientSnapshot,
+  ensureDesktopClientStarted = async () => ({ client: {} }) as DesktopClientSnapshot,
 ) {
   const [agent, setAgent] = useState<string | null>("agent-a");
   const [behavior, setBehavior] = useState<string | null>("behavior-a");

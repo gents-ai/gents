@@ -110,7 +110,9 @@ export function StartupScreen({
                   />
                   <span>
                     Archive this exact managed home and initialize a new local database:
-                    <code className="block break-all">{managedServerReset.managedHome}</code>
+                    <code className="block break-all">
+                      {managedServerReset.managedHome}
+                    </code>
                   </span>
                 </label>
                 <button
