@@ -113,3 +113,52 @@ token. The marker is not a document and carries no state; a remote host cannot s
 
 Live scorecard and watcher, retention TTLs, a richer compare with per-stage breakdowns (spec 4b).
 Remote cancel (2b). The LLM proposer behind `optimization run` (M7).
+
+## Spec 4b (approved 2026-09-22): watcher, retention, richer compare
+
+Decided with three further decisions; delivered by M4 as two more PRs so M4 is complete in one pass.
+
+| Question | Decision | Why |
+|---|---|---|
+| Watcher source | The derived report for finished slots plus an ephemeral `<run dir>/progress.json` the loop rewrites when a slot starts a stage or ends (`{slot, attempt, stage_id, started_at}` per in-flight slot); never evidence; the watcher shows finished slots only when it is absent | In-flight state lives in the trial homes, which a second process must not open; one writer, one reader, no daemon |
+| Retention | `gents eval gc [--older-than 14d] [--definition ID] [--dry-run]`: deletes run directories (never documents) of finished, non-running runs older than the threshold, skipping runs an optimization job references; nothing deletes on its own; `eval list` shows on-disk size | Deleting evidence must be an operator act, and M5's calibration must not lose homes to a side effect |
+| Richer compare | `compare --by check` and `--by stage` aggregate the paired difference by check name or stage id across cases; `compare --case ID` prints that case's trials side by side with each verdict; all pure functions over the existing `Comparison` | Shows which check a candidate moved without a new serialization |
+
+### 6. The watcher
+
+`gents eval watch <run_id> [--interval 2s]` re-renders every interval: the `show` table from
+`report::build`, then one line per in-flight slot from `progress.json` (stage, elapsed). The loop
+writes `progress.json` atomically (temp file and rename) at stage start, stage end and slot end, and
+removes the slot's entry at completion. The file is created by `run` and `resume`, never read by
+the runner, and deleted by `rm` and `gc` with the directory. It is not an anchor, not a digest
+input, and not a document.
+
+### 7. Retention
+
+`eval gc` lists candidate runs (finished: no Planned or Abandoned slots; not referenced by an
+`OptimizationJob` journal as baseline, checkpoint or round evidence; older than `--older-than` by
+`created_at`), prints each with its on-disk size, and with no `--dry-run` deletes their run
+directories, then prints bytes reclaimed. `eval list` gains a size column computed from the run
+directory. No TTL is stored anywhere.
+
+### 8. Compare breakdowns
+
+`report::by_check(&Comparison) -> Vec<CheckDiff { check, cases, mean_diff_bp, improved, tied,
+worsened }>`, `report::by_stage(...)` likewise by `stage_id`, and `report::case_view(&Comparison,
+case_id) -> CaseView` with the paired trials and each verdict's kind, score and reason code on both
+sides. The `Comparison` JSON carries the per-verdict data these need; `--json` on the breakdown
+flags prints the aggregated structure.
+
+### 9. One runner fix carried by M4's PR 1 (from M6b ruling T35-1)
+
+An abandoned attempt (null completion: crash or cancel) does not count toward `max_infra_retries`;
+that cap applies to NotEvidence completions only. A separate bound of ten abandoned attempts per
+slot guards a crash loop. Without this, a mid-run cancel under `max_infra_retries: 0` lost the slot's
+pair for good, and resume determinism held only at run boundaries.
+
+### Phasing, extended
+
+| PR | Branch | Content |
+|---|---|---|
+| 4 | `eval/53-watch-gc` on `eval/52-optimization-cli` | `progress.json` in the loop; `eval watch`; `eval gc` and the size column; tests |
+| 5 | `eval/54-compare-breakdowns` on `eval/53-watch-gc` | `by_check`, `by_stage`, `case_view` and the flags; tests |
