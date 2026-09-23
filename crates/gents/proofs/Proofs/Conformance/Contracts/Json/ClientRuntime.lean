@@ -42,6 +42,7 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
 def queuedSteeringGuardJson (witness : QueuedSteering.GuardObservation) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"prefixAdmitted\":" ++ boolString witness.prefixAdmitted ++ ","
     ++ "\"admitted\":" ++ boolString witness.admitted
     ++ "}"
 
@@ -197,6 +198,7 @@ private def queuedSteeringActionJson : QueuedSteering.Action → String
   | .enqueue => jsonString "enqueue"
   | .claimWithoutBegin => jsonString "claimWithoutBegin"
   | .claimAndBegin => jsonString "claimAndBegin"
+  | .latchInterrupt => jsonString "latchInterrupt"
   | .terminate .interruptBeforeClaim => jsonString "interruptBeforeClaim"
   | .terminate .admissionReject => jsonString "admissionReject"
   | .terminate .failBeforeStream => jsonString "failBeforeStream"
@@ -242,6 +244,8 @@ def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String
     ",\"bodyToken\":" ++ toString script.capture.request.value ++
     ",\"priorBodyToken\":" ++ optionalNatJson (script.capture.priorBinding.map (·.value)) ++ "}" ++
     ",\"lifecycleState\":" ++ jsonString witness.lifecycleState ++
+    ",\"acceptedInput\":" ++ boolString witness.acceptedInput ++
+    ",\"queueActive\":" ++ optionalNatJson witness.queueActive ++
     ",\"admissionVisible\":" ++ boolString witness.admissionVisible ++
     ",\"canonicalAuthoredCount\":" ++ toString witness.canonicalAuthoredCount ++
     ",\"providerSendPermitted\":" ++ boolString witness.providerSendPermitted ++ "}"

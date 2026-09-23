@@ -54,7 +54,8 @@ def canonicalAuthoredCount (w : World) : Nat :=
           message.header.publication == prepared.message.header.publication).length
   | _, _ => 0
 
-def admissionVisible (w : World) : Bool := projectPendingUserTurn (hasExactAuthoredOwner w)
+def admissionVisible (w : World) : Bool :=
+  (w.accepted == some w.input) && projectPendingUserTurn (hasExactAuthoredOwner w)
 
 def enqueue? (w : World) (entry : SessionQueue.QueueEntry) : Option World :=
   if entry.requestId != w.input.requestId || w.request.state != .pending then none
@@ -73,7 +74,73 @@ def terminateBeforeStart? (w : World) (action : RequestContext.Action) : Option 
   if w.execution.isSome then none
   let request ← RequestContext.step? w.request action
   if !decide (isTerminal request.state) then none
-  pure { w with request }
+  let queue ← if w.queue.active == some w.input.requestId then
+      SessionQueue.step? w.queue .finishActive else some w.queue
+  pure { w with request, queue }
+
+/-! Once the owned execution has begun, a preparation failure or interruption
+is a real terminal commit followed by the existing queue handoff. No authored
+header is invented for the input accepted at admission. -/
+private structure OwnedTerminalHandoff where
+  request : RequestContext
+  execution : CanonicalOutput.Execution.World
+  outcome : RequestExecutionLease.Outcome
+  queueCleared : execution.queue.active = none
+
+private def ownedTerminalHandoff? (w : World) (actor now generation : Nat)
+    (action : RequestContext.Action) : Option OwnedTerminalHandoff := do
+  if w.prepared.isSome then none
+  let outcome ← match action with
+    | .fail => some RequestExecutionLease.Outcome.failed
+    | .interruptProcessing => some RequestExecutionLease.Outcome.interrupted
+    | _ => none
+  let request ← RequestContext.step? w.request action
+  let current ← w.execution
+  if current.queue != w.queue || current.requestId != w.input.requestDocId then none
+  let released ← Gate.scheduling current actor .release
+  let held ← Gate.acquire released actor true
+  let terminal ← Gate.commit held actor now (.terminalize generation outcome .noMessage)
+  let finishReleased ← Gate.scheduling terminal actor .release
+  let finishHeld ← Gate.acquire finishReleased actor true
+  match hfinish : Handover.finishAndAcknowledge finishHeld actor with
+  | none => none
+  | some finished =>
+      if finished.outcome != outcome then none
+      else some ⟨request, finished.state, outcome,
+        (Handover.successful_finish_clears_claim_control finishHeld finished actor hfinish).2⟩
+
+def terminateOwnedBeforePublication? (w : World) (actor now generation : Nat)
+    (action : RequestContext.Action) : Option World := do
+  let handoff ← ownedTerminalHandoff? w actor now generation action
+  -- Queue clearance is proved by Handover. The two lease/request equalities are
+  -- explicit coherence checks at this composition boundary, not new transitions.
+  if handoff.request.state != handoff.outcome.requestState ||
+      handoff.execution.lease.request != handoff.request.state ||
+      handoff.execution.lease.lease != .terminal generation handoff.outcome then none
+  pure { w with
+    request := handoff.request,
+    execution := some (handoff.execution),
+    queue := handoff.execution.queue }
+
+theorem owned_terminal_before_publication_retains_input_and_finishes_queue
+    {before after : World} {actor now generation : Nat} {action : RequestContext.Action}
+    (hp : before.prepared = none)
+    (ha : before.accepted = some before.input)
+    (ht : terminateOwnedBeforePublication? before actor now generation action = some after) :
+    after.input = before.input ∧ after.accepted = some before.input ∧
+      after.prepared = none ∧ after.queue.active = none ∧
+      ∃ execution outcome, after.execution = some execution ∧
+        execution.lease.lease = .terminal generation outcome ∧
+        execution.lease.request = after.request.state ∧
+        after.request.state = outcome.requestState := by
+  unfold terminateOwnedBeforePublication? at ht
+  cases hh : ownedTerminalHandoff? before actor now generation action with
+  | none => simp [hh] at ht
+  | some handoff =>
+      simp [hh] at ht
+      rcases ht with ⟨⟨⟨hrequest, hleaseRequest⟩, hleaseTerminal⟩, rfl⟩
+      exact ⟨rfl, ha, hp, handoff.queueCleared, handoff.execution, handoff.outcome,
+        rfl, hleaseTerminal, hleaseRequest, hrequest⟩
 
 def claimWithoutBegin? (w : World) : Option World := do
   if w.execution.isSome then none
@@ -225,17 +292,26 @@ theorem terminal_before_start_retains_admission_input
   | none => simp [hs] at ht
   | some request =>
       by_cases hterm : isTerminal request.state
-      · simp [hs, hterm] at ht
-        cases ht
-        simp [hterm, hx, hp, ha, admissionVisible, canonicalAuthoredCount,
-          hasExactAuthoredOwner,
-          projectPendingUserTurn]
+      · by_cases hactive : before.queue.active = some before.input.requestId
+        · simp [hs, hterm, hactive] at ht
+          cases hqueue : SessionQueue.step? before.queue .finishActive with
+          | none => simp [hqueue] at ht
+          | some queue =>
+              simp [hqueue] at ht
+              cases ht
+              simp [hterm, hx, hp, ha, admissionVisible, canonicalAuthoredCount,
+                hasExactAuthoredOwner, projectPendingUserTurn]
+        · simp [hs, hterm, hactive] at ht
+          cases ht
+          simp [hterm, hx, hp, ha, admissionVisible, canonicalAuthoredCount,
+            hasExactAuthoredOwner, projectPendingUserTurn]
       · simp [hs, hterm] at ht
 
 inductive Action where
   | enqueue
   | claimWithoutBegin
   | claimAndBegin
+  | latchInterrupt
   | terminate (transition : RequestContext.Action)
   | publish
   | prepareFails
@@ -260,6 +336,8 @@ structure TraceObservation where
   requestDocId : Nat
   contentToken : Nat
   lifecycleState : String
+  acceptedInput : Bool
+  queueActive : Option RequestId
   admissionVisible : Bool
   canonicalAuthoredCount : Nat
   providerSendPermitted : Bool
@@ -344,7 +422,13 @@ private def runAction (script : Script) (w : World) : Action → Option World
   | .claimAndBegin => do
       let owner ← begunOwner? w
       claimAndBegin? w 91 owner
-  | .terminate transition => terminateBeforeStart? w transition
+  -- An external durable interrupt intent becomes observable at this point.
+  -- RequestContext owns the subsequent legal terminal transition.
+  | .latchInterrupt =>
+      some { w with request := { w.request with interruptRequestedAt := some w.request.currentTime } }
+  | .terminate transition =>
+      if w.execution.isSome then terminateOwnedBeforePublication? w 1 10 91 transition
+      else terminateBeforeStart? w transition
   | .publish => publishAtExecutionStart? w 1 10 91 script.candidate
   | .prepareFails =>
       if script.candidate.isNone &&
@@ -363,7 +447,8 @@ private def runScript (script : Script) : Option World :=
 private def observe (script : Script) : Option TraceObservation := do
   let w ← runScript script
   pure ⟨script.name, script, w.input.requestId, w.input.requestDocId,
-    w.input.contentToken, w.request.state.toDefraDB, admissionVisible w,
+    w.input.contentToken, w.request.state.toDefraDB,
+    w.accepted == some w.input, w.queue.active, admissionVisible w,
     canonicalAuthoredCount w, w.lastSendAllowed.getD false⟩
 
 private def fixture (name : String) (actions : List Action)
@@ -395,7 +480,13 @@ def publicationHandoffObservation : Option TraceObservation :=
 
 def preparationFailureObservation : Option TraceObservation :=
   observe (fixture "queued_steering_failed_preparation_cannot_publish_or_send"
-    [.enqueue, .claimAndBegin, .prepareFails, .capture, .send] none none)
+    [.enqueue, .claimAndBegin, .prepareFails, .terminate .fail, .capture, .send] none none)
+
+def interruptedDuringPreparationObservation : Option TraceObservation :=
+  observe (fixture "queued_steering_interrupted_during_preparation_retains_input_without_transcript"
+    [.enqueue, .claimAndBegin, .prepareFails, .latchInterrupt,
+      .terminate .interruptProcessing, .capture, .send]
+    none none)
 
 def captureConflictObservation : Option TraceObservation :=
   observe (fixture "queued_steering_conflicting_capture_blocks_send"
@@ -408,6 +499,7 @@ def publicationReplayObservation : Option TraceObservation :=
 
 structure GuardObservation where
   name : String
+  prefixAdmitted : Bool
   admitted : Bool
   deriving DecidableEq, Repr
 
@@ -417,18 +509,23 @@ private def wrongHead : SessionQueue.QueueEntry :=
 
 def wrongHeadObservation : GuardObservation :=
   let withWrongHead := { base none with queue := (base none).queue.appendPending wrongHead }
+  let queued? := enqueue? withWrongHead entry
   let admitted := (do
-    let queued ← enqueue? withWrongHead entry
+    let queued ← queued?
     let owner ← begunOwner? queued
     claimAndBegin? queued 91 owner).isSome
-  { name := "queued_steering_cannot_claim_a_different_queue_head", admitted }
+  { name := "queued_steering_cannot_claim_a_different_queue_head",
+    prefixAdmitted := queued?.isSome, admitted }
 
 def interruptedPublishObservation : GuardObservation :=
-  let admitted := do
+  let interrupted? := do
     let queued ← enqueue? (base (some 10)) entry
-    let interrupted ← interruptBeforeClaim? queued
+    interruptBeforeClaim? queued
+  let admitted := do
+    let interrupted ← interrupted?
     publishAtExecutionStart? interrupted 1 10 91 (some preparedInput)
-  { name := "interrupted_queued_steering_cannot_publish", admitted := admitted.isSome }
+  { name := "interrupted_queued_steering_cannot_publish",
+    prefixAdmitted := interrupted?.isSome, admitted := admitted.isSome }
 
 def guardObservations : List GuardObservation :=
   [wrongHeadObservation, interruptedPublishObservation]
@@ -436,12 +533,13 @@ def guardObservations : List GuardObservation :=
 def traceObservations : List TraceObservation :=
   match interruptedBeforeClaimObservation, admissionRejectedObservation,
       claimedFailureObservation, beforePublicationObservation, publicationHandoffObservation,
-      preparationFailureObservation, captureConflictObservation, publicationReplayObservation with
+      preparationFailureObservation, interruptedDuringPreparationObservation,
+      captureConflictObservation, publicationReplayObservation with
   | some interrupted, some rejected, some failed, some before, some published,
-      some preparationFailed, some captureBlocked, some replayed =>
+      some preparationFailed, some interruptedPreparation, some captureBlocked, some replayed =>
       [interrupted, rejected, failed, before, published, preparationFailed,
-        captureBlocked, replayed]
-  | _, _, _, _, _, _, _, _ => []
+        interruptedPreparation, captureBlocked, replayed]
+  | _, _, _, _, _, _, _, _, _ => []
 
 theorem interrupted_trace_is_derived : interruptedBeforeClaimObservation.isSome = true := by native_decide
 theorem publication_trace_is_derived : publicationHandoffObservation.isSome = true := by native_decide
@@ -449,20 +547,40 @@ theorem admission_rejection_trace_is_derived : admissionRejectedObservation.isSo
 theorem claimed_failure_trace_is_derived : claimedFailureObservation.isSome = true := by native_decide
 theorem before_publication_trace_is_derived : beforePublicationObservation.isSome = true := by native_decide
 theorem preparation_failure_trace_is_derived : preparationFailureObservation.isSome = true := by native_decide
+theorem interrupted_preparation_trace_is_derived :
+    interruptedDuringPreparationObservation.isSome = true := by native_decide
 theorem capture_conflict_trace_is_derived : captureConflictObservation.isSome = true := by native_decide
 theorem publication_replay_trace_is_derived : publicationReplayObservation.isSome = true := by native_decide
-theorem eight_traces_exported : traceObservations.length = 8 := by native_decide
+theorem nine_traces_exported : traceObservations.length = 9 := by native_decide
 theorem prepublication_send_is_rejected :
     (beforePublicationObservation.map (·.providerSendPermitted)) = some false := by native_decide
 theorem published_send_is_permitted :
     (publicationHandoffObservation.map (·.providerSendPermitted)) = some true := by native_decide
 theorem failed_preparation_blocks_send :
     (preparationFailureObservation.map (·.providerSendPermitted)) = some false := by native_decide
+theorem failed_preparation_retains_input_after_terminal_commit :
+    (preparationFailureObservation.map fun observation =>
+      (observation.lifecycleState, observation.acceptedInput,
+        observation.queueActive, observation.admissionVisible,
+        observation.canonicalAuthoredCount)) = some ("failed", true, none, true, 0) := by native_decide
+theorem interrupted_preparation_retains_input_after_terminal_commit :
+    (interruptedDuringPreparationObservation.map fun observation =>
+      (observation.lifecycleState, observation.acceptedInput,
+        observation.queueActive, observation.admissionVisible,
+        observation.canonicalAuthoredCount)) = some ("interrupted", true, none, true, 0) := by native_decide
+theorem claimed_failure_finishes_queue_and_retains_input :
+    (claimedFailureObservation.map fun observation =>
+      (observation.lifecycleState, observation.acceptedInput,
+        observation.queueActive, observation.admissionVisible,
+        observation.canonicalAuthoredCount)) = some ("failed", true, none, true, 0) := by native_decide
 theorem capture_conflict_blocks_send :
     (captureConflictObservation.map (·.providerSendPermitted)) = some false := by native_decide
 theorem exact_replay_does_not_duplicate_authored_owner :
     (publicationReplayObservation.map (·.canonicalAuthoredCount)) = some 1 := by native_decide
 theorem wrong_head_is_rejected : wrongHeadObservation.admitted = false := by native_decide
 theorem interrupted_publish_is_rejected : interruptedPublishObservation.admitted = false := by native_decide
+theorem wrong_head_prefix_is_reachable : wrongHeadObservation.prefixAdmitted = true := by native_decide
+theorem interrupted_publish_prefix_is_reachable :
+    interruptedPublishObservation.prefixAdmitted = true := by native_decide
 
 end QueuedSteering

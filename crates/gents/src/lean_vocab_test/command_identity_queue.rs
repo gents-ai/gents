@@ -87,6 +87,7 @@ pub(crate) struct LeanPendingUserTurnCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanQueuedSteeringTraceCase {
     pub(crate) name: String,
     pub(crate) actions: Vec<LeanQueuedSteeringAction>,
@@ -104,6 +105,10 @@ pub(crate) struct LeanQueuedSteeringTraceCase {
     pub(crate) capture: LeanQueuedSteeringCapture,
     #[serde(rename = "lifecycleState")]
     pub(crate) lifecycle_state: String,
+    #[serde(rename = "acceptedInput")]
+    pub(crate) accepted_input: bool,
+    #[serde(rename = "queueActive")]
+    pub(crate) queue_active: Option<u64>,
     #[serde(rename = "admissionVisible")]
     pub(crate) admission_visible: bool,
     #[serde(rename = "canonicalAuthoredCount")]
@@ -118,6 +123,7 @@ pub(crate) enum LeanQueuedSteeringAction {
     Enqueue,
     ClaimWithoutBegin,
     ClaimAndBegin,
+    LatchInterrupt,
     InterruptBeforeClaim,
     AdmissionReject,
     FailBeforeStream,
@@ -179,8 +185,11 @@ pub(crate) struct LeanQueuedSteeringCapture {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanQueuedSteeringGuardCase {
     pub(crate) name: String,
+    #[serde(rename = "prefixAdmitted")]
+    pub(crate) prefix_admitted: bool,
     pub(crate) admitted: bool,
 }
 

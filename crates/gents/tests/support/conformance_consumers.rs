@@ -133,6 +133,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_pending_steering_terminals_retain_signed_admission_without_output",
         },
         ConformanceConsumer::RustTest {
+            id: "lifecycle::queue::tests::steering::generated_owned_prepublication_terminals_retain_signed_admission_without_output",
+            package: "gents",
+            source_path: "crates/gents/src/lifecycle/queue/tests/steering.rs",
+            module_path: "lifecycle::queue::tests::steering",
+            function: "generated_owned_prepublication_terminals_retain_signed_admission_without_output",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_authored_input_is_durable_before_provider_stream_entry",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/request_assembly.rs",

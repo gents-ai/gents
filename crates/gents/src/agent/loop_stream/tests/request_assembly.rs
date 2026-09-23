@@ -169,10 +169,9 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
     .expect("provider stream did not reach the authored-input handoff");
     assert_eq!(collected.error, None, "{}", case.name);
     let sent = model.seen_requests().await;
-    assert_eq!(sent.len(), 1, "{}", case.name);
     assert_eq!(
-        !sent.is_empty(),
-        case.provider_send_permitted,
+        sent.len(),
+        usize::from(case.provider_send_permitted),
         "{}",
         case.name
     );
