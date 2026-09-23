@@ -233,3 +233,18 @@ Side branches (off the chain): `test/monitor-eval-cases` `46962dfab` on 6; `feat
 failures (one `e2e_triggers` runtime-snapshot timeout on the first run, passed on rerun: a flake to
 file); `-p gents-cli` only the 20 known environmental; conformance 269/269; workspace check; `lake
 build` at the eval-core and policy tips. Report: `.superpowers/sdd/mvp-chain/report.md`.
+
+## The MVP stack, squashed (2026-09-23; six PRs, 25 commits; every commit tree identical to its former PR; tip tree identical to `b43d5085f`)
+
+| # | Branch | Head | Commits | Parent |
+|---|---|---|---|---|
+| 1 | `feat/guarded-publication` | `00043f57d` | 3 | `main` |
+| 2 | `feat/eval-contract` | `9a987a43d` | 6 | 1 |
+| 3 | `feat/eval-runner` | `df979f0bd` | 4 | 2 |
+| 4 | `feat/optimization-policy` | `0f38ea41e` | 3 | 3 |
+| 5 | `feat/optimization-driver` | `4ae0ea4a9` | 4 | 4 |
+| 6 | `feat/eval-cli` | `cfc7eae7e` | 5 | 5 |
+| side | `test/monitor-findings-eval` | `e33f47bb2` | 3 | 3 (the monitor pre-work unit is superseded by the definition unit and dropped) |
+
+The 29 former branches are kept locally as `archive/<old name>` and deleted on the remote at push.
+Each squashed commit's body lists the subjects it folds. Report: `.superpowers/sdd/mvp-chain/squash-report.md`.
