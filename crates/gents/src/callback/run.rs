@@ -600,6 +600,12 @@ async fn deny(
     invocation: &mut CallbackInvocationDoc,
     reason: &str,
 ) -> Result<()> {
+    tracing::warn!(
+        invocation_id = %invocation.invocation_id,
+        callback_id = %invocation.callback_id,
+        %reason,
+        "callback invocation denied"
+    );
     apply_planner_deny(invocation, reason);
     if !update_invocation(node, invocation, None).await? {
         anyhow::bail!(
