@@ -36,24 +36,44 @@ Orchestrator directions (2026-09-22 addendum):
 
 Orchestrator rulings on the planning draft (`.superpowers/sdd/m4-plan-rulings.md`), applied:
 
-- **U1 — `gents optimization rm <job_id> [--force]`** (Task 12a) deletes `<origin.jobs_dir>/<job_id>/` and refuses without `--force` unless the job is finalized, promoted, reverted or failed; documents stay. `eval gc --jobs` (Task 14) also removes such jobs' directories older than the threshold.
+- **U1 — `gents optimization rm <job_id> [--force]`** (Task 12a) deletes `<origin.jobs_dir>/<job_id>/`; which jobs it removes without `--force` is ruling F2's set. `eval gc --jobs` (Task 14) removes the same set's directories older than the threshold.
 - **U2 — Freeze materializes the definition** (Task 2a): `<run dir>/definition.json`, verified by digest on resume; `report::store` builds from it and reports `definition_changed` from the installed one (Task 3); runs without the file fall back to the installed definition only while it matches.
 - **U3 — `optimization revert <job_id> --digest D`**; spec amended (D11).
-- **U4 — `progress.json` entries carry `pid` and `written_at`** (Task 6), refreshed on the loop's timer (Task 6a). Neither `nix` nor `sysinfo` is a dependency (`libc` is, in `gents` only, and the ruling does not list it), so `eval watch` marks an entry stale by age alone: `written_at` older than three watch intervals (Task 13).
+- **U4 — `progress.json` entries carry `pid` and `written_at`** (Task 6), refreshed on the loop's timer (Task 6a); liveness by pid per ruling F3 (`host_alive`), staleness by age as the fallback (Task 13).
 - **U5 — The marker is seen mid-batch** on the `marker_poll` timer inside the batch `select!` (Task 6a), with a test that a long trial is interrupted by a marker written mid-trial.
-- **U6 — Accepted:** the embedded path is covered by the canary and one CLI binary smoke test (Task 10a).
+- **U6 — Accepted:** the embedded path is covered by the canary and one CLI binary smoke test (Task 10c).
 - **U7 — Accepted:** the CLI fixture duplicates the crate-private harnesses; `commands/eval/testing.rs` names the files that move with it.
 - **U8 — `eval run` on an existing run id clears the marker as `resume` does**, in `runner::run` (Task 4).
 - **U9 — Spec wording amended:** `build`, `compare`, `by_*` are pure; `report::store` is the module's one I/O boundary beside `load_run_rows` (module docs in Tasks 1 and 3).
 - **U10 — Accepted for now:** `list` and `gc` build one report per run. Follow-up: a header-only projection.
 - **U11/U12 — Single base:** M6b's final `optimization/23-promote` tip; all five PRs stack on it; no cherry-picks ("The M4 base"; Task 1 Step 0 and Task 12 Step 0 re-verify).
-- **U13 — Accepted as inherited behavior**, noted in `eval run --registry`'s doc (Task 10).
+- **U13 — Accepted as inherited behavior**, noted in `eval run --registry`'s doc (Task 10b).
 - **D1, D2, D3, O1, D12 accepted.**
+
+Orchestrator rulings on the plan review (`.superpowers/sdd/m4-plan-review-rulings.md`), applied:
+
+- **F1 — `RunOutcome.cancelled`** (Task 4) is set when the token or the marker stopped the pass. The optimizer treats it after `execute_run` as "stopped, no decision" and returns the job `Running` (Task 4a, `driver.rs`). `eval cancel` on a run whose purpose is `optimization:<job>` proceeds and says the job stops at that run (Task 8). `eval run`'s stopped notice reads `cancelled` (Task 10b).
+- **F2 — Removable job states** are `NothingToPromote`, `Exhausted`, `Failed`, `Stale`, `Promoted`, `Reverted` (`optimization::references::removable`, Task 4b). `optimization rm` and `gc --jobs` keep a `ReadyToPromote` job; their tests remove a promoted-then-reverted one (Tasks 12a, 14). This closes the draft's R1.
+- **F3 — `host_alive(pid)`** via `libc::kill(pid, 0)` on unix, `true` elsewhere (Task 6); `is_fresh` combines it with age; the watcher's live test entry is this process (Task 13). This closes the draft's R2.
+- **F4 — The comparison seed is `decision_seed` over the distinct run ids** (Task 2); a 21-case test pins it to what `optimization show` computes (Task 2b).
+- **F5 — `optimization::evidence::totals`** is the one two-cell cost rule, called by `token_totals` and by `Comparison`; `CellReport.cell_usage` stores `evidence::cell_usage` (Tasks 1, 1b, 2).
+- **F6 — The backoff between passes** watches the marker on the `marker_poll` interval (Task 6a).
+- **F7 — "Finished" for `gc` and `rm` without `--force`** is `runner::plan(…)` empty and no fresh `progress.json` entry (`slots_owed`, `running_elsewhere`, `run_finished`, Task 6b; used in Tasks 8, 14). This widens spec 4b §7's and spec §2's "no Planned or Abandoned slots": a slot that spent its retry cap or its ten-abandonment bound owes nothing although the report shows it NotEvidence or Abandoned, and a run a live process is on is unfinished although the report may show no Planned slot.
+- **F8 — `eval rm` without `--force` refuses a run a non-removable job names** (`held_runs`, Task 4b; Task 8; CLI test in Task 12a). `optimization::references` moved into PR 1.
+- **F9 — A run frozen before `definition.json`** reports while the installed definition matches (test in Task 3).
+- **F10 — Split tasks:** 1 / 1b, 2 / 2b, 7 / 7b, 10 / 10b; each has its own test cycle. (The binary smoke test is now Task 10c.)
+- **F11 — `optimization/23-promote` @ `144be2916` matches Task 12's interfaces** ("The M4 base"); the draft's R6 is closed.
+- **F12 — No agent tool surface reaches the eval operator verbs** (test beside `the_model_facing_config_tool_has_no_optimization_surface`, Task 8).
+- **F13 — `--interval` refuses under 250 ms**; `gc --older-than` has its own parser that allows zero (Task 13).
+- **F14 — Default ids are `<definition>-<unix ms>-<4 random hex>`** (`default_id`, Task 10); `--run-id`/`--job-id` are how an operator gets idempotent reuse (Tasks 10b, 11).
+- **F15 — `resume` prints about the marker only after `thaw` let it run** (Task 10b).
+- **F16 — The heartbeat writes at most every `max(marker_poll, 250 ms)`** (Tasks 6, 6a).
+- `counted_slots` is at `evidence.rs:74` (Task 1b).
 
 Planning deviations, verified against the code at `e4f3373b5` (contained in `<M4-BASE>`):
 
 - **D1 — `build` takes the owner's run headers.** Spec §1 gives `build(run, trials, verdicts, definition)` but `EvalReport.exposure` counts other runs (`eval::scoring::exposure(runs: &[RunHeader], …)`), which that signature cannot see. The plan's signature is `build(run, trials, verdicts, definition, peers: &[RunHeader])`; `peers` includes the run itself.
-- **D2 — Additive report fields.** `SlotReport.counted: SlotScore` (the slot's pairing score, which `compare` needs and `SlotClass` cannot carry: an Abandoned slot may still have an earlier completed attempt); `CellReport.usage_trials` and `usage_missing` (the cost gate's missing-usage share); `Comparison.{baseline_run, baseline_cell, candidate_run, candidate_cell}` and four `#[serde(skip)]` fields holding the pairing state `with_policy` needs; `Comparison.mean_diff_bp` is `Option<i64>` (it is `decide`'s `mean_diff_bp`, `None` with no pairs or no common scale). PR 5 adds `SlotReport.verdicts` and `Comparison.trials` (spec 4b §8, "the `Comparison` JSON carries the per-verdict data"). `report_version` stays 1: every change is an added field.
+- **D2 — Additive report fields.** `SlotReport.counted: SlotScore` (the slot's pairing score, which `compare` needs and `SlotClass` cannot carry: an Abandoned slot may still have an earlier completed attempt); `CellReport.cell_usage` (M6b's `evidence::CellUsage`, now `Serialize`: the cost gate's tokens, counted trials and missing usage, ruling F5); `Comparison.{baseline_run, baseline_cell, candidate_run, candidate_cell}` and four `#[serde(skip)]` fields holding the pairing state `with_policy` needs; `Comparison.mean_diff_bp` is `Option<i64>` (it is `decide`'s `mean_diff_bp`, `None` with no pairs or no common scale). PR 5 adds `SlotReport.verdicts` and `Comparison.trials` (spec 4b §8, "the `Comparison` JSON carries the per-verdict data"). `report_version` stays 1: every change is an added field.
 - **D3 — The report reads the optimizer's pure statistics.** Spec §1 says `p_ppm` is `optimization::policy::permutation_p_ppm` over the pairs the policy would use. `permutation_p_ppm` takes scaled per-case differences whose scaling (`scaled_case_differences`) is private to `policy.rs`, so `compare` calls `decide(Mode::Improve, policy, &evidence, seed)` and reads `p_ppm`, `improved`, `tied`, `worsened` and `mean_diff_bp` from it; a test pins `p_ppm` to `permutation_p_ppm` on hand-computed differences. The seed is `optimization::evidence::decision_seed(&[baseline_run, candidate_run])`. The module doc in `report/mod.rs` that says "nothing in this module imports from `optimization`" is rewritten to "nothing here reads or writes an optimization document"; `optimization::policy` and `decision_seed` are pure.
 - **D4 — An Abandoned slot keeps the score of an earlier completed attempt.** The class follows the latest row (spec §1); the score follows the latest *completed* attempt through `report::evidence::counted_slots`, which is the selection the optimizer pairs on. Both are shown.
 - **D5 — `load_runs` lives in `eval::report::store`.** `eval::documents` has no list function and is frozen (standing rule 1). `store::load_runs` queries `EvalRun` for the owner's `run_id`s and calls the frozen `load_run` for each, so row decoding stays in one place.
@@ -65,7 +85,7 @@ Planning deviations, verified against the code at `e4f3373b5` (contained in `<M4
 - **D11 — `optimization revert <job_id> --digest D`** (ruling U3; the spec text is amended to match). M6b's `revert(access, owner, job_id, digest, by)` (ruling R6) confirms the promoted target digest.
 - **D12 — Output goes through `&mut dyn std::io::Write`.** Repository rule: `tracing`, never `println!`. Bodies write to the writer `dispatch` passes (a locked stdout); diagnostics go to `tracing`. Tests capture a `Vec<u8>`.
 - **D13 — Exit status.** A library refusal (`ReportRefused`, `FreezeRefused`, `AlreadyInvalidated`, `ProviderDown`, `JobRefused`, `PromoteRefused`) is re-raised with exactly its `Display` text (`surface_refusal`), and `main` exits 1. A malformed `--cell`, `--subject`, `--policy`, `--proposer`, `--split` or `--interval` is a clap value-parser error: exit 2. A usage problem only visible after reading documents (a multi-cell run with no `--baseline-cell`) exits 1.
-- **D14 — `eval gc` reads job references through a new `optimization::references`.** Spec 4b §7 needs every `OptimizationJob` journal's run ids; `optimization::job` has only `load_job` by id. A new file lists the owner's job ids and collects `RunStarted` and `Decided` run ids from each journal. It adds a file to M6b's module and edits none.
+- **D14 — Job references live in a new `optimization::references`** (Task 4b, in PR 1 by ruling F8): spec 4b §7 needs every `OptimizationJob` journal's run ids and `optimization::job` has only `load_job` by id. The file also holds `removable` (ruling F2) and `held_runs` (ruling F8); it adds a file to M6b's module and edits none.
 - **D15 — Breakdowns read verdict scores, not imputed slot scores.** `by_check` and `by_stage` pair a key only when both slots are paired by `pair_trials` (Scored or Unknown) and then compare each side's acceptance, weighted, scored verdicts for that check or stage; a verdict with no `score_bp` contributes nothing.
 
 ## Global Constraints
@@ -4877,25 +4897,18 @@ What was found in the CLI (`crates/gents-cli`, library crate `gents_server`):
 | `crates/gents-cli/src/commands/eval/testing.rs` | `#[cfg(test)]` launching-home fixture |
 | `crates/gents-cli/src/commands/pack/mod.rs` | `SubjectPack`, `resolve_subject_pack` |
 
-### Task 7: The `eval` module, `list`, `show` and `trial`
+### Task 7: The `eval` arguments, context and test fixture
 
 **Files:**
 - Modify: `crates/gents-cli/Cargo.toml` (after `tokio.workspace = true` in `[dependencies]` add `tokio-util.workspace = true`; the workspace root `Cargo.toml` already declares `tokio-util = "0.7"`)
-- Modify: `crates/gents-cli/src/cli/args.rs` (a `Command::Eval` variant after `Subagent`; new items appended before the final `#[cfg(test)]\nmod tests;`)
-- Modify: `crates/gents-cli/src/lib.rs` (`async_main`: one arm before `Command::NativeFsRunner(_) => unreachable!(…)`)
+- Modify: `crates/gents-cli/src/cli/args.rs` (new items appended before the final `#[cfg(test)]\nmod tests;`)
 - Modify: `crates/gents-cli/src/commands/mod.rs` (`pub(crate) mod eval;` after `pub(crate) mod diagnose;`)
-- Create: `crates/gents-cli/src/commands/eval/mod.rs`, `inspect.rs`, `render.rs`, `testing.rs`
+- Create: `crates/gents-cli/src/commands/eval/mod.rs`, `crates/gents-cli/src/commands/eval/testing.rs`
 
 **Interfaces:**
 - Consumes:
   ```rust
-  // gents (PR 1)
-  pub async fn gents::eval::report::load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>>;
-  pub fn gents::eval::report::run_header(record: &RunRecord) -> RunHeader;
-  pub async fn gents::eval::report::load_report_among(access, owner, runs_dir: &Path, record: &RunRecord, peers: &[RunHeader]) -> Result<EvalReport>;
-  pub async fn gents::eval::report::load_report(access: &ConfigAccess, owner: &str, runs_dir: &Path, run_id: &str) -> Result<EvalReport>;
-  pub fn gents::eval::report::report_refused(error: &anyhow::Error) -> Option<&ReportRefused>;
-  pub async fn gents::eval::load_verdicts(access, owner, run_id) -> Result<Vec<VerdictRecord>>;
+  pub fn gents::eval::report::report_refused(error: &anyhow::Error) -> Option<&ReportRefused>;   // ReportRefused(pub String)
   pub fn gents::eval::runner::freeze_refused(error) -> Option<&FreezeRefused>;
   pub fn gents::eval::already_invalidated(error) -> Option<&AlreadyInvalidated>;
   pub fn gents::eval::runner::provider_down(error) -> Option<&ProviderDown>;
@@ -4904,7 +4917,6 @@ What was found in the CLI (`crates/gents-cli`, library crate `gents_server`):
   pub async fn gents::eval::runner::embedded::EmbeddedHome::create_temp(prefix: &str) -> Result<EmbeddedHome>;  // .node: Arc<EmbeddedNode>, .did() -> &str
   pub async fn gents::ensure_agent_principal(node: &EmbeddedNode, agent_did: &str) -> Result<..>;
   gents::config_client::{apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan};
-  // gents-cli
   pub(crate) async fn crate::resolve_config_access(home: Option<&Path>, explicit_graphql: Option<&str>) -> Result<(ConfigAccess, PathBuf)>;
   pub(crate) fn crate::resolve_agent_did(home: Option<&Path>, explicit: Option<&str>) -> Result<String>;
   ```
@@ -4917,17 +4929,8 @@ What was found in the CLI (`crates/gents-cli`, library crate `gents_server`):
   // crates/gents-cli/src/commands/eval/mod.rs
   pub(crate) struct EvalContext { pub(crate) access: ConfigAccess, pub(crate) home_dir: PathBuf, pub(crate) owner: String }
   impl EvalContext { pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self>; pub(crate) fn runs_dir(&self) -> PathBuf }
-  pub(crate) async fn dispatch(command: EvalCommand) -> Result<()>;
-  pub(crate) async fn execute(ctx: &EvalContext, command: EvalCommand, out: &mut dyn Write) -> Result<()>;   // Task 10 adds `deps`
   pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error;
   pub(crate) fn write_json<T: Serialize>(out: &mut dyn Write, value: &T) -> Result<()>;
-  // crates/gents-cli/src/commands/eval/render.rs
-  pub(crate) fn percent(bp: Option<u32>) -> String;          // "50.00%" or "-"
-  pub(crate) fn wire<T: Serialize>(value: &T) -> String;      // serde's string form
-  pub(crate) fn counts_inline(counts: &SlotCounts) -> String;
-  pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()>;
-  pub(crate) fn list_table(rows: &[ListRow], out: &mut dyn Write) -> io::Result<()>;
-  pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()>;
   // crates/gents-cli/src/commands/eval/testing.rs (#[cfg(test)])
   pub(crate) const DEFINITION: &str = "cli-def";
   pub(crate) const TRAIN_CASES: [&str; 1]; pub(crate) const VALIDATION_CASES: [&str; 6]; pub(crate) const HELD_OUT_CASES: [&str; 6];
@@ -4938,12 +4941,9 @@ What was found in the CLI (`crates/gents-cli`, library crate `gents_server`):
       pub(crate) async fn scripted_run(&self, run_id: &str, executor: &ScriptedExecutor, cancel: CancellationToken) -> RunOutcome; }
   pub(crate) fn fast() -> RunOptions; pub(crate) fn pass() -> TrialEvidence; pub(crate) fn fail() -> TrialEvidence;
   pub(crate) fn executor(failing_baseline_cases: &[&str]) -> ScriptedExecutor;
-  pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand;
-  pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String>;
-  pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str>;
   ```
 
-- [ ] **Step 1: Add the arguments, the module skeleton, the fixture and the failing tests**
+- [ ] **Step 1: Add the arguments, the fixture and the failing tests**
 
 Append to `crates/gents-cli/src/cli/args.rs`, before the final `#[cfg(test)]` / `mod tests;` lines:
 
@@ -5015,22 +5015,6 @@ pub(crate) struct EvalTrialArgs {
 }
 ```
 
-In the `Command` enum in the same file, after the `Subagent { … }` variant, add:
-
-```rust
-    #[command(about = "Run, inspect, compare and clean up evals")]
-    Eval {
-        #[command(subcommand)]
-        command: EvalCommand,
-    },
-```
-
-In `crates/gents-cli/src/lib.rs` `async_main`, before `Command::NativeFsRunner(_) => unreachable!(…),` add:
-
-```rust
-        Command::Eval { command } => commands::eval::dispatch(command).await,
-```
-
 Create `crates/gents-cli/src/commands/eval/testing.rs`:
 
 ```rust
@@ -5050,7 +5034,6 @@ Create `crates/gents-cli/src/commands/eval/testing.rs`:
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use clap::Parser;
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
@@ -5066,8 +5049,7 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use super::{execute, EvalContext};
-use crate::cli::{Cli, Command, EvalCommand};
+use super::EvalContext;
 
 pub(crate) const DEFINITION: &str = "cli-def";
 pub(crate) const TRAIN_CASES: [&str; 1] = ["train-a"];
@@ -5201,33 +5183,6 @@ pub(crate) fn executor(failing_baseline_cases: &[&str]) -> ScriptedExecutor {
         }
     }
     executor
-}
-
-/// `gents eval <argv…>` as clap parses it.
-pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand {
-    let cli = Cli::try_parse_from(["gents", "eval"].into_iter().chain(argv.iter().copied()))
-        .unwrap_or_else(|error| panic!("{error}"));
-    match cli.command {
-        Command::Eval { command } => command,
-        _ => panic!("not an eval command"),
-    }
-}
-
-/// Run `gents eval <argv…>` against the fixture and return what it wrote.
-pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String> {
-    let mut out = Vec::new();
-    execute(&fixture.ctx, eval_command(argv), &mut out).await?;
-    Ok(String::from_utf8(out)?)
-}
-
-/// The whitespace-split row of `output` that starts with `first` and has
-/// exactly `width` columns.
-pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str> {
-    output
-        .lines()
-        .map(|line| line.split_whitespace().collect::<Vec<_>>())
-        .find(|words| words.first() == Some(&first) && words.len() == width)
-        .unwrap_or_else(|| panic!("no {width}-column row for {first} in\n{output}"))
 }
 
 fn documents(owner: &str) -> Vec<(Collection, Value)> {
@@ -5394,6 +5349,276 @@ fn write_pack(root: &Path) {
 }
 ```
 
+In `crates/gents-cli/src/commands/mod.rs` add `pub(crate) mod eval;` after `pub(crate) mod diagnose;`.
+
+Create `crates/gents-cli/src/commands/eval/mod.rs` with the module head and tests only (Step 3 adds the items):
+
+```rust
+//! `gents eval`: thin commands over `gents::eval`. Each resolves the
+//! launching home the way the other commands do, calls one library function,
+//! and writes a table or, with `--json`, the library's own structure.
+//!
+//! Refusals the library returns are re-raised with exactly their text
+//! ([`surface_refusal`]); `main` prints them and exits 1. Clap exits 2 on a
+//! usage error.
+
+#[cfg(test)]
+pub(crate) mod testing;
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use tokio_util::sync::CancellationToken;
+
+    use super::testing::{executor, Fixture, VALIDATION_CASES};
+    use super::*;
+    use crate::cli::EvalCommand;
+
+    /// `EvalCommand` alone; Task 7b hangs it under `gents eval`.
+    #[derive(Parser)]
+    struct Probe {
+        #[command(subcommand)]
+        command: EvalCommand,
+    }
+
+    #[test]
+    fn the_read_commands_parse_with_their_scope() {
+        let probe = Probe::try_parse_from(["probe", "list", "--all", "--json", "--home", "/tmp/h"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::List(args) = &probe.command else {
+            panic!("not list");
+        };
+        assert!(args.all && args.json);
+        assert_eq!(
+            probe.command.scope().home.as_deref(),
+            Some(std::path::Path::new("/tmp/h"))
+        );
+        let probe = Probe::try_parse_from(["probe", "trial", "r1", "baseline", "val-a"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::Trial(args) = &probe.command else {
+            panic!("not trial");
+        };
+        assert_eq!((args.cell.as_str(), args.trial_index), ("baseline", None));
+    }
+
+    #[test]
+    fn a_refusal_is_surfaced_with_exactly_its_own_text() {
+        use anyhow::Context as _;
+        let refusal = Err::<(), _>(anyhow::Error::from(gents::eval::report::ReportRefused(
+            "no eval run \"x\"".into(),
+        )))
+        .context("loading the report")
+        .unwrap_err();
+        assert_eq!(surface_refusal(refusal).to_string(), "no eval run \"x\"");
+        assert_eq!(
+            surface_refusal(anyhow::anyhow!("plain failure")).to_string(),
+            "plain failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_fixture_home_runs_a_scripted_two_cell_run() {
+        let fixture = Fixture::new().await;
+        let outcome = fixture
+            .scripted_run("r1", &executor(&VALIDATION_CASES[..3]), CancellationToken::new())
+            .await;
+        assert_eq!(outcome.completed, 24);
+        assert!(fixture.ctx.runs_dir().join("r1").is_dir());
+    }
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t7.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t7.log" | head -20`
+Expected: compile errors: `EvalContext`, `surface_refusal` not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Insert between the module doc and `#[cfg(test)] pub(crate) mod testing;` in `crates/gents-cli/src/commands/eval/mod.rs`:
+
+```rust
+use std::io::Write;
+use std::path::PathBuf;
+
+use anyhow::Result;
+use gents::ConfigAccess;
+use serde::Serialize;
+
+use crate::cli::EvalScopeArgs;
+
+/// The launching home a command acts for.
+pub(crate) struct EvalContext {
+    pub(crate) access: ConfigAccess,
+    pub(crate) home_dir: PathBuf,
+    /// The home's identity: owner of the runs it launches, and `by` on what
+    /// it invalidates.
+    pub(crate) owner: String,
+}
+
+impl EvalContext {
+    pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self> {
+        let (access, home_dir) =
+            crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
+        let owner = crate::resolve_agent_did(Some(&home_dir), None)?;
+        Ok(Self {
+            access,
+            home_dir,
+            owner,
+        })
+    }
+
+    /// `<home>/eval/runs`, where the runner freezes every run.
+    pub(crate) fn runs_dir(&self) -> PathBuf {
+        self.home_dir.join("eval").join("runs")
+    }
+}
+
+/// A refusal the library returned, re-raised with exactly its own text
+/// whatever context was added above it; any other error unchanged.
+pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
+    let verbatim = gents::eval::report::report_refused(&error)
+        .map(ToString::to_string)
+        .or_else(|| gents::eval::runner::freeze_refused(&error).map(ToString::to_string))
+        .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
+        .or_else(|| gents::eval::runner::provider_down(&error).map(ToString::to_string));
+    match verbatim {
+        Some(text) => anyhow::anyhow!(text),
+        None => error,
+    }
+}
+
+pub(crate) fn write_json<T: Serialize>(out: &mut dyn Write, value: &T) -> Result<()> {
+    serde_json::to_writer_pretty(&mut *out, value)?;
+    writeln!(out)?;
+    Ok(())
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t7.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t7.log" | tail -20`
+Expected: the three tests pass.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents-cli/
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): the gents eval arguments, launching-home context and test fixture (#1515)"
+```
+
+### Task 7b: `eval list`, `show` and `trial`
+
+**Files:**
+- Modify: `crates/gents-cli/src/cli/args.rs` (a `Command::Eval` variant after `Subagent`)
+- Modify: `crates/gents-cli/src/lib.rs` (`async_main`: one arm before `Command::NativeFsRunner(_) => unreachable!(…)`)
+- Modify: `crates/gents-cli/src/commands/eval/mod.rs` (`mod inspect;`, `pub(crate) mod render;`, `dispatch`, `execute`)
+- Modify: `crates/gents-cli/src/commands/eval/testing.rs` (`eval_command`, `eval`, `row`)
+- Create: `crates/gents-cli/src/commands/eval/inspect.rs`, `crates/gents-cli/src/commands/eval/render.rs`
+
+**Interfaces:**
+- Consumes:
+  ```rust
+  // gents (PR 1)
+  pub async fn gents::eval::report::load_runs(access: &ConfigAccess, owner: &str) -> Result<Vec<RunRecord>>;
+  pub fn gents::eval::report::run_header(record: &RunRecord) -> RunHeader;
+  pub async fn gents::eval::report::load_report_among(access, owner, runs_dir: &Path, record: &RunRecord, peers: &[RunHeader]) -> Result<EvalReport>;
+  pub async fn gents::eval::report::load_report(access: &ConfigAccess, owner: &str, runs_dir: &Path, run_id: &str) -> Result<EvalReport>;
+  pub async fn gents::eval::load_verdicts(access, owner, run_id) -> Result<Vec<VerdictRecord>>;
+  // Task 7: EvalContext, surface_refusal, write_json, testing::{Fixture, executor, VALIDATION_CASES}
+  ```
+- Produces:
+  ```rust
+  pub(crate) async fn dispatch(command: EvalCommand) -> Result<()>;
+  pub(crate) async fn execute(ctx: &EvalContext, command: EvalCommand, out: &mut dyn Write) -> Result<()>;   // Task 10b adds `deps`
+  // crates/gents-cli/src/commands/eval/render.rs
+  pub(crate) fn percent(bp: Option<u32>) -> String;          // "50.00%" or "-"
+  pub(crate) fn wire<T: Serialize>(value: &T) -> String;      // serde's string form
+  pub(crate) fn counts_inline(counts: &SlotCounts) -> String;
+  pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Result<()>;
+  pub(crate) fn list_table(rows: &[ListRow], out: &mut dyn Write) -> io::Result<()>;
+  pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()>;
+  // crates/gents-cli/src/commands/eval/testing.rs
+  pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand;
+  pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String>;
+  pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str>;
+  ```
+
+- [ ] **Step 1: Wire the command and write the failing tests**
+
+In the `Command` enum in the same file, after the `Subagent { … }` variant, add:
+
+```rust
+    #[command(about = "Run, inspect, compare and clean up evals")]
+    Eval {
+        #[command(subcommand)]
+        command: EvalCommand,
+    },
+```
+
+In `crates/gents-cli/src/lib.rs` `async_main`, before `Command::NativeFsRunner(_) => unreachable!(…),` add:
+
+```rust
+        Command::Eval { command } => commands::eval::dispatch(command).await,
+```
+
+Add to `crates/gents-cli/src/commands/eval/testing.rs`: `use clap::Parser;` among the external imports, `use super::execute;` and `use crate::cli::{Cli, Command, EvalCommand};` among the crate imports, and before `fn documents`:
+
+```rust
+/// `gents eval <argv…>` as clap parses it.
+pub(crate) fn eval_command(argv: &[&str]) -> EvalCommand {
+    let cli = Cli::try_parse_from(["gents", "eval"].into_iter().chain(argv.iter().copied()))
+        .unwrap_or_else(|error| panic!("{error}"));
+    match cli.command {
+        Command::Eval { command } => command,
+        _ => panic!("not an eval command"),
+    }
+}
+
+/// Run `gents eval <argv…>` against the fixture and return what it wrote.
+pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String> {
+    let mut out = Vec::new();
+    execute(&fixture.ctx, eval_command(argv), &mut out).await?;
+    Ok(String::from_utf8(out)?)
+}
+
+/// The whitespace-split row of `output` that starts with `first` and has
+/// exactly `width` columns.
+pub(crate) fn row<'a>(output: &'a str, first: &str, width: usize) -> Vec<&'a str> {
+    output
+        .lines()
+        .map(|line| line.split_whitespace().collect::<Vec<_>>())
+        .find(|words| words.first() == Some(&first) && words.len() == width)
+        .unwrap_or_else(|| panic!("no {width}-column row for {first} in\n{output}"))
+}
+```
+
+In `crates/gents-cli/src/commands/eval/mod.rs` add `mod inspect;` and `pub(crate) mod render;` before `#[cfg(test)] pub(crate) mod testing;`, add `EvalCommand` to the `crate::cli` import, and below `impl EvalContext`:
+
+```rust
+pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
+    let ctx = EvalContext::resolve(command.scope()).await?;
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    execute(&ctx, command, &mut out).await
+}
+
+pub(crate) async fn execute(
+    ctx: &EvalContext,
+    command: EvalCommand,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let result = match command {
+        EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
+        EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
+        EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
+    };
+    result.map_err(surface_refusal)
+}
+```
+
+Create an empty `crates/gents-cli/src/commands/eval/render.rs`.
+
 Create `crates/gents-cli/src/commands/eval/inspect.rs` with only its tests:
 
 ```rust
@@ -5524,104 +5749,9 @@ mod tests {
 }
 ```
 
-Create `crates/gents-cli/src/commands/eval/mod.rs`:
-
-```rust
-//! `gents eval`: thin commands over `gents::eval`. Each resolves the
-//! launching home the way the other commands do, calls one library function,
-//! and writes a table or, with `--json`, the library's own structure.
-//!
-//! Refusals the library returns are re-raised with exactly their text
-//! ([`surface_refusal`]); `main` prints them and exits 1. Clap exits 2 on a
-//! usage error.
-
-use std::io::Write;
-use std::path::PathBuf;
-
-use anyhow::Result;
-use gents::ConfigAccess;
-use serde::Serialize;
-
-use crate::cli::{EvalCommand, EvalScopeArgs};
-
-mod inspect;
-pub(crate) mod render;
-#[cfg(test)]
-pub(crate) mod testing;
-
-/// The launching home a command acts for.
-pub(crate) struct EvalContext {
-    pub(crate) access: ConfigAccess,
-    pub(crate) home_dir: PathBuf,
-    /// The home's identity: owner of the runs it launches, and `by` on what
-    /// it invalidates.
-    pub(crate) owner: String,
-}
-
-impl EvalContext {
-    pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self> {
-        let (access, home_dir) =
-            crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
-        let owner = crate::resolve_agent_did(Some(&home_dir), None)?;
-        Ok(Self {
-            access,
-            home_dir,
-            owner,
-        })
-    }
-
-    /// `<home>/eval/runs`, where the runner freezes every run.
-    pub(crate) fn runs_dir(&self) -> PathBuf {
-        self.home_dir.join("eval").join("runs")
-    }
-}
-
-pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
-    let ctx = EvalContext::resolve(command.scope()).await?;
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    execute(&ctx, command, &mut out).await
-}
-
-pub(crate) async fn execute(
-    ctx: &EvalContext,
-    command: EvalCommand,
-    out: &mut dyn Write,
-) -> Result<()> {
-    let result = match command {
-        EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
-        EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
-        EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
-    };
-    result.map_err(surface_refusal)
-}
-
-/// A refusal the library returned, re-raised with exactly its own text
-/// whatever context was added above it; any other error unchanged.
-pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
-    let verbatim = gents::eval::report::report_refused(&error)
-        .map(ToString::to_string)
-        .or_else(|| gents::eval::runner::freeze_refused(&error).map(ToString::to_string))
-        .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
-        .or_else(|| gents::eval::runner::provider_down(&error).map(ToString::to_string));
-    match verbatim {
-        Some(text) => anyhow::anyhow!(text),
-        None => error,
-    }
-}
-
-pub(crate) fn write_json<T: Serialize>(out: &mut dyn Write, value: &T) -> Result<()> {
-    serde_json::to_writer_pretty(&mut *out, value)?;
-    writeln!(out)?;
-    Ok(())
-}
-```
-
-In `crates/gents-cli/src/commands/mod.rs` add `pub(crate) mod eval;` after `pub(crate) mod diagnose;`. Create an empty `crates/gents-cli/src/commands/eval/render.rs`.
-
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t7.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t7.log" | head -20`
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t7b.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t7b.log" | head -20`
 Expected: compile errors `cannot find function `list` in module `inspect`` (and `show`, `trial`).
 
 - [ ] **Step 3: Write the implementation**
@@ -6084,10 +6214,10 @@ pub(crate) fn trial_text(view: &TrialView, out: &mut dyn Write) -> io::Result<()
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t7.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t7.log" | tail -20`
-Expected: the three `inspect::tests` pass.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t7b.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t7b.log" | tail -20`
+Expected: the three `inspect::tests` and Task 7's three pass.
 
-Then `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib cli::args > "$LOG/t7-args.log" 2>&1; grep -E "test result|panicked" "$LOG/t7-args.log"`. Expected: the existing argument tests (`crates/gents-cli/src/cli/args/tests.rs`) still pass; none of them lists the top-level commands, so adding `eval` changes no expectation.
+Then `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib cli::args > "$LOG/t7b-args.log" 2>&1; grep -E "test result|panicked" "$LOG/t7b-args.log"`. Expected: the existing argument tests (`crates/gents-cli/src/cli/args/tests.rs`) still pass; none of them lists the top-level commands, so adding `eval` changes no expectation.
 
 - [ ] **Step 5: Format and commit**
 
@@ -6103,6 +6233,7 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
 - Modify: `crates/gents-cli/src/cli/args.rs` (three `EvalCommand` variants, their `scope()` arms, three argument structs)
 - Modify: `crates/gents-cli/src/commands/eval/mod.rs` (`mod manage;`, three `execute` arms)
 - Create: `crates/gents-cli/src/commands/eval/manage.rs`
+- Modify: `crates/gents/src/optimization/promote.rs` (ruling F12: a sibling of `the_model_facing_config_tool_has_no_optimization_surface`)
 
 **Interfaces:**
 - Consumes:
@@ -6114,6 +6245,10 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   pub async fn gents::eval::load_run(access, owner, run_id) -> Result<Option<RunRecord>>;         // test only
   pub async fn gents::eval::load_trials(access, owner, run_id) -> Result<Vec<TrialRecord>>;      // test only
   pub async fn gents::eval::report::load_report(access, owner, runs_dir: &Path, run_id) -> Result<EvalReport>;
+  pub fn gents::eval::runner::{slots_owed, running_elsewhere}(…);   // Task 6b: slots_owed(&RunRecord, &[TrialRecord]) -> usize; running_elsewhere(&Path) -> bool
+  pub async fn gents::optimization::held_runs(access, owner) -> Result<BTreeMap<String, (String, JobState)>>;   // Task 4b
+  impl JobState { pub fn label(&self) -> &'static str }
+  pub const crate::self_config::SELF_CONFIG_TOOL_NAMES: [&str; 6];   // gents; the agent-facing config tools
   // Task 7: EvalContext, surface_refusal, testing::{Fixture, eval, executor, row, fast, pass, VALIDATION_CASES}
   ```
 - Produces:
@@ -6123,7 +6258,8 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   pub(crate) struct EvalRmArgs { pub(crate) run_id: String, pub(crate) force: bool, pub(crate) scope: EvalScopeArgs }
   // EvalCommand gains Cancel(EvalRunIdArgs), Invalidate(EvalInvalidateArgs), Rm(EvalRmArgs)
   // crates/gents-cli/src/commands/eval/manage.rs
-  pub(crate) fn cancel(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -> Result<()>;
+  pub(crate) fn cancel(runs_dir: &Path, run_id: &str, purpose: Option<&str>, out: &mut dyn Write) -> Result<()>;
+  pub(super) async fn cancel_run(ctx: &EvalContext, args: &EvalRunIdArgs, out: &mut dyn Write) -> Result<()>;   // reads the run's purpose (F1)
   pub(super) async fn invalidate(ctx: &EvalContext, args: &EvalInvalidateArgs, out: &mut dyn Write) -> Result<()>;
   pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write) -> Result<()>;
   pub(crate) fn dir_size(path: &Path) -> Result<u64>;
@@ -6173,7 +6309,8 @@ pub(crate) struct EvalInvalidateArgs {
 #[derive(clap::Args)]
 pub(crate) struct EvalRmArgs {
     pub(crate) run_id: String,
-    /// Delete even when the run has planned or abandoned slots.
+    /// Delete even when the run still owes slots, a live process runs it, or
+    /// a job that is not settled still needs it.
     #[arg(long)]
     pub(crate) force: bool,
     #[command(flatten)]
@@ -6225,7 +6362,7 @@ mod tests {
         async fn execute(&self, spec: &TrialSpec, cancel_token: CancellationToken) -> TrialEvidence {
             if !self.done.swap(true, Ordering::SeqCst) {
                 let mut confirmation = Vec::new();
-                cancel(&self.runs_dir, &self.run_id, &mut confirmation).unwrap();
+                cancel(&self.runs_dir, &self.run_id, None, &mut confirmation).unwrap();
                 assert!(String::from_utf8(confirmation)
                     .unwrap()
                     .contains("stops launching at its next check"));
@@ -6275,6 +6412,32 @@ mod tests {
         );
     }
 
+    /// Ruling F1: cancelling a job's run proceeds and says the job stops there.
+    #[tokio::test]
+    async fn cancelling_a_jobs_run_says_the_job_stops_at_it() {
+        let fixture = Fixture::new().await;
+        let mut request = fixture.request("r-job");
+        request.purpose = "optimization:job-9".into();
+        let interrupted = CancellationToken::new();
+        interrupted.cancel();
+        run(
+            &fixture.ctx.access,
+            &request,
+            &executor(&[]),
+            &CheckRegistry::builtin(),
+            interrupted,
+            &fast(),
+        )
+        .await
+        .unwrap();
+        let said = eval(&fixture, &["cancel", "r-job"]).await.unwrap();
+        assert!(
+            said.contains("this run belongs to job job-9; the job stops at this run"),
+            "{said}"
+        );
+        assert!(fixture.ctx.runs_dir().join("r-job").join(CANCEL_MARKER).exists());
+    }
+
     #[tokio::test]
     async fn invalidate_confirms_once_and_then_prints_already_invalidated() {
         let fixture = Fixture::new().await;
@@ -6312,7 +6475,7 @@ mod tests {
         assert!(
             refused
                 .to_string()
-                .contains("unfinished: 24 planned and 0 abandoned slots"),
+                .contains("is unfinished: it still owes 24 slots"),
             "{refused:#}"
         );
         assert!(dir.is_dir(), "a refusal deletes nothing");
@@ -6340,9 +6503,71 @@ mod tests {
 In `crates/gents-cli/src/commands/eval/mod.rs` add `pub(crate) mod manage;` after `mod inspect;` (`pub(crate)` so `gents optimization rm` can reuse `dir_size`), and to `execute`'s match:
 
 ```rust
-        EvalCommand::Cancel(args) => manage::cancel(&ctx.runs_dir(), &args.run_id, out),
+        EvalCommand::Cancel(args) => manage::cancel_run(ctx, &args, out).await,
         EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
         EvalCommand::Rm(args) => manage::rm(ctx, &args, out).await,
+```
+
+Append to the tests in `crates/gents/src/optimization/promote.rs`, after `the_model_facing_config_tool_has_no_optimization_surface` (ruling F12):
+
+```rust
+    /// Ruling F12: cancelling, invalidating and deleting runs, and collecting
+    /// their directories, are the operator's verbs; no agent tool reaches the
+    /// functions behind `gents eval cancel | invalidate | rm | gc`.
+    #[test]
+    fn no_agent_tool_surface_reaches_the_eval_operator_verbs() {
+        fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, found);
+                } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                    found.push(path);
+                }
+            }
+        }
+        for name in crate::self_config::SELF_CONFIG_TOOL_NAMES {
+            for verb in ["cancel", "invalidate", "rm", "gc"] {
+                assert!(
+                    !(name.contains("eval") && name.contains(verb)),
+                    "the self-config tool set names {name}"
+                );
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        for surface in [
+            "self_config",
+            "toolset",
+            "meta_tools",
+            "background_tools",
+            "tool_surface",
+        ] {
+            sources(&root.join(surface), &mut files);
+        }
+        for module in ["toolset.rs", "meta_tools.rs", "background_tools.rs", "tool_control.rs"] {
+            files.push(root.join(module));
+        }
+        assert!(files.len() > 10, "expected the agent tool surfaces under {}", root.display());
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            for word in [
+                "request_cancel",
+                "CANCEL_MARKER",
+                "invalidate_run",
+                "eval::runner::run_dir",
+                "run_finished",
+                "held_runs",
+                "referenced_run_ids",
+            ] {
+                assert!(
+                    !source.contains(word),
+                    "{} mentions {word}; the eval operator verbs are not an agent's",
+                    path.display()
+                );
+            }
+        }
+    }
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -6363,21 +6588,44 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use gents::eval::invalidate_run;
-use gents::eval::report::load_report;
-use gents::eval::runner::{request_cancel, run_dir};
+use gents::eval::runner::{request_cancel, run_dir, running_elsewhere, slots_owed};
+use gents::eval::{invalidate_run, load_run, load_trials};
 
 use super::EvalContext;
-use crate::cli::{EvalInvalidateArgs, EvalRmArgs};
+use crate::cli::{EvalInvalidateArgs, EvalRmArgs, EvalRunIdArgs};
 
-pub(crate) fn cancel(runs_dir: &Path, run_id: &str, out: &mut dyn Write) -> Result<()> {
+/// Write the marker. `purpose` is the run's origin purpose when known: a
+/// job's run is cancelled like any other, and the job stops at it (F1).
+pub(crate) fn cancel(
+    runs_dir: &Path,
+    run_id: &str,
+    purpose: Option<&str>,
+    out: &mut dyn Write,
+) -> Result<()> {
     let marker = request_cancel(runs_dir, run_id)?;
     writeln!(
         out,
         "wrote {}; the process hosting run {run_id} stops launching at its next check, and `gents eval resume {run_id}` continues it",
         marker.display()
     )?;
+    if let Some(job_id) = purpose.and_then(|purpose| purpose.strip_prefix("optimization:")) {
+        writeln!(
+            out,
+            "this run belongs to job {job_id}; the job stops at this run, and `gents optimization run … --job-id {job_id}` resumes it"
+        )?;
+    }
     Ok(())
+}
+
+pub(super) async fn cancel_run(
+    ctx: &EvalContext,
+    args: &EvalRunIdArgs,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let purpose = load_run(&ctx.access, &ctx.owner, &args.run_id)
+        .await?
+        .map(|record| record.origin.purpose);
+    cancel(&ctx.runs_dir(), &args.run_id, purpose.as_deref(), out)
 }
 
 pub(super) async fn invalidate(
@@ -6403,16 +6651,35 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         dir.display()
     );
     if !args.force {
-        let report = load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), &args.run_id).await?;
-        let (planned, abandoned) = report.cells.iter().fold((0, 0), |(planned, abandoned), cell| {
-            (planned + cell.counts.planned, abandoned + cell.counts.abandoned)
-        });
+        let record = load_run(&ctx.access, &ctx.owner, &args.run_id)
+            .await?
+            .with_context(|| format!("no eval run {:?} for {}", args.run_id, ctx.owner))?;
+        let trials = load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
+        // Ruling F7: finished means nothing owed and no live process on it.
+        let owed = slots_owed(&record, &trials);
         anyhow::ensure!(
-            planned == 0 && abandoned == 0,
-            "run {} is unfinished: {planned} planned and {abandoned} abandoned slots; `gents eval resume {}` finishes it, or pass --force to delete its directory anyway",
+            owed == 0,
+            "run {} is unfinished: it still owes {owed} slots; `gents eval resume {}` finishes it, or pass --force to delete its directory anyway",
             args.run_id,
             args.run_id
         );
+        anyhow::ensure!(
+            !running_elsewhere(&dir),
+            "run {} is being run by a live process right now (see `gents eval watch {}`); pass --force to delete its directory anyway",
+            args.run_id,
+            args.run_id
+        );
+        // Ruling F8: a job that still needs the run keeps it.
+        if let Some((job_id, state)) = gents::optimization::held_runs(&ctx.access, &ctx.owner)
+            .await?
+            .get(&args.run_id)
+        {
+            anyhow::bail!(
+                "run {} is evidence of optimization job {job_id}, which is {}; pass --force to delete its directory anyway",
+                args.run_id,
+                state.label()
+            );
+        }
     }
     let bytes = dir_size(&dir)?;
     std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
@@ -6443,7 +6710,7 @@ pub(crate) fn dir_size(path: &Path) -> Result<u64> {
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t8.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t8.log" | tail -20`
-Expected: the three `manage::tests` and Task 7's tests pass.
+Expected: the four `manage::tests` and the earlier `commands::eval` tests pass. Then `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::promote > "$LOG/t8-surface.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t8-surface.log"` — the surface test passes (it guards; it has no failing phase).
 
 - [ ] **Step 5: Format and commit**
 
@@ -6820,78 +7087,121 @@ git add crates/gents-cli/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): gents eval compare with an opt-in, labelled policy verdict (#1515)"
 ```
 
-### Task 10: `run` and `resume`, with Ctrl-C
+### Task 10: Subject packs, cell arguments and default ids
 
 **Files:**
-- Modify: `crates/gents-cli/src/cli/args.rs` (`EvalCommand::{Run, Resume}`, their `scope()` arms, `EvalRunArgs`, `EvalResumeArgs`, `CellArg`, `parse_cell`, `parse_assignment`, `parse_split`)
+- Modify: `crates/gents-cli/src/cli/args.rs` (`CellArg`, `parse_cell`, `parse_assignment`, `parse_split`)
 - Modify: `crates/gents-cli/src/commands/pack/mod.rs` (`SubjectPack`, `resolve_subject_pack`, after `materialize_named_pack`)
-- Modify: `crates/gents-cli/src/commands/eval/mod.rs` (`mod run;`, `Deps`, `cancel_on_ctrl_c`, `source_commit`, `source_dirty`; `dispatch` and `execute` take `Deps`)
-- Modify: `crates/gents-cli/src/commands/eval/testing.rs` (`deps`, `eval_with`; `eval` passes default `Deps`)
-- Create: `crates/gents-cli/src/commands/eval/run.rs`
+- Modify: `crates/gents-cli/src/commands/eval/mod.rs` (`source_commit`, `source_dirty`, `default_id`; tests)
 
 **Interfaces:**
 - Consumes:
   ```rust
-  pub async fn gents::eval::runner::run(access, request: &RunRequest, executor: &dyn TrialExecutor, registry: &CheckRegistry,
-      cancel: CancellationToken, options: &RunOptions) -> Result<RunOutcome>;
-  #[allow(clippy::too_many_arguments)]
-  pub async fn gents::eval::runner::resume(access, owner: &str, run_id: &str, runs_dir: &Path, executor: &dyn TrialExecutor,
-      registry: &CheckRegistry, cancel: CancellationToken, options: &RunOptions) -> Result<RunOutcome>;   // removes the cancel marker (Task 4)
-  pub struct gents::eval::runner::RunRequest { run_id, owner, evaluator_did, definition_id, split: EvalSplit, case_ids: Option<Vec<String>>,
-      cells: Vec<CellRequest>, trials_per_case: u32, seed_base: i64, deadline_secs: Option<u64>, concurrency: u32, max_infra_retries: u32,
-      breaker_threshold: u32, purpose: String, source_commit: String, source_dirty: bool, captures: Vec<Capture>, runs_dir: PathBuf }
-  pub struct gents::eval::runner::CellRequest { cell_id, label, source: CellSource, behavior_id, inference_profile_id }
-  pub enum gents::eval::runner::CellSource { InstalledPack { name: String }, Directory(PathBuf) }
-  pub struct gents::eval::runner::RunOutcome { pub run_id: String, pub completed: u32, pub abandoned: u32, pub not_evidence: u32, pub breaker_tripped: bool }
-  pub struct gents::eval::runner::embedded::EmbeddedExecutor;  impl { pub fn new(runtime_options: DocumentRuntimeOptions, runs_dir: PathBuf) -> Self }
-  gents::DocumentRuntimeOptions: Default;  gents::eval::checks::CheckRegistry::builtin() -> CheckRegistry
-  pub fn gents::eval::documents::default_breaker_threshold() -> u32;   // 5
-  pub fn gents::default_behavior_id_for_agent(agent_did: &str) -> String;                  // "{did}:default"
-  pub fn gents::default_inference_profile_id_for_behavior(behavior_id: &str) -> String;    // "{behavior_id}-profile"
   // crates/gents-cli/src/commands/pack/mod.rs (existing, private)
   enum PackSource { Bundled(ResolvedPack), Registry(registry::RegistryPack) }   // fn manifest(&self) -> &PackManifest
   async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Result<PackSource>;
   fn materialize_cached_pack(home: &Path, pack: &PackSource) -> Result<(PathBuf, std::fs::File)>;   // shared-locked cache entry
-  // gents::pack::PackManifest { name, metadata: PackMetadata { inference_slots: Vec<PackInferenceSlot { name, description, behaviors: Vec<String> }>, .. }, .. }
-  // crates/gents-cli/build.rs sets GENTS_BUILD_GIT_SHA and GENTS_BUILD_GIT_DIRTY ("true"/"false") for this crate
+  // gents::pack::PackManifest { name, metadata: PackMetadata { inference_slots: Vec<PackInferenceSlot { behaviors: Vec<String>, .. }>, .. }, .. }
+  pub enum gents::eval::runner::CellSource { InstalledPack { name: String }, Directory(PathBuf) }   // Clone
+  // crates/gents-cli/build.rs sets GENTS_BUILD_GIT_SHA and GENTS_BUILD_GIT_DIRTY ("true"/"false") for this crate; `uuid` and `chrono` are dependencies
   ```
 - Produces:
   ```rust
-  // crates/gents-cli/src/cli/args.rs
   pub(crate) struct CellArg { pub(crate) cell_id: String, pub(crate) pack: String, pub(crate) behavior: Option<String> }
   pub(crate) fn parse_cell(raw: &str) -> Result<CellArg, String>;                 // "<id>=<pack>[:<behavior>]", split at the first ':'
   pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String>;   // "<cell>=<profile_id>"
   pub(crate) fn parse_split(raw: &str) -> Result<EvalSplit, String>;              // train | validation | held_out
-  pub(crate) struct EvalRunArgs { definition_id, cells: Vec<CellArg>, profiles: Vec<(String, String)>, split: EvalSplit, trials: u32,
-      seed_base: i64, concurrency: u32, purpose: String, run_id: Option<String>, max_infra_retries: u32, registry: Option<String>, json: bool, scope }
-  pub(crate) struct EvalResumeArgs { run_id, json: bool, scope }
-  // crates/gents-cli/src/commands/pack/mod.rs
   pub(crate) struct SubjectPack { pub(crate) source: CellSource, pub(crate) manifest: PackManifest, /* private lease */ }
   impl SubjectPack { pub(crate) fn directory(&self) -> Option<&Path>; pub(crate) fn default_behavior(&self) -> Result<String> }
   pub(crate) async fn resolve_subject_pack(home: &Path, spec: &str, registry: Option<&str>, directory: bool) -> Result<SubjectPack>;
-  // crates/gents-cli/src/commands/eval/mod.rs
-  pub(crate) struct Deps<'a> { pub(crate) executor: &'a dyn TrialExecutor, pub(crate) registry: &'a CheckRegistry,
-      pub(crate) cancel: CancellationToken, pub(crate) options: RunOptions }
-  pub(crate) async fn execute(ctx: &EvalContext, command: EvalCommand, deps: &Deps<'_>, out: &mut dyn Write) -> Result<()>;
-  pub(crate) fn cancel_on_ctrl_c() -> CancellationToken;
   pub(crate) fn source_commit() -> String;  pub(crate) fn source_dirty() -> bool;
-  // crates/gents-cli/src/commands/eval/testing.rs
-  pub(crate) fn deps<'a>(executor: &'a dyn TrialExecutor, registry: &'a CheckRegistry, cancel: CancellationToken) -> Deps<'a>;
-  pub(crate) async fn eval_with(fixture: &Fixture, argv: &[&str], deps: &Deps<'_>) -> anyhow::Result<String>;
+  pub(crate) fn default_id(definition_id: &str) -> String;   // ruling F14
   ```
 
-- [ ] **Step 1: Add the arguments, `Deps`, the fixture helpers and the failing tests**
+- [ ] **Step 1: Write the failing tests**
 
-In `crates/gents-cli/src/cli/args.rs`, add to `EvalCommand` (first, so `gents eval --help` lists it first):
+Append inside `mod tests` in `crates/gents-cli/src/commands/eval/mod.rs` (adding `use crate::cli::{parse_cell, CellArg};`):
 
 ```rust
-    #[command(about = "Freeze and run an eval over one or more cells; Ctrl-C cancels")]
-    Run(EvalRunArgs),
-    #[command(about = "Continue a run from what it already wrote")]
-    Resume(EvalResumeArgs),
+    #[test]
+    fn a_cell_names_its_pack_and_optionally_a_behavior_with_colons() {
+        assert_eq!(
+            parse_cell("base=monitor:did:key:z6M:default").unwrap(),
+            CellArg {
+                cell_id: "base".into(),
+                pack: "monitor".into(),
+                behavior: Some("did:key:z6M:default".into()),
+            }
+        );
+        assert_eq!(parse_cell("base=/packs/monitor").unwrap().behavior, None);
+        assert!(parse_cell("no-equals").is_err());
+        assert!(parse_cell("base=").is_err());
+        assert!(parse_cell("base=monitor:").is_err());
+    }
+
+    #[test]
+    fn a_default_id_names_its_definition_and_never_repeats() {
+        let (first, second) = (default_id("cli-def"), default_id("cli-def"));
+        assert_ne!(first, second);
+        let parts: Vec<&str> = first.rsplitn(3, '-').collect();
+        assert_eq!(parts.len(), 3, "{first}");
+        assert_eq!(parts[2], "cli-def");
+        assert!(parts[1].parse::<i64>().is_ok(), "{first}");
+        assert!(
+            parts[0].len() == 4 && parts[0].bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pack_name_resolves_like_pack_install_and_a_directory_names_its_behavior() {
+        let fixture = Fixture::new().await;
+        let directory = crate::commands::pack::resolve_subject_pack(
+            &fixture.ctx.home_dir,
+            &fixture.pack_arg(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(directory.directory(), Some(fixture.pack.as_path()));
+        assert_eq!(directory.default_behavior().unwrap(), "monitor");
+
+        let bundled = gents::pack::pack_catalog().unwrap()[0].name.clone();
+        let named = crate::commands::pack::resolve_subject_pack(
+            &fixture.ctx.home_dir,
+            &bundled,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(&named.source, gents::eval::runner::CellSource::InstalledPack { name } if *name == bundled),
+            "a compiled-in pack is handed to the runner by name"
+        );
+        let materialized = crate::commands::pack::resolve_subject_pack(
+            &fixture.ctx.home_dir,
+            &bundled,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(materialized
+            .directory()
+            .is_some_and(|dir| dir.join("manifest.json").is_file()));
+    }
 ```
 
-to `scope()`: `Self::Run(args) => &args.scope,` and `Self::Resume(args) => &args.scope,`; and after `EvalCompareArgs`:
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t10.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t10.log" | head -20`
+Expected: compile errors: `parse_cell`, `CellArg`, `default_id`, `resolve_subject_pack` not found.
+
+- [ ] **Step 3: Write the implementation**
+
+Append to `crates/gents-cli/src/cli/args.rs`, after `EvalCompareArgs`:
 
 ```rust
 /// One `--cell <id>=<pack>[:<behavior>]`.
@@ -6940,378 +7250,7 @@ pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit
     serde_json::from_value(serde_json::Value::String(raw.trim().to_owned()))
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
 }
-
-#[derive(clap::Args)]
-pub(crate) struct EvalRunArgs {
-    pub(crate) definition_id: String,
-    /// `<id>=<pack>[:<behavior>]`, once per cell.
-    #[arg(long = "cell", value_parser = parse_cell, required = true)]
-    pub(crate) cells: Vec<CellArg>,
-    /// `<cell>=<inference_profile_id>`; a cell without one uses the home's
-    /// default profile.
-    #[arg(long = "profile", value_parser = parse_assignment)]
-    pub(crate) profiles: Vec<(String, String)>,
-    #[arg(long, value_parser = parse_split, default_value = "validation")]
-    pub(crate) split: gents::document_config::EvalSplit,
-    #[arg(long, default_value_t = 2)]
-    pub(crate) trials: u32,
-    #[arg(long, default_value_t = 1000)]
-    pub(crate) seed_base: i64,
-    #[arg(long, default_value_t = 1)]
-    pub(crate) concurrency: u32,
-    #[arg(long, default_value = "eval")]
-    pub(crate) purpose: String,
-    /// Defaults to `<definition_id>-<UTC timestamp>`.
-    #[arg(long)]
-    pub(crate) run_id: Option<String>,
-    #[arg(long, default_value_t = 1)]
-    pub(crate) max_infra_retries: u32,
-    /// The pack registry to fall back to for a pack not compiled in. As with
-    /// `gents pack install`, a registry download is cached under the default
-    /// home, not `--home` (inherited behavior, ruling U13).
-    #[arg(long)]
-    pub(crate) registry: Option<String>,
-    #[arg(long)]
-    pub(crate) json: bool,
-    #[command(flatten)]
-    pub(crate) scope: EvalScopeArgs,
-}
-
-#[derive(clap::Args)]
-pub(crate) struct EvalResumeArgs {
-    pub(crate) run_id: String,
-    #[arg(long)]
-    pub(crate) json: bool,
-    #[command(flatten)]
-    pub(crate) scope: EvalScopeArgs,
-}
 ```
-
-In `crates/gents-cli/src/commands/eval/mod.rs`, add these imports and items, add `mod run;` after `mod manage;`, and replace `dispatch` and `execute`:
-
-```rust
-use gents::eval::checks::CheckRegistry;
-use gents::eval::runner::embedded::EmbeddedExecutor;
-use gents::eval::runner::{RunOptions, TrialExecutor};
-use tokio_util::sync::CancellationToken;
-
-/// What a command body runs trials with. `dispatch` supplies the embedded
-/// executor; tests supply a scripted one.
-pub(crate) struct Deps<'a> {
-    pub(crate) executor: &'a dyn TrialExecutor,
-    pub(crate) registry: &'a CheckRegistry,
-    pub(crate) cancel: CancellationToken,
-    pub(crate) options: RunOptions,
-}
-
-pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
-    let ctx = EvalContext::resolve(command.scope()).await?;
-    let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
-    let registry = CheckRegistry::builtin();
-    // Only a command that hosts a loop replaces the default interrupt: a
-    // read-only command stays killable by Ctrl-C.
-    let cancel = if matches!(command, EvalCommand::Run(_) | EvalCommand::Resume(_)) {
-        cancel_on_ctrl_c()
-    } else {
-        CancellationToken::new()
-    };
-    let deps = Deps {
-        executor: &executor,
-        registry: &registry,
-        cancel,
-        options: RunOptions::default(),
-    };
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    execute(&ctx, command, &deps, &mut out).await
-}
-
-pub(crate) async fn execute(
-    ctx: &EvalContext,
-    command: EvalCommand,
-    deps: &Deps<'_>,
-    out: &mut dyn Write,
-) -> Result<()> {
-    let result = match command {
-        EvalCommand::Run(args) => run::run(ctx, &args, deps, out).await,
-        EvalCommand::Resume(args) => run::resume(ctx, &args, deps, out).await,
-        EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
-        EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
-        EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
-        EvalCommand::Compare(args) => compare::compare(ctx, &args, out).await,
-        EvalCommand::Cancel(args) => manage::cancel(&ctx.runs_dir(), &args.run_id, out),
-        EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
-        EvalCommand::Rm(args) => manage::rm(ctx, &args, out).await,
-    };
-    result.map_err(surface_refusal)
-}
-
-/// A token Ctrl-C cancels. The loop then stops launching, leaves in-flight
-/// trials open for a resume, and the command prints how to resume.
-pub(crate) fn cancel_on_ctrl_c() -> CancellationToken {
-    let token = CancellationToken::new();
-    let cancel = token.clone();
-    tokio::spawn(async move {
-        if tokio::signal::ctrl_c().await.is_ok() {
-            tracing::warn!("interrupt: the run stops launching; resume it to continue");
-            cancel.cancel();
-        }
-    });
-    token
-}
-
-/// The commit this binary was built from, recorded on every run it freezes.
-pub(crate) fn source_commit() -> String {
-    option_env!("GENTS_BUILD_GIT_SHA")
-        .unwrap_or("unknown")
-        .to_owned()
-}
-
-pub(crate) fn source_dirty() -> bool {
-    option_env!("GENTS_BUILD_GIT_DIRTY") == Some("true")
-}
-```
-
-In `crates/gents-cli/src/commands/eval/testing.rs`, add `use gents::eval::runner::TrialExecutor;` and `use super::Deps;`, and replace `eval` with:
-
-```rust
-pub(crate) fn deps<'a>(
-    executor: &'a dyn TrialExecutor,
-    registry: &'a CheckRegistry,
-    cancel: CancellationToken,
-) -> Deps<'a> {
-    Deps {
-        executor,
-        registry,
-        cancel,
-        options: fast(),
-    }
-}
-
-/// Run `gents eval <argv…>` with `deps` and return what it wrote.
-pub(crate) async fn eval_with(
-    fixture: &Fixture,
-    argv: &[&str],
-    deps: &Deps<'_>,
-) -> anyhow::Result<String> {
-    let mut out = Vec::new();
-    execute(&fixture.ctx, eval_command(argv), deps, &mut out).await?;
-    Ok(String::from_utf8(out)?)
-}
-
-/// Run `gents eval <argv…>` with a scripted executor where every trial passes.
-pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String> {
-    let executor = executor(&[]);
-    let registry = CheckRegistry::builtin();
-    eval_with(fixture, argv, &deps(&executor, &registry, CancellationToken::new())).await
-}
-```
-
-Create `crates/gents-cli/src/commands/eval/run.rs` with only its tests:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use gents::eval::checks::CheckRegistry;
-    use tokio_util::sync::CancellationToken;
-
-    use super::super::testing::{
-        deps, eval, eval_with, executor, row, Fixture, DEFINITION, VALIDATION_CASES,
-    };
-    use crate::cli::{parse_cell, CellArg};
-
-    fn run_argv<'a>(run_id: &'a str, cells: &'a [String]) -> Vec<&'a str> {
-        let mut argv = vec!["run", DEFINITION, "--run-id", run_id];
-        for cell in cells {
-            argv.extend(["--cell", cell.as_str()]);
-        }
-        argv.extend(["--profile", "baseline=local", "--profile", "candidate=local"]);
-        argv
-    }
-
-    fn cells(pack: &str) -> Vec<String> {
-        vec![
-            format!("baseline={pack}"),
-            format!("candidate={pack}:monitor"),
-        ]
-    }
-
-    #[test]
-    fn a_cell_names_its_pack_and_optionally_a_behavior_with_colons() {
-        assert_eq!(
-            parse_cell("base=monitor:did:key:z6M:default").unwrap(),
-            CellArg {
-                cell_id: "base".into(),
-                pack: "monitor".into(),
-                behavior: Some("did:key:z6M:default".into()),
-            }
-        );
-        assert_eq!(parse_cell("base=/packs/monitor").unwrap().behavior, None);
-        assert!(parse_cell("no-equals").is_err());
-        assert!(parse_cell("base=").is_err());
-        assert!(parse_cell("base=monitor:").is_err());
-    }
-
-    #[tokio::test]
-    async fn run_prints_one_line_per_landed_slot_and_the_show_table() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cells = cells(&pack);
-        let scripted = executor(&VALIDATION_CASES[..3]);
-        let registry = CheckRegistry::builtin();
-        let output = eval_with(
-            &fixture,
-            &run_argv("r1", &cells),
-            &deps(&scripted, &registry, CancellationToken::new()),
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            output.lines().filter(|line| line.starts_with("landed ")).count(),
-            24,
-            "{output}"
-        );
-        assert!(output.contains("landed baseline val-a #0 attempt 1"), "{output}");
-        assert_eq!(
-            row(&output, "baseline", 10),
-            vec!["baseline", "6", "6", "0", "0", "0", "0", "12", "50.00%", "-/-"]
-        );
-        assert!(!output.contains("stopped before it finished"), "{output}");
-
-        let mut json_argv = run_argv("r2", &cells);
-        json_argv.push("--json");
-        let json: serde_json::Value = serde_json::from_str(
-            &eval_with(
-                &fixture,
-                &json_argv,
-                &deps(&scripted, &registry, CancellationToken::new()),
-            )
-            .await
-            .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(json["run"]["run_id"], "r2");
-        assert_eq!(json["run"]["source_commit"], super::super::source_commit());
-    }
-
-    #[tokio::test]
-    async fn a_cancelled_run_says_how_to_resume_and_resume_clears_the_marker_and_finishes() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cells = cells(&pack);
-        let scripted = executor(&[]);
-        let registry = CheckRegistry::builtin();
-        // What Ctrl-C does: cancel the token the command was given.
-        let interrupted = CancellationToken::new();
-        interrupted.cancel();
-        let stopped = eval_with(
-            &fixture,
-            &run_argv("r1", &cells),
-            &deps(&scripted, &registry, interrupted),
-        )
-        .await
-        .unwrap();
-        assert!(
-            stopped.contains(
-                "run r1 stopped before it finished (0 completed, 0 abandoned this pass); `gents eval resume r1` continues it"
-            ),
-            "{stopped}"
-        );
-        assert_eq!(row(&stopped, "baseline", 10)[6], "12");
-
-        eval(&fixture, &["cancel", "r1"]).await.unwrap();
-        let resumed = eval(&fixture, &["resume", "r1"]).await.unwrap();
-        assert!(resumed.starts_with("removing "), "{resumed}");
-        assert_eq!(
-            resumed.lines().filter(|line| line.starts_with("landed ")).count(),
-            24,
-            "{resumed}"
-        );
-        assert_eq!(row(&resumed, "candidate", 10)[1], "12", "{resumed}");
-        assert!(!fixture
-            .ctx
-            .runs_dir()
-            .join("r1")
-            .join(gents::eval::runner::CANCEL_MARKER)
-            .exists());
-    }
-
-    #[tokio::test]
-    async fn a_cell_without_a_profile_uses_the_homes_default_profile() {
-        let fixture = Fixture::new().await;
-        let pack = fixture.pack_arg();
-        let cell = format!("baseline={pack}");
-        let error = eval(&fixture, &["run", DEFINITION, "--cell", cell.as_str(), "--run-id", "r1"])
-            .await
-            .unwrap_err();
-        let profile = gents::default_inference_profile_id_for_behavior(
-            &gents::default_behavior_id_for_agent(&fixture.ctx.owner),
-        );
-        assert_eq!(
-            error.to_string(),
-            format!("cell \"baseline\" names no inference profile {profile:?}")
-        );
-
-        let stray = eval(
-            &fixture,
-            &["run", DEFINITION, "--cell", cell.as_str(), "--profile", "other=local"],
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(
-            stray.to_string(),
-            "--profile names cell \"other\", which no --cell declares"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_pack_name_resolves_like_pack_install_and_a_directory_names_its_behavior() {
-        let fixture = Fixture::new().await;
-        let directory = crate::commands::pack::resolve_subject_pack(
-            &fixture.ctx.home_dir,
-            &fixture.pack_arg(),
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-        assert_eq!(directory.directory(), Some(fixture.pack.as_path()));
-        assert_eq!(directory.default_behavior().unwrap(), "monitor");
-
-        let bundled = gents::pack::pack_catalog().unwrap()[0].name.clone();
-        let named = crate::commands::pack::resolve_subject_pack(
-            &fixture.ctx.home_dir,
-            &bundled,
-            None,
-            false,
-        )
-        .await
-        .unwrap();
-        assert!(
-            matches!(&named.source, gents::eval::runner::CellSource::InstalledPack { name } if *name == bundled),
-            "a compiled-in pack is handed to the runner by name"
-        );
-        let materialized = crate::commands::pack::resolve_subject_pack(
-            &fixture.ctx.home_dir,
-            &bundled,
-            None,
-            true,
-        )
-        .await
-        .unwrap();
-        assert!(materialized
-            .directory()
-            .is_some_and(|dir| dir.join("manifest.json").is_file()));
-    }
-}
-```
-
-- [ ] **Step 2: Run the tests to verify they fail**
-
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t10.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t10.log" | head -20`
-Expected: compile errors: `run::run`, `run::resume` and `resolve_subject_pack` not found.
-
-- [ ] **Step 3: Write the implementation**
 
 Append to `crates/gents-cli/src/commands/pack/mod.rs`, after `materialize_named_pack`:
 
@@ -7401,6 +7340,467 @@ pub(crate) async fn resolve_subject_pack(
 }
 ```
 
+In `crates/gents-cli/src/commands/eval/mod.rs`, add below `write_json`:
+
+```rust
+/// The commit this binary was built from, recorded on every run it freezes.
+pub(crate) fn source_commit() -> String {
+    option_env!("GENTS_BUILD_GIT_SHA")
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+pub(crate) fn source_dirty() -> bool {
+    option_env!("GENTS_BUILD_GIT_DIRTY") == Some("true")
+}
+
+/// Ruling F14: `<definition>-<unix ms>-<4 random hex>`, unique per call. An
+/// operator who wants a run or job reused (the idempotent freeze, a resume)
+/// names it with `--run-id` or `--job-id`.
+pub(crate) fn default_id(definition_id: &str) -> String {
+    let random = uuid::Uuid::new_v4().simple().to_string();
+    format!(
+        "{definition_id}-{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        &random[..4]
+    )
+}
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t10.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t10.log" | tail -20` then `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::pack > "$LOG/t10-pack.log" 2>&1; grep -E "test result|panicked" "$LOG/t10-pack.log"`
+Expected: the three new tests pass; the existing pack tests still pass.
+
+- [ ] **Step 5: Format and commit**
+
+```bash
+cargo fmt --all && cargo fmt --all --check
+git add crates/gents-cli/
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): subject packs resolved like pack install, cell arguments and fresh default ids (#1515)"
+```
+
+### Task 10b: `run` and `resume`, with Ctrl-C
+
+**Files:**
+- Modify: `crates/gents-cli/src/cli/args.rs` (`EvalCommand::{Run, Resume}`, their `scope()` arms, `EvalRunArgs`, `EvalResumeArgs`)
+- Modify: `crates/gents-cli/src/commands/eval/mod.rs` (`mod run;`, `Deps`, `cancel_on_ctrl_c`; `dispatch` and `execute` take `Deps`)
+- Modify: `crates/gents-cli/src/commands/eval/testing.rs` (`deps`, `eval_with`; `eval` passes default `Deps`)
+- Create: `crates/gents-cli/src/commands/eval/run.rs`
+
+**Interfaces:**
+- Consumes:
+  ```rust
+  pub async fn gents::eval::runner::run(access, request: &RunRequest, executor: &dyn TrialExecutor, registry: &CheckRegistry,
+      cancel: CancellationToken, options: &RunOptions) -> Result<RunOutcome>;
+  #[allow(clippy::too_many_arguments)]
+  pub async fn gents::eval::runner::resume(access, owner: &str, run_id: &str, runs_dir: &Path, executor: &dyn TrialExecutor,
+      registry: &CheckRegistry, cancel: CancellationToken, options: &RunOptions) -> Result<RunOutcome>;   // removes the cancel marker (Task 4)
+  pub struct gents::eval::runner::RunRequest { run_id, owner, evaluator_did, definition_id, split: EvalSplit, case_ids: Option<Vec<String>>,
+      cells: Vec<CellRequest>, trials_per_case: u32, seed_base: i64, deadline_secs: Option<u64>, concurrency: u32, max_infra_retries: u32,
+      breaker_threshold: u32, purpose: String, source_commit: String, source_dirty: bool, captures: Vec<Capture>, runs_dir: PathBuf }
+  pub struct gents::eval::runner::CellRequest { cell_id, label, source: CellSource, behavior_id, inference_profile_id }
+  pub enum gents::eval::runner::CellSource { InstalledPack { name: String }, Directory(PathBuf) }
+  pub struct gents::eval::runner::RunOutcome { pub run_id: String, pub completed: u32, pub abandoned: u32, pub not_evidence: u32, pub breaker_tripped: bool }
+  pub struct gents::eval::runner::embedded::EmbeddedExecutor;  impl { pub fn new(runtime_options: DocumentRuntimeOptions, runs_dir: PathBuf) -> Self }
+  gents::DocumentRuntimeOptions: Default;  gents::eval::checks::CheckRegistry::builtin() -> CheckRegistry
+  pub fn gents::eval::documents::default_breaker_threshold() -> u32;   // 5
+  pub fn gents::default_behavior_id_for_agent(agent_did: &str) -> String;                  // "{did}:default"
+  pub fn gents::default_inference_profile_id_for_behavior(behavior_id: &str) -> String;    // "{behavior_id}-profile"
+  // crates/gents-cli/src/commands/pack/mod.rs (existing, private)
+  enum PackSource { Bundled(ResolvedPack), Registry(registry::RegistryPack) }   // fn manifest(&self) -> &PackManifest
+  async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Result<PackSource>;
+  fn materialize_cached_pack(home: &Path, pack: &PackSource) -> Result<(PathBuf, std::fs::File)>;   // shared-locked cache entry
+  // gents::pack::PackManifest { name, metadata: PackMetadata { inference_slots: Vec<PackInferenceSlot { name, description, behaviors: Vec<String> }>, .. }, .. }
+  // crates/gents-cli/build.rs sets GENTS_BUILD_GIT_SHA and GENTS_BUILD_GIT_DIRTY ("true"/"false") for this crate
+  ```
+- Already produced by Task 10 and only consumed here: `CellArg`, `parse_cell`, `parse_assignment`, `parse_split`, `SubjectPack`, `resolve_subject_pack`, `source_commit`, `source_dirty`, `default_id` (the block below repeats their signatures for reference).
+- Produces:
+  ```rust
+  // crates/gents-cli/src/cli/args.rs
+  pub(crate) struct CellArg { pub(crate) cell_id: String, pub(crate) pack: String, pub(crate) behavior: Option<String> }
+  pub(crate) fn parse_cell(raw: &str) -> Result<CellArg, String>;                 // "<id>=<pack>[:<behavior>]", split at the first ':'
+  pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String>;   // "<cell>=<profile_id>"
+  pub(crate) fn parse_split(raw: &str) -> Result<EvalSplit, String>;              // train | validation | held_out
+  pub(crate) struct EvalRunArgs { definition_id, cells: Vec<CellArg>, profiles: Vec<(String, String)>, split: EvalSplit, trials: u32,
+      seed_base: i64, concurrency: u32, purpose: String, run_id: Option<String>, max_infra_retries: u32, registry: Option<String>, json: bool, scope }
+  pub(crate) struct EvalResumeArgs { run_id, json: bool, scope }
+  // crates/gents-cli/src/commands/pack/mod.rs
+  pub(crate) struct SubjectPack { pub(crate) source: CellSource, pub(crate) manifest: PackManifest, /* private lease */ }
+  impl SubjectPack { pub(crate) fn directory(&self) -> Option<&Path>; pub(crate) fn default_behavior(&self) -> Result<String> }
+  pub(crate) async fn resolve_subject_pack(home: &Path, spec: &str, registry: Option<&str>, directory: bool) -> Result<SubjectPack>;
+  // crates/gents-cli/src/commands/eval/mod.rs
+  pub(crate) struct Deps<'a> { pub(crate) executor: &'a dyn TrialExecutor, pub(crate) registry: &'a CheckRegistry,
+      pub(crate) cancel: CancellationToken, pub(crate) options: RunOptions }
+  pub(crate) async fn execute(ctx: &EvalContext, command: EvalCommand, deps: &Deps<'_>, out: &mut dyn Write) -> Result<()>;
+  pub(crate) fn cancel_on_ctrl_c() -> CancellationToken;
+  pub(crate) fn source_commit() -> String;  pub(crate) fn source_dirty() -> bool;
+  // crates/gents-cli/src/commands/eval/testing.rs
+  pub(crate) fn deps<'a>(executor: &'a dyn TrialExecutor, registry: &'a CheckRegistry, cancel: CancellationToken) -> Deps<'a>;
+  pub(crate) async fn eval_with(fixture: &Fixture, argv: &[&str], deps: &Deps<'_>) -> anyhow::Result<String>;
+  ```
+
+- [ ] **Step 1: Add the arguments, `Deps`, the fixture helpers and the failing tests**
+
+In `crates/gents-cli/src/cli/args.rs`, add to `EvalCommand` (first, so `gents eval --help` lists it first):
+
+```rust
+    #[command(about = "Freeze and run an eval over one or more cells; Ctrl-C cancels")]
+    Run(EvalRunArgs),
+    #[command(about = "Continue a run from what it already wrote")]
+    Resume(EvalResumeArgs),
+```
+
+to `scope()`: `Self::Run(args) => &args.scope,` and `Self::Resume(args) => &args.scope,`; and after `parse_split` (Task 10):
+
+```rust
+#[derive(clap::Args)]
+pub(crate) struct EvalRunArgs {
+    pub(crate) definition_id: String,
+    /// `<id>=<pack>[:<behavior>]`, once per cell.
+    #[arg(long = "cell", value_parser = parse_cell, required = true)]
+    pub(crate) cells: Vec<CellArg>,
+    /// `<cell>=<inference_profile_id>`; a cell without one uses the home's
+    /// default profile.
+    #[arg(long = "profile", value_parser = parse_assignment)]
+    pub(crate) profiles: Vec<(String, String)>,
+    #[arg(long, value_parser = parse_split, default_value = "validation")]
+    pub(crate) split: gents::document_config::EvalSplit,
+    #[arg(long, default_value_t = 2)]
+    pub(crate) trials: u32,
+    #[arg(long, default_value_t = 1000)]
+    pub(crate) seed_base: i64,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) concurrency: u32,
+    #[arg(long, default_value = "eval")]
+    pub(crate) purpose: String,
+    /// Defaults to `<definition_id>-<unix ms>-<4 random hex>`, fresh every
+    /// time; name a run with `--run-id` to reuse it (the idempotent freeze).
+    #[arg(long)]
+    pub(crate) run_id: Option<String>,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) max_infra_retries: u32,
+    /// The pack registry to fall back to for a pack not compiled in. As with
+    /// `gents pack install`, a registry download is cached under the default
+    /// home, not `--home` (inherited behavior, ruling U13).
+    #[arg(long)]
+    pub(crate) registry: Option<String>,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalResumeArgs {
+    pub(crate) run_id: String,
+    #[arg(long)]
+    pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+```
+
+In `crates/gents-cli/src/commands/eval/mod.rs`, add these imports and items, add `mod run;` after `mod manage;`, and replace `dispatch` and `execute`:
+
+```rust
+use gents::eval::checks::CheckRegistry;
+use gents::eval::runner::embedded::EmbeddedExecutor;
+use gents::eval::runner::{RunOptions, TrialExecutor};
+use tokio_util::sync::CancellationToken;
+
+/// What a command body runs trials with. `dispatch` supplies the embedded
+/// executor; tests supply a scripted one.
+pub(crate) struct Deps<'a> {
+    pub(crate) executor: &'a dyn TrialExecutor,
+    pub(crate) registry: &'a CheckRegistry,
+    pub(crate) cancel: CancellationToken,
+    pub(crate) options: RunOptions,
+}
+
+pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
+    let ctx = EvalContext::resolve(command.scope()).await?;
+    let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
+    let registry = CheckRegistry::builtin();
+    // Only a command that hosts a loop replaces the default interrupt: a
+    // read-only command stays killable by Ctrl-C.
+    let cancel = if matches!(command, EvalCommand::Run(_) | EvalCommand::Resume(_)) {
+        cancel_on_ctrl_c()
+    } else {
+        CancellationToken::new()
+    };
+    let deps = Deps {
+        executor: &executor,
+        registry: &registry,
+        cancel,
+        options: RunOptions::default(),
+    };
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    execute(&ctx, command, &deps, &mut out).await
+}
+
+pub(crate) async fn execute(
+    ctx: &EvalContext,
+    command: EvalCommand,
+    deps: &Deps<'_>,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let result = match command {
+        EvalCommand::Run(args) => run::run(ctx, &args, deps, out).await,
+        EvalCommand::Resume(args) => run::resume(ctx, &args, deps, out).await,
+        EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
+        EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
+        EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
+        EvalCommand::Compare(args) => compare::compare(ctx, &args, out).await,
+        EvalCommand::Cancel(args) => manage::cancel_run(ctx, &args, out).await,
+        EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
+        EvalCommand::Rm(args) => manage::rm(ctx, &args, out).await,
+    };
+    result.map_err(surface_refusal)
+}
+
+/// A token Ctrl-C cancels. The loop then stops launching, leaves in-flight
+/// trials open for a resume, and the command prints how to resume.
+pub(crate) fn cancel_on_ctrl_c() -> CancellationToken {
+    let token = CancellationToken::new();
+    let cancel = token.clone();
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::warn!("interrupt: the run stops launching; resume it to continue");
+            cancel.cancel();
+        }
+    });
+    token
+}
+```
+
+In `crates/gents-cli/src/commands/eval/testing.rs`, add `use gents::eval::runner::TrialExecutor;` and `use super::Deps;`, and replace `eval` with:
+
+```rust
+pub(crate) fn deps<'a>(
+    executor: &'a dyn TrialExecutor,
+    registry: &'a CheckRegistry,
+    cancel: CancellationToken,
+) -> Deps<'a> {
+    Deps {
+        executor,
+        registry,
+        cancel,
+        options: fast(),
+    }
+}
+
+/// Run `gents eval <argv…>` with `deps` and return what it wrote.
+pub(crate) async fn eval_with(
+    fixture: &Fixture,
+    argv: &[&str],
+    deps: &Deps<'_>,
+) -> anyhow::Result<String> {
+    let mut out = Vec::new();
+    execute(&fixture.ctx, eval_command(argv), deps, &mut out).await?;
+    Ok(String::from_utf8(out)?)
+}
+
+/// Run `gents eval <argv…>` with a scripted executor where every trial passes.
+pub(crate) async fn eval(fixture: &Fixture, argv: &[&str]) -> anyhow::Result<String> {
+    let executor = executor(&[]);
+    let registry = CheckRegistry::builtin();
+    eval_with(fixture, argv, &deps(&executor, &registry, CancellationToken::new())).await
+}
+```
+
+Create `crates/gents-cli/src/commands/eval/run.rs` with only its tests:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use gents::eval::checks::CheckRegistry;
+    use tokio_util::sync::CancellationToken;
+
+    use super::super::testing::{
+        deps, eval, eval_with, executor, row, Fixture, DEFINITION, VALIDATION_CASES,
+    };
+
+    fn run_argv<'a>(run_id: &'a str, cells: &'a [String]) -> Vec<&'a str> {
+        let mut argv = vec!["run", DEFINITION, "--run-id", run_id];
+        for cell in cells {
+            argv.extend(["--cell", cell.as_str()]);
+        }
+        argv.extend(["--profile", "baseline=local", "--profile", "candidate=local"]);
+        argv
+    }
+
+    /// Ruling F15: a refused resume prints nothing about the marker.
+    #[tokio::test]
+    async fn a_refused_resume_says_nothing_about_the_marker() {
+        let fixture = Fixture::new().await;
+        let interrupted = CancellationToken::new();
+        interrupted.cancel();
+        fixture.scripted_run("r1", &executor(&[]), interrupted).await;
+        eval(&fixture, &["cancel", "r1"]).await.unwrap();
+        eval(&fixture, &["invalidate", "r1", "--reason", "broken fixture"])
+            .await
+            .unwrap();
+        let mut out = Vec::new();
+        let scripted = executor(&[]);
+        let registry = CheckRegistry::builtin();
+        let error = super::super::execute(
+            &fixture.ctx,
+            super::super::testing::eval_command(&["resume", "r1"]),
+            &deps(&scripted, &registry, CancellationToken::new()),
+            &mut out,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("invalidated"), "{error:#}");
+        assert!(out.is_empty(), "{}", String::from_utf8_lossy(&out));
+        assert!(fixture
+            .ctx
+            .runs_dir()
+            .join("r1")
+            .join(gents::eval::runner::CANCEL_MARKER)
+            .exists());
+    }
+
+    fn cells(pack: &str) -> Vec<String> {
+        vec![
+            format!("baseline={pack}"),
+            format!("candidate={pack}:monitor"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn run_prints_one_line_per_landed_slot_and_the_show_table() {
+        let fixture = Fixture::new().await;
+        let pack = fixture.pack_arg();
+        let cells = cells(&pack);
+        let scripted = executor(&VALIDATION_CASES[..3]);
+        let registry = CheckRegistry::builtin();
+        let output = eval_with(
+            &fixture,
+            &run_argv("r1", &cells),
+            &deps(&scripted, &registry, CancellationToken::new()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            output.lines().filter(|line| line.starts_with("landed ")).count(),
+            24,
+            "{output}"
+        );
+        assert!(output.contains("landed baseline val-a #0 attempt 1"), "{output}");
+        assert_eq!(
+            row(&output, "baseline", 10),
+            vec!["baseline", "6", "6", "0", "0", "0", "0", "12", "50.00%", "-/-"]
+        );
+        assert!(!output.contains("stopped before it finished"), "{output}");
+
+        let mut json_argv = run_argv("r2", &cells);
+        json_argv.push("--json");
+        let json: serde_json::Value = serde_json::from_str(
+            &eval_with(
+                &fixture,
+                &json_argv,
+                &deps(&scripted, &registry, CancellationToken::new()),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["run"]["run_id"], "r2");
+
+        // Ruling F14: without --run-id, a fresh id every time.
+        let fresh: Vec<&str> = run_argv("unused", &cells)
+            .into_iter()
+            .filter(|arg| *arg != "--run-id" && *arg != "unused")
+            .collect();
+        let first = eval_with(&fixture, &fresh, &deps(&scripted, &registry, CancellationToken::new()))
+            .await
+            .unwrap();
+        assert!(first.contains(&format!("run {DEFINITION}-")), "{first}");
+        assert_eq!(json["run"]["source_commit"], super::super::source_commit());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_run_says_how_to_resume_and_resume_clears_the_marker_and_finishes() {
+        let fixture = Fixture::new().await;
+        let pack = fixture.pack_arg();
+        let cells = cells(&pack);
+        let scripted = executor(&[]);
+        let registry = CheckRegistry::builtin();
+        // What Ctrl-C does: cancel the token the command was given.
+        let interrupted = CancellationToken::new();
+        interrupted.cancel();
+        let stopped = eval_with(
+            &fixture,
+            &run_argv("r1", &cells),
+            &deps(&scripted, &registry, interrupted),
+        )
+        .await
+        .unwrap();
+        assert!(
+            stopped.contains(
+                "run r1 stopped before it finished (0 completed, 0 abandoned this pass); `gents eval resume r1` continues it"
+            ),
+            "{stopped}"
+        );
+        assert_eq!(row(&stopped, "baseline", 10)[6], "12");
+
+        eval(&fixture, &["cancel", "r1"]).await.unwrap();
+        let resumed = eval(&fixture, &["resume", "r1"]).await.unwrap();
+        assert!(resumed.contains("cleared the cancel marker "), "{resumed}");
+        assert_eq!(
+            resumed.lines().filter(|line| line.starts_with("landed ")).count(),
+            24,
+            "{resumed}"
+        );
+        assert_eq!(row(&resumed, "candidate", 10)[1], "12", "{resumed}");
+        assert!(!fixture
+            .ctx
+            .runs_dir()
+            .join("r1")
+            .join(gents::eval::runner::CANCEL_MARKER)
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn a_cell_without_a_profile_uses_the_homes_default_profile() {
+        let fixture = Fixture::new().await;
+        let pack = fixture.pack_arg();
+        let cell = format!("baseline={pack}");
+        let error = eval(&fixture, &["run", DEFINITION, "--cell", cell.as_str(), "--run-id", "r1"])
+            .await
+            .unwrap_err();
+        let profile = gents::default_inference_profile_id_for_behavior(
+            &gents::default_behavior_id_for_agent(&fixture.ctx.owner),
+        );
+        assert_eq!(
+            error.to_string(),
+            format!("cell \"baseline\" names no inference profile {profile:?}")
+        );
+
+        let stray = eval(
+            &fixture,
+            &["run", DEFINITION, "--cell", cell.as_str(), "--profile", "other=local"],
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            stray.to_string(),
+            "--profile names cell \"other\", which no --cell declares"
+        );
+    }
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t10b.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t10b.log" | head -20`
+Expected: compile errors: `run::run` and `run::resume` not found.
+
+- [ ] **Step 3: Write the implementation**
+
 Insert above the test module in `crates/gents-cli/src/commands/eval/run.rs`:
 
 ```rust
@@ -7420,7 +7820,7 @@ use gents::eval::report::load_report;
 use gents::eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
 use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
 
-use super::{render, source_commit, source_dirty, write_json, Deps, EvalContext};
+use super::{default_id, render, source_commit, source_dirty, write_json, Deps, EvalContext};
 use crate::cli::{EvalResumeArgs, EvalRunArgs};
 use crate::commands::pack::{resolve_subject_pack, SubjectPack};
 
@@ -7452,7 +7852,7 @@ pub(super) async fn run(
         ),
     )
     .await;
-    finish(ctx, &run_id, args.json, deps, result, out).await
+    finish(ctx, &run_id, args.json, result, out).await
 }
 
 pub(super) async fn resume(
@@ -7461,10 +7861,11 @@ pub(super) async fn resume(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
+    // Ruling F15: `runner::resume` thaws the run before it touches the
+    // marker, so a refused resume (an invalidated run, a changed pack) says
+    // nothing about it; the notice is printed only once the resume ran.
     let marker = runner::run_dir(&ctx.runs_dir(), &args.run_id)?.join(CANCEL_MARKER);
-    if marker.exists() && !args.json {
-        writeln!(out, "removing {} before resuming", marker.display())?;
-    }
+    let had_marker = marker.exists();
     let landed: BTreeSet<String> = load_trials(&ctx.access, &ctx.owner, &args.run_id)
         .await?
         .into_iter()
@@ -7489,7 +7890,10 @@ pub(super) async fn resume(
         ),
     )
     .await;
-    finish(ctx, &args.run_id, args.json, deps, result, out).await
+    if result.is_ok() && had_marker && !args.json {
+        writeln!(out, "cleared the cancel marker {}", marker.display())?;
+    }
+    finish(ctx, &args.run_id, args.json, result, out).await
 }
 
 async fn run_request(ctx: &EvalContext, args: &EvalRunArgs) -> Result<(RunRequest, Vec<SubjectPack>)> {
@@ -7524,13 +7928,10 @@ async fn run_request(ctx: &EvalContext, args: &EvalRunArgs) -> Result<(RunReques
         packs.push(pack);
     }
     let request = RunRequest {
-        run_id: args.run_id.clone().unwrap_or_else(|| {
-            format!(
-                "{}-{}",
-                args.definition_id,
-                chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
-            )
-        }),
+        run_id: args
+            .run_id
+            .clone()
+            .unwrap_or_else(|| default_id(&args.definition_id)),
         owner: ctx.owner.clone(),
         evaluator_did: ctx.owner.clone(),
         definition_id: args.definition_id.clone(),
@@ -7626,16 +8027,12 @@ async fn finish(
     ctx: &EvalContext,
     run_id: &str,
     json: bool,
-    deps: &Deps<'_>,
     result: Result<RunOutcome>,
     out: &mut dyn Write,
 ) -> Result<()> {
     let outcome = result?;
-    let stopped = deps.cancel.is_cancelled()
-        || outcome.abandoned > 0
-        || runner::run_dir(&ctx.runs_dir(), run_id)?
-            .join(CANCEL_MARKER)
-            .exists();
+    // Ruling F1: the pass says whether the token or a marker stopped it.
+    let stopped = outcome.cancelled || outcome.abandoned > 0;
     if stopped {
         let note = format!(
             "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents eval resume {run_id}` continues it",
@@ -7660,10 +8057,8 @@ Note `CellSource` must be `Clone` for `pack.source.clone()`; it derives `Clone, 
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t10.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t10.log" | tail -30`
-Expected: the five `run::tests` pass, and every earlier `commands::eval` test still passes.
-
-Then `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::pack > "$LOG/t10-pack.log" 2>&1; grep -E "test result|panicked" "$LOG/t10-pack.log"` — the existing pack tests still pass.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t10b.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t10b.log" | tail -30`
+Expected: the four `run::tests` pass, and every earlier `commands::eval` test still passes.
 
 - [ ] **Step 5: Format and commit**
 
@@ -7673,7 +8068,7 @@ git add crates/gents-cli/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): gents eval run and resume follow the loop and cancel on Ctrl-C (#1515)"
 ```
 
-### Task 10a: A binary smoke test of `eval run` (ruling U6)
+### Task 10c: A binary smoke test of `eval run` (ruling U6)
 
 The embedded path (`dispatch` building `EmbeddedExecutor`) is covered by the canary for the runner and by this one test for the CLI wiring; no CLI test runs a trial on an embedded home.
 
@@ -7735,8 +8130,8 @@ mod cli_eval;
 
 - [ ] **Step 2: Run it**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --test cli_offline cli_eval:: > "$LOG/t10a.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t10a.log"`
-Expected: it passes on the Task 10 code (this task adds coverage, not behavior). If it fails, the failure is a Task 10 defect: fix it there.
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --test cli_offline cli_eval:: > "$LOG/t10c.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t10c.log"`
+Expected: it passes on the Task 10b code (this task adds coverage, not behavior). If it fails, the failure is a Task 10b defect: fix it there.
 
 - [ ] **Step 3: Format and commit**
 
@@ -7749,7 +8144,7 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
 ### PR 2 gate
 
 - [ ] Run, one at a time and logged: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval`, `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib`, `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --test cli_offline`, `CARGO_BUILD_JOBS=4 cargo check --workspace --all-targets`, `cargo fmt --all --check`. Expected: all pass; record counts in the ledger.
-- [ ] Record in the ledger that Task 10a's binary smoke test passed, and that `cargo run -p gents-cli --bin gents -- eval run x --cell bad` exits 2 with the `--cell` usage message.
+- [ ] Record in the ledger that Task 10c's binary smoke test passed, and that `cargo run -p gents-cli --bin gents -- eval run x --cell bad` exits 2 with the `--cell` usage message.
 
 ---
 
@@ -7763,7 +8158,7 @@ Branch `eval/52-optimization-cli`, base `eval/51-cli` (which stacks on `<M4-BASE
 | `crates/gents-cli/src/lib.rs` | One dispatch arm |
 | `crates/gents-cli/src/commands/mod.rs` | `pub(crate) mod optimization;` |
 | `crates/gents-cli/src/commands/eval/mod.rs` | `EvalContext::jobs_dir` |
-| `crates/gents-cli/src/commands/optimization/mod.rs` | `dispatch`, `execute`, `surface_refusal`, `run`, `show`, `promote`, `revert`, `rm`, `removable` |
+| `crates/gents-cli/src/commands/optimization/mod.rs` | `dispatch`, `execute`, `surface_refusal`, `run`, `show`, `promote`, `revert`, `rm` |
 | `crates/gents-cli/src/commands/optimization/render.rs` | `journal_line`, `job_table` |
 | `crates/gents-cli/src/commands/optimization/testing.rs` | `#[cfg(test)]` proposer file and command helpers |
 
@@ -7905,8 +8300,9 @@ pub(crate) struct OptimizationRunArgs {
     /// `defaults` (with max_rounds set to --rounds) when absent.
     #[arg(long, value_parser = parse_policy)]
     pub(crate) policy: Option<PolicyArg>,
-    /// Defaults to `<definition_id>-<UTC timestamp>`; repeat it with the same
-    /// flags to resume a stopped job.
+    /// Defaults to `<definition_id>-<unix ms>-<4 random hex>`, fresh every
+    /// time (ruling F14); name the job with `--job-id` and repeat the same
+    /// flags to resume it.
     #[arg(long)]
     pub(crate) job_id: Option<String>,
     #[arg(long, value_parser = parse_proposer)]
@@ -8152,7 +8548,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cli::{OptimizationCommand, OptimizationRunArgs, OptimizationShowArgs};
 use crate::commands::eval::{
-    cancel_on_ctrl_c, load_policy, source_commit, source_dirty, write_json, Deps, EvalContext,
+    cancel_on_ctrl_c, default_id, load_policy, source_commit, source_dirty, write_json, Deps,
+    EvalContext,
 };
 use crate::commands::pack::resolve_subject_pack;
 
@@ -8247,13 +8644,10 @@ async fn run(
             ..PolicyV2::uncalibrated()
         },
     };
-    let job_id = args.job_id.clone().unwrap_or_else(|| {
-        format!(
-            "{}-{}",
-            args.definition_id,
-            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
-        )
-    });
+    let job_id = args
+        .job_id
+        .clone()
+        .unwrap_or_else(|| default_id(&args.definition_id));
     let request = JobRequest {
         job_id: job_id.clone(),
         owner: ctx.owner.clone(),
@@ -8733,11 +9127,11 @@ git add crates/gents-cli/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): gents optimization promote and revert print refusals verbatim (#1515)"
 ```
 
-### Task 12a: `optimization rm` (ruling U1)
+### Task 12a: `optimization rm` (rulings U1, F2, F8)
 
 **Files:**
 - Modify: `crates/gents-cli/src/cli/args.rs` (`OptimizationCommand::Rm`, its `scope()` arm, `OptimizationRmArgs`)
-- Modify: `crates/gents-cli/src/commands/optimization/mod.rs` (`removable`, `rm`, one `execute` arm, tests)
+- Modify: `crates/gents-cli/src/commands/optimization/mod.rs` (`rm`, one `execute` arm, tests)
 
 **Interfaces:**
 - Consumes:
@@ -8745,18 +9139,18 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
   pub async fn gents::optimization::load_job(access, owner, job_id) -> Result<Option<JobRecord>>;
   pub fn gents::optimization::derive_state(journal: &[JournalEntry]) -> JobState;
   pub fn gents::optimization::job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf;   // <jobs_dir>/<job_id>
+  pub fn gents::optimization::removable(state: &JobState) -> bool;                 // Task 4b: NothingToPromote|Exhausted|Failed|Stale|Promoted|Reverted
+  pub async fn gents::optimization::promote(access, owner, job_id, digest: &str, by: &str) -> Result<Promotion>;   // Promotion { target_digest, .. }
+  pub async fn gents::optimization::revert(access, owner, job_id, digest: &str, by: &str) -> Result<()>;
   pub struct JobOrigin { pub jobs_dir: PathBuf, .. }                                // ruling R8: the job's own jobs_dir
-  pub enum JournalEntry { Finalized { state: JobState }, .. }
-  pub(crate) fn crate::commands::eval::manage::dir_size(path: &Path) -> Result<u64>;   // Task 8, module made pub(crate)
-  // Task 11: testing::{optimization, optimization_with, accepted_job, proposer_file}; eval testing::{Fixture, deps, executor, DEFINITION}
+  pub(crate) fn crate::commands::eval::manage::dir_size(path: &Path) -> Result<u64>;   // Task 8, module pub(crate)
+  // Task 11: testing::{optimization, optimization_with, accepted_job, proposer_file}; eval testing::{Fixture, deps, executor, eval, DEFINITION}
   ```
 - Produces:
   ```rust
   pub(crate) struct OptimizationRmArgs { pub(crate) job_id: String, pub(crate) force: bool, pub(crate) scope: EvalScopeArgs }
-  /// A job whose directory may go without --force: finalized, promoted, reverted or failed.
-  pub(crate) fn removable(journal: &[JournalEntry]) -> bool;
   ```
-  `gents optimization rm <job_id> [--force]` deletes `<origin.jobs_dir>/<job_id>/` (baseline copy, candidate packs, staging); the job's documents and its runs stay. Without `--force` it refuses a job that is none of Finalized, Reverted, Failed, Promoted.
+  `gents optimization rm <job_id> [--force]` deletes `<origin.jobs_dir>/<job_id>/` (baseline copy, candidate packs, staging); the job's documents and runs stay. Without `--force` it refuses a job that `removable` does not accept: `Running`, and `ReadyToPromote` (whose promotion rebuilds from that directory).
 
 - [ ] **Step 1: Add the arguments and the failing tests**
 
@@ -8773,7 +9167,7 @@ to `scope()`: `Self::Rm(args) => &args.scope,` and:
 #[derive(clap::Args)]
 pub(crate) struct OptimizationRmArgs {
     pub(crate) job_id: String,
-    /// Delete even while the job is still running.
+    /// Delete even while the job is running or waiting to be promoted.
     #[arg(long)]
     pub(crate) force: bool,
     #[command(flatten)]
@@ -8781,11 +9175,11 @@ pub(crate) struct OptimizationRmArgs {
 }
 ```
 
-Append inside `mod tests` in `crates/gents-cli/src/commands/optimization/mod.rs` (adding `use gents::eval::checks::CheckRegistry; use tokio_util::sync::CancellationToken; use super::testing::{optimization_with, proposer_file}; use crate::commands::eval::testing::{deps, executor};`):
+Append inside `mod tests` in `crates/gents-cli/src/commands/optimization/mod.rs` (adding `use gents::eval::checks::CheckRegistry; use tokio_util::sync::CancellationToken; use super::testing::{optimization_with, proposer_file}; use crate::commands::eval::testing::{deps, eval, executor};`):
 
 ```rust
     #[tokio::test]
-    async fn rm_refuses_a_running_job_then_forces_and_removes_a_settled_one() {
+    async fn rm_keeps_running_and_ready_jobs_and_removes_a_reverted_one() {
         let fixture = Fixture::new().await;
         // What Ctrl-C leaves: a job frozen and still running.
         let pack = fixture.pack_arg();
@@ -8809,18 +9203,58 @@ Append inside `mod tests` in `crates/gents-cli/src/commands/optimization/mod.rs`
         let refused = optimization(&fixture, &["rm", "job-running"]).await.unwrap_err();
         assert_eq!(
             refused.to_string(),
-            "job job-running is running: only a finalized, promoted, reverted or failed job's directory is removed without --force"
+            "job job-running is running: only a job that is nothing_to_promote, exhausted, failed, stale, promoted or reverted is removed without --force"
         );
         let forced = optimization(&fixture, &["rm", "job-running", "--force"]).await.unwrap();
         assert!(forced.contains("bytes reclaimed"), "{forced}");
         assert!(!running_dir.exists());
 
+        // Ruling F2: a job waiting to be promoted keeps its directory.
         accepted_job(&fixture, "job-1").await;
+        let kept = optimization(&fixture, &["rm", "job-1"]).await.unwrap_err();
+        assert!(kept.to_string().starts_with("job job-1 is ready_to_promote: "), "{kept:#}");
+
+        // Ruling F8: `eval rm` refuses a run a job still needs.
+        let held = gents::optimization::held_runs(&fixture.ctx.access, &fixture.ctx.owner)
+            .await
+            .unwrap();
+        let (run_id, _) = held.iter().next().expect("the ready job holds its runs");
+        let refused = eval(&fixture, &["rm", run_id.as_str()]).await.unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "run {run_id} is evidence of optimization job job-1, which is ready_to_promote; pass --force to delete its directory anyway"
+            )
+        );
+
+        // Promoted, then reverted: removable.
+        let view = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
+            .await
+            .unwrap();
+        let digest = view.checkpoint.expect("a retained checkpoint").pack_digest;
+        let promotion = gents::optimization::promote(
+            &fixture.ctx.access,
+            &fixture.ctx.owner,
+            "job-1",
+            &digest,
+            &fixture.ctx.owner,
+        )
+        .await
+        .unwrap();
+        gents::optimization::revert(
+            &fixture.ctx.access,
+            &fixture.ctx.owner,
+            "job-1",
+            &promotion.target_digest,
+            &fixture.ctx.owner,
+        )
+        .await
+        .unwrap();
         let removed = optimization(&fixture, &["rm", "job-1"]).await.unwrap();
         assert!(removed.starts_with("removed "), "{removed}");
         assert!(!fixture.ctx.jobs_dir().join("job-1").exists());
         let shown = optimization(&fixture, &["show", "job-1"]).await.unwrap();
-        assert!(shown.contains("state ready_to_promote"), "the documents stay: {shown}");
+        assert!(shown.contains("state reverted"), "the documents stay: {shown}");
     }
 ```
 
@@ -8831,20 +9265,9 @@ Expected: a non-exhaustive `match` error in `execute` (`Rm` not covered).
 
 - [ ] **Step 3: Write the implementation**
 
-In `crates/gents-cli/src/commands/optimization/mod.rs`, add `derive_state, job_dir, JournalEntry` to the `gents::optimization::{…}` import and `OptimizationRmArgs` to the `crate::cli::{…}` import; add the arm `OptimizationCommand::Rm(args) => rm(ctx, &args, out).await,`; and add:
+In `crates/gents-cli/src/commands/optimization/mod.rs`, add `derive_state, job_dir, removable` to the `gents::optimization::{…}` import and `OptimizationRmArgs` to the `crate::cli::{…}` import; add the arm `OptimizationCommand::Rm(args) => rm(ctx, &args, out).await,`; and add:
 
 ```rust
-/// Ruling U1: finalized (any `Finalized` entry), promoted, reverted or failed.
-pub(crate) fn removable(journal: &[JournalEntry]) -> bool {
-    journal
-        .iter()
-        .any(|entry| matches!(entry, JournalEntry::Finalized { .. }))
-        || matches!(
-            derive_state(journal),
-            JobState::Promoted | JobState::Reverted | JobState::Failed { .. }
-        )
-}
-
 async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -> Result<()> {
     let job = load_job(&ctx.access, &ctx.owner, &args.job_id)
         .await?
@@ -8856,11 +9279,12 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
         job.job_id,
         dir.display()
     );
-    if !args.force && !removable(&job.journal) {
+    let state = derive_state(&job.journal);
+    if !args.force && !removable(&state) {
         anyhow::bail!(
-            "job {} is {}: only a finalized, promoted, reverted or failed job's directory is removed without --force",
+            "job {} is {}: only a job that is nothing_to_promote, exhausted, failed, stale, promoted or reverted is removed without --force",
             job.job_id,
-            derive_state(&job.journal).label()
+            state.label()
         );
     }
     let bytes = crate::commands::eval::manage::dir_size(&dir)?;
@@ -8919,13 +9343,14 @@ Branch `eval/53-watch-gc`, base `eval/52-optimization-cli`. Worktree: `make work
   ```
 - Produces:
   ```rust
-  pub(crate) fn parse_interval(raw: &str) -> Result<Duration, String>;
+  pub(crate) fn parse_interval(raw: &str) -> Result<Duration, String>;   // refuses under 250 ms (ruling F13)
+  pub(crate) fn parse_age(raw: &str) -> Result<Duration, String>;        // `gc --older-than`; zero allowed
   pub(crate) struct EvalWatchArgs { pub(crate) run_id: String, pub(crate) interval: Duration, pub(crate) once: bool, pub(crate) scope: EvalScopeArgs }
   pub(super) async fn watch::watch(ctx: &EvalContext, args: &EvalWatchArgs, out: &mut dyn Write) -> Result<()>;
-  pub(crate) fn render::in_flight(progress: Option<&Progress>, now: chrono::DateTime<chrono::Utc>, stale_after: chrono::Duration, out: &mut dyn Write) -> io::Result<()>;
-  pub(crate) fn render::is_stale(slot: &InFlight, now: chrono::DateTime<chrono::Utc>, stale_after: chrono::Duration) -> bool;
+  pub(crate) fn render::in_flight(progress: Option<&Progress>, now: chrono::DateTime<chrono::Utc>, stale_after: std::time::Duration, out: &mut dyn Write) -> io::Result<()>;
+  pub(crate) fn render::is_stale(slot: &InFlight, stale_after: std::time::Duration) -> bool;   // !runner::is_fresh (ruling F3)
   ```
-  Behavior (spec 4b §6): each render is a `--- <UTC time>` line, the `show` table, then the in-flight lines (`in flight: none`, or one line per slot with its stage and elapsed seconds, suffixed `stale: pid <pid> has not refreshed it for <n>s` when its `written_at` is older than three intervals (ruling U4; the loop refreshes live entries every `marker_poll`, Task 6a), or `no progress file: showing finished slots only`). It returns after one render with `--once`, and otherwise when the run has no planned or abandoned slot and no fresh entry in flight; Ctrl-C ends it (no handler is installed).
+  Behavior (spec 4b §6): each render is a `--- <UTC time>` line, the `show` table, then the in-flight lines (`in flight: none`, or one line per slot with its stage and elapsed seconds, suffixed `stale: pid <pid> is not running` when its host process is gone (ruling F3, `host_alive`) or `stale: pid <pid> has not refreshed it for <n>s` when its `written_at` is older than three intervals (ruling U4; the loop refreshes live entries at most every `max(marker_poll, 250 ms)`, Task 6a); `--interval` refuses anything under 250 ms (ruling F13), or `no progress file: showing finished slots only`). It returns after one render with `--once`, and otherwise when the run has no planned or abandoned slot and no fresh entry in flight; Ctrl-C ends it (no handler is installed).
 
 - [ ] **Step 1: Add the arguments and the failing tests**
 
@@ -8939,7 +9364,18 @@ In `crates/gents-cli/src/cli/args.rs`, add to `EvalCommand`:
 to `scope()`: `Self::Watch(args) => &args.scope,` and:
 
 ```rust
+/// `--interval`: at least 250 ms (ruling F13), so a watcher never spins.
 pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
+    let interval =
+        crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?;
+    if interval < std::time::Duration::from_millis(250) {
+        return Err(format!("--interval {raw:?} is under 250ms"));
+    }
+    Ok(interval)
+}
+
+/// `--older-than`: any duration, zero included.
+pub(crate) fn parse_age(raw: &str) -> Result<std::time::Duration, String> {
     crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())
 }
 
@@ -8963,6 +9399,7 @@ Create `crates/gents-cli/src/commands/eval/watch.rs` with only its tests:
 mod tests {
     use std::collections::BTreeMap;
 
+    use clap::Parser;
     use gents::eval::runner::{InFlight, Progress, PROGRESS_FILE};
     use tokio_util::sync::CancellationToken;
 
@@ -8986,21 +9423,22 @@ mod tests {
             (chrono::Utc::now() - chrono::Duration::seconds(seconds))
                 .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
         };
-        let slot = |case_id: &str, written_at: String| InFlight {
+        let slot = |case_id: &str, pid: u32, written_at: String| InFlight {
             cell_id: "baseline".into(),
             case_id: case_id.into(),
             trial_index: 0,
             attempt: 2,
             stage_id: Some("check".into()),
             started_at: ago(5),
-            pid: 4242,
+            pid,
             written_at,
         };
         let progress = Progress {
             slots: BTreeMap::from([
-                ("trial-1".to_owned(), slot("val-a", ago(0))),
+                // This test's own process: alive, and just refreshed (F3).
+                ("trial-1".to_owned(), slot("val-a", std::process::id(), ago(0))),
                 // Not refreshed for a minute: its host stopped (ruling U4).
-                ("trial-2".to_owned(), slot("val-b", ago(60))),
+                ("trial-2".to_owned(), slot("val-b", 4242, ago(60))),
             ]),
         };
         std::fs::write(
@@ -9019,8 +9457,14 @@ mod tests {
             .find(|line| line.trim_start().starts_with("baseline val-b #0"))
             .unwrap_or_else(|| panic!("{live}"));
         assert!(
-            stale.contains("(trial-2) stale: pid 4242 has not refreshed it for "),
+            stale.contains("(trial-2) stale: pid 4242 "),
             "{stale}"
+        );
+
+        assert!(
+            crate::cli::Cli::try_parse_from(["gents", "eval", "watch", "r1", "--interval", "0s"])
+                .is_err(),
+            "a zero interval is refused (F13)"
         );
 
         std::fs::remove_file(run_dir.join(PROGRESS_FILE)).unwrap();
@@ -9070,10 +9514,9 @@ pub(super) async fn watch(ctx: &EvalContext, args: &EvalWatchArgs, out: &mut dyn
             now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         )?;
         render::report_table(&report, out)?;
-        // Ruling U4: neither `nix` nor `sysinfo` is a dependency, so an
-        // entry is stale by age alone: not refreshed for three intervals.
-        let stale_after = chrono::Duration::from_std(args.interval * 3)
-            .unwrap_or(chrono::Duration::MAX);
+        // Rulings U4, F3: stale when its host is gone or it was not
+        // refreshed within three intervals.
+        let stale_after = args.interval * 3;
         render::in_flight(progress.as_ref(), now, stale_after, out)?;
         out.flush()?;
         let unfinished = report
@@ -9084,7 +9527,7 @@ pub(super) async fn watch(ctx: &EvalContext, args: &EvalWatchArgs, out: &mut dyn
             progress
                 .slots
                 .values()
-                .any(|slot| !render::is_stale(slot, now, stale_after))
+                .any(|slot| !render::is_stale(slot, stale_after))
         });
         if args.once || (!unfinished && !in_flight) {
             return Ok(());
@@ -9097,6 +9540,20 @@ pub(super) async fn watch(ctx: &EvalContext, args: &EvalWatchArgs, out: &mut dyn
 Append to `crates/gents-cli/src/commands/eval/render.rs` (adding `use gents::eval::runner::{InFlight, Progress};`):
 
 ```rust
+/// The in-flight lines under a watched report.
+/// Seconds since `timestamp`, or `None` when it does not parse.
+fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .ok()
+        .map(|then| (now - then.with_timezone(&chrono::Utc)).num_seconds().max(0))
+}
+
+/// Ruling F3: stale when the host process is gone or the entry was not
+/// refreshed within `stale_after` (`gents::eval::runner::is_fresh`).
+pub(crate) fn is_stale(slot: &InFlight, stale_after: std::time::Duration) -> bool {
+    !gents::eval::runner::is_fresh(slot, stale_after)
+}
+
 /// The in-flight lines under a watched report.
 /// Seconds since `timestamp`, or `None` when it does not parse.
 fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
@@ -9120,7 +9577,7 @@ pub(crate) fn is_stale(
 pub(crate) fn in_flight(
     progress: Option<&Progress>,
     now: chrono::DateTime<chrono::Utc>,
-    stale_after: chrono::Duration,
+    stale_after: std::time::Duration,
     out: &mut dyn Write,
 ) -> io::Result<()> {
     let Some(progress) = progress else {
@@ -9133,15 +9590,17 @@ pub(crate) fn in_flight(
     for (trial_id, slot) in &progress.slots {
         let elapsed = age(&slot.started_at, now)
             .map_or_else(|| "?".to_owned(), |seconds| format!("{seconds}s"));
-        let staleness = if is_stale(slot, now, stale_after) {
+        let staleness = if !is_stale(slot, stale_after) {
+            String::new()
+        } else if !gents::eval::runner::host_alive(slot.pid) {
+            format!(" stale: pid {} is not running", slot.pid)
+        } else {
             format!(
                 " stale: pid {} has not refreshed it for {}",
                 slot.pid,
                 age(&slot.written_at, now)
                     .map_or_else(|| "an unknown time".to_owned(), |seconds| format!("{seconds}s"))
             )
-        } else {
-            String::new()
         };
         writeln!(
             out,
@@ -9171,11 +9630,9 @@ git add crates/gents-cli/
 git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): gents eval watch reads the report and progress.json (#1515)"
 ```
 
-### Task 14: `eval gc`, the job-reference check and the size column
+### Task 14: `eval gc` and the size column
 
 **Files:**
-- Create: `crates/gents/src/optimization/references.rs`
-- Modify: `crates/gents/src/optimization/mod.rs` (`pub mod references;` between `pub mod proposer;` and `pub mod show;`, and a `pub use references::{…};` line)
 - Modify: `crates/gents-cli/src/cli/args.rs` (`EvalCommand::Gc`, its `scope()` arm, `EvalGcArgs`)
 - Modify: `crates/gents-cli/src/commands/eval/mod.rs` (one `execute` arm)
 - Modify: `crates/gents-cli/src/commands/eval/manage.rs` (`gc`, tests)
@@ -9185,102 +9642,28 @@ git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.co
 **Interfaces:**
 - Consumes:
   ```rust
-  // gents::optimization::job (M6b)
-  pub async fn load_job(access: &ConfigAccess, owner: &str, job_id: &str) -> Result<Option<JobRecord>>;
-  pub enum JournalEntry { RunStarted { run_id: String, round: Option<u32>, split: EvalSplit }, Decided { round, attempt, run_ids: Vec<String>, mode,
-      decision, policy_version: String, summary: DecisionSummary }, Frozen, Reverted { by: String }, .. }
-  // the OptimizationJob collection's owner field is `owner_agent_did` (job.rs `filter`)
-  // crates/gents/src/optimization/driver/matrix.rs (#[cfg(test)] pub(crate))
-  pub(crate) async fn accepting_harness(job_id: &str) -> (Harness, JobRequest);   // Harness::access(&self) -> &ConfigAccess
-  // PR 1/2
-  gents::eval::report::{load_runs, run_header, load_report_among};  gents::eval::runner::run_dir;
+  // PR 1
+  pub async fn gents::optimization::{job_ids, referenced_run_ids}(access, owner);   // Task 4b
+  pub fn gents::optimization::removable(state: &JobState) -> bool;                  // Task 4b (ruling F2)
+  pub fn gents::optimization::{job_dir, derive_state, load_job};
+  pub fn gents::eval::runner::{run_dir, slots_owed, running_elsewhere};            // Tasks 4, 6b (ruling F7)
+  pub async fn gents::eval::{load_trials};  gents::eval::report::load_runs;
+  // PR 2/3
   crate::commands::eval::manage::dir_size(path: &Path) -> Result<u64>;
   crate::commands::optimization::testing::accepted_job(fixture: &Fixture, job_id: &str) -> String;   // Task 11
-  pub(crate) fn crate::commands::optimization::removable(journal: &[JournalEntry]) -> bool;          // Task 12a
-  pub fn gents::optimization::{job_dir, derive_state, load_job};
+  pub(crate) fn crate::cli::parse_age(raw: &str) -> Result<Duration, String>;                         // Task 13
+  pub async fn gents::optimization::{promote, revert, show};                                          // test only
   ```
 - Produces:
   ```rust
-  // crates/gents/src/optimization/references.rs, re-exported from gents::optimization
-  pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String>;
-  pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>>;
-  pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>>;
-  // CLI
   pub(crate) struct EvalGcArgs { pub(crate) older_than: Duration, pub(crate) definition: Option<String>, pub(crate) dry_run: bool, pub(crate) jobs: bool, pub(crate) scope: EvalScopeArgs }
   pub(super) async fn manage::gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write) -> Result<()>;
   pub(crate) fn render::human_bytes(bytes: u64) -> String;   // "512B", "1.5KiB", "3.0MiB"
   // ListRow gains `pub(crate) size_bytes: Option<u64>`: the run directory's size, `None` when it has none
   ```
-  `gc` candidates (spec 4b §7): run directory present; `created_at` at or before now minus `--older-than` (default `14d`); not named by any job journal; report builds and has no planned or abandoned slot. It prints each candidate with its size and, without `--dry-run`, deletes the directories and prints bytes reclaimed. It prints `kept <run_id>: …` for an old run it keeps. With `--jobs` (ruling U1) it also removes the directories of jobs `crate::commands::optimization::removable` accepts whose directory was last modified before the cutoff (a job document has no creation time), and prints `kept job <id>: <state>` for the rest. Nothing deletes on its own; no TTL is stored.
+  `gc` candidates (spec 4b §7 as ruled): run directory present; `created_at` at or before now minus `--older-than` (default `14d`, zero allowed); not named by any job journal; **finished** by ruling F7 (`slots_owed == 0` and not `running_elsewhere`). It prints each candidate with its size and, without `--dry-run`, deletes the directories and prints bytes reclaimed. It prints `kept <run_id>: …` for an old run it keeps. With `--jobs` (ruling U1) it also removes the directories of jobs `gents::optimization::removable` accepts (ruling F2) whose directory was last modified before the cutoff (a job document has no creation time), and prints `kept job <id>: <state>` for the rest. Nothing deletes on its own; no TTL is stored.
 
 - [ ] **Step 1: Write the failing tests**
-
-Create `crates/gents/src/optimization/references.rs` with only:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::document_config::EvalSplit;
-    use crate::eval::runner::freeze::tests::OWNER;
-    use crate::optimization::driver::matrix::accepting_harness;
-    use crate::optimization::job::{load_job, DecisionSummary};
-    use crate::optimization::policy::{Decision, Mode};
-
-    #[test]
-    fn a_journal_names_every_run_it_started_or_decided_on() {
-        let journal = vec![
-            JournalEntry::Frozen,
-            JournalEntry::RunStarted {
-                run_id: "train".into(),
-                round: Some(1),
-                split: EvalSplit::Train,
-            },
-            JournalEntry::Decided {
-                round: Some(1),
-                attempt: 0,
-                run_ids: vec!["val-a".into(), "val-b".into()],
-                mode: Mode::Improve,
-                decision: Decision::Accept,
-                policy_version: "v2".into(),
-                summary: DecisionSummary {
-                    improved: 0,
-                    tied: 0,
-                    worsened: 0,
-                    mean_diff_bp: None,
-                    p_ppm: None,
-                    alpha_effective_ppm: 0,
-                    cost_skipped: true,
-                },
-            },
-            JournalEntry::Reverted {
-                by: "did:key:owner".into(),
-            },
-        ];
-        assert_eq!(
-            journal_run_ids(&journal),
-            BTreeSet::from(["train".to_owned(), "val-a".to_owned(), "val-b".to_owned()])
-        );
-    }
-
-    #[tokio::test]
-    async fn every_run_of_an_owners_jobs_is_referenced() {
-        let (harness, request) = accepting_harness("refs").await;
-        let referenced = referenced_run_ids(harness.access(), OWNER).await.unwrap();
-        let job = load_job(harness.access(), OWNER, &request.job_id)
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(!referenced.is_empty());
-        assert_eq!(referenced, journal_run_ids(&job.journal));
-        assert_eq!(job_ids(harness.access(), OWNER).await.unwrap(), vec!["refs".to_owned()]);
-        assert!(referenced_run_ids(harness.access(), "did:key:someone-else")
-            .await
-            .unwrap()
-            .is_empty());
-    }
-}
-```
 
 Append inside `mod tests` in `crates/gents-cli/src/commands/eval/manage.rs` (adding `use crate::commands::optimization::testing::accepted_job;` to its imports):
 
@@ -9310,7 +9693,7 @@ Append inside `mod tests` in `crates/gents-cli/src/commands/eval/manage.rs` (add
             .await
             .unwrap();
         assert!(dry.contains("would remove r-done "), "{dry}");
-        assert!(dry.contains("kept r-stopped: unfinished"), "{dry}");
+        assert!(dry.contains("kept r-stopped: unfinished (it still owes 24 slots)"), "{dry}");
         for run_id in &referenced {
             assert!(
                 dry.contains(&format!("kept {run_id}: an optimization job references it")),
@@ -9344,6 +9727,35 @@ Append inside `mod tests` in `crates/gents-cli/src/commands/eval/manage.rs` (add
         );
         assert!(fixture.ctx.jobs_dir().join("job-1").is_dir(), "no --jobs, no job");
 
+        // Ruling F2: a job waiting to be promoted keeps its directory.
+        let kept = eval(&fixture, &["gc", "--older-than", "0s", "--jobs", "--dry-run"])
+            .await
+            .unwrap();
+        assert!(kept.contains("kept job job-1: ready_to_promote"), "{kept}");
+
+        // Promoted, then reverted: collected.
+        let view = gents::optimization::show(&fixture.ctx.access, &fixture.ctx.owner, "job-1")
+            .await
+            .unwrap();
+        let digest = view.checkpoint.expect("a retained checkpoint").pack_digest;
+        let promotion = gents::optimization::promote(
+            &fixture.ctx.access,
+            &fixture.ctx.owner,
+            "job-1",
+            &digest,
+            &fixture.ctx.owner,
+        )
+        .await
+        .unwrap();
+        gents::optimization::revert(
+            &fixture.ctx.access,
+            &fixture.ctx.owner,
+            "job-1",
+            &promotion.target_digest,
+            &fixture.ctx.owner,
+        )
+        .await
+        .unwrap();
         let jobs = eval(&fixture, &["gc", "--older-than", "0s", "--jobs", "--dry-run"])
             .await
             .unwrap();
@@ -9388,7 +9800,7 @@ to `scope()`: `Self::Gc(args) => &args.scope,` and:
 ```rust
 #[derive(clap::Args)]
 pub(crate) struct EvalGcArgs {
-    #[arg(long, value_parser = parse_interval, default_value = "14d")]
+    #[arg(long, value_parser = parse_age, default_value = "14d")]
     pub(crate) older_than: std::time::Duration,
     #[arg(long)]
     pub(crate) definition: Option<String>,
@@ -9408,84 +9820,12 @@ In `crates/gents-cli/src/commands/eval/mod.rs` add the arm `EvalCommand::Gc(args
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::references > "$LOG/t14.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t14.log" | head`
-Expected: compile errors: `journal_run_ids`, `referenced_run_ids`, `job_ids` not found (add `pub mod references;` to `optimization/mod.rs` first).
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t14.log" 2>&1; grep -E "error(\[|:)|test result" "$LOG/t14.log" | head`
+Expected: compile errors: `manage::gc` and `ListRow.size_bytes` not found.
 
 - [ ] **Step 3: Write the implementation**
 
-Insert above the test module in `crates/gents/src/optimization/references.rs`:
-
-```rust
-//! Which eval runs an optimization job's journal names: its train,
-//! validation, re-run and held-out runs. `gents eval gc` keeps them (spec 4b
-//! §7), so a job's evidence and M5's calibration never lose their homes to
-//! a side effect.
-
-use std::collections::BTreeSet;
-
-use anyhow::Result;
-
-use crate::config_client::ConfigAccess;
-use crate::graphql::escape_graphql_string;
-use crate::optimization::job::{load_job, JournalEntry};
-
-/// Every run `journal` started and every run one of its decisions read.
-pub fn journal_run_ids(journal: &[JournalEntry]) -> BTreeSet<String> {
-    let mut ids = BTreeSet::new();
-    for entry in journal {
-        match entry {
-            JournalEntry::RunStarted { run_id, .. } => {
-                ids.insert(run_id.clone());
-            }
-            JournalEntry::Decided { run_ids, .. } => ids.extend(run_ids.iter().cloned()),
-            _ => {}
-        }
-    }
-    ids
-}
-
-/// The ids of every job `owner` has, sorted.
-pub async fn job_ids(access: &ConfigAccess, owner: &str) -> Result<Vec<String>> {
-    let query = format!(
-        r#"{{ OptimizationJob(filter: {{ owner_agent_did: {{ _eq: "{owner}" }} }}) {{ job_id }} }}"#,
-        owner = escape_graphql_string(owner),
-    );
-    let response = access
-        .transact("optimization.job_ids", |txn| {
-            let query = &query;
-            Box::pin(async move { txn.execute(query).await })
-        })
-        .await?;
-    let mut ids: Vec<String> = response["data"]["OptimizationJob"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row["job_id"].as_str().map(str::to_owned))
-        .collect();
-    ids.sort();
-    ids.dedup();
-    Ok(ids)
-}
-
-/// Every run any of `owner`'s jobs names.
-pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BTreeSet<String>> {
-    let mut ids = BTreeSet::new();
-    for job_id in job_ids(access, owner).await? {
-        if let Some(job) = load_job(access, owner, &job_id).await? {
-            ids.extend(journal_run_ids(&job.journal));
-        }
-    }
-    Ok(ids)
-}
-```
-
-In `crates/gents/src/optimization/mod.rs` add `pub mod references;` between `pub mod proposer;` and `pub mod show;`, and after the `pub use proposer::{…};` line:
-
-```rust
-pub use references::{job_ids, journal_run_ids, referenced_run_ids};
-```
-
-Append to `crates/gents-cli/src/commands/eval/manage.rs` above its tests (extending its imports with `use std::path::PathBuf;`, `use gents::eval::report::{load_report_among, load_runs, run_header};`, `use gents::eval::RunHeader;`, `use super::render::human_bytes;` and `EvalGcArgs` in the `crate::cli` import):
+Append to `crates/gents-cli/src/commands/eval/manage.rs` above its tests (extending its imports with `use std::path::PathBuf;`, `use gents::eval::report::load_runs;`, `use super::render::human_bytes;` and `EvalGcArgs` in the `crate::cli` import; `load_trials`, `slots_owed`, `running_elsewhere` and `run_dir` are already imported by Task 8):
 
 ```rust
 pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write) -> Result<()> {
@@ -9493,7 +9833,6 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
         - chrono::Duration::from_std(args.older_than).context("--older-than is too large")?;
     let referenced = gents::optimization::referenced_run_ids(&ctx.access, &ctx.owner).await?;
     let runs = load_runs(&ctx.access, &ctx.owner).await?;
-    let peers: Vec<RunHeader> = runs.iter().map(run_header).collect();
     let mut doomed: Vec<(PathBuf, u64)> = Vec::new();
     for record in &runs {
         if args
@@ -9525,24 +9864,20 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
             writeln!(out, "kept {}: an optimization job references it", record.run_id)?;
             continue;
         }
-        match load_report_among(&ctx.access, &ctx.owner, &ctx.runs_dir(), record, &peers).await {
-            Ok(report)
-                if report
-                    .cells
-                    .iter()
-                    .all(|cell| cell.counts.planned == 0 && cell.counts.abandoned == 0) => {}
-            Ok(_) => {
-                writeln!(out, "kept {}: unfinished", record.run_id)?;
-                continue;
-            }
-            Err(error) => {
-                writeln!(
-                    out,
-                    "kept {}: its report cannot be built ({error:#})",
-                    record.run_id
-                )?;
-                continue;
-            }
+        // Ruling F7: finished means nothing owed and no live process on it.
+        let trials = load_trials(&ctx.access, &ctx.owner, &record.run_id).await?;
+        let owed = slots_owed(record, &trials);
+        if owed > 0 {
+            writeln!(
+                out,
+                "kept {}: unfinished (it still owes {owed} slots)",
+                record.run_id
+            )?;
+            continue;
+        }
+        if running_elsewhere(&dir) {
+            writeln!(out, "kept {}: a live process is running it", record.run_id)?;
+            continue;
         }
         let size = dir_size(&dir)?;
         writeln!(
@@ -9573,13 +9908,9 @@ pub(super) async fn gc(ctx: &EvalContext, args: &EvalGcArgs, out: &mut dyn Write
             if modified > cutoff {
                 continue;
             }
-            if !crate::commands::optimization::removable(&job.journal) {
-                writeln!(
-                    out,
-                    "kept job {}: {}",
-                    job.job_id,
-                    gents::optimization::derive_state(&job.journal).label()
-                )?;
+            let state = gents::optimization::derive_state(&job.journal);
+            if !gents::optimization::removable(&state) {
+                writeln!(out, "kept job {}: {}", job.job_id, state.label())?;
                 continue;
             }
             let size = dir_size(&dir)?;
@@ -9662,15 +9993,15 @@ and in `list`, when building each row:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run, one at a time: `CARGO_BUILD_JOBS=4 cargo test -p gents --lib optimization::references > "$LOG/t14.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t14.log"` then `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t14-cli.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t14-cli.log" | tail -30`.
-Expected: both reference tests, both new CLI tests and every earlier `commands::eval` test pass (the Task 7 list test reads columns by content, not position, so the size column does not disturb it).
+Run: `CARGO_BUILD_JOBS=4 cargo test -p gents-cli --lib commands::eval > "$LOG/t14-cli.log" 2>&1; grep -E "^test |test result|panicked" "$LOG/t14-cli.log" | tail -30`.
+Expected: both new CLI tests and every earlier `commands::eval` test pass (the Task 7 list test reads columns by content, not position, so the size column does not disturb it).
 
 - [ ] **Step 5: Format and commit**
 
 ```bash
 cargo fmt --all && cargo fmt --all --check
-git add crates/gents/src/optimization/ crates/gents-cli/
-git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): gents eval gc keeps job-referenced runs; eval list shows size on disk (#1515)"
+git add crates/gents-cli/
+git -c user.name="Eduardo Diaz" -c user.email="eduardo.j.diaz.rodriguez@gmail.com" commit -m "feat(cli): gents eval gc keeps job-referenced and unfinished runs; eval list shows size on disk (#1515)"
 ```
 
 ### PR 4 gate
@@ -10517,7 +10848,7 @@ Issue #1515, spec 4a/4b (`docs/superpowers/specs/2026-09-22-eval-report-and-cli-
 
 **Baseline:** <parent branch> @ <hash from `git rev-parse --short <parent>`>.
 **What it adds:** <one line per task in this PR, from the ledger>.
-**Owners it extends:** <PR 1: `eval::report` (M6b's unfrozen module), `eval::runner` loop and plan; PR 2/3/4/5: `gents-cli` commands over those owners; PR 4 also `optimization::references`>.
+**Owners it extends:** <PR 1: `eval::report` (M6b's unfrozen module), `eval::runner` loop and plan; PR 1 also `optimization::driver` (F1) and `optimization::references` (F8); PR 2/3/4/5: `gents-cli` commands over those owners>.
 **Deletions:** none. **Frozen interfaces touched:** none (`eval::{outcome, scoring, documents}`, `EvalDefinition` untouched: `git diff --stat <parent>..<branch> -- crates/gents/src/eval/outcome.rs crates/gents/src/eval/scoring.rs crates/gents/src/eval/documents.rs crates/gents/src/document_config/eval_definition.rs` prints nothing).
 **Deviations:** <the D-items this PR carries, by number>.
 **Validation:** <the gate commands and their counts from the ledger>.
@@ -10563,36 +10894,43 @@ Expected: no output for any pair. If one prints, stop and message the orchestrat
 | 4b §9 abandoned attempts spend no retry; ten-abandonment bound; table test; loop test under `max_infra_retries: 0` | 5 (O2) |
 | 4b phasing, PRs 4-5 | PR sections 4-5 |
 | Ruling U1 `optimization rm`, `gc --jobs` | 12a, 14 |
-| Ruling U2 frozen `definition.json`, report reads it, resume verifies it | 2a, 3 (and `definition_changed` in 1, 7) |
+| Ruling U2 frozen `definition.json`, report reads it, resume verifies it | 2a, 3 (and `definition_changed` in 1, 7b) |
 | Ruling U3 `revert --digest` | 12 |
 | Ruling U4 `pid`/`written_at`, heartbeat, stale marking | 6, 6a, 13 |
 | Ruling U5 marker seen mid-batch, long-trial test | 6a |
-| Ruling U6 binary smoke test | 10a |
+| Ruling U6 binary smoke test | 10c |
 | Ruling U7 files that move together | 7 (`testing.rs` doc) |
 | Ruling U8 `run` clears the marker | 4 |
 | Ruling U9 purity wording | 1, 3 (module docs) |
 | Ruling U11/U12 single base, signatures re-verified | "The M4 base", 1 Step 0, 12 Step 0 |
-| Ruling U13 registry note | 10 (`--registry` doc) |
+| Ruling U13 registry note | 10b (`--registry` doc) |
+| F1 `RunOutcome.cancelled`, driver stops undecided, job-run cancel notice | 4, 4a, 8, 10b |
+| F2 removable job states, flipped tests | 4b, 12a, 14 |
+| F3 `host_alive`, `is_fresh` | 6, 13 |
+| F4 distinct-run seed, >20-case test | 2, 2b |
+| F5 shared `totals`, `CellReport.cell_usage` | 1, 1b, 2 |
+| F6 marker during backoff | 6a |
+| F7 finished = nothing owed and nothing fresh | 6b, 8, 14 |
+| F8 `rm` refuses runs held by live jobs; references in PR 1 | 4b, 8, 12a |
+| F9 pre-file run still reports | 3 |
+| F10 task splits | 1/1b, 2/2b, 7/7b, 10/10b |
+| F11 base signatures recorded | "The M4 base" |
+| F12 agent tool surfaces free of the operator verbs | 8 |
+| F13 `--interval` ≥ 250 ms | 13 |
+| F14 default ids | 10, 10b, 11 |
+| F15 resume prints after thaw | 10b |
+| F16 heartbeat rate | 6, 6a |
 
 No spec item or ruling is without a task.
 
 **Placeholder scan.** Searched the plan for "TBD", "TODO", "implement later", "appropriate", "similar to Task", "fill in": none. Every code step shows its code; every command shows its expected result. Two steps name a value to read from the repository rather than assume it, and say exactly where: Task 12 Step 0 (`git grep` for M6b's `promote`) and Task 17 (branch hashes from `git rev-parse`).
 
-**Type consistency.** Checked across tasks: `build(run, trials, verdicts, definition, peers)` (1) is called by `store::load_report_among` (3) with that order; `load_report(access, owner, runs_dir, run_id)` and `load_report_among(access, owner, runs_dir, record, peers)` (3) are called with `&ctx.runs_dir()` in Tasks 7, 8, 9, 10, 13 and 14 and with `&launching.runs_dir()` in Task 3's tests; `read_frozen_definition(run_dir, &DefinitionRef)` and `DEFINITION_FILE` (2a) are what `thaw` and `store` use; `InFlight { …, pid, written_at }` (6) is built with both fields in Tasks 6 and 13 and refreshed by `ProgressWriter::heartbeat` (6, called in 6a); `render::{in_flight(progress, now, stale_after, out), is_stale}` (13) match their one caller; `removable(journal)` (12a) is what Task 14's `gc --jobs` calls; `manage` is `pub(crate)` (8) so Task 12a can call `dir_size`; `SlotScore::trial_score` (1) is what `compare::trial_scores` (2) reads; `Comparison::{with_policy, evidence, seed}` (2) are the names Task 9 and the tests use; `run_dir`, `request_cancel`, `CANCEL_MARKER` (4) are the names Tasks 8, 10, 13 and 14 import; `read_progress`, `Progress`, `InFlight`, `PROGRESS_FILE`, `StageProgress` (6) match Task 13; `MAX_ABANDONED_ATTEMPTS` (5) is re-exported from `eval::runner`; `EvalContext::{runs_dir, jobs_dir}` (7, 11), `Deps` (10), `execute(ctx, command, deps, out)` (10, and both `testing` helpers), `load_policy` (9, 11), `source_commit`/`source_dirty` (10, 11), `resolve_subject_pack(home, spec, registry, directory)` (10, 11), `render::{percent, wire, signed_percent, decision_label, human_bytes}` (7, 9, 14) are spelled the same everywhere they appear; `SlotVerdict`, `SideTrial`, `PairedTrial` (15) are what Task 16 renders.
+**Type consistency.** Checked across tasks, after the F-rulings: `RunOutcome { …, cancelled }` (4) is read by the driver (4a) and `eval run`/`resume` (10b), and Task 4's `a_two_cell_run…` literal gains the field; `CellReport.cell_usage: CellUsage` (1) feeds `Comparison.usage: [CellUsage; 2]` and `optimization::evidence::totals(CellUsage, CellUsage, u64)` (2); `removable(&JobState)` and `held_runs(access, owner)` (4b) are called by Tasks 8, 12a and 14 with those signatures; `host_alive`/`is_fresh(slot, Duration)` (6) by 6b and 13; `heartbeat(min_gap)` (6) by 6a; `slots_owed`, `running_elsewhere` (6b) by 8 and 14; `manage::cancel(runs_dir, run_id, purpose, out)` and `cancel_run` (8) match the Task 10b `execute` arm and the Task 8 test executor; `default_id` (10) by 10b and 11; `parse_interval`/`parse_age` (13) by 13 and 14. Earlier checks: `build(run, trials, verdicts, definition, peers)` (1) is called by `store::load_report_among` (3) with that order; `load_report(access, owner, runs_dir, run_id)` and `load_report_among(access, owner, runs_dir, record, peers)` (3) are called with `&ctx.runs_dir()` in Tasks 7, 8, 9, 10, 13 and 14 and with `&launching.runs_dir()` in Task 3's tests; `read_frozen_definition(run_dir, &DefinitionRef)` and `DEFINITION_FILE` (2a) are what `thaw` and `store` use; `InFlight { …, pid, written_at }` (6) is built with both fields in Tasks 6 and 13 and refreshed by `ProgressWriter::heartbeat` (6, called in 6a); `render::{in_flight(progress, now, stale_after, out), is_stale}` (13) match their one caller; `removable(journal)` (12a) is what Task 14's `gc --jobs` calls; `manage` is `pub(crate)` (8) so Task 12a can call `dir_size`; `SlotScore::trial_score` (1) is what `compare::trial_scores` (2) reads; `Comparison::{with_policy, evidence, seed}` (2) are the names Task 9 and the tests use; `run_dir`, `request_cancel`, `CANCEL_MARKER` (4) are the names Tasks 8, 10, 13 and 14 import; `read_progress`, `Progress`, `InFlight`, `PROGRESS_FILE`, `StageProgress` (6) match Task 13; `MAX_ABANDONED_ATTEMPTS` (5) is re-exported from `eval::runner`; `EvalContext::{runs_dir, jobs_dir}` (7, 11), `Deps` (10), `execute(ctx, command, deps, out)` (10, and both `testing` helpers), `load_policy` (9, 11), `source_commit`/`source_dirty` (10, 11), `resolve_subject_pack(home, spec, registry, directory)` (10, 11), `render::{percent, wire, signed_percent, decision_label, human_bytes}` (7, 9, 14) are spelled the same everywhere they appear; `SlotVerdict`, `SideTrial`, `PairedTrial` (15) are what Task 16 renders.
 
 ## Plan defects I could not resolve
 
-- **R1 — Removing a ready job's directory breaks its promotion.** Ruling U1 lets `optimization rm` (and `gc --jobs`) remove a *finalized* job's directory without `--force`, and `ReadyToPromote` is finalized. M6b's `promote` rebuilds the checkpoint from the baseline copy in that directory (R8), so a ready job whose directory is gone can no longer be promoted (it would refuse, most likely `rebuild_mismatch`). The plan applies the ruling as written; excluding `ReadyToPromote` from "settled" would need a ruling.
-- **R2 — Staleness is by age only.** Ruling U4's fallback applies: neither `nix` nor `sysinfo` is a dependency. `libc` is a dependency of `gents` (not `gents-cli`), and `libc::kill(pid, 0)` would give a real liveness check; the ruling does not list it, so it is not used. While a loop is winding down after a cancel (it stops refreshing once it has observed the cancellation), its in-flight entries can read as stale for up to the executor's grace period.
-- **R3 — `thaw` now prefers the frozen definition.** Ruling U2 says resume "verifies the file's digest against the origin"; the plan also makes resume *use* the verified copy, so a run whose installed definition was edited can still be resumed (before, resume refused). The optimizer is unaffected (it refuses a drifted definition itself before resuming a run). If the orchestrator wants resume to keep refusing on a live edit, Task 2a's `thaw` change is one `if` away.
-- **R4 — `gc --jobs` ages a job by its directory's modification time.** An `OptimizationJob` has no creation timestamp; a job directory touched by a later write (a candidate staged in a late round) looks younger than the job.
-- **R5 — U10 follow-up is open.** `eval list` and `eval gc` build one report per run; the header-only projection is recorded, not planned.
-- **R6 — PR 3's signatures are still cited from M6b's plan.** Until M6b's final `optimization/23-promote` exists, Task 12's interfaces come from M6b plan PR 4 Task 1; Task 12 Step 0 re-verifies them and stops on any difference.
-
-## Orchestrator rulings on R1–R6 (2026-09-22)
-
-- R1: `ReadyToPromote` is NOT removable without `--force` (its directory holds the baseline copy `promote` rebuilds from); `removable` = Finalized, Reverted, Failed, Promoted. Fix Task 12a and its test.
-- R2: use `libc::kill(pid, 0)` for pid liveness (`libc` is already a dependency of `gents`); age remains the second criterion. Apply in Task 13.
-- R3: accepted — resume uses the verified frozen copy; that is the point of materializing it.
-- R4: accepted — job directories age by mtime.
-- R5, R6: remain open by design; the coordinator re-verifies PR 3's signatures against `optimization/23-promote` at dispatch.
+- **R1 — `thaw` prefers the frozen definition.** Ruling U2 says resume "verifies the file's digest against the origin"; the plan also makes resume *use* the verified copy (Task 2a), so a run whose installed definition was edited can still be resumed where it was refused before. The optimizer is unaffected (it refuses a drifted definition itself before resuming a run). If resume should keep refusing a live edit, Task 2a's `thaw` change is one `if` away.
+- **R2 — `gc --jobs` ages a job by its directory's modification time.** An `OptimizationJob` has no creation timestamp; a directory touched by a later round looks younger than the job.
+- **R3 — U10's follow-up is open.** `eval list` and `eval gc` build per-run reports or read every run's trials; the header-only projection is recorded, not planned.
+- **R4 — The heartbeat stops once the loop has observed a cancel.** While in-flight executors wind down (up to the embedded executor's grace period) their entries stop being refreshed; with a live host they read stale only after three watch intervals, and `running_elsewhere` treats them as not running after three runner poll periods, so `rm`/`gc` could act on a run whose last trial is still unwinding. The window is the grace period (30 s).
+- **R5 — The F6 backoff test is timing-shaped.** It writes the marker once the first attempt is recorded; if the marker lands before the pass's own after-pass check, the test still passes without exercising the backoff branch. The 30 s backoff makes that unlikely, not impossible.
