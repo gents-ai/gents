@@ -20,8 +20,10 @@ pub use gents_loop::compaction::{
     DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX, DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
-/// Maximum provider-stream silence before treating the connection as dead.
-pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 1_800;
+/// Default execution lease duration, exposed by InferenceExecution's
+/// stream_liveness_timeout_secs field. The owned renewal task keeps live work
+/// current independently of provider output.
+pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 /// Overall wall-clock budget for a claimed request. Long-running goals may
 /// legitimately work for many hours while continuing to emit model/tool data.
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
@@ -517,6 +519,15 @@ mod tests {
     #[test]
     fn default_request_deadline_supports_long_running_agents() {
         assert_eq!(DEFAULT_DEADLINE_DURATION_SECS, 86_400);
+    }
+
+    #[test]
+    fn default_execution_lease_is_two_minutes() {
+        assert_eq!(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS, 120);
+        assert_eq!(
+            behavior_with_wire(OpenAiWireApi::ChatCompletions).stream_liveness_timeout,
+            Duration::from_secs(120),
+        );
     }
 
     #[test]

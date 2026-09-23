@@ -31,7 +31,7 @@ impl RenewalTask {
             // Poll more often than renewal is due, but only the bounded policy
             // writes. Skip missed ticks after suspension; never catch up with
             // a burst of renewals or revive an expired generation.
-            let mut ticker = tokio::time::interval(Duration::from_millis((duration_ms / 4).max(1)));
+            let mut ticker = tokio::time::interval(renewal_poll_interval(duration_ms));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
@@ -46,6 +46,21 @@ impl RenewalTask {
                 }
             }
         }))
+    }
+}
+
+fn renewal_poll_interval(duration_ms: u64) -> Duration {
+    Duration::from_millis((duration_ms / 4).max(1))
+}
+
+#[cfg(test)]
+mod cadence_tests {
+    use super::*;
+
+    #[test]
+    fn two_minute_default_polls_every_thirty_seconds() {
+        let duration_ms = crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS * 1_000;
+        assert_eq!(renewal_poll_interval(duration_ms), Duration::from_secs(30));
     }
 }
 
