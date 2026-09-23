@@ -19,7 +19,7 @@ use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
+use crate::support::interrupt::BootedAgent;
 use crate::support::{first_optional_row, TestDb};
 
 pub fn d4f_enabled() -> bool {
@@ -210,12 +210,12 @@ pub async fn boot_d4f_agent_with_options(
     identity: Arc<dyn AgentIdentity>,
     options: DocumentRuntimeOptions,
 ) -> Result<(BootedAgent, Gents)> {
-    let agent = Gents::from_default_behavior_documents(db.node.clone(), identity, options).await?;
-    let agent_did = agent.agent_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.clone().run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-    Ok((BootedAgent::new(shutdown_tx, handle, agent_did), agent))
+    let (running, agent) =
+        gents::eval::runner::embedded::boot_runtime(&db.home, identity, options).await?;
+    Ok((
+        BootedAgent::new(running.shutdown, running.handle, running.agent_did),
+        agent,
+    ))
 }
 
 pub async fn assert_d4f_reachable() {

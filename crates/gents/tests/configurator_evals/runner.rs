@@ -15,7 +15,7 @@ use crate::support::live_inference::{
     bind_d4f_backend_for_model, bind_openrouter_backend_for_model, boot_d4f_agent_with_options,
     D4F_BACKEND_ID, OPENROUTER_BACKEND_ID,
 };
-use crate::support::test_db_in;
+use crate::support::test_db_from_home;
 
 #[path = "stages.rs"]
 mod stages;
@@ -876,12 +876,12 @@ async fn run_eval_trial(
 }
 
 async fn retained_trial_db(artifacts: &std::path::Path) -> crate::support::TestDb {
-    let mut home = tempfile::Builder::new()
-        .prefix("home-")
-        .tempdir_in(artifacts)
-        .expect("isolated trial database home");
-    home.disable_cleanup(true);
-    test_db_in(home).await
+    let home = gents::eval::runner::embedded::EmbeddedHome::create_retained(
+        &artifacts.join(format!("home-{}", uuid::Uuid::new_v4())),
+    )
+    .await
+    .expect("isolated trial database home");
+    test_db_from_home(home)
 }
 
 #[tokio::test]

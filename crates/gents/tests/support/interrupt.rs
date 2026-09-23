@@ -12,7 +12,7 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::snapshots::{fetch_request_snapshot, fetch_runtime_snapshot};
+use super::snapshots::fetch_request_snapshot;
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
@@ -89,33 +89,9 @@ impl Drop for BootedAgent {
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) {
-    let deadline = tokio::time::Instant::now() + TEST_RUNTIME_READY_TIMEOUT;
-    let mut sleep = Duration::from_millis(50);
-    loop {
-        let snapshot = fetch_runtime_snapshot(node, agent_did).await;
-        let readiness = super::snapshots::fetch_behavior_readiness_snapshot(node, agent_did).await;
-        if let Some(snapshot) = &snapshot {
-            if snapshot.process_state == "ready"
-                && snapshot.reconcile_phase == "idle"
-                && snapshot.active_generation >= 1
-                && readiness.as_ref().is_some_and(|readiness| {
-                    readiness.process_state.accepts_work()
-                        && readiness.behaviors.iter().any(|behavior| {
-                            behavior.state == gents_protocol::row::BehaviorReadinessState::Ready
-                        })
-                })
-            {
-                return;
-            }
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "agent did not reach ready state within {TEST_RUNTIME_READY_TIMEOUT:?}; \
-             last runtime snapshot: {snapshot:?}; readiness: {readiness:?}"
-        );
-        tokio::time::sleep(sleep).await;
-        sleep = (sleep * 2).min(Duration::from_millis(250));
-    }
+    gents::eval::runner::embedded::wait_for_runtime_ready(node, agent_did)
+        .await
+        .expect("runtime ready");
 }
 
 pub async fn create_runtime_request(
