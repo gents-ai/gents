@@ -175,24 +175,33 @@ test.describe("kit shell", () => {
   test("session filters stay visible and can be reset", async ({ page }) => {
     await gotoHarness(page);
     const filters = page.getByLabel("Session filters");
+    const session = page.getByRole("link", { name: /introduction-and-greetings/ });
     await expect(filters).toBeVisible();
     await expect(filters.getByRole("button", { name: "State" })).toBeVisible();
     await expect(filters.getByRole("button", { name: "Started by" })).toBeVisible();
     await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
 
-    await filters.getByRole("button", { name: "Started by" }).click();
-    await page.getByRole("menuitemcheckbox", { name: /A person/ }).click();
+    /* the behavior filter counts what each choice would leave: Ops has no
+       session here, so it is offered with its zero and cannot be picked */
+    await filters.getByRole("combobox", { name: "Behavior" }).click();
+    const ops = page.getByRole("option", { name: /Ops\s*0$/ });
+    await expect(ops).toBeVisible();
+    await expect(ops).toHaveAttribute("aria-disabled", "true");
+    const withSession = page.getByRole("option", { name: /Default\s*1$/ });
+    await withSession.click();
     await page.keyboard.press("Escape");
     await expect(filters.getByRole("button", { name: "Clear filters" })).toBeVisible();
-    await expect(
-      page.getByRole("link", { name: /introduction-and-greetings/ }),
-    ).toBeVisible();
+    await expect(session).toBeVisible();
 
+    /* narrowing to nothing says so, and Clear filters brings the list back */
+    await filters.getByRole("button", { name: "State" }).click();
+    await expect(
+      page.getByRole("menuitemcheckbox", { name: /Failed\s*0$/ }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.keyboard.press("Escape");
     await filters.getByRole("button", { name: "Clear filters" }).click();
     await expect(filters.getByRole("button", { name: "Clear filters" })).toHaveCount(0);
-    await expect(
-      page.getByRole("link", { name: /introduction-and-greetings/ }),
-    ).toBeVisible();
+    await expect(session).toBeVisible();
   });
 
   test("agents and configuration are reachable", async ({ page }) => {

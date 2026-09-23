@@ -678,6 +678,48 @@ describe("configuration panels", () => {
     ).toEqual([expect.objectContaining({ profile_id: profile.profile_id })]);
   });
 
+  it("turns a behavior on or off from its row with a patch of enabled alone", async () => {
+    const { api, shell } = harness();
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
+    const toggle = screen.getAllByRole("switch", {
+      name: `${ops.displayName} is ${ops.enabled ? "enabled" : "disabled"}`,
+    })[0]!;
+    await userEvent.setup().click(toggle);
+    await waitFor(() =>
+      expect(api.patchConfigComponents).toHaveBeenCalledWith({
+        agentDid: deployment.agentDid,
+        patches: [
+          {
+            collection: "AgentBehavior",
+            id: "ops",
+            changes: { enabled: !ops.enabled },
+          },
+        ],
+      }),
+    );
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+  });
+
+  it("makes a behavior the agent's default from its row menu", async () => {
+    const { api, shell } = harness();
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
+    const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
+    await user.click(
+      screen.getAllByRole("button", { name: `More for ${ops.displayName}` })[0]!,
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Make default" }));
+    await waitFor(() =>
+      expect(api.saveAgentConfig).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          agent_did: deployment.agentDid,
+          default_behavior_id: "ops",
+        }),
+      }),
+    );
+  });
+
   it("coalesces repeated create activation while the operator write is pending", async () => {
     const { api, shell } = harness();
     let finish: (() => void) | undefined;

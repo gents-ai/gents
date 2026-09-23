@@ -2,7 +2,7 @@
    (Behavior and AgentContext stay two documents), but the context is a
    visible block on the behavior: pick one, see who else uses it, duplicate
    it or start empty, and edit its instructions and capabilities in place.
-   Everything waits for one Save. PROPOSED: not yet in the desktop app. */
+   Everything waits for one Save. */
 import { dependentsWarning } from "./dependents";
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
@@ -262,6 +262,8 @@ function ContextPicker({
 }
 
 /* one-click changes that a behavior's row and its header share */
+/* the switch changes only `enabled`: a patch, so a behavior with no profile
+   yet is never rewritten with an empty profile reference */
 async function saveEnabled(
   shell: Shell,
   deployment: DeploymentView,
@@ -269,18 +271,11 @@ async function saveEnabled(
   next: boolean,
 ) {
   await shell.applyConfig((api) =>
-    api.saveBehaviorConfig({
-      document: {
-        behavior_id: b.behaviorId,
-        agent_did: deployment.agentDid,
-        display_name: b.displayName,
-        description: b.description ?? null,
-        context_id: b.contextId ?? null,
-        inference_profile_id: b.inferenceProfileId ?? "",
-        enabled: next,
-        tags: b.tags?.length ? b.tags : null,
-        created_at: b.createdAt,
-      },
+    api.patchConfigComponents({
+      agentDid: deployment.agentDid,
+      patches: [
+        { collection: "AgentBehavior", id: b.behaviorId, changes: { enabled: next } },
+      ],
     }),
   );
 }
