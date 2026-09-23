@@ -708,7 +708,7 @@ fn bounded_chars(text: &str, limit: usize) -> String {
 /// The longest a tool's key argument or failure status may be in the short
 /// summary line before eliding the rest — long enough to show a real
 /// command or path, short enough that even a giant one stays one line.
-const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
+pub(super) const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
 
 /// Makes tool-provided text safe to print as a single line of a terminal
 /// summary. Tool arguments and output are not trusted terminal input: a
@@ -719,7 +719,12 @@ const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
 /// control character outright, and bounds the result to `max_chars`
 /// *characters* — never splitting a UTF-8 code point. Returns `None` when
 /// nothing printable remains.
-fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
+///
+/// This is the sole normalization/bounding helper for terminal-facing text
+/// that ultimately comes from an untrusted source (tool name, tool
+/// arguments, tool output, or an agent's display name): every such call
+/// site routes through this function rather than adding a second one.
+pub(super) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
     let mut normalized = String::with_capacity(text.len());
     let mut last_was_space = false;
     for ch in text.chars() {
@@ -833,15 +838,16 @@ impl ToolOutcome {
 /// needs to see (#1622).
 fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
     match status {
-        "completed" => Some(
-            match result.and_then(parse_tool_output_metadata) {
-                Some((ok, meta_status)) if !ok => ToolOutcome::Failed(Some(meta_status)),
-                _ => ToolOutcome::Ok,
-            },
-        ),
-        "error" => Some(ToolOutcome::Failed(
-            result.and_then(|value| sanitize_summary_text(value, SUMMARY_ARGUMENT_MAX_CHARS)),
-        )),
+        "completed" => Some(match result.and_then(parse_tool_output_metadata) {
+            Some((ok, meta_status)) if !ok => ToolOutcome::Failed(sanitize_summary_text(
+                &meta_status,
+                SUMMARY_ARGUMENT_MAX_CHARS,
+            )),
+            _ => ToolOutcome::Ok,
+        }),
+        "error" => Some(ToolOutcome::Failed(result.and_then(|value| {
+            sanitize_summary_text(value, SUMMARY_ARGUMENT_MAX_CHARS)
+        }))),
         _ => None,
     }
 }
@@ -850,7 +856,8 @@ fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
 /// — once terminal — the outcome. Raw JSON never appears here; that's only
 /// available with `--verbose` via [`format_tool_progress_line`].
 pub(super) fn format_tool_summary_line(tool: &ToolCallProgress, colors: bool) -> String {
-    let mut line = tool.tool_name.clone();
+    let mut line = sanitize_summary_text(&tool.tool_name, SUMMARY_ARGUMENT_MAX_CHARS)
+        .unwrap_or_else(|| "tool".to_string());
     let argument = key_argument(&tool.arguments)
         .or_else(|| preview_compact_text(&tool.arguments))
         .and_then(|argument| sanitize_summary_text(&argument, SUMMARY_ARGUMENT_MAX_CHARS));
@@ -1014,10 +1021,7 @@ mod tests {
             key_argument(r#"{"args":["branch","--show-current"],"command":"git"}"#),
             Some("git branch --show-current".to_string())
         );
-        assert_eq!(
-            key_argument(r#"{"command":"ls"}"#),
-            Some("ls".to_string())
-        );
+        assert_eq!(key_argument(r#"{"command":"ls"}"#), Some("ls".to_string()));
     }
 
     #[test]
@@ -1144,6 +1148,64 @@ mod tests {
     }
 
     #[test]
+    fn tool_summary_line_sanitizes_a_hostile_tool_name_and_status_and_keeps_dim_ansi() {
+        // Both the tool's own name and its self-reported failure status are
+        // attacker-influenced (an MCP tool's declared name; a tool's own
+        // output), not trusted terminal input, same as the key argument.
+        let hostile_name = format!("bash\x1b[31mHACKED\x1b[0m\r\n{}", "n".repeat(200));
+        let hostile_status = format!("exit\x1b[31mHACKED\x1b[0m\r\n{}", "s".repeat(200));
+        let result = format!(
+            "gents_exec: {}\nstdout:\n(empty)\nstderr:\n(empty)",
+            serde_json::json!({"ok": false, "status": hostile_status, "exit_code": 1})
+        );
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: hostile_name,
+            status: "completed".into(),
+            arguments: r#"{"command":"ls"}"#.into(),
+            result: Some(result),
+        };
+
+        let plain = format_tool_summary_line(&tool, false);
+        assert!(
+            !plain.contains('\u{1b}'),
+            "ESC leaked into plain line: {plain:?}"
+        );
+        assert!(
+            !plain.contains('\r'),
+            "CR leaked into plain line: {plain:?}"
+        );
+        assert_eq!(
+            plain.lines().count(),
+            1,
+            "summary must stay one line: {plain:?}"
+        );
+        assert!(
+            plain.chars().count() < 250,
+            "summary line should stay bounded even for hostile name/status: {plain}"
+        );
+
+        let colored = format_tool_summary_line(&tool, true);
+        assert!(
+            colored.starts_with(DIM) && colored.ends_with(RESET),
+            "deliberate dim ANSI wrapper must remain: {colored:?}"
+        );
+        let inner = colored
+            .strip_prefix(DIM)
+            .and_then(|rest| rest.strip_suffix(RESET))
+            .expect("dim wrapper present");
+        assert!(
+            !inner.contains('\u{1b}'),
+            "ESC leaked inside the dim wrapper: {inner:?}"
+        );
+        assert!(
+            !inner.contains('\r'),
+            "CR leaked inside the dim wrapper: {inner:?}"
+        );
+    }
+
+    #[test]
     fn verbose_tool_line_is_unaffected_by_the_short_summary_formatter() {
         let tool = bash_tool(
             "completed",
@@ -1225,8 +1287,15 @@ mod tests {
             result: None,
         };
         let line = format_tool_summary_line(&tool, false);
-        assert_eq!(line.lines().count(), 1, "summary must stay one line: {line:?}");
-        assert!(!line.contains('\u{1b}'), "ESC leaked into summary: {line:?}");
+        assert_eq!(
+            line.lines().count(),
+            1,
+            "summary must stay one line: {line:?}"
+        );
+        assert!(
+            !line.contains('\u{1b}'),
+            "ESC leaked into summary: {line:?}"
+        );
         assert_eq!(line, "  [tool] bash printf 'line1 line2[31mline3'");
     }
 

@@ -15,7 +15,10 @@ use crate::{
     RequestSubmitOptions, SubmittedRequest, DEFAULT_HTTP_PORT,
 };
 
-use streaming::{load_existing_tool_call_keys, stream_turn_progress};
+use streaming::{
+    load_existing_tool_call_keys, sanitize_summary_text, stream_turn_progress,
+    SUMMARY_ARGUMENT_MAX_CHARS,
+};
 
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -149,9 +152,19 @@ fn chat_prompt_label(
     args: &ChatArgs,
     runtime_state: Option<&crate::shared::StoredRuntimeState>,
 ) -> String {
-    args.agent_name
-        .clone()
-        .or_else(|| runtime_state.map(|state| state.agent_name.clone()))
+    sanitize_prompt_label(
+        args.agent_name
+            .clone()
+            .or_else(|| runtime_state.map(|state| state.agent_name.clone())),
+    )
+}
+
+/// Routes a candidate agent-name label through the same control/newline
+/// stripping and bounding used for tool summaries: `agent_name` can come
+/// from `--agent-name` or stored runtime state, neither of which is trusted
+/// terminal input, and this prompt is printed on every turn.
+fn sanitize_prompt_label(name: Option<String>) -> String {
+    name.and_then(|name| sanitize_summary_text(&name, SUMMARY_ARGUMENT_MAX_CHARS))
         .unwrap_or_else(|| "gents".to_string())
 }
 
@@ -314,4 +327,28 @@ fn chat_turn_output(submitted: &SubmittedRequest, envelope: RequestOutputEnvelop
         "request": request,
         "output": output,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_label_strips_control_characters_and_bounds_a_hostile_agent_name() {
+        let hostile = format!("gents\x1b[31mHACKED\x1b[0m\r\n{}", "x".repeat(200));
+        let label = sanitize_prompt_label(Some(hostile));
+        assert!(!label.contains('\u{1b}'), "ESC leaked: {label:?}");
+        assert!(!label.contains('\r'), "CR leaked: {label:?}");
+        assert!(
+            !label.contains('\n'),
+            "prompt label must stay one line: {label:?}"
+        );
+        assert!(label.chars().count() <= SUMMARY_ARGUMENT_MAX_CHARS + 3);
+    }
+
+    #[test]
+    fn prompt_label_falls_back_to_gents_when_nothing_printable_remains() {
+        assert_eq!(sanitize_prompt_label(None), "gents");
+        assert_eq!(sanitize_prompt_label(Some("\x1b\x07".to_string())), "gents");
+    }
 }
