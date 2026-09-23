@@ -101,12 +101,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/toolset/memory.rs", 1),
     ("crates/gents/src/toolset/session_history.rs", 9),
     ("crates/gents/src/toolset/session_history/context_details.rs", 2),
-    ("crates/gents/src/trigger_engine/cross_deployment_cancel_mirror.rs", 4),
-    ("crates/gents/src/trigger_engine/event_delivery.rs", 3),
-    ("crates/gents/src/trigger_engine/event_source.rs", 7),
-    ("crates/gents/src/trigger_engine/goal_source.rs", 5),
-    ("crates/gents/src/trigger_engine/production_materializer.rs", 3),
-    ("crates/gents/src/trigger_engine/subagent_source.rs", 5),
     ("crates/gents/src/watcher/query.rs", 3),
 ];
 

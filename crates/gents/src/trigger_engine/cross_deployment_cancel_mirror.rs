@@ -12,7 +12,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::p2p_reconcile::PeerAdmissionAuthority;
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::ActiveRuntimeSnapshot;
 
 const TOOL_CALL_COLLECTION: &str = "AgentToolCall";
@@ -211,13 +211,9 @@ impl CrossDeploymentCancelMirror {
                 _docID
             }
         }"#;
-        let response = self.node.execute(query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "cancel mirror pending intent query failed: {:?}",
-                response.errors
-            );
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, query, "cancel mirror pending intent query")
+                .await?;
         let rows: Vec<DocIdRow> = response
             .data
             .as_ref()
@@ -243,10 +239,8 @@ impl CrossDeploymentCancelMirror {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("cancel mirror bridge load failed: {:?}", response.errors);
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "cancel mirror bridge load").await?;
         let rows: Vec<BridgeCancelRow> = response
             .data
             .as_ref()
@@ -266,13 +260,9 @@ impl CrossDeploymentCancelMirror {
                 ) {{ request_id agent_did }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "cancel mirror parent DID load failed: {:?}",
-                response.errors
-            );
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "cancel mirror parent DID load")
+                .await?;
         let value = response
             .data
             .as_ref()
@@ -298,10 +288,8 @@ impl CrossDeploymentCancelMirror {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("cancel mirror child load failed: {:?}", response.errors);
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "cancel mirror child load").await?;
         let value = response
             .data
             .as_ref()

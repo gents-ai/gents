@@ -24,7 +24,7 @@ use crate::goal::{
     GoalContinuationPhase, GoalDecision, GoalDocument, GoalRequestTerminal, GoalStatus,
     GOAL_TRIGGER_KIND, MAX_INFRASTRUCTURE_RETRIES,
 };
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::watcher::AgentRequest;
 use crate::UpdateSubscriptionSource;
@@ -134,10 +134,8 @@ impl GoalSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            bail!("query active Goal rows failed: {:?}", response.errors);
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query active Goal rows").await?;
         serde_json::from_value(
             response
                 .data
@@ -585,14 +583,12 @@ impl GoalSource {
             }}"#,
             signed_fields = crate::request_admission::SIGNED_REQUEST_FIELDS,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            bail!(
-                "query goal session requests failed for {}: {:?}",
-                goal.session_id,
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            &format!("query goal session requests for {}", goal.session_id),
+        )
+        .await?;
         let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data
@@ -631,13 +627,9 @@ impl GoalSource {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            bail!(
-                "query goal continuation child failed: {:?}",
-                response.errors
-            );
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query goal continuation child")
+                .await?;
         Ok(response
             .data
             .as_ref()
@@ -664,10 +656,9 @@ impl GoalSource {
                 AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {segment_fields} }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            bail!("query goal request activity failed: {:?}", response.errors);
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query goal request activity")
+                .await?;
         let data = response
             .data
             .as_ref()
@@ -707,13 +698,9 @@ impl GoalSource {
                 ) {{ failure_reason }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            bail!(
-                "query goal usage-limit failure failed: {:?}",
-                response.errors
-            );
-        }
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query goal usage-limit failure")
+                .await?;
         let reason = response
             .data
             .as_ref()

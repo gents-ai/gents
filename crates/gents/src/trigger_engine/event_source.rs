@@ -231,10 +231,12 @@ impl SourceSchemaCache {
             }}"#,
             name = collection,
         );
-        let response = node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("introspect {} failed: {:?}", collection, response.errors);
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            node,
+            &query,
+            &format!("introspect {collection}"),
+        )
+        .await?;
         let Some(fields_arr) = response
             .data
             .as_ref()
@@ -572,13 +574,12 @@ impl EventSource {
             collection = collection,
             limit = SEEN_DOCS_SEED_LIMIT,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "seen-doc seed query for {collection} failed: {:?}",
-                response.errors
-            );
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            &format!("seen-doc seed query for {collection}"),
+        )
+        .await?;
         let rows = response
             .data
             .as_ref()
@@ -609,15 +610,12 @@ impl EventSource {
                 }}"#,
                 limit = SEEN_DOCS_SEED_LIMIT,
             );
-            let response = self.node.execute(&query).await;
-            if response.has_errors() {
-                anyhow::bail!(
-                    "correlation readiness seed for {}.{} failed: {:?}",
-                    collection,
-                    field,
-                    response.errors
-                );
-            }
+            let response = crate::graphql::graphql_with_transaction_retry(
+                &self.node,
+                &query,
+                &format!("correlation readiness seed for {collection}.{field}"),
+            )
+            .await?;
             for row in response
                 .data
                 .as_ref()
@@ -705,14 +703,12 @@ impl EventSource {
             collection = collection,
             limit = SEEN_DOCS_SEED_LIMIT,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "event source rescan query for {} failed: {:?}",
-                collection,
-                response.errors
-            );
-        }
+        let response = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            &format!("event source rescan query for {collection}"),
+        )
+        .await?;
         let rows = response
             .data
             .as_ref()
@@ -889,10 +885,9 @@ impl EventSource {
             id = crate::graphql::escape_graphql_string(source_doc_id),
             projection = projection,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("fetch source doc errors: {:?}", response.errors);
-        }
+        let response =
+            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "fetch source doc")
+                .await?;
         let Some(rows) = response
             .data
             .as_ref()
@@ -1239,15 +1234,23 @@ impl EventSource {
             trigger_id = crate::graphql::escape_graphql_string(&trigger.trigger_id),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            tracing::warn!(
-                trigger_id = %trigger.trigger_id,
-                errors = ?response.errors,
-                "event-trigger batched marker prune failed; dispatch will retain the final marker check",
-            );
-            return HashSet::new();
-        }
+        let response = match crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "event-trigger batched marker prune",
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    trigger_id = %trigger.trigger_id,
+                    error = %error,
+                    "event-trigger batched marker prune failed; dispatch will retain the final marker check",
+                );
+                return HashSet::new();
+            }
+        };
         response
             .data
             .as_ref()
@@ -1295,15 +1298,23 @@ impl EventSource {
             owner = crate::graphql::escape_graphql_string(delivery.owner()),
             limit = GROUP_RECOVERY_PAGE_SIZE,
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            tracing::warn!(
-                consumer = ?delivery.consumer(),
-                errors = ?response.errors,
-                "event-trigger durable quiescence prune failed; invalid groups may be rechecked",
-            );
-            return HashSet::new();
-        }
+        let response = match crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "event-trigger durable quiescence prune",
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(
+                    consumer = ?delivery.consumer(),
+                    error = %error,
+                    "event-trigger durable quiescence prune failed; invalid groups may be rechecked",
+                );
+                return HashSet::new();
+            }
+        };
         response
             .data
             .as_ref()
