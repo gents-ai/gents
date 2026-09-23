@@ -17,8 +17,8 @@ use crate::eval::report::refused;
 use crate::eval::runner::freeze::definition_ref;
 use crate::eval::{
     case_means_bp, case_trial_score, classify, exposure, headline_bp, CaseTrialScore, CellSpec,
-    DefinitionRef, EvidenceClass, Invalidation, RunHeader, RunRecord, StageCompletion, SubjectRef,
-    TrialRecord, TrialScore, TrialUsage, VerdictRecord,
+    DefinitionRef, EvidenceClass, Invalidation, OutcomeKind, ProviderReason, RunHeader, RunRecord,
+    StageCompletion, SubjectRef, TrialRecord, TrialScore, TrialUsage, VerdictRecord,
 };
 
 /// Bumped when a field's meaning changes; an added field does not bump it.
@@ -34,7 +34,7 @@ pub struct EvalReport {
     pub exposure: usize,
     /// The installed definition no longer digests to the one the run froze
     /// (or is gone). `build` never sets it; `report::store` does, from the
-    /// run's frozen copy (ruling U2).
+    /// run's frozen copy.
     pub definition_changed: bool,
 }
 
@@ -65,8 +65,9 @@ pub struct CellReport {
     pub headline_bp: Option<u32>,
     /// Summed over each slot's counted attempt.
     pub usage: TrialUsage,
-    /// `evidence::cell_usage` for this cell: the numbers the cost gate reads
-    /// (ruling F5), so `compare` and the optimizer share one tally.
+    /// `evidence::cell_usage` for this cell: the numbers the cost gate reads,
+    /// computed as the optimizer computes them, so `compare` and the
+    /// optimizer share one tally.
     pub cell_usage: CellUsage,
     /// Trial rows of this cell, every attempt included.
     pub attempts: u32,
@@ -82,8 +83,51 @@ pub struct SlotReport {
     pub score_bp: Option<u32>,
     /// What pairing reads for this slot.
     pub counted: SlotScore,
+    /// The counted attempt's verdicts, in (stage, check) order; empty when
+    /// no attempt completed.
+    pub verdicts: Vec<SlotVerdict>,
     /// The latest row, completed or not.
     pub latest: Option<AttemptSummary>,
+}
+
+/// One verdict that counts for a slot: of its counted attempt, after regrade
+/// supersession.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SlotVerdict {
+    pub verdict_id: String,
+    pub stage_id: String,
+    pub check: String,
+    pub tier: EvalTier,
+    pub kind: OutcomeKind,
+    pub provider_reason: Option<ProviderReason>,
+    pub score_bp: Option<u32>,
+    pub weight: u32,
+    /// `raw.reason_code`, the check's own contract.
+    pub reason_code: Option<String>,
+}
+
+/// A verdict's `raw.reason_code`, the check's own contract; `None` when the
+/// check wrote none or wrote something other than a string.
+pub fn reason_code(record: &VerdictRecord) -> Option<String> {
+    record
+        .raw
+        .get("reason_code")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned)
+}
+
+fn slot_verdict(record: &VerdictRecord) -> SlotVerdict {
+    SlotVerdict {
+        verdict_id: record.verdict_id.clone(),
+        stage_id: record.stage_id.clone(),
+        check: record.check.clone(),
+        tier: record.tier,
+        kind: record.kind,
+        provider_reason: record.provider_reason,
+        score_bp: record.score_bp,
+        weight: record.weight,
+        reason_code: reason_code(record),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -269,11 +313,12 @@ pub fn build(
 }
 
 /// A slot's counted attempt: its score, whether every weighted acceptance
-/// verdict passed, and the row itself.
+/// verdict passed, the row itself, and the verdicts that count.
 struct Counted<'a> {
     score: CaseTrialScore,
     all_pass: bool,
     record: &'a TrialRecord,
+    verdicts: Vec<SlotVerdict>,
 }
 
 fn cell_report(
@@ -282,6 +327,18 @@ fn cell_report(
     cell: &CellSpec,
     trials_per_case: u32,
 ) -> CellReport {
+    // Keyed by trial as well: `counted_slots` selected each view within one
+    // trial, so a verdict id another trial repeats never stands in for it.
+    let by_id: BTreeMap<(&str, &str), &VerdictRecord> = rows
+        .verdicts
+        .iter()
+        .map(|verdict| {
+            (
+                (verdict.trial_id.as_str(), verdict.verdict_id.as_str()),
+                verdict,
+            )
+        })
+        .collect();
     let counted: BTreeMap<(&str, u32), Counted<'_>> =
         counted_slots(definition, rows, &cell.cell_id)
             .into_iter()
@@ -299,6 +356,16 @@ fn cell_report(
                         score: case_trial_score(case.reducer, &views),
                         all_pass,
                         record,
+                        verdicts: views
+                            .iter()
+                            .filter_map(|view| {
+                                by_id.get(&(
+                                    record.identity.trial_id.as_str(),
+                                    view.verdict_id.as_str(),
+                                ))
+                            })
+                            .map(|verdict| slot_verdict(verdict))
+                            .collect(),
                     },
                 )
             })
@@ -372,6 +439,9 @@ fn cell_report(
                     _ => None,
                 },
                 counted: SlotScore::of(score),
+                verdicts: counted_here
+                    .map(|counted_here| counted_here.verdicts.clone())
+                    .unwrap_or_default(),
                 latest: latest.map(attempt_summary),
             });
         }
@@ -766,6 +836,40 @@ mod tests {
         assert_eq!(
             trial_id(RUN, at("base", "elsewhere", 0, 1)),
             elsewhere.trials[0].identity.trial_id
+        );
+    }
+
+    #[test]
+    fn a_slot_carries_the_verdicts_that_count_for_it() {
+        let definition = definition(&["disk"]);
+        let run = record(RUN, &definition, &["base"], 2);
+        let mut rows = Rows::default().add(RUN, at("base", "disk", 0, 1), fail());
+        let original = rows.verdicts[0].clone();
+        rows.verdicts.push(VerdictRecord {
+            verdict_id: "regrade".into(),
+            kind: OutcomeKind::Passed,
+            score_bp: Some(10_000),
+            regrade_of: Some(original.verdict_id.clone()),
+            ..original
+        });
+        let report = build(&run, &rows.trials, &rows.verdicts, &definition, &[]).unwrap();
+        let verdicts = &report.cells[0].slots[0].verdicts;
+        assert_eq!(
+            verdicts
+                .iter()
+                .map(|verdict| (
+                    verdict.verdict_id.as_str(),
+                    verdict.kind,
+                    verdict.reason_code.as_deref()
+                ))
+                .collect::<Vec<_>>(),
+            vec![("regrade", OutcomeKind::Passed, Some("fixture"))],
+            "the superseded row is not counted"
+        );
+        assert_eq!(verdicts[0].stage_id, "check");
+        assert!(
+            report.cells[0].slots[1].verdicts.is_empty(),
+            "a planned slot has none"
         );
     }
 }

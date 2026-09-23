@@ -112,10 +112,10 @@ where
         if !running_elsewhere(&dir) {
             // The holder can lapse for a moment, as when one call over the
             // run hands it to the next: with the documents open, look once
-            // more an interval later before ending, and keep watching a run
-            // held again.
+            // more before ending, after an interval or the stale window,
+            // whichever is shorter, and keep watching a run held again.
             if let Documents::Open(_) = &documents {
-                tokio::time::sleep(args.interval).await;
+                tokio::time::sleep(args.interval.min(STALE_WINDOW)).await;
                 if running_elsewhere(&dir) {
                     continue;
                 }
@@ -613,7 +613,8 @@ mod tests {
     }
 
     /// A holder that lapses for a moment does not end the watch: it looks
-    /// again an interval later and keeps watching a run held again.
+    /// again after an interval (at most the stale window) and keeps
+    /// watching a run held again.
     #[tokio::test]
     async fn a_holder_that_lapses_for_a_moment_is_watched_again() {
         let fixture = Fixture::new().await;

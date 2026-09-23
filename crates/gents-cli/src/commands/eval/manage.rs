@@ -23,7 +23,7 @@ use crate::cli::{EvalGcArgs, EvalInvalidateArgs, EvalRmArgs, EvalRunIdArgs};
 /// hosting the run may hold the home's embedded node, and `purpose` (which
 /// opens it) is awaited only afterwards. A failed lookup is logged and the
 /// cancel still succeeds; only the job note is skipped. A job's run is
-/// cancelled like any other, and the job stops at it (F1).
+/// cancelled like any other, and the job stops at it.
 pub(crate) async fn cancel<P>(
     runs_dir: &Path,
     run_id: &str,
@@ -135,12 +135,19 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         args.run_id,
         dir.display()
     );
+    let live = || {
+        anyhow::anyhow!(
+            "run {} is being run by a live process right now (see `gents eval watch {}`); pass --force to delete its directory anyway",
+            args.run_id,
+            args.run_id
+        )
+    };
     if !args.force {
         let record = load_run(&ctx.access, &ctx.owner, &args.run_id)
             .await?
             .with_context(|| format!("no eval run {:?} for {}", args.run_id, ctx.owner))?;
         let trials = load_trials(&ctx.access, &ctx.owner, &args.run_id).await?;
-        // Ruling F7: finished means nothing owed and no live process on it.
+        // Finished means nothing owed and no live process on it.
         let owed = slots_owed(&record, &trials);
         anyhow::ensure!(
             owed == 0,
@@ -148,13 +155,10 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
             args.run_id,
             args.run_id
         );
-        anyhow::ensure!(
-            !running_elsewhere(&dir),
-            "run {} is being run by a live process right now (see `gents eval watch {}`); pass --force to delete its directory anyway",
-            args.run_id,
-            args.run_id
-        );
-        // Ruling F8: a job that still needs the run keeps it.
+        if running_elsewhere(&dir) {
+            return Err(live());
+        }
+        // A job that still needs the run keeps it.
         if let Some((job_id, state)) = gents::optimization::held_runs(&ctx.access, &ctx.owner)
             .await?
             .get(&args.run_id)
@@ -167,6 +171,11 @@ pub(super) async fn rm(ctx: &EvalContext, args: &EvalRmArgs, out: &mut dyn Write
         }
     }
     let bytes = dir_size(&dir)?;
+    // A process may have started on the run while the checks above read the
+    // database and sized the directory: look again right before deleting.
+    if !args.force && running_elsewhere(&dir) {
+        return Err(live());
+    }
     std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
     tracing::warn!(run_id = %args.run_id, bytes, "eval run directory removed; its documents stay");
     writeln!(
@@ -608,7 +617,7 @@ mod tests {
         );
     }
 
-    /// Ruling F1: cancelling a job's run proceeds and says the job stops there.
+    /// Cancelling a job's run proceeds and says the job stops there.
     #[tokio::test]
     async fn cancelling_a_jobs_run_says_the_job_stops_at_it() {
         let fixture = Fixture::new().await;
@@ -736,6 +745,31 @@ mod tests {
         fixture
             .scripted_run("r-done", &executor(&[]), CancellationToken::new())
             .await;
+        // A finished run with a slot a live process is running is kept.
+        let done = fixture.ctx.runs_dir().join("r-done");
+        let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let held = serde_json::json!({"slots": {"trial-1": {
+            "cell_id": "baseline",
+            "case_id": "val-a",
+            "trial_index": 0,
+            "attempt": 2,
+            "stage_id": null,
+            "started_at": now,
+            "pid": std::process::id(),
+            "written_at": now,
+        }}});
+        let progress = done.join(gents::eval::runner::PROGRESS_FILE);
+        std::fs::write(&progress, serde_json::to_vec(&held).unwrap()).unwrap();
+        let refused = eval(&fixture, &["rm", "r-done"]).await.unwrap_err();
+        assert!(
+            refused
+                .to_string()
+                .contains("is being run by a live process right now"),
+            "{refused:#}"
+        );
+        assert!(done.is_dir(), "a refusal deletes nothing");
+        std::fs::remove_file(&progress).unwrap();
+
         let removed = eval(&fixture, &["rm", "r-done"]).await.unwrap();
         assert!(removed.starts_with("removed "), "{removed}");
     }

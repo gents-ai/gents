@@ -1215,7 +1215,7 @@ pub async fn run_job(
             cancel.clone(),
         )
         .await?;
-        // Ruling F1: a run its cancel marker stopped is unfinished. The job
+        // A run its cancel marker stopped is unfinished. The job
         // stops at it, journals nothing more, and a resume continues it.
         if cancel.is_cancelled() || ran.cancelled {
             return stopped(&job);
@@ -1327,7 +1327,7 @@ pub async fn run_job(
                 cancel.clone(),
             )
             .await?;
-            // Ruling F1: a run its cancel marker stopped is unfinished. The job
+            // A run its cancel marker stopped is unfinished. The job
             // stops at it, journals nothing more, and a resume continues it.
             if cancel.is_cancelled() || ran.cancelled {
                 return stopped(&job);
@@ -1426,7 +1426,7 @@ pub async fn run_job(
                 cancel.clone(),
             )
             .await?;
-            // Ruling F1: a run its cancel marker stopped is unfinished. The job
+            // A run its cancel marker stopped is unfinished. The job
             // stops at it, journals nothing more, and a resume continues it.
             if cancel.is_cancelled() || ran.cancelled {
                 return stopped(&job);

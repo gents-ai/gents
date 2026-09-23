@@ -13,10 +13,12 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use serde::Serialize;
 
-use crate::eval::report::build::{CellReport, EvalReport};
+use crate::eval::report::build::{
+    CellReport, EvalReport, SlotClass, SlotReport, SlotScore, SlotVerdict,
+};
 use crate::eval::report::evidence::CellUsage;
 use crate::eval::report::refused;
-use crate::eval::{pair_trials, CaseTrialScore, DefinitionRef, PairedEvidence, TrialScore};
+use crate::eval::{pair_trials, CaseTrialScore, DefinitionRef, Pair, PairedEvidence, TrialScore};
 use crate::optimization::evidence::{decision_seed, totals};
 use crate::optimization::policy::{
     cost_ok, decide, evidence_from_pairs, no_case_regression, sufficient, CaseEvidence,
@@ -62,9 +64,21 @@ pub struct GateView {
 pub struct PolicyOutcome {
     pub report: DecisionReport,
     pub gates: GateView,
-    /// False while the policy equals the placeholder defaults, which only the
-    /// A/A calibration replaces.
+    /// False while the policy is the placeholder defaults ([`is_placeholder`]),
+    /// which only the A/A calibration replaces.
     pub calibrated: bool,
+}
+
+/// Whether `policy` is the placeholder defaults: `PolicyV2::uncalibrated()`
+/// with the policy's own `max_rounds`. `max_rounds` sizes a job's budget (the
+/// Bonferroni divisor), not a calibrated value, so the defaults sized to any
+/// round count are still uncalibrated.
+pub fn is_placeholder(policy: &PolicyV2) -> bool {
+    *policy
+        == PolicyV2 {
+            max_rounds: policy.max_rounds,
+            ..PolicyV2::uncalibrated()
+        }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -88,6 +102,9 @@ pub struct Comparison {
     /// Only after [`Comparison::with_policy`]: the optimizer decides by
     /// default, never a comparison.
     pub policy: Option<PolicyOutcome>,
+    /// Every `(case_id, trial_index)` either cell has, in that order, with
+    /// each side's counted verdicts.
+    pub trials: Vec<PairedTrial>,
     #[serde(skip)]
     paired: PairedEvidence,
     #[serde(skip)]
@@ -131,7 +148,7 @@ pub fn compare(
     let cand = cell(candidate, candidate_cell)?;
     let (base_scores, cand_scores) = (trial_scores(base), trial_scores(cand));
     let paired = pair_trials(&base_scores, &cand_scores);
-    // Ruling F4: the distinct run ids, as `optimization show` seeds a
+    // Seeded over the distinct run ids, as `optimization show` seeds a
     // decision over the runs it read.
     let mut seed_runs = vec![left.run_id.clone()];
     if right.run_id != left.run_id {
@@ -154,6 +171,7 @@ pub fn compare(
         imputed: imputed(&base_scores, &cand_scores),
         p_ppm: None,
         policy: None,
+        trials: paired_trials(base, cand),
         paired,
         case_ids: base.cases.iter().map(|case| case.case_id.clone()).collect(),
         usage: [base.cell_usage, cand.cell_usage],
@@ -180,6 +198,11 @@ impl Comparison {
             &self.case_ids,
             totals(self.usage[0], self.usage[1], policy.max_missing_usage_bp),
         )
+    }
+
+    /// `pair_trials`' own pairs, each naming its `(case_id, trial_index)`.
+    pub(crate) fn pairs(&self) -> &[Pair] {
+        &self.paired.pairs
     }
 
     /// The Monte Carlo seed: `decision_seed` over the distinct run ids.
@@ -211,7 +234,7 @@ impl Comparison {
         self.policy = Some(PolicyOutcome {
             report,
             gates,
-            calibrated: *policy != PolicyV2::uncalibrated(),
+            calibrated: !is_placeholder(policy),
         });
         self
     }
@@ -226,6 +249,52 @@ impl Comparison {
         self.p_ppm = report.p_ppm;
         report
     }
+}
+
+/// One cell's side of a trial key.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct SideTrial {
+    pub class: SlotClass,
+    pub score: SlotScore,
+    pub verdicts: Vec<SlotVerdict>,
+}
+
+/// Both cells at one `(case_id, trial_index)`, as the breakdowns read them.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PairedTrial {
+    pub case_id: String,
+    pub trial_index: u32,
+    pub baseline: Option<SideTrial>,
+    pub candidate: Option<SideTrial>,
+}
+
+fn paired_trials(baseline: &CellReport, candidate: &CellReport) -> Vec<PairedTrial> {
+    let side = |slot: &SlotReport| SideTrial {
+        class: slot.class,
+        score: slot.counted,
+        verdicts: slot.verdicts.clone(),
+    };
+    fn entry<'a>(
+        trials: &'a mut BTreeMap<(String, u32), PairedTrial>,
+        slot: &SlotReport,
+    ) -> &'a mut PairedTrial {
+        trials
+            .entry((slot.case_id.clone(), slot.trial_index))
+            .or_insert_with(|| PairedTrial {
+                case_id: slot.case_id.clone(),
+                trial_index: slot.trial_index,
+                baseline: None,
+                candidate: None,
+            })
+    }
+    let mut trials: BTreeMap<(String, u32), PairedTrial> = BTreeMap::new();
+    for slot in &baseline.slots {
+        entry(&mut trials, slot).baseline = Some(side(slot));
+    }
+    for slot in &candidate.slots {
+        entry(&mut trials, slot).candidate = Some(side(slot));
+    }
+    trials.into_values().collect()
 }
 
 fn cell<'a>(report: &'a EvalReport, cell_id: &str) -> Result<&'a CellReport> {
@@ -425,7 +494,7 @@ mod tests {
         );
         // One pair per case, so the common scale is 1 and the per-case
         // differences in case order a, b, c, d are the raw ones. One run:
-        // its id once, as `optimization show` seeds a one-run decision (F4).
+        // its id once, as `optimization show` seeds a one-run decision.
         let seed = decision_seed(&[RUN.to_owned()]);
         assert_eq!(comparison.seed(), seed);
         assert_eq!(
@@ -631,7 +700,23 @@ mod tests {
         assert!(outcome.calibrated);
     }
 
-    /// Ruling F4: above twenty cases `decide` samples, so the seed matters.
+    /// The defaults sized to another round count are still the placeholder.
+    #[test]
+    fn the_defaults_with_other_max_rounds_are_a_placeholder() {
+        let policy = PolicyV2 {
+            max_rounds: 2,
+            ..PolicyV2::uncalibrated()
+        };
+        assert!(super::is_placeholder(&policy));
+        assert!(!super::is_placeholder(&PolicyV2 {
+            min_pairs: 1,
+            ..policy.clone()
+        }));
+        let (comparison, _) = against_the_optimizer(&SIX, 0, &policy);
+        assert!(!comparison.policy.unwrap().calibrated);
+    }
+
+    /// Above twenty cases `decide` samples, so the seed matters.
     /// The comparison of one run's two cells seeds as `optimization show`
     /// recomputes that run's decision: over the run id once.
     #[test]

@@ -293,7 +293,7 @@ pub(crate) fn source_dirty() -> bool {
     option_env!("GENTS_BUILD_GIT_DIRTY") == Some("true")
 }
 
-/// Ruling F14: `<definition>-<unix ms>-<4 random hex>`, unique per call. An
+/// `<definition>-<unix ms>-<4 random hex>`, unique per call. An
 /// operator who wants a run or job reused (the idempotent freeze, a resume)
 /// names it with `--run-id` or `--job-id`.
 pub(crate) fn default_id(definition_id: &str) -> String {
@@ -307,7 +307,7 @@ fn format_default_id(definition_id: &str, unix_ms: i64, random: u16) -> String {
 
 /// Printed above a policy verdict computed with the placeholder defaults.
 pub(crate) const UNCALIBRATED_BANNER: &str =
-    "policy defaults are uncalibrated until the A/A calibration (M5)";
+    "policy defaults are uncalibrated until an A/A calibration run has set them";
 
 pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimization::PolicyV2> {
     use anyhow::Context;

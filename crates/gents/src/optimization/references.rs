@@ -1,7 +1,7 @@
 //! Which eval runs an optimization job's journal names: its train,
 //! validation, re-run and held-out runs. `gents eval gc` keeps them (spec 4b
-//! §7), so a job's evidence and M5's calibration never lose their homes to
-//! a side effect.
+//! §7), so a job's evidence and a later A/A calibration over it never lose
+//! their homes to a side effect.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -69,8 +69,8 @@ pub async fn referenced_run_ids(access: &ConfigAccess, owner: &str) -> Result<BT
     Ok(ids)
 }
 
-/// Ruling F2: a job whose directory, and the directories of whose runs, may
-/// go without `--force`. `ReadyToPromote` is not: `promote` verifies the
+/// Whether a job's directory, and its runs' directories, may go without
+/// `--force`. `ReadyToPromote` is not: `promote` verifies the
 /// retained checkpoint pack in the job's directory.
 pub fn removable(state: &JobState) -> bool {
     matches!(
@@ -84,7 +84,7 @@ pub fn removable(state: &JobState) -> bool {
     )
 }
 
-/// Ruling F8: every run a job that is not [`removable`] still names, with
+/// Every run a job that is not [`removable`] still names, with
 /// that job's id and state. `gents eval rm` refuses these without `--force`.
 pub async fn held_runs(
     access: &ConfigAccess,

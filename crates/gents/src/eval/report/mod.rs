@@ -1,14 +1,15 @@
 //! Pure projections from eval documents to comparable numbers.
 //!
-//! Unfrozen by design (ruling R3). `evidence` is the verdict-to-evidence
+//! Unfrozen by design. `evidence` is the verdict-to-evidence
 //! projection the optimizer and the operator share; `build` is spec 4a's
 //! versioned report over it. `build`, `compare` and the breakdowns are pure;
 //! `store` is the module's one I/O boundary, loading rows for an owner,
-//! alongside `evidence::load_run_rows` (ruling U9). Reports are derived on
+//! alongside `evidence::load_run_rows`. Reports are derived on
 //! demand and never stored, so a regrade changes a report with no migration.
 //! `compare` reuses the optimizer's pure statistics so an operator's p-value
 //! is the optimizer's; nothing here reads or writes an optimization document.
 
+pub mod breakdown;
 pub mod build;
 pub mod compare;
 pub mod evidence;
@@ -16,11 +17,15 @@ pub mod evidence;
 pub(crate) mod fixtures;
 pub mod store;
 
+pub use breakdown::{by_check, by_stage, case_view, CaseView, CheckDiff, StageDiff};
 pub use build::{
     build, AttemptSummary, CaseReport, CellReport, EvalReport, RunSummary, SlotClass, SlotCounts,
-    SlotReport, SlotScore, REPORT_VERSION,
+    SlotReport, SlotScore, SlotVerdict, REPORT_VERSION,
 };
-pub use compare::{compare, CaseComparison, Comparison, GateView, PolicyOutcome};
+pub use compare::{
+    compare, is_placeholder, CaseComparison, Comparison, GateView, PairedTrial, PolicyOutcome,
+    SideTrial,
+};
 pub use evidence::{
     cell_trial_scores, cell_usage, concat_paired, counted_verdicts, latest_attempts, load_run_rows,
     paired_evidence, CellUsage, RunRows,

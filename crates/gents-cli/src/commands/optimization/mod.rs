@@ -1,6 +1,6 @@
 //! `gents optimization`: thin commands over `gents::optimization`. A job is
-//! driven only by a scripted proposer supplied as a file until the LLM
-//! proposer exists (M7).
+//! driven only by a scripted proposer supplied as a file until an LLM
+//! proposer exists.
 //!
 //! Refusals the library returns are re-raised with exactly their text
 //! ([`surface_refusal`]); `main` prints them and exits 1. Clap exits 2 on a
@@ -121,7 +121,7 @@ async fn run(
     out: &mut dyn Write,
 ) -> Result<()> {
     let proposer_arg = args.proposer.as_ref().context(
-        "optimization run needs a proposer: until the LLM proposer lands (M7), pass --proposer scripted:<file>",
+        "optimization run needs a proposer: no model-driven proposer is available yet; pass --proposer scripted:<file>",
     )?;
     let proposer = scripted_proposer(&proposer_arg.script, args.rounds)?;
     let subject = resolve_subject_pack(
@@ -203,21 +203,22 @@ async fn run(
         ),
     )
     .await?;
-    if outcome.state == JobState::Running {
-        let note = format!(
+    // A job left running is not a success: the view still renders, then the
+    // command fails with the resume note, so a script never reads it as done.
+    let stopped = (outcome.state == JobState::Running).then(|| {
+        format!(
             "job {job_id} stopped before it finished; run the same command with --job-id {job_id} to resume it"
-        );
-        if args.json {
-            tracing::warn!("{note}");
-        } else {
-            writeln!(out, "{note}")?;
-        }
-    }
+        )
+    });
     let view = show_job(&ctx.access, &ctx.owner, &job_id).await?;
     if args.json {
-        write_json(out, &view)
+        write_json(out, &view)?;
     } else {
-        Ok(render::job_table(&view, out)?)
+        render::job_table(&view, out)?;
+    }
+    match stopped {
+        Some(note) => Err(anyhow::anyhow!(note)),
+        None => Ok(()),
     }
 }
 
@@ -405,8 +406,10 @@ mod tests {
     use gents::eval::checks::CheckRegistry;
     use tokio_util::sync::CancellationToken;
 
+    use super::execute;
     use super::testing::{
-        accepted_job, delete_definition, optimization, optimization_with, proposer_file,
+        accepted_job, delete_definition, optimization, optimization_command, optimization_with,
+        proposer_file,
     };
     use crate::cli::Cli;
     use crate::commands::eval::testing::{deps, eval, executor, Fixture, DEFINITION};
@@ -421,7 +424,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             error.to_string(),
-            "optimization run needs a proposer: until the LLM proposer lands (M7), pass --proposer scripted:<file>"
+            "optimization run needs a proposer: no model-driven proposer is available yet; pass --proposer scripted:<file>"
         );
         let usage = match Cli::try_parse_from([
             "gents",
@@ -437,9 +440,9 @@ mod tests {
             Err(error) => error,
         };
         assert!(
-            usage
-                .to_string()
-                .contains("the only proposer until M7 is scripted:<file>"),
+            usage.to_string().contains(
+                "no model-driven proposer is available yet; pass --proposer scripted:<file>"
+            ),
             "{usage}"
         );
         assert_eq!(usage.exit_code(), 2);
@@ -660,18 +663,22 @@ mod tests {
         }
 
         let stopped = executor(&[]);
-        let output = optimization_with(
-            &fixture,
-            &refs(&argv("job-stop", false)),
+        let mut out = Vec::new();
+        let error = execute(
+            &fixture.ctx,
+            optimization_command(&refs(&argv("job-stop", false))),
             &deps(&stopped, &registry, interrupted()),
+            &mut out,
         )
         .await
-        .unwrap();
-        assert!(
-            output.lines().any(|line| line
-                == "job job-stop stopped before it finished; run the same command with --job-id job-stop to resume it"),
-            "{output}"
+        .unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "job job-stop stopped before it finished; run the same command with --job-id job-stop to resume it"
         );
+        let output = String::from_utf8(out).unwrap();
+        assert!(output.contains("job job-stop state running "), "{output}");
+        assert!(!output.contains("stopped before it finished"), "{output}");
         let shown = optimization(&fixture, &["show", "job-stop"]).await.unwrap();
         assert!(shown.contains("job job-stop state running "), "{shown}");
 
@@ -703,14 +710,23 @@ mod tests {
             "the resume froze nothing again: {journal:?}"
         );
 
-        // With --json, stdout is the view alone: the note goes to the log.
-        let output = optimization_with(
-            &fixture,
-            &refs(&argv("job-json", true)),
+        // With --json, stdout is the view alone: the note is the error.
+        let mut out = Vec::new();
+        let error = execute(
+            &fixture.ctx,
+            optimization_command(&refs(&argv("job-json", true))),
             &deps(&stopped, &registry, interrupted()),
+            &mut out,
         )
         .await
-        .unwrap();
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("job job-json stopped before it finished"),
+            "{error:#}"
+        );
+        let output = String::from_utf8(out).unwrap();
         let json: serde_json::Value = serde_json::from_str(&output)
             .unwrap_or_else(|error| panic!("stdout is not pure JSON ({error}): {output}"));
         assert_eq!(json["state"]["state"], "running");
@@ -854,7 +870,7 @@ mod tests {
             &deps(&scripted, &registry, interrupted),
         )
         .await
-        .unwrap();
+        .unwrap_err();
         let running_dir = fixture.ctx.jobs_dir().join("job-running");
         assert!(
             running_dir.is_dir(),

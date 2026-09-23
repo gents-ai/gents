@@ -3,7 +3,9 @@
 
 use std::io::{self, Write};
 
-use gents::eval::report::{Comparison, EvalReport, SlotCounts};
+use gents::eval::report::{
+    CaseView, CheckDiff, Comparison, EvalReport, SideTrial, SlotCounts, SlotScore, StageDiff,
+};
 use gents::eval::runner::{is_fresh, Progress, STALE_WINDOW};
 use gents::eval::TrialUsage;
 use gents::optimization::Decision;
@@ -369,6 +371,116 @@ pub(crate) fn comparison_table(comparison: &Comparison, out: &mut dyn Write) -> 
             yes(gates.significant),
             yes_or(gates.min_effect, "undetermined")
         )?;
+    }
+    Ok(())
+}
+
+/// A compare breakdown, as `--json` prints it: `{"by": …, "rows": […]}`.
+#[derive(Debug, Serialize)]
+#[serde(tag = "by", content = "rows", rename_all = "snake_case")]
+pub(crate) enum Breakdown {
+    Check(Vec<CheckDiff>),
+    Stage(Vec<StageDiff>),
+}
+
+pub(crate) fn breakdown_table(breakdown: &Breakdown, out: &mut dyn Write) -> io::Result<()> {
+    // One row shape for both: a stage row is a check row named by stage id.
+    let (label, rows): (&str, Vec<CheckDiff>) = match breakdown {
+        Breakdown::Check(rows) => ("check", rows.clone()),
+        Breakdown::Stage(rows) => (
+            "stage",
+            rows.iter()
+                .map(|row| CheckDiff {
+                    check: row.stage_id.clone(),
+                    cases: row.cases,
+                    pairs: row.pairs,
+                    mean_diff_bp: row.mean_diff_bp,
+                    improved: row.improved,
+                    tied: row.tied,
+                    worsened: row.worsened,
+                })
+                .collect(),
+        ),
+    };
+    writeln!(out)?;
+    if rows.is_empty() {
+        return writeln!(out, "no {label} scored on both sides of any pair");
+    }
+    writeln!(
+        out,
+        "{:<28} {:>5} {:>5} {:>9} {:>8} {:>4} {:>8}",
+        label, "cases", "pairs", "mean_diff", "improved", "tied", "worsened"
+    )?;
+    for row in &rows {
+        writeln!(
+            out,
+            "{:<28} {:>5} {:>5} {:>9} {:>8} {:>4} {:>8}",
+            row.check,
+            row.cases,
+            row.pairs,
+            signed_percent(row.mean_diff_bp),
+            row.improved,
+            row.tied,
+            row.worsened
+        )?;
+    }
+    Ok(())
+}
+
+fn slot_score(score: SlotScore) -> String {
+    match score {
+        SlotScore::Absent => "absent".to_owned(),
+        SlotScore::NotEvidence => "not_evidence".to_owned(),
+        SlotScore::Unknown => "unknown".to_owned(),
+        SlotScore::Scored(bp) => percent(Some(bp)),
+    }
+}
+
+fn side_label(side: Option<&SideTrial>) -> String {
+    side.map_or_else(
+        || "absent".to_owned(),
+        |side| format!("{} {}", wire(&side.class), slot_score(side.score)),
+    )
+}
+
+pub(crate) fn case_view_text(view: &CaseView, out: &mut dyn Write) -> io::Result<()> {
+    let summary = &view.summary;
+    writeln!(out)?;
+    writeln!(
+        out,
+        "case {} pairs {} baseline {} candidate {} diff {}",
+        view.case_id,
+        summary.pairs,
+        percent(summary.baseline_mean_bp),
+        percent(summary.candidate_mean_bp),
+        signed_percent(summary.diff_bp)
+    )?;
+    for trial in &view.trials {
+        writeln!(
+            out,
+            "#{} baseline {} candidate {}",
+            trial.trial_index,
+            side_label(trial.baseline.as_ref()),
+            side_label(trial.candidate.as_ref())
+        )?;
+        for (arm, side) in [
+            ("baseline", &trial.baseline),
+            ("candidate", &trial.candidate),
+        ] {
+            for verdict in side.iter().flat_map(|side| &side.verdicts) {
+                writeln!(
+                    out,
+                    "  {arm} {}/{} {} score {} reason {}",
+                    verdict.stage_id,
+                    verdict.check,
+                    verdict.kind.as_str(),
+                    verdict
+                        .score_bp
+                        .map_or_else(|| "-".to_owned(), |score| score.to_string()),
+                    verdict.reason_code.as_deref().unwrap_or("-")
+                )?;
+            }
+        }
     }
     Ok(())
 }

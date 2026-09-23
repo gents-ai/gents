@@ -10,6 +10,16 @@ fn eval_run_help_and_a_missing_definition_refuses_before_any_run_directory_exist
 
     let help = run_cli_text(&home_dir, &["eval", "run", "--help"])?;
     assert!(help.contains("--cell"), "{help}");
+    // A stopped run exits 1, so a script never reads it as a success.
+    for argv in [
+        &["eval", "run", "--help"][..],
+        &["eval", "resume", "--help"],
+        &["optimization", "run", "--help"],
+    ] {
+        let help = run_cli_text(&home_dir, argv)?;
+        assert!(help.contains("Exit status: 0 when the"), "{help}");
+        assert!(help.contains("; 2 on a usage error."), "{help}");
+    }
 
     run_init_json(&home_dir, &[])?;
     let packs = run_cli_json(&home_dir, &["pack", "list"])?;

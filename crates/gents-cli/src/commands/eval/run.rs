@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::io::Write;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use gents::eval::documents::default_breaker_threshold;
 use gents::eval::load_trials;
 use gents::eval::report::load_report;
@@ -31,7 +31,7 @@ pub(super) async fn run(
     let run_id = request.run_id.clone();
     // A `--run-id` naming an existing run continues it, as `resume` does:
     // its landed attempts are not printed again, and the marker the runner
-    // clears (U8) is reported once the run ran.
+    // clears is reported once the run ran.
     let marker = runner::run_dir(&ctx.runs_dir(), &run_id)?.join(CANCEL_MARKER);
     let had_marker = marker.exists();
     let landed = landed_attempts(ctx, &run_id).await?;
@@ -73,7 +73,7 @@ pub(super) async fn resume(
     deps: &Deps<'_>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    // Ruling F15: `runner::resume` thaws the run before it touches the
+    // `runner::resume` thaws the run before it touches the
     // marker, so a refused resume (an invalidated run, a changed pack) says
     // nothing about it; the notice is printed only once the resume ran.
     let marker = runner::run_dir(&ctx.runs_dir(), &args.run_id)?.join(CANCEL_MARKER);
@@ -273,24 +273,24 @@ async fn finish(
     out: &mut dyn Write,
 ) -> Result<()> {
     let outcome = result?;
-    // Ruling F1: the pass says whether the token or a marker stopped it.
-    let stopped = outcome.cancelled || outcome.abandoned > 0;
-    if stopped {
-        let note = format!(
+    // The pass says whether the token or a marker stopped it. A stopped run
+    // is not a success: the table (or JSON) still renders, then the command
+    // fails with the note, so a script never reads a partial run as done.
+    let stopped = (outcome.cancelled || outcome.abandoned > 0).then(|| {
+        format!(
             "run {run_id} stopped before it finished ({} completed, {} abandoned this pass); `gents eval resume {run_id}` continues it",
             outcome.completed, outcome.abandoned
-        );
-        if json {
-            tracing::warn!("{note}");
-        } else {
-            writeln!(out, "{note}")?;
-        }
-    }
+        )
+    });
     let report = load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), run_id).await?;
     if json {
-        write_json(out, &report)
+        write_json(out, &report)?;
     } else {
-        Ok(render::report_table(&report, out)?)
+        render::report_table(&report, out)?;
+    }
+    match stopped {
+        Some(note) => Err(anyhow!(note)),
+        None => Ok(()),
     }
 }
 
@@ -317,7 +317,7 @@ mod tests {
         argv
     }
 
-    /// Ruling F15: a refused resume prints nothing about the marker.
+    /// A refused resume prints nothing about the marker.
     #[tokio::test]
     async fn a_refused_resume_says_nothing_about_the_marker() {
         let fixture = Fixture::new().await;
@@ -407,7 +407,7 @@ mod tests {
         .unwrap();
         assert_eq!(json["run"]["run_id"], "r2");
 
-        // Ruling F14: without --run-id, a fresh id every time.
+        // Without --run-id, a fresh id every time.
         let fresh: Vec<&str> = run_argv("unused", &cells)
             .into_iter()
             .filter(|arg| *arg != "--run-id" && *arg != "unused")
@@ -433,20 +433,49 @@ mod tests {
         // What Ctrl-C does: cancel the token the command was given.
         let interrupted = CancellationToken::new();
         interrupted.cancel();
-        let stopped = eval_with(
-            &fixture,
-            &run_argv("r1", &cells),
-            &deps(&scripted, &registry, interrupted),
+        // A stopped run renders its table, then fails with the note once.
+        let mut out = Vec::new();
+        let error = super::super::execute(
+            &fixture.ctx,
+            super::super::testing::eval_command(&run_argv("r1", &cells)),
+            &deps(&scripted, &registry, interrupted.clone()),
+            &mut out,
         )
         .await
-        .unwrap();
-        assert!(
-            stopped.contains(
-                "run r1 stopped before it finished (0 completed, 0 abandoned this pass); `gents eval resume r1` continues it"
-            ),
-            "{stopped}"
+        .unwrap_err();
+        assert_eq!(
+            format!("{error:#}"),
+            "run r1 stopped before it finished (0 completed, 0 abandoned this pass); `gents eval resume r1` continues it"
         );
+        let stopped = String::from_utf8(out).unwrap();
+        assert!(!stopped.contains("stopped before it finished"), "{stopped}");
         assert_eq!(row(&stopped, "baseline", 10)[6], "12");
+
+        // With --json, stdout stays the report alone and the note is the error.
+        let mut json_argv = run_argv("r1", &cells);
+        json_argv.push("--json");
+        let mut out = Vec::new();
+        let error = super::super::execute(
+            &fixture.ctx,
+            super::super::testing::eval_command(&json_argv),
+            &deps(&scripted, &registry, interrupted),
+            &mut out,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("run r1 stopped before it finished"),
+            "{error:#}"
+        );
+        let json: serde_json::Value = serde_json::from_slice(&out).unwrap_or_else(|error| {
+            panic!(
+                "stdout is not pure JSON ({error}): {}",
+                String::from_utf8_lossy(&out)
+            )
+        });
+        assert_eq!(json["run"]["run_id"], "r1");
 
         eval(&fixture, &["cancel", "r1"]).await.unwrap();
         let resumed = eval(&fixture, &["resume", "r1"]).await.unwrap();

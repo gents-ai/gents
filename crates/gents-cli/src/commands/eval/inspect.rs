@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gents::document_config::{EvalSplit, EvalTier};
+use gents::eval::report::build::reason_code;
 use gents::eval::report::{
     load_report, load_report_among, load_runs, report_refused, run_header, SlotCounts, SlotReport,
 };
@@ -158,11 +159,7 @@ pub(crate) struct TrialVerdict {
 impl From<VerdictRecord> for TrialVerdict {
     fn from(verdict: VerdictRecord) -> Self {
         Self {
-            reason_code: verdict
-                .raw
-                .get("reason_code")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned),
+            reason_code: reason_code(&verdict),
             verdict_id: verdict.verdict_id,
             stage_id: verdict.stage_id,
             check: verdict.check,
@@ -180,10 +177,15 @@ impl From<VerdictRecord> for TrialVerdict {
 pub(crate) struct TrialView {
     pub(crate) run_id: String,
     pub(crate) cell_id: String,
+    /// The slot as the report counts it: its `verdicts` are the counted
+    /// attempt's, after regrade supersession, which is what scoring reads.
     pub(crate) slot: SlotReport,
     /// The retained trial home: `<home>/eval/runs/<home_hint>`.
     pub(crate) home: Option<PathBuf>,
-    /// Every verdict row of the latest attempt, regrades included.
+    /// Every verdict row of the latest attempt, regrades and the verdicts
+    /// they superseded included. The latest attempt can differ from the
+    /// counted one: the counted attempt is the latest completed one, so a
+    /// retry in flight has no verdicts here yet.
     pub(crate) verdicts: Vec<TrialVerdict>,
 }
 

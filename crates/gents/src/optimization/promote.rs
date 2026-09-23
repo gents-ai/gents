@@ -834,7 +834,7 @@ mod tests {
         );
     }
 
-    /// Ruling F12: cancelling, invalidating and deleting runs, and collecting
+    /// Cancelling, invalidating and deleting runs, and collecting
     /// their directories, are the operator's verbs; no agent tool reaches the
     /// functions behind `gents eval cancel | invalidate | rm | gc`.
     #[test]

@@ -5,7 +5,7 @@
 //! documents a run and a job read, and a directory pack whose behavior's
 //! prompt matches the installed context (the optimizer's freeze checks that).
 //!
-//! Ruling U7: this file duplicates `write_fixture_pack` and `Launching` in
+//! This file duplicates `write_fixture_pack` and `Launching` in
 //! `crates/gents/src/eval/runner/freeze.rs` (its `tests` module) and the
 //! definition shape of `crates/gents/src/optimization/driver/matrix.rs`.
 //! Those files and this one move together: a change to the fixture pack's

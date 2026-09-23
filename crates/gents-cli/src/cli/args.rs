@@ -3350,10 +3350,14 @@ pub(crate) enum EvalCommand {
         about = "Freeze and run an eval over one or more cells; Ctrl-C cancels",
         long_about = "Freeze and run an eval over one or more cells; Ctrl-C cancels.\n\n\
                       Each stage's captures come from the eval definition (its stage's \
-                      `capture` list); this command adds none."
+                      `capture` list); this command adds none.",
+        after_help = EVAL_RUN_AFTER_HELP
     )]
     Run(EvalRunArgs),
-    #[command(about = "Continue a run from what it already wrote")]
+    #[command(
+        about = "Continue a run from what it already wrote",
+        after_help = EVAL_RUN_AFTER_HELP
+    )]
     Resume(EvalResumeArgs),
     #[command(about = "List eval runs; invalidated runs only with --all")]
     List(EvalListArgs),
@@ -3367,7 +3371,9 @@ pub(crate) enum EvalCommand {
     Invalidate(EvalInvalidateArgs),
     #[command(about = "Delete a run's directory (homes, packs, sidecars); its documents stay")]
     Rm(EvalRmArgs),
-    #[command(about = "Paired statistics between two cells; a policy verdict only with --policy")]
+    #[command(
+        about = "Paired statistics between two cells; a policy verdict only with --policy; --by check|stage breaks it down, --case shows one case side by side"
+    )]
     Compare(EvalCompareArgs),
     #[command(
         about = "Re-render a run's report and its in-flight slots until no process runs it",
@@ -3464,7 +3470,7 @@ pub(crate) struct EvalRmArgs {
 
 /// `--interval`: at least 250 ms, so a watcher never spins, and at most an
 /// hour, so every wait the watch derives from it is representable. Takes
-/// `ms` as well as the `s`, `m`, `h` and `d` suffixes.
+/// `ms` as well as the `s`, `m` and `h` suffixes.
 pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     let interval = match raw.trim().strip_suffix("ms") {
         Some(millis) => millis
@@ -3483,6 +3489,10 @@ pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
     }
     Ok(interval)
 }
+
+/// `gents eval run` and `gents eval resume`'s exit statuses: scripts must
+/// not read a stopped run as a success.
+const EVAL_RUN_AFTER_HELP: &str = "Exit status: 0 when the run finished; 1 when it stopped with slots still owed (Ctrl-C, a cancel marker, or abandoned slots; `gents eval resume` continues it) or the command was refused; 2 on a usage error.";
 
 /// `gents eval watch`'s exit statuses: scripts must not read a stopped run
 /// as a success.
@@ -3552,6 +3562,12 @@ pub(crate) fn parse_policy(raw: &str) -> Result<PolicyArg, String> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum BreakdownArg {
+    Check,
+    Stage,
+}
+
 #[derive(clap::Args)]
 pub(crate) struct EvalCompareArgs {
     pub(crate) baseline_run: String,
@@ -3564,6 +3580,12 @@ pub(crate) struct EvalCompareArgs {
     pub(crate) candidate_cell: Option<String>,
     #[arg(long, value_parser = parse_policy)]
     pub(crate) policy: Option<PolicyArg>,
+    /// Aggregate the paired difference by check name or stage id.
+    #[arg(long, value_enum, conflicts_with = "case_id")]
+    pub(crate) by: Option<BreakdownArg>,
+    /// Print this case's trials side by side with each verdict.
+    #[arg(long = "case")]
+    pub(crate) case_id: Option<String>,
     #[arg(long)]
     pub(crate) json: bool,
     #[command(flatten)]
@@ -3688,7 +3710,8 @@ pub(crate) fn parse_subject(raw: &str) -> Result<SubjectArg, String> {
     })
 }
 
-/// `--proposer scripted:<file>`: the only proposer until the LLM one (M7).
+/// `--proposer scripted:<file>`: a script of proposals, the only proposer
+/// for now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ProposerArg {
     pub(crate) script: PathBuf,
@@ -3700,10 +3723,14 @@ pub(crate) fn parse_proposer(raw: &str) -> Result<ProposerArg, String> {
             script: PathBuf::from(path.trim()),
         }),
         _ => Err(format!(
-            "unknown proposer {raw:?}; the only proposer until M7 is scripted:<file>"
+            "unknown proposer {raw:?}; no model-driven proposer is available yet; pass --proposer scripted:<file>"
         )),
     }
 }
+
+/// `gents optimization run`'s exit statuses: scripts must not read a job left
+/// running as a success.
+const OPTIMIZATION_RUN_AFTER_HELP: &str = "Exit status: 0 when the job settled; 1 when it stopped still running (Ctrl-C; the same command with --job-id resumes it) or the command was refused; 2 on a usage error.";
 
 #[derive(Subcommand)]
 pub(crate) enum OptimizationCommand {
@@ -3711,7 +3738,8 @@ pub(crate) enum OptimizationCommand {
         about = "Run an optimization job over a subject pack; Ctrl-C stops it for a resume",
         long_about = "Run an optimization job over a subject pack; Ctrl-C stops it for a resume.\n\n\
                       Each stage's captures come from the eval definition (its stage's \
-                      `capture` list); this command adds none."
+                      `capture` list); this command adds none.",
+        after_help = OPTIMIZATION_RUN_AFTER_HELP
     )]
     Run(OptimizationRunArgs),
     #[command(about = "Show a job's journal and every decision recomputed from its runs")]

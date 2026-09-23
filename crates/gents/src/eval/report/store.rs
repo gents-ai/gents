@@ -307,7 +307,7 @@ mod tests {
         );
     }
 
-    /// Ruling F9: a run frozen before `definition.json` existed still
+    /// A run frozen before `definition.json` existed still
     /// reports while the installed definition digests to the run's.
     #[tokio::test]
     async fn a_run_without_the_frozen_file_reports_from_a_matching_installed_definition() {

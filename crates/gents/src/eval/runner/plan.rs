@@ -96,7 +96,7 @@ pub fn not_evidence_slots(existing: &[TrialRecord]) -> u32 {
 /// run was cancelled mid-trial) a slot may accumulate before it is planned no
 /// more. Abandonment is not a verdict on the subject or the provider, so it
 /// spends no `max_infra_retries`; this bound only stops a trial that kills
-/// its host every time from looping forever (spec 4b §9, ruling T35-1).
+/// its host every time from looping forever (spec 4b §9).
 pub const MAX_ABANDONED_ATTEMPTS: u32 = 10;
 
 /// How many slots [`MAX_ABANDONED_ATTEMPTS`] stopped: slots with that many
@@ -466,7 +466,7 @@ mod tests {
         );
     }
 
-    /// Spec 4b §9 (M6b ruling T35-1): the retry cap counts attempts that
+    /// The retry cap counts attempts that
     /// finished without evidence. An abandoned attempt, a crash or a cancel,
     /// is not a verdict on the provider and is bounded separately.
     #[test]

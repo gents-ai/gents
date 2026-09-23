@@ -1991,7 +1991,7 @@ mod tests {
             (1, 0),
             "the trial that was running finishes; the next is never launched"
         );
-        assert!(outcome.cancelled, "the pass says why it stopped (F1)");
+        assert!(outcome.cancelled, "the pass says why it stopped");
         assert!(
             !caller.is_cancelled(),
             "the marker stops this run, never the caller's other work"
@@ -2142,7 +2142,7 @@ mod tests {
         assert!(!outcome.cancelled, "the run owes nothing: {outcome:?}");
     }
 
-    /// Ruling U8: `run` on a run id that already exists reuses the run, and
+    /// `run` on a run id that already exists reuses the run, and
     /// clears a leftover marker exactly as `resume` does.
     #[tokio::test]
     async fn run_on_an_existing_run_id_clears_the_marker_like_resume() {
@@ -2304,7 +2304,8 @@ mod tests {
     }
 
     /// A stage reads what it declares; a stage that declares nothing reads what
-    /// the run requested, which is how an M2 definition keeps its captures.
+    /// the run requested, which is how a definition whose stages declare no
+    /// captures keeps the ones the run requested.
     #[test]
     fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
         let case: EvalCase = serde_json::from_value(json!({
@@ -2361,8 +2362,8 @@ mod tests {
         assert_eq!(stages[1].captures, fallback);
     }
 
-    /// Spec 4b §9: before the fix, a slot cancelled mid-trial under
-    /// `max_infra_retries: 0` was never planned again and its pair was lost.
+    /// A slot cancelled mid-trial under `max_infra_retries: 0` is planned
+    /// again, so its pair is not lost.
     #[tokio::test]
     async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
         let (launching, pack) = launching("captured_rows_count").await;

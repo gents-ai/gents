@@ -1784,8 +1784,8 @@ async fn an_inconclusive_round_whose_rerun_is_unaffordable_keeps_its_decision_an
     ));
 }
 
-/// Ruling F1: the marker stops only the run's own child token, so before
-/// the fix the driver decided on half a validation run.
+/// The cancel marker stops only the run's own child token: a cancelled
+/// validation run journals no decision, and the job resumes it.
 #[tokio::test]
 async fn a_cancelled_validation_run_journals_no_decision_and_the_job_resumes() {
     let harness = Harness::new().await;

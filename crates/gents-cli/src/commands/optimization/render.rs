@@ -3,6 +3,7 @@
 
 use std::io::{self, Write};
 
+use gents::eval::report::is_placeholder;
 use gents::optimization::{Decision, JobState, JobView, JournalEntry, PolicyV2};
 
 use crate::commands::eval::render::{decision_label, signed_percent, wire};
@@ -12,21 +13,9 @@ use crate::commands::eval::UNCALIBRATED_BANNER;
 /// one: the job's definition was deleted or no longer validates.
 const NOT_RECOMPUTABLE: &str = "not recomputable: definition changed or runs invalidated";
 
-/// Whether a job decided under the placeholder defaults: the rule a
-/// comparison's `calibrated` applies (the policy is `PolicyV2::uncalibrated()`),
-/// with `max_rounds` read from the job, since `--policy defaults` is sized to
-/// `--rounds`.
-pub(crate) fn uncalibrated(policy: &PolicyV2) -> bool {
-    *policy
-        == PolicyV2 {
-            max_rounds: policy.max_rounds,
-            ..PolicyV2::uncalibrated()
-        }
-}
-
 /// [`UNCALIBRATED_BANNER`] when `policy` is the placeholder defaults.
 pub(crate) fn uncalibrated_banner(policy: &PolicyV2, out: &mut dyn Write) -> io::Result<()> {
-    if uncalibrated(policy) {
+    if is_placeholder(policy) {
         writeln!(out, "{UNCALIBRATED_BANNER}")?;
     }
     Ok(())

@@ -1,13 +1,18 @@
 //! `compare`: the paired statistics between two cells, of one run or two,
-//! and a policy verdict only when `--policy` asks for one.
+//! and a policy verdict only when `--policy` asks for one; `--by` adds a
+//! breakdown by check or stage and `--case` one case's trials side by side.
 
 use std::io::Write;
 
 use anyhow::Result;
-use gents::eval::report::{compare as compare_reports, load_report, EvalReport};
+use gents::eval::report::{
+    by_check, by_stage, case_view, compare as compare_reports, load_report, EvalReport,
+    PolicyOutcome,
+};
+use serde::Serialize;
 
 use super::{load_policy, render, write_json, EvalContext};
-use crate::cli::EvalCompareArgs;
+use crate::cli::{BreakdownArg, EvalCompareArgs};
 
 pub(super) async fn compare(
     ctx: &EvalContext,
@@ -37,10 +42,48 @@ pub(super) async fn compare(
     if let Some(policy) = &args.policy {
         comparison = comparison.with_policy(&load_policy(policy)?);
     }
+    if let Some(by) = args.by {
+        let breakdown = match by {
+            BreakdownArg::Check => render::Breakdown::Check(by_check(&comparison)),
+            BreakdownArg::Stage => render::Breakdown::Stage(by_stage(&comparison)),
+        };
+        if args.json {
+            return write_json(out, &with_policy(&breakdown, &comparison));
+        }
+        render::comparison_table(&comparison, out)?;
+        return Ok(render::breakdown_table(&breakdown, out)?);
+    }
+    if let Some(case_id) = &args.case_id {
+        let view = case_view(&comparison, case_id)?;
+        if args.json {
+            return write_json(out, &with_policy(&view, &comparison));
+        }
+        render::comparison_table(&comparison, out)?;
+        return Ok(render::case_view_text(&view, out)?);
+    }
     if args.json {
         write_json(out, &comparison)
     } else {
         Ok(render::comparison_table(&comparison, out)?)
+    }
+}
+
+/// A breakdown's or a case's JSON with the comparison's `"policy"` outcome
+/// beside it: the `PolicyOutcome` under `--policy`, else null.
+#[derive(Serialize)]
+struct WithPolicy<'a, T: Serialize> {
+    #[serde(flatten)]
+    body: &'a T,
+    policy: Option<&'a PolicyOutcome>,
+}
+
+fn with_policy<'a, T: Serialize>(
+    body: &'a T,
+    comparison: &'a gents::eval::report::Comparison,
+) -> WithPolicy<'a, T> {
+    WithPolicy {
+        body,
+        policy: comparison.policy.as_ref(),
     }
 }
 
@@ -59,10 +102,12 @@ fn pick_cell(report: &EvalReport, named: Option<&str>, flag: &str) -> Result<Str
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
     use tokio_util::sync::CancellationToken;
 
-    use super::super::testing::{eval, executor, Fixture, VALIDATION_CASES};
+    use super::super::testing::{eval, executor, row, Fixture, VALIDATION_CASES};
     use super::super::UNCALIBRATED_BANNER;
+    use crate::cli::Cli;
 
     const CELLS: [&str; 4] = [
         "--baseline-cell",
@@ -192,5 +237,110 @@ mod tests {
             text.contains("cost_ok skipped significant no min_effect no"),
             "{text}"
         );
+    }
+
+    #[tokio::test]
+    async fn by_check_and_by_stage_aggregate_and_case_prints_both_sides() {
+        let fixture = Fixture::new().await;
+        fixture
+            .scripted_run(
+                "r1",
+                &executor(&VALIDATION_CASES[..3]),
+                CancellationToken::new(),
+            )
+            .await;
+        let with = |extra: &[&'static str]| {
+            let mut argv = vec!["compare", "r1", "r1"];
+            argv.extend(CELLS);
+            argv.extend_from_slice(extra);
+            argv
+        };
+
+        let checks = eval(&fixture, &with(&["--by", "check"])).await.unwrap();
+        assert_eq!(
+            row(&checks, "captured_rows_count", 7),
+            vec!["captured_rows_count", "6", "12", "+50.00%", "3", "3", "0"]
+        );
+        let stages = eval(&fixture, &with(&["--by", "stage"])).await.unwrap();
+        assert_eq!(
+            row(&stages, "check", 7),
+            vec!["check", "6", "12", "+50.00%", "3", "3", "0"]
+        );
+
+        let json: serde_json::Value = serde_json::from_str(
+            &eval(&fixture, &with(&["--by", "check", "--json"]))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["by"], "check");
+        assert_eq!(json["rows"][0]["mean_diff_bp"], 5_000);
+        assert!(json["policy"].is_null(), "{json}");
+
+        // With --policy, the breakdown and the case carry its outcome.
+        for extra in [
+            &["--by", "stage", "--json", "--policy", "defaults"][..],
+            &["--case", "val-a", "--json", "--policy", "defaults"],
+        ] {
+            let json: serde_json::Value =
+                serde_json::from_str(&eval(&fixture, &with(extra)).await.unwrap()).unwrap();
+            assert_eq!(json["policy"]["calibrated"], false, "{json}");
+            assert_eq!(
+                json["policy"]["report"]["decision"]["decision"], "reject",
+                "{json}"
+            );
+        }
+        let json: serde_json::Value = serde_json::from_str(
+            &eval(&fixture, &with(&["--case", "val-a", "--json"]))
+                .await
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(json["case_id"], "val-a");
+        assert!(json["policy"].is_null(), "{json}");
+
+        let case = eval(&fixture, &with(&["--case", "val-a"])).await.unwrap();
+        for expected in [
+            "case val-a pairs 2 baseline 0.00% candidate 100.00% diff +100.00%",
+            "#0 baseline fail 0.00% candidate pass 100.00%",
+            "  baseline check/captured_rows_count model_acceptance score 0 reason below_min",
+            "  candidate check/captured_rows_count passed score 10000 reason in_range",
+        ] {
+            assert!(
+                case.lines().any(|line| line == expected),
+                "{expected:?} in\n{case}"
+            );
+        }
+
+        // A breakdown with no row says so instead of printing a bare header.
+        for (breakdown, expected) in [
+            (
+                super::super::render::Breakdown::Check(Vec::new()),
+                "no check scored on both sides of any pair",
+            ),
+            (
+                super::super::render::Breakdown::Stage(Vec::new()),
+                "no stage scored on both sides of any pair",
+            ),
+        ] {
+            let mut out = Vec::new();
+            super::super::render::breakdown_table(&breakdown, &mut out).unwrap();
+            assert_eq!(String::from_utf8(out).unwrap(), format!("\n{expected}\n"));
+        }
+        let help = Cli::try_parse_from(["gents", "eval", "--help"])
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(
+            help.contains("--by check|stage breaks it down, --case shows one case"),
+            "{help}"
+        );
+
+        let missing = eval(&fixture, &with(&["--case", "zzz"])).await.unwrap_err();
+        assert_eq!(missing.to_string(), "the comparison has no case \"zzz\"");
+        assert!(Cli::try_parse_from([
+            "gents", "eval", "compare", "r1", "r1", "--by", "check", "--case", "val-a"
+        ])
+        .is_err());
     }
 }
