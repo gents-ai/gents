@@ -204,6 +204,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.operatorCli]
     , deferred := [(Surface.operatorUi, "#281")]
     }
+  , { feature := "eval"
+    , required := [Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#1515")]
+    }
   , { feature := "event-delivery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -416,6 +420,21 @@ def vocabularyCoverage : List CoverageEntry :=
       "MailboxSourceKind"
       "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
       "mailbox" allSurfaces
+  , tagged (followUpCoverage
+      "vocabulary"
+      "EvalOutcomeKind"
+      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "eval" [Surface.operatorCli]
+  , tagged (followUpCoverage
+      "vocabulary"
+      "EvalProviderReason"
+      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "eval" [Surface.operatorCli]
+  , tagged (followUpCoverage
+      "vocabulary"
+      "EvalEvidenceClass"
+      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "eval" [Surface.operatorCli]
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -718,6 +737,11 @@ def caseCoverage : List CoverageEntry :=
       "ApplyReconcileCases"
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
+  , tagged (followUpCoverage
+      "eval_outcome_cases"
+      "EvalOutcomeCases"
+      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
       "publish_if_cases"
       "PublishIfCases"
