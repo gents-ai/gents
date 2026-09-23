@@ -46,7 +46,9 @@ use crate::eval::runner::{
     TrialEvidence, TrialExecutor, TrialLocator, TrialSpec,
 };
 use crate::eval::{load_run, load_trials, load_verdicts, OutcomeKind, TrialUsage};
-use crate::optimization::driver::{baseline_dir, run_job, spend_so_far, JobOutcome, JobRequest};
+use crate::optimization::driver::{
+    baseline_dir, run_job, spend_so_far, JobOutcome, JobRequest, TEST_CLOCK_OFFSET,
+};
 use crate::optimization::evidence::decision_evidence;
 use crate::optimization::job::{create_job, load_job, Budgets, JobState, JournalEntry};
 use crate::optimization::policy::{Decision, InconclusiveReason, Mode, PolicyV2, RejectReason};
@@ -87,7 +89,12 @@ fn case(case_id: &str, split: &str, check: &str) -> Value {
     })
 }
 
-fn definition(definition_id: &str, check: &str, validation: &[&str], version: i64) -> Value {
+pub(crate) fn definition(
+    definition_id: &str,
+    check: &str,
+    validation: &[&str],
+    version: i64,
+) -> Value {
     let mut cases: Vec<Value> = TRAIN_CASES
         .iter()
         .map(|id| case(id, "train", check))
@@ -247,6 +254,29 @@ impl Proposer for CancellingProposer {
     }
 }
 
+/// Advances the driver's test clock past `deadline` when it is asked for
+/// round 1, so the job's deadline passes between round 1's budget check and
+/// round 2's without waiting on the wall clock (ruling FW-4). Must run inside
+/// a `TEST_CLOCK_OFFSET` scope.
+struct DeadlineProposer {
+    inner: ScriptedProposer,
+    deadline: u64,
+}
+
+#[async_trait::async_trait]
+impl Proposer for DeadlineProposer {
+    async fn propose(&self, input: ProposalInput) -> Result<Proposal> {
+        if input.round == 1 {
+            let behind = self
+                .deadline
+                .saturating_sub(crate::optimization::driver::now_unix_secs());
+            TEST_CLOCK_OFFSET.with(|offset| offset.set(offset.get() + behind + 1));
+            assert!(crate::optimization::driver::now_unix_secs() > self.deadline);
+        }
+        self.inner.propose(input).await
+    }
+}
+
 /// Cancels `token` inside the first trial of `run_id`, after the driver has
 /// journaled that run as started: the trial is abandoned, every other slot is
 /// skipped, and the run is left open with no decision. The abandoned slot is
@@ -373,6 +403,10 @@ impl Harness {
         self.launching.install(documents).await;
     }
 
+    pub(crate) async fn delete(&self, collection: Collection, id: &str) {
+        self.launching.delete(collection, id).await;
+    }
+
     pub(crate) fn request(
         &self,
         job_id: &str,
@@ -399,11 +433,24 @@ impl Harness {
             max_infra_retries: 0,
             breaker_threshold: 100,
             deadline_secs: Some(600),
+            captures: vec![findings_capture()],
             run_options: RunOptions {
                 poll_backoff_base: std::time::Duration::from_millis(1),
                 poll_backoff_cap: std::time::Duration::from_millis(2),
             },
         }
+    }
+}
+
+/// The capture `captured_rows_count` grades. The scripted executor fabricates
+/// its rows rather than reading them, so here the list proves only that the
+/// job hands it to every run (C1).
+pub(crate) fn findings_capture() -> Capture {
+    Capture::Documents {
+        name: "findings".into(),
+        collection: "ExperimentFinding".into(),
+        filter: json!({}),
+        fields: vec!["finding_id".into()],
     }
 }
 
@@ -621,6 +668,99 @@ async fn a_candidate_that_wins_every_case_is_accepted_and_reaches_ready_to_promo
         (retained.round, retained.text.as_str()),
         (1, CANDIDATE_PROMPT)
     );
+    // C1: every run the job asked for froze the job's capture list, which is
+    // what an executor reads stage evidence from.
+    let mut started = 0;
+    for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
+        for run_id in runs_started(&journal, split) {
+            let frozen =
+                crate::eval::runner::freeze::frozen_captures(&request.runs_dir.join(&run_id))
+                    .unwrap();
+            assert_eq!(frozen, Some(vec![findings_capture()]), "{run_id}");
+            started += 1;
+        }
+    }
+    assert_eq!(
+        started, 5,
+        "three train runs, one validation run, one held-out run: {journal:#?}"
+    );
+}
+
+/// Ruling F-3: the deadline ends the rounds but never the confirmation. Round
+/// 1 is accepted, the deadline passes before round 2, and the held-out run
+/// still confirms the checkpoint.
+#[tokio::test]
+async fn a_deadline_that_passes_after_an_accept_still_runs_the_held_out_confirmation() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    // An hour away: only the proposer's clock advance can pass it.
+    let deadline = crate::optimization::driver::now_unix_secs() + 3_600;
+    let mut request = harness.request("deadline", DEFINITION, budgets(1_000));
+    request.budgets.deadline_unix_secs = Some(deadline);
+    let proposer = DeadlineProposer {
+        inner: repeating_proposer(CANDIDATE_PROMPT),
+        deadline,
+    };
+    let outcome = TEST_CLOCK_OFFSET
+        .scope(
+            std::cell::Cell::new(0),
+            settle(&harness, &request, &executor, &proposer),
+        )
+        .await;
+    let journal = journal(&harness, &request.job_id).await;
+    assert_eq!(outcome.state, JobState::ReadyToPromote, "{journal:#?}");
+    let exhausted = journal
+        .iter()
+        .position(|entry| {
+            matches!(entry, JournalEntry::BudgetExhausted { round: Some(2), reason }
+                if reason.contains("deadline"))
+        })
+        .unwrap_or_else(|| panic!("round 2 was not stopped by the deadline: {journal:#?}"));
+    let held_out = journal
+        .iter()
+        .position(|entry| {
+            matches!(
+                entry,
+                JournalEntry::RunStarted {
+                    split: EvalSplit::HeldOut,
+                    ..
+                }
+            )
+        })
+        .unwrap_or_else(|| panic!("no held-out run: {journal:#?}"));
+    assert!(exhausted < held_out, "{journal:#?}");
+    assert_eq!(
+        decisions(&journal),
+        vec![(Some(1), Decision::Accept), (None, Decision::Accept)]
+    );
+}
+
+/// C1 (constraint 15): a resume that names another capture list is refused
+/// and writes nothing, whatever state the job reached.
+#[tokio::test]
+async fn a_resume_with_another_capture_list_is_refused() {
+    let (harness, request) = accepting_harness("captures-resume").await;
+    let before = journal(&harness, &request.job_id).await;
+    let mut changed = request.clone();
+    changed.captures.clear();
+    let error = settle_err(&harness, &changed).await;
+    let refusal =
+        crate::optimization::driver::job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+    assert!(refusal.0.contains("captures"), "{}", refusal.0);
+    assert_eq!(journal(&harness, &request.job_id).await, before);
+}
+
+async fn settle_err(harness: &Harness, request: &JobRequest) -> anyhow::Error {
+    drive(
+        harness,
+        request,
+        &base_executor(),
+        &repeating_proposer(CANDIDATE_PROMPT),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap_err()
 }
 
 #[tokio::test]
@@ -1383,7 +1523,7 @@ async fn a_job_created_without_frozen_resumes_to_the_journal_of_its_twin() {
 }
 
 /// Freeze a job and stop before any run: a pre-cancelled token.
-async fn frozen_job(harness: &Harness, job_id: &str) -> JobRequest {
+pub(crate) async fn frozen_job(harness: &Harness, job_id: &str) -> JobRequest {
     let request = harness.request(job_id, DEFINITION, budgets(1_000));
     let cancelled = CancellationToken::new();
     cancelled.cancel();

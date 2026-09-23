@@ -122,7 +122,7 @@ pub fn freeze_refused(error: &anyhow::Error) -> Option<&FreezeRefused> {
     error.downcast_ref::<FreezeRefused>()
 }
 
-pub(crate) fn refused(reason: impl Into<String>) -> anyhow::Error {
+fn refused(reason: impl Into<String>) -> anyhow::Error {
     anyhow::Error::from(FreezeRefused(reason.into()))
 }
 
@@ -824,6 +824,13 @@ fn read_sidecar(run_dir: &Path) -> Result<Option<RunSidecar>> {
     serde_json::from_slice(&bytes)
         .map(Some)
         .with_context(|| format!("parsing {}", path.display()))
+}
+
+/// The capture list a run froze beside itself, or `None` when `run_dir` holds
+/// no `run.json`. An optimization job reads it to refuse adopting a run frozen
+/// with a different list than the job's.
+pub(crate) fn frozen_captures(run_dir: &Path) -> Result<Option<Vec<Capture>>> {
+    Ok(read_sidecar(run_dir)?.map(|sidecar| sidecar.captures))
 }
 
 fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {

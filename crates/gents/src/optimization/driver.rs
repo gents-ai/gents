@@ -23,8 +23,8 @@ use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze;
 use crate::eval::runner::freeze::load_pack;
 use crate::eval::runner::{
-    freeze_refused, resume, run, CellRequest, CellSource, RunOptions, RunOutcome, RunRequest,
-    TrialExecutor,
+    freeze_refused, resume, run, Capture, CellRequest, CellSource, RunOptions, RunOutcome,
+    RunRequest, TrialExecutor,
 };
 use crate::eval::{load_run, load_trials, DefinitionRef, RunOrigin, SubjectRef, TrialRecord};
 use crate::optimization::evidence::{
@@ -79,6 +79,11 @@ pub struct JobRequest {
     pub max_infra_retries: u32,
     pub breaker_threshold: u32,
     pub deadline_secs: Option<u64>,
+    /// What every run reads out of a finished trial home: the request-level
+    /// fallback; stage-level `EvalStage.capture` supersedes it once the runner
+    /// reads stage captures. May be empty. Frozen into the origin, so a resume
+    /// must repeat it (finding F2).
+    pub captures: Vec<Capture>,
     /// Not comparability data: how long the runner backs off between passes.
     pub run_options: RunOptions,
 }
@@ -86,14 +91,13 @@ pub struct JobRequest {
 /// A job id names the one directory the job owns under `jobs_dir`, so it has
 /// to be one ordinary path component, by the rule the runner holds run and
 /// cell ids to. Every path below is built from a job id this has accepted;
-/// `run_job` and job creation call it before building any.
+/// `run_job` and job creation call it before building any. A bad id is a
+/// [`JobRefused`]: nothing was written.
 pub(crate) fn validate_job_id(job_id: &str) -> Result<()> {
     if job_id.trim().is_empty() {
-        return Err(freeze::refused(format!(
-            "job_id {job_id:?} must not be blank"
-        )));
+        return Err(refused(format!("job_id {job_id:?} must not be blank")));
     }
-    freeze::directory_name("job_id", job_id)
+    freeze::directory_name("job_id", job_id).map_err(as_job_refusal)
 }
 
 pub fn job_dir(jobs_dir: &Path, job_id: &str) -> PathBuf {
@@ -151,11 +155,55 @@ pub(crate) fn cells_for(split: EvalSplit) -> u64 {
     }
 }
 
+/// How far apart two validation attempts of one round start their seeds.
+const ATTEMPT_SEED_STRIDE: i64 = 100;
+/// How far apart two rounds start their seeds. Round 0 is the held-out run.
+const ROUND_SEED_STRIDE: i64 = 1_000;
+
 /// Seeds are spaced so a re-run and a later round never draw the same trial
-/// seeds: a trial's seed is `seed_base + trial_index`, and no run has 100
-/// trials of one case.
+/// seeds: a trial's seed is `seed_base + trial_index`. [`check_seed_spacing`]
+/// refuses at freeze any job whose trials would outgrow an attempt's stride,
+/// whose re-runs would outgrow a round's, or whose highest seed would not fit
+/// an `i64`, so the saturation here never happens for a frozen job.
 fn seed_base_for(base: i64, round: u32, attempt: u32) -> i64 {
-    base + i64::from(round) * 1_000 + i64::from(attempt) * 100
+    base.saturating_add(i64::from(round).saturating_mul(ROUND_SEED_STRIDE))
+        .saturating_add(i64::from(attempt).saturating_mul(ATTEMPT_SEED_STRIDE))
+}
+
+/// Spec section 3.5: a re-run draws a new `seed_base`, and no re-run or later
+/// round reuses an earlier attempt's seeds. A round's train run and its
+/// validation attempt 0 do share a seed base, on disjoint splits, which the
+/// spec allows. Checked once, at freeze, against what the job may
+/// ever plan: rounds `0..=max_rounds`, attempts `0..=max_reruns`, and trial
+/// indices `0..trials_per_case`.
+pub(crate) fn check_seed_spacing(request: &JobRequest, policy: &PolicyV2) -> Result<()> {
+    let trials = i64::from(request.trials_per_case);
+    if trials > ATTEMPT_SEED_STRIDE {
+        return Err(refused(format!(
+            "trials_per_case {} exceeds {ATTEMPT_SEED_STRIDE}; a re-run would draw the trial seeds of the attempt before it",
+            request.trials_per_case
+        )));
+    }
+    let attempts = i64::from(policy.max_reruns) + 1;
+    if attempts * ATTEMPT_SEED_STRIDE > ROUND_SEED_STRIDE {
+        return Err(refused(format!(
+            "policy max_reruns {} exceeds {}; a re-run would draw the trial seeds of the next round",
+            policy.max_reruns,
+            ROUND_SEED_STRIDE / ATTEMPT_SEED_STRIDE - 1
+        )));
+    }
+    let highest = i64::from(request.budgets.max_rounds)
+        .checked_mul(ROUND_SEED_STRIDE)
+        .and_then(|rounds| rounds.checked_add(i64::from(policy.max_reruns) * ATTEMPT_SEED_STRIDE))
+        .and_then(|offset| offset.checked_add((trials - 1).max(0)))
+        .and_then(|offset| request.seed_base.checked_add(offset));
+    if highest.is_none() {
+        return Err(refused(format!(
+            "seed_base {} leaves no room for {} rounds of seeds within an i64",
+            request.seed_base, request.budgets.max_rounds
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn train_plan(
@@ -243,9 +291,10 @@ pub(crate) fn run_request(request: &JobRequest, origin: &JobOrigin, plan: &RunPl
         purpose: format!("optimization:{}", request.job_id),
         source_commit: request.source_commit.clone(),
         source_dirty: request.source_dirty,
-        // Grading reads stage evidence; an optimization run captures nothing
-        // out of a trial home.
-        captures: Vec::new(),
+        // Stage evidence is what the executor captures out of a trial home, and
+        // grading reads nothing else. Frozen with the job, so every run of it
+        // captures the same list.
+        captures: origin.captures.clone(),
         runs_dir: request.runs_dir.clone(),
     }
 }
@@ -271,7 +320,15 @@ pub(crate) async fn execute_run(
                     .with_context(|| format!("loading pack {}", dir.display()))
             })
             .collect::<Result<Vec<_>>>()?;
-        check_run_matches_plan(&existing.origin, &request.job_id, origin, plan, &digests)?;
+        let captures = freeze::frozen_captures(&request.runs_dir.join(&plan.run_id))?;
+        check_run_matches_plan(
+            &existing.origin,
+            captures.as_deref(),
+            &request.job_id,
+            origin,
+            plan,
+            &digests,
+        )?;
         tracing::info!(run_id = %plan.run_id, "optimization run resumed");
         return resume(
             access,
@@ -454,11 +511,26 @@ pub(crate) fn definition_ref(definition: &EvalDefinition) -> Result<DefinitionRe
     freeze::definition_ref(definition)
 }
 
+#[cfg(test)]
+tokio::task_local! {
+    /// Seconds a test has advanced the driver's clock by (ruling FW-4). Task
+    /// local rather than thread local, so it follows the job's future under
+    /// any runtime and never reaches a test that did not scope it.
+    pub(crate) static TEST_CLOCK_OFFSET: std::cell::Cell<u64>;
+}
+
 pub(crate) fn now_unix_secs() -> u64 {
-    std::time::SystemTime::now()
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or(Duration::ZERO)
-        .as_secs()
+        .as_secs();
+    #[cfg(test)]
+    let now = now.saturating_add(
+        TEST_CLOCK_OFFSET
+            .try_with(|offset| offset.get())
+            .unwrap_or(0),
+    );
+    now
 }
 
 /// A job that will not start or resume, and why. Distinct from a `Failed`
@@ -554,6 +626,9 @@ pub(crate) fn check_resume(
     if origin.owner != request.owner {
         differs.push("owner");
     }
+    if origin.captures != request.captures {
+        differs.push("captures");
+    }
     if differs.is_empty() {
         return Ok(());
     }
@@ -566,9 +641,11 @@ pub(crate) fn check_resume(
 
 /// Task 3 review minor 4 (constraint 15): a run that already exists is resumed
 /// only when it was frozen from the plan being executed now. `digests` holds
-/// what each of the plan's cell directories digests to, in cell order.
+/// what each of the plan's cell directories digests to, in cell order, and
+/// `captures` the list the run froze beside itself (`None` when it has none).
 pub(crate) fn check_run_matches_plan(
     run: &RunOrigin,
+    captures: Option<&[Capture]>,
     job_id: &str,
     origin: &JobOrigin,
     plan: &RunPlan,
@@ -603,6 +680,9 @@ pub(crate) fn check_run_matches_plan(
             );
     if !cells_match {
         differs.push("cells");
+    }
+    if captures != Some(origin.captures.as_slice()) {
+        differs.push("captures");
     }
     if differs.is_empty() {
         return Ok(());
@@ -847,8 +927,9 @@ async fn freeze_job(
     request: &JobRequest,
     policy: &PolicyV2,
 ) -> Result<JobRecord> {
-    validate_job_id(&request.job_id).map_err(as_job_refusal)?;
+    validate_job_id(&request.job_id)?;
     check_policy(request, policy)?;
+    check_seed_spacing(request, policy)?;
     let owner = request.owner.as_str();
     let definition = load_definition(access, owner, &request.definition_id)
         .await
@@ -898,6 +979,7 @@ async fn freeze_job(
         inference_profile_id: request.inference_profile_id.clone(),
         max_text_bytes: request.max_text_bytes,
         jobs_dir: request.jobs_dir.clone(),
+        captures: request.captures.clone(),
     };
     let mut job = create_job(access, &request.job_id, owner, &origin).await?;
     append(access, &mut job, JournalEntry::Frozen).await?;
@@ -930,6 +1012,9 @@ async fn unaffordable(
             budgets.max_tokens
         )));
     }
+    // The deadline gates rounds, never confirmation: the held-out run is
+    // exempt from it as from the token budget (rulings T33-2 and F-3). See the
+    // finalize step of `run_job`.
     if past_deadline(budgets) {
         return Ok(Some("the job's deadline has passed".to_owned()));
     }
@@ -989,7 +1074,7 @@ pub async fn run_job(
     cancel: CancellationToken,
 ) -> Result<JobOutcome> {
     // Ruling P-N6: no path is built from a job id this has not accepted.
-    validate_job_id(&request.job_id).map_err(as_job_refusal)?;
+    validate_job_id(&request.job_id)?;
     let mut job = match load_job(access, &request.owner, &request.job_id).await? {
         Some(mut existing) => {
             check_resume(request, policy, &existing.origin)?;
@@ -1171,7 +1256,6 @@ pub async fn run_job(
                     &text,
                     origin.max_text_bytes,
                     &seen_digests(&baseline.digest, &job.journal, round),
-                    owner,
                 )
                 .map(|()| candidate)
             }
@@ -1294,6 +1378,13 @@ pub async fn run_job(
     let decision = match decided_held_out(&job.journal) {
         Some(decision) => decision,
         None => {
+            // Rulings T33-2 and F-3: once validation has accepted, the
+            // held-out confirmation always runs. It is reserved in every
+            // round's case-trial charge, and it is checked against neither the
+            // token budget nor the deadline: a job whose rounds ended on
+            // either still confirms its checkpoint, so an accepted candidate
+            // never reaches `ReadyToPromote` unconfirmed or is left `Running`.
+            //
             // Ruling T34-5: the held-out run freezes the pack the journal
             // retained, or none.
             let checkpoint_path = verified_checkpoint(&origin, &job_id, &retained)?;
@@ -1348,7 +1439,11 @@ pub async fn run_job(
 
 /// The retained checkpoint's directory, still digesting to what the journal
 /// retained. A missing or edited checkpoint is an error, never rebuilt.
-fn verified_checkpoint(origin: &JobOrigin, job_id: &str, held: &Checkpoint) -> Result<PathBuf> {
+pub(crate) fn verified_checkpoint(
+    origin: &JobOrigin,
+    job_id: &str,
+    held: &Checkpoint,
+) -> Result<PathBuf> {
     let path = candidate_dir(&origin.jobs_dir, job_id, held.round);
     let pack = materialize_pack(&path, &origin.owner, &origin.subject.behavior_id)?;
     anyhow::ensure!(
@@ -1402,6 +1497,7 @@ fn outcome(job: &JobRecord, state: JobState) -> JobOutcome {
 
 #[cfg(test)]
 mod tests {
+    use super::matrix::findings_capture as findings;
     use super::*;
     use crate::eval::{DefinitionRef, SubjectRef};
     use crate::optimization::policy::PolicyV2;
@@ -1467,6 +1563,7 @@ mod tests {
             max_infra_retries: 1,
             breaker_threshold: 5,
             deadline_secs: Some(600),
+            captures: vec![findings()],
             run_options: RunOptions::default(),
         }
     }
@@ -1498,6 +1595,7 @@ mod tests {
             inference_profile_id: "local".into(),
             max_text_bytes: 32 * 1024,
             jobs_dir: PathBuf::from("/home/eval/jobs"),
+            captures: vec![findings()],
         }
     }
 
@@ -1540,7 +1638,11 @@ mod tests {
             frozen.cells[0].inference_profile_id, frozen.cells[1].inference_profile_id,
             "both arms run the same inference binding"
         );
-        assert!(frozen.captures.is_empty());
+        assert_eq!(
+            frozen.captures,
+            vec![findings()],
+            "C1: the job's captures reach every run it asks for"
+        );
         assert_eq!(frozen.seed_base, validation.seed_base);
     }
 
@@ -1553,10 +1655,12 @@ mod tests {
         drifted.behavior_id = "other".into();
         drifted.inference_profile_id = "other".into();
         drifted.definition_id = "other".into();
+        drifted.captures.clear();
         let origin = origin();
         let plan = validation_plan("job-1", &origin, 1, 0, Path::new("a"), Path::new("b"));
         let frozen = run_request(&drifted, &origin, &plan);
         assert_eq!(frozen.trials_per_case, 2);
+        assert_eq!(frozen.captures, origin.captures);
         assert_eq!(frozen.definition_id, "monitor-findings");
         assert!(frozen
             .cells
@@ -1631,7 +1735,7 @@ mod tests {
         for bad in ["", " ", ".", "..", "a/b", "/abs", "../escape", "a\\b"] {
             let error = validate_job_id(bad).unwrap_err();
             assert!(
-                crate::eval::runner::freeze_refused(&error).is_some(),
+                job_refused(&error).is_some(),
                 "{bad:?}: every bad id is one error type"
             );
             assert!(
@@ -1655,6 +1759,56 @@ mod tests {
             run_id: run_id.into(),
             round,
             split,
+        }
+    }
+
+    /// Review minor 1: a job whose seeds could collide or overflow is refused
+    /// at freeze, and the boundaries themselves are accepted.
+    #[test]
+    fn a_job_whose_seeds_would_collide_or_overflow_is_refused() {
+        let policy = PolicyV2::uncalibrated();
+        check_seed_spacing(&request(), &policy).unwrap();
+        let refusal = |request: &JobRequest, policy: &PolicyV2| {
+            let error = check_seed_spacing(request, policy).unwrap_err();
+            job_refused(&error)
+                .unwrap_or_else(|| panic!("{error:#}"))
+                .0
+                .clone()
+        };
+
+        let mut trials = request();
+        trials.trials_per_case = 100;
+        check_seed_spacing(&trials, &policy).unwrap();
+        trials.trials_per_case = 101;
+        assert!(refusal(&trials, &policy).contains("trials_per_case"));
+
+        let mut reruns = policy.clone();
+        reruns.max_reruns = 9;
+        check_seed_spacing(&trials_at(100), &reruns).unwrap();
+        reruns.max_reruns = 10;
+        assert!(refusal(&request(), &reruns).contains("max_reruns"));
+
+        // max_rounds 3, max_reruns 1, trials 2: the highest seed is
+        // seed_base + 3000 + 100 + 1.
+        let mut edge = request();
+        edge.seed_base = i64::MAX - 3_101;
+        check_seed_spacing(&edge, &policy).unwrap();
+        let origin = JobOrigin {
+            seed_base: edge.seed_base,
+            ..origin()
+        };
+        let last = validation_plan("job-1", &origin, 3, 1, Path::new("a"), Path::new("b"));
+        assert_eq!(last.seed_base + 1, i64::MAX, "the last trial seed fits");
+        edge.seed_base += 1;
+        assert!(refusal(&edge, &policy).contains("seed_base"));
+        edge.seed_base = i64::MAX;
+        assert!(refusal(&edge, &policy).contains("seed_base"));
+    }
+
+    fn trials_at(trials_per_case: u32) -> JobRequest {
+        JobRequest {
+            trials_per_case,
+            ..request()
         }
     }
 
@@ -1893,6 +2047,33 @@ mod tests {
         assert!(job_refused(&error).unwrap().0.contains("policy"));
     }
 
+    /// C1 (constraint 15): the capture list is frozen with the job, so a
+    /// resume that names another list is refused, and an empty list — the
+    /// request-level fallback left unused — is a list like any other.
+    #[test]
+    fn a_resume_whose_captures_differ_is_refused() {
+        let policy = PolicyV2::uncalibrated();
+        let mut dropped = request();
+        dropped.captures.clear();
+        let error = check_resume(&dropped, &policy, &origin()).unwrap_err();
+        let refusal = job_refused(&error).unwrap_or_else(|| panic!("{error:#}"));
+        assert!(refusal.0.contains("captures"), "{}", refusal.0);
+
+        let mut renamed = request();
+        renamed.captures = vec![Capture::File {
+            name: "findings".into(),
+            glob: "*.json".into(),
+        }];
+        let error = check_resume(&renamed, &policy, &origin()).unwrap_err();
+        assert!(job_refused(&error).unwrap().0.contains("captures"));
+
+        let empty_origin = JobOrigin {
+            captures: Vec::new(),
+            ..origin()
+        };
+        check_resume(&dropped, &policy, &empty_origin).unwrap();
+    }
+
     #[test]
     fn a_round_is_replayed_from_its_journal_rather_than_reproposed() {
         let journal = vec![
@@ -2116,23 +2297,36 @@ mod tests {
             purpose: "optimization:job-1".into(),
             breaker_threshold: 5,
         };
-        check_run_matches_plan(&run, "job-1", &origin, &plan, &digests).unwrap();
+        let captures = Some(origin.captures.as_slice());
+        check_run_matches_plan(&run, captures, "job-1", &origin, &plan, &digests).unwrap();
 
         let other_candidate = vec!["sha256:checkpoint".to_owned(), "sha256:other".to_owned()];
         let error =
-            check_run_matches_plan(&run, "job-1", &origin, &plan, &other_candidate).unwrap_err();
+            check_run_matches_plan(&run, captures, "job-1", &origin, &plan, &other_candidate)
+                .unwrap_err();
         assert!(
             job_refused(&error).unwrap().0.contains("cells"),
             "{error:#}"
         );
+
+        // C1: a run frozen with another capture list, or with none recorded,
+        // is not this job's run.
+        for frozen in [Some(&[][..]), None] {
+            let error = check_run_matches_plan(&run, frozen, "job-1", &origin, &plan, &digests)
+                .unwrap_err();
+            assert!(
+                job_refused(&error).unwrap().0.contains("captures"),
+                "{frozen:?}: {error:#}"
+            );
+        }
 
         let foreign = RunOrigin {
             purpose: "eval".into(),
             seed_base: plan.seed_base + 1,
             ..run
         };
-        let error =
-            check_run_matches_plan(&foreign, "job-1", &origin, &plan, &digests).unwrap_err();
+        let error = check_run_matches_plan(&foreign, captures, "job-1", &origin, &plan, &digests)
+            .unwrap_err();
         let refusal = &job_refused(&error).unwrap().0;
         assert!(
             refusal.contains("purpose") && refusal.contains("seed_base"),

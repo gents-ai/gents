@@ -116,15 +116,14 @@ pub fn text_gate(
 /// checkpoint's digest and every earlier candidate's, and it is consulted
 /// before the file comparison, so a proposer that repeats itself — including
 /// one that returns the checkpoint's own text — is a duplicate and spends
-/// nothing. `owner` is kept for the caller's signature; the gate reads nothing
-/// owner-specific, because reference validity is inherited from the baseline.
+/// nothing. The gate reads nothing owner-specific, because reference validity
+/// is inherited from the baseline.
 pub fn structural_gate(
     baseline: &MaterializedPack,
     candidate: &MaterializedPack,
     text: &str,
     max_text_bytes: usize,
     seen_digests: &[String],
-    _owner: &str,
 ) -> Result<(), StructuralRejection> {
     text_gate(baseline, text, max_text_bytes)?;
 
@@ -263,7 +262,6 @@ mod tests {
             text,
             32 * 1024,
             &[fixture.baseline.digest.clone()],
-            OWNER,
         )
     }
 
@@ -305,7 +303,6 @@ mod tests {
             &long,
             32,
             &[fixture.baseline.digest.clone()],
-            OWNER,
         )
         .unwrap_err();
         assert_eq!(rejection.reason, "text_too_long");

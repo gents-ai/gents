@@ -5,12 +5,14 @@
 //! append-only journal from which the job's state is derived. `subject`
 //! materializes the baseline subject pack and each candidate derived from it.
 //! `show` projects a job's journal and recomputes each decision from its runs.
+//! `promote` holds the operator's two verbs, `promote` and `revert`.
 
 pub mod driver;
 pub mod evidence;
 pub mod gate;
 pub mod job;
 pub mod policy;
+pub mod promote;
 pub mod proposer;
 pub mod show;
 pub mod subject;
@@ -34,10 +36,11 @@ pub use policy::{
     CaseEvidence, Decision, DecisionReport, Evidence, Gates, InconclusiveReason, Mode, PolicyV2,
     RejectReason, TokenTotals, POLICY_VERSION,
 };
+pub use promote::{promote, promote_refused, revert, PromoteRefused, Promotion};
 pub use proposer::{CheckFeedback, Proposal, ProposalInput, Proposer, Rejection, ScriptedProposer};
 pub use show::{show, DecisionView, JobView};
 pub use subject::{baseline_text, materialize_candidate, materialize_pack, MaterializedPack};
 pub use target::{
     apply_text, capture_closure, closure_digests, current_text, expectations, target_digest,
-    target_plan, Closure, FrozenDocument, Target, TargetField, MAX_TARGET_TEXT_BYTES,
+    target_plan, Closure, FrozenDocument, Target, TargetField,
 };

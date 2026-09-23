@@ -17,6 +17,7 @@ use serde_json::{json, Value};
 
 use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::document_config::EvalSplit;
+use crate::eval::runner::Capture;
 use crate::eval::{DefinitionRef, SubjectRef};
 use crate::graphql::escape_graphql_string;
 use crate::optimization::policy::{Decision, Mode, PolicyV2};
@@ -57,9 +58,15 @@ pub struct JobOrigin {
     pub inference_profile_id: String,
     pub max_text_bytes: usize,
     /// `<launching home>/eval/jobs` (ruling R8). The job owns
-    /// `<jobs_dir>/<job_id>/`; `promote` rebuilds the checkpoint from the
-    /// baseline copy there, so the operator's verb needs only the job id.
+    /// `<jobs_dir>/<job_id>/`; `promote` verifies the retained checkpoint's
+    /// pack there, so the operator's verb needs only the job id.
     pub jobs_dir: PathBuf,
+    /// What every run of the job reads out of a finished trial home: the
+    /// request-level fallback; stage-level `EvalStage.capture` supersedes it
+    /// once the runner reads stage captures. Frozen because the runner refuses
+    /// to resume a run under a changed list; empty is a valid list.
+    #[serde(default)]
+    pub captures: Vec<Capture>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,7 +313,7 @@ pub async fn create_job(
     })
 }
 
-const JOB_FIELDS: &str = "job_id owner_agent_did origin journal journal_len state";
+const JOB_FIELDS: &str = "job_id owner_agent_did origin journal";
 
 fn decode(row: &Value) -> Result<JobRecord> {
     Ok(JobRecord {
@@ -453,6 +460,7 @@ mod tests {
             inference_profile_id: "local".into(),
             max_text_bytes: 32 * 1024,
             jobs_dir: std::path::PathBuf::from("/home/eval/jobs"),
+            captures: Vec::new(),
         }
     }
 

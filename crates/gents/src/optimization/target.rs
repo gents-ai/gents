@@ -15,9 +15,6 @@ use crate::config_client::{
 };
 use crate::Collection;
 
-/// The cap the structural gate holds a proposed text to.
-pub const MAX_TARGET_TEXT_BYTES: usize = 32 * 1024;
-
 /// The one field an optimization job may change in v1 (ruling R2). A Task's
 /// `prompt_template` is deferred; adding it is a new variant and a new
 /// structural check, not a flag on this one.
