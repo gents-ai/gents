@@ -119,3 +119,11 @@ Filled in by the orchestrator at spin-up.
   `2026-09-22-optimization-driver.md`; its first step builds the M6b base by cherry-picking
   `eval/06-protected`, `optimization/01..03` and `optimization/10..12` onto `eval/13` @ `7d1ca360f`
   as branch `optimization/19-base`). M4 waits for spec 4a.
+- 2026-09-22, user rule: commit messages carry no `Co-Authored-By` trailer. The 18 finished branches
+  were rewritten with a message filter (trees identical; old refs kept under `refs/original`):
+  `design/optimization-substrate` `eaca5a940`; `eval/01` `f58a40a84`, `02` `d849e047b`, `03` `116d659e7`,
+  `04` `1e6273315`, `05` `6d8e18e4d` (the pin), `06` `fa4059df6`, `10` `25bb761b4`, `11` `63efa986a`,
+  `12` `2f006ece4`, `13` `38c95e8de` (the M3/M6b base root), `30` `cd440f686`; `optimization/01`
+  `551a4ce9f`, `02` `918ccf21f`, `03` `254444088`, `10` `d6fbc8b61`, `11` `a9401c9d2`, `12` `eca2d79a5`.
+  In-progress branches (`eval/40`, `41`, `optimization/19..22`) still sit on the old commits and are
+  rebased onto the rewritten bases at the end of their plans; new commits carry no trailer.
