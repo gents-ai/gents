@@ -282,6 +282,10 @@ export function createDesktopApiAdapter(
       invokeDesktop<void>("desktop_provider_account_disconnect", {
         request: { agentDid, credentialId },
       }),
+    retrySaveProviderAccount: (agentDid, provider) =>
+      invokeDesktop<ProviderAccountView>("desktop_provider_account_retry_save", {
+        request: { agentDid, provider },
+      }),
     saveInferenceProfileConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_inference_profile_save", {
         request,

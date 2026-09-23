@@ -30,6 +30,10 @@ pub enum BridgeErrorCode {
     IncompatibleLocalStore,
     /// Enrollment-owned peer pairing and route-actuation failures.
     Pairing,
+    /// A provider sign-in completed, but saving the issued credential to the
+    /// agent's configuration failed. The bridge holds the credential in memory
+    /// so the save can be retried without signing in again.
+    CredentialNotSaved,
     /// Catch-all for failures whose producer has not assigned a typed code.
     Unknown,
 }
@@ -49,6 +53,7 @@ impl BridgeErrorCode {
             Self::Backend => "backend",
             Self::IncompatibleLocalStore => "incompatibleLocalStore",
             Self::Pairing => "pairing",
+            Self::CredentialNotSaved => "credentialNotSaved",
             Self::Unknown => "unknown",
         }
     }
@@ -61,6 +66,7 @@ impl BridgeErrorCode {
                 | Self::Backend
                 | Self::StalePreview
                 | Self::Pairing
+                | Self::CredentialNotSaved
         )
     }
 }

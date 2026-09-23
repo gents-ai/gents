@@ -26,8 +26,8 @@ use crate::tauri_commands::inference_setup::{
     CodexLoginUrl, GrokLoginRequest, GrokLoginResult, GrokLoginUrl,
     InferenceBackendRecommendationRequest, InferenceDiscoveryFailure, InferenceDiscoveryRequest,
     InferenceDiscoveryResult, InferenceProbeRequest, InferenceProbeResult,
-    InferenceRecommendationRequest, ProviderAccountDisconnectRequest, ProviderAccountView,
-    ProviderAccountsRequest,
+    InferenceRecommendationRequest, ProviderAccountDisconnectRequest,
+    ProviderAccountRetrySaveRequest, ProviderAccountView, ProviderAccountsRequest,
 };
 use crate::tauri_commands::lifecycle::DesktopObserverMetrics;
 use crate::tauri_commands::workspace::WorkspaceListingView;
@@ -231,6 +231,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         ClaudeLoginRequest,
         ProviderAccountsRequest,
         ProviderAccountDisconnectRequest,
+        ProviderAccountRetrySaveRequest,
     );
 
     export_types!(
@@ -384,6 +385,7 @@ fn all_bridge_visible_contract_roots_are_generated() {
         "ClaudeLoginRequest.ts",
         "ClaudeLoginResult.ts",
         "ClaudeLoginUrl.ts",
+        "ProviderAccountRetrySaveRequest.ts",
     ] {
         assert!(
             files.contains(inference_wire_type),

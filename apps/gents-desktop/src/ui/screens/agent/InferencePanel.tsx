@@ -21,7 +21,12 @@ import type {
 import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
 import type { Shell } from "@/hooks/useShell";
-import { PROVIDER_CREDENTIAL_KIND } from "@/lib/providerLogin";
+import {
+  bridgeErrorCode,
+  CREDENTIAL_NOT_SAVED,
+  PROVIDER_CREDENTIAL_KIND,
+  setupErrorMessage,
+} from "@/lib/providerLogin";
 import {
   fromLinesOrNull,
   optionalInteger,
@@ -175,6 +180,9 @@ function AccountRows({
   const expired = account ? Date.parse(account.accessTokenExpiresAt) < now : false;
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  /* The bridge holds a completed sign-in whose save failed; retry saves it
+     without another browser login. */
+  const [unsaved, setUnsaved] = useState(false);
   const api = shell.api;
   const signIn = async () => {
     setBusy(true);
@@ -182,12 +190,27 @@ function AccountRows({
       if (sub.login === "codex") await api.codexLogin(deployment.agentDid);
       else if (sub.login === "claude") await api.claudeLogin(deployment.agentDid);
       else await api.grokLogin(deployment.agentDid);
+      setUnsaved(false);
       toast("Signed in");
       await reload();
     } catch (error) {
-      toast(
-        `Sign in failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
+      setUnsaved(bridgeErrorCode(error) === CREDENTIAL_NOT_SAVED);
+      toast(`Sign in failed: ${setupErrorMessage(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const retrySave = async () => {
+    if (!api.retrySaveProviderAccount) return;
+    setBusy(true);
+    try {
+      await api.retrySaveProviderAccount(deployment.agentDid, sub.provider);
+      setUnsaved(false);
+      toast("Signed in");
+      await reload();
+    } catch (error) {
+      if (bridgeErrorCode(error) === "notFound") setUnsaved(false);
+      toast(`Save failed: ${setupErrorMessage(error)}`);
     } finally {
       setBusy(false);
     }
@@ -250,9 +273,14 @@ function AccountRows({
               </Button>
             </>
           )}
+          {unsaved && api.retrySaveProviderAccount ? (
+            <Button size="sm" variant="brand" disabled={busy} onClick={retrySave}>
+              Retry save
+            </Button>
+          ) : null}
           <Button
             size="sm"
-            variant={account ? "outline" : "brand"}
+            variant={account || unsaved ? "outline" : "brand"}
             disabled={busy}
             onClick={signIn}
           >

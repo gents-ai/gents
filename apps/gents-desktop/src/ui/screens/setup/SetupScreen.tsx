@@ -52,10 +52,18 @@ import { applyTheme, themePreference } from "@/theme";
 import { Mark } from "@/app/Mark";
 import { openExternalUrl } from "../../../lib/externalLinks";
 import {
+  bridgeErrorCode,
+  CREDENTIAL_NOT_SAVED,
+  setupErrorMessage,
   watchProviderLoginUrl,
   PROVIDER_CREDENTIAL_KIND,
   type OauthProvider,
 } from "@/lib/providerLogin";
+import { isLocalAgent } from "@/lib/firstRun";
+import {
+  ensureManagedRuntimeServing,
+  waitForManagedRuntimePairing,
+} from "@/lib/managedRuntimeReadiness";
 import { ManagedRuntimeAuthorityPicker } from "@/components/ManagedRuntimeAuthority";
 import { authoritiesEqual, authorityForSelection } from "@/lib/managedRuntimeAuthority";
 import {
@@ -361,6 +369,52 @@ export function SetupScreen({
     shell.snapshot?.client?.deployments[0]?.agentDid;
   const setupAgentDidRef = useRef(setupAgentDid);
   setupAgentDidRef.current = setupAgentDid;
+  /* Setup re-entry opens at the provider step without first run's
+     provisioning, so a local agent's managed runtime may not be serving.
+     Provider sign-in and the final save both write through it. */
+  const setupDeployment = (shell.deployments ?? []).find(
+    (deployment) => deployment.agentDid === setupAgentDid,
+  );
+  const requiresManagedRuntime = Boolean(
+    initialStep === "inference" &&
+    allowLocal &&
+    api.managedServerStatus &&
+    setupDeployment &&
+    isLocalAgent(setupDeployment, shell.snapshot?.bootstrap.initAgentDid),
+  );
+  const [runtimeGate, setRuntimeGate] = useState<
+    "idle" | "checking" | "ready" | "unavailable"
+  >("idle");
+  const runtimeFallbackName =
+    shell.snapshot?.bootstrap.initAgentName?.trim() || "Local Agent";
+  const checkManagedRuntime = async () => {
+    setRuntimeGate("checking");
+    setError(null);
+    try {
+      await ensureManagedRuntimeServing(api, runtimeFallbackName);
+      setRuntimeGate("ready");
+    } catch (cause) {
+      setRuntimeGate("unavailable");
+      setError(setupErrorMessage(cause));
+    }
+  };
+  useEffect(() => {
+    if (step !== "inference" || !requiresManagedRuntime || runtimeGate !== "idle")
+      return;
+    void checkManagedRuntime();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, requiresManagedRuntime, runtimeGate]);
+  /* A sign-in whose issued credential the bridge holds after a failed save. */
+  const [unsavedSignIn, setUnsavedSignIn] = useState<{
+    agentDid: string;
+    provider: ProviderId;
+    credentialKind: string;
+  } | null>(null);
+  useEffect(() => {
+    setUnsavedSignIn((current) =>
+      current && current.agentDid !== setupAgentDid ? null : current,
+    );
+  }, [setupAgentDid]);
   useEffect(() => {
     const revision = ++accountRevision.current;
     setSignedIn({});
@@ -450,9 +504,7 @@ export function SetupScreen({
         });
         if (next.providers[0]) setProvider(next.providers[0].id);
       })
-      .catch((cause) =>
-        setError(cause instanceof Error ? cause.message : String(cause)),
-      );
+      .catch((cause) => setError(setupErrorMessage(cause)));
   }, [api, catalog, step]);
 
   const createAgent = async () => {
@@ -492,24 +544,11 @@ export function SetupScreen({
       if (api.commitManagedServerAutoStart) {
         await api.commitManagedServerAutoStart(agentName);
       }
-      if (api.managedServerStatus) {
-        const deadline = Date.now() + 30_000;
-        while (Date.now() < deadline) {
-          const status = await api.managedServerStatus();
-          if (status.pairingReady) break;
-          await new Promise((resolve) => window.setTimeout(resolve, 250));
-        }
-        const status = await api.managedServerStatus();
-        if (!status.pairingReady) {
-          throw new Error(
-            "The local agent started, but secure background pairing is not ready.",
-          );
-        }
-      }
+      await waitForManagedRuntimePairing(api);
       await finishProvisioning();
     } catch (e) {
       setPhase("managed-server-error");
-      setError(e instanceof Error ? e.message : String(e));
+      setError(setupErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -524,7 +563,7 @@ export function SetupScreen({
       await finishProvisioning();
     } catch (e) {
       setPhase("client-error");
-      setError(e instanceof Error ? e.message : String(e));
+      setError(setupErrorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -533,14 +572,16 @@ export function SetupScreen({
     if (!connection) return;
     const oauthProvider = oauthProviderFor(connection.authMethod);
     if (!oauthProvider) return;
+    if (requiresManagedRuntime && runtimeGate !== "ready") return;
     setBusy(true);
     setError(null);
     setAuthUrl(null);
     let unlisten = () => {};
+    let agentDid: string | undefined;
     try {
       unlisten = await watchProviderLoginUrl(oauthProvider, setAuthUrl);
       const snapshot = await api.fetchDesktopSnapshot();
-      const agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
+      agentDid = setupAgentDid ?? snapshot.client?.deployments[0]?.agentDid;
       if (!agentDid) throw new Error("No agent to sign in");
       const result =
         oauthProvider === "openai"
@@ -551,12 +592,51 @@ export function SetupScreen({
       if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
       setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
+      setUnsavedSignIn(null);
       invalidateDiscovery();
       setAuthUrl(null);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (agentDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
+        setUnsavedSignIn({
+          agentDid,
+          provider,
+          credentialKind: PROVIDER_CREDENTIAL_KIND[oauthProvider],
+        });
+        setAuthUrl(null);
+      }
+      setError(setupErrorMessage(cause));
     } finally {
       unlisten();
+      setBusy(false);
+    }
+  };
+
+  const retrySaveSignIn = async () => {
+    const pending = unsavedSignIn;
+    if (!pending || !api.retrySaveProviderAccount) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (requiresManagedRuntime) {
+        await ensureManagedRuntimeServing(api, runtimeFallbackName);
+        setRuntimeGate("ready");
+      }
+      const account = await api.retrySaveProviderAccount(
+        pending.agentDid,
+        pending.credentialKind,
+      );
+      if (setupAgentDidRef.current !== pending.agentDid) return;
+      accountRevision.current += 1;
+      setSignedIn((current) => ({
+        ...current,
+        [pending.provider]: account.credentialId,
+      }));
+      setUnsavedSignIn(null);
+      invalidateDiscovery();
+    } catch (cause) {
+      if (bridgeErrorCode(cause) === "notFound") setUnsavedSignIn(null);
+      setError(setupErrorMessage(cause));
+    } finally {
       setBusy(false);
     }
   };
@@ -625,7 +705,7 @@ export function SetupScreen({
       setSettings(null);
     } catch (cause) {
       if (currentDiscoveryKey.current !== requestKey) return;
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(setupErrorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -657,7 +737,7 @@ export function SetupScreen({
       setSelectedRecommendation(recommendation);
       setSettings(recommendedInferenceSettings(recommendation));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(setupErrorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -737,7 +817,7 @@ export function SetupScreen({
       const snapshot = await waitForSelectedBehavior(profileId, defaultBehaviorId);
       onDone(snapshot);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(setupErrorMessage(cause));
     } finally {
       setBusy(false);
     }
@@ -943,6 +1023,42 @@ export function SetupScreen({
       </Frame>
     );
   }
+  if (
+    step === "inference" &&
+    requiresManagedRuntime &&
+    runtimeGate !== "ready" &&
+    !unsavedSignIn
+  ) {
+    return (
+      <Frame embedded={purpose === "add-backend"}>
+        <Title note="Provider sign-in and the saved configuration are stored by your local agent.">
+          {purpose === "add-backend"
+            ? "Add an inference backend"
+            : "Choose an inference provider"}
+        </Title>
+        {runtimeGate === "unavailable" ? (
+          <div className="grid gap-3">
+            <p role="alert" className="text-sm text-destructive">
+              {error ??
+                "The local agent is not running, so provider sign-in is unavailable."}
+            </p>
+            <Button
+              variant="brand"
+              className="justify-self-start"
+              onClick={() => void checkManagedRuntime()}
+            >
+              Try again
+            </Button>
+          </div>
+        ) : (
+          <p className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Spinner /> Starting your local agent…
+          </p>
+        )}
+        <Nav onBack={onCancel} />
+      </Frame>
+    );
+  }
   const advertised = discovery?.models.find(
     (option) => option.advertised.model_name === model,
   )?.advertised;
@@ -1017,7 +1133,22 @@ export function SetupScreen({
                       Cancel
                     </Button>
                   ) : null}
-                  <Button variant="brand" disabled={busy} onClick={signIn}>
+                  {!busy &&
+                  unsavedSignIn?.provider === provider &&
+                  api.retrySaveProviderAccount ? (
+                    <Button variant="brand" onClick={retrySaveSignIn}>
+                      Retry save
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant={
+                      unsavedSignIn?.provider === provider && !busy
+                        ? "outline"
+                        : "brand"
+                    }
+                    disabled={busy}
+                    onClick={signIn}
+                  >
                     {busy ? <Spinner /> : null}
                     {busy ? "Waiting…" : "Sign in"}
                   </Button>

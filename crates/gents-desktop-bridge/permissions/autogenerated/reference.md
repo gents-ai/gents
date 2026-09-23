@@ -1531,6 +1531,32 @@ Denies the desktop_provider_account_disconnect command without any pre-configure
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-provider-account-retry-save`
+
+</td>
+<td>
+
+Enables the desktop_provider_account_retry_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-account-retry-save`
+
+</td>
+<td>
+
+Denies the desktop_provider_account_retry_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-provider-accounts-list`
 
 </td>

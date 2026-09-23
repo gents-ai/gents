@@ -47,6 +47,43 @@ pub struct DesktopAppState {
     pub managed_server_lifecycle: tokio::sync::Mutex<()>,
     pub policy: ResolvedBridgePolicy,
     pub managed_server: tokio::sync::Mutex<ManagedServerState>,
+    /// OAuth credentials issued by a completed provider sign-in whose save to
+    /// the agent's canonical configuration failed. Held only in memory so the
+    /// user can retry the save without repeating the browser login.
+    pub pending_oauth_credentials: Mutex<PendingOAuthCredentials>,
+}
+
+/// Issued-but-unsaved OAuth credentials, keyed by agent DID and credential
+/// provider. Never serialized, never written to disk, and never returned to
+/// the webview; a successful save or a newer sign-in for the same key
+/// replaces the entry, and the process exit discards it.
+#[derive(Default)]
+pub struct PendingOAuthCredentials {
+    entries: std::collections::HashMap<(String, String), gents::oauth_credential::OAuthCredential>,
+}
+
+impl PendingOAuthCredentials {
+    pub fn hold(&mut self, credential: gents::oauth_credential::OAuthCredential) {
+        self.entries.insert(
+            (credential.agent_did.clone(), credential.provider.clone()),
+            credential,
+        );
+    }
+
+    pub fn get(
+        &self,
+        agent_did: &str,
+        provider: &str,
+    ) -> Option<gents::oauth_credential::OAuthCredential> {
+        self.entries
+            .get(&(agent_did.to_string(), provider.to_string()))
+            .cloned()
+    }
+
+    pub fn discard(&mut self, agent_did: &str, provider: &str) {
+        self.entries
+            .remove(&(agent_did.to_string(), provider.to_string()));
+    }
 }
 
 #[derive(Default)]
@@ -87,6 +124,7 @@ impl DesktopAppState {
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
+            pending_oauth_credentials: Mutex::new(PendingOAuthCredentials::default()),
         }
     }
 }

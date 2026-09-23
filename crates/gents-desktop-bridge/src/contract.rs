@@ -129,6 +129,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_claude_login_cancel", "config-write"),
         ("desktop_provider_accounts_list", "provider-accounts-read"),
         ("desktop_provider_account_disconnect", "config-write"),
+        ("desktop_provider_account_retry_save", "config-write"),
         // tasks
         ("desktop_task_save", "tasks"),
         ("desktop_schedule_save", "tasks"),
@@ -493,6 +494,7 @@ mod tests {
             ("desktop_claude_login_cancel", "mutate"),
             ("desktop_provider_accounts_list", "read"),
             ("desktop_provider_account_disconnect", "mutate"),
+            ("desktop_provider_account_retry_save", "mutate"),
             ("desktop_task_save", "mutate"),
             ("desktop_schedule_save", "mutate"),
             ("desktop_schedule_run", "mutate"),
