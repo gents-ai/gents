@@ -99,6 +99,8 @@ pub const EVENT_GROUP_STATE_NAME: &str = "EventGroupState";
 pub const EVENT_GROUP_STATE: &str = include_str!("../schemas/agent/event_group_state.graphql");
 pub const GRAPH_DEFINITION_NAME: &str = "GraphDefinition";
 pub const GRAPH_DEFINITION: &str = include_str!("../schemas/agent/graph_definition.graphql");
+pub const EVAL_DEFINITION_NAME: &str = "EvalDefinition";
+pub const EVAL_DEFINITION: &str = include_str!("../schemas/agent/eval_definition.graphql");
 pub const GRAPH_REVISION_NAME: &str = "GraphRevision";
 pub const GRAPH_REVISION: &str = include_str!("../schemas/agent/graph_revision.graphql");
 pub const GRAPH_RUN_NAME: &str = "GraphRun";
@@ -204,6 +206,7 @@ pub const ALL: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE,
     PERSONA_CONFIG_REQUEST,
     SESSION_HYDRATION_REQUEST,
+    EVAL_DEFINITION,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -268,6 +271,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     ENROLLMENT_OPERATOR_NONCE_NAME,
     PERSONA_CONFIG_REQUEST_NAME,
     SESSION_HYDRATION_REQUEST_NAME,
+    EVAL_DEFINITION_NAME,
 ];
 
 /// Agent-domain collections the desktop bulk-syncs after pairing.
@@ -310,6 +314,7 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     RENDERED_REQUEST_NAME,
     PROVIDER_CONTEXT_REDUCTION_NAME,
     ETH_SUBMISSION_NAME,
+    EVAL_DEFINITION_NAME,
 ];
 
 /// Local trust state that must never be subscribed or learned from peers.

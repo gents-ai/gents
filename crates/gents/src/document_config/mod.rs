@@ -6,6 +6,7 @@ mod compaction;
 mod context;
 mod datastore_tool_surface;
 mod eth_tool;
+mod eval_definition;
 mod event_trigger;
 mod graph_definition;
 mod inference_backend;
@@ -40,6 +41,10 @@ pub use callback::{
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
+pub use eval_definition::{
+    EvalCase, EvalCheckRef, EvalDefinition, EvalFixtureDocument, EvalFixtures, EvalReducer,
+    EvalSplit, EvalStage, EvalSubject, EvalSubjectKind, EvalTier, LLM_JUDGE_CHECK,
+};
 pub use graph_definition::{GraphDefinition, GraphDefinitionObservation};
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,

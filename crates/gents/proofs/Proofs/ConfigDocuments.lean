@@ -33,10 +33,11 @@ inductive Collection where
   | callbackModule
   | repositoryPlacement
   | graphDefinition
+  | evalDefinition
   deriving DecidableEq, Repr
 
 def all : List Collection :=
-  [.agentPrincipal, .agentBehavior, .agentContext, .compaction, .skill, .datastoreToolSurface, .chainKeyBinding, .ethTool, .tools, .subagentTarget, .inferenceBackend, .inferenceProfile, .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy, .toolServiceRegistry, .projectionAcpBinding, .task, .schedule, .eventSource, .trigger, .callback, .callbackBinding, .callbackModule, .repositoryPlacement, .graphDefinition]
+  [.agentPrincipal, .agentBehavior, .agentContext, .compaction, .skill, .datastoreToolSurface, .chainKeyBinding, .ethTool, .tools, .subagentTarget, .inferenceBackend, .inferenceProfile, .inferenceSampling, .inferenceExecution, .inferenceRetryPolicy, .toolServiceRegistry, .projectionAcpBinding, .task, .schedule, .eventSource, .trigger, .callback, .callbackBinding, .callbackModule, .repositoryPlacement, .graphDefinition, .evalDefinition]
 
 /-- One formal catalog row per canonical document; projections below serve
 existing consumers without parallel name/key/field tables. -/
@@ -74,6 +75,7 @@ def documentSpec : Collection → DocumentSpec
   | .callbackModule => ⟨"CallbackModule", "module_id", "automation", ["module_id", "agent_did", "abi_version", "wasm_bytes", "canonical_args", "signer_did", "provenance", "enabled", "fuel_limit", "memory_pages", "max_input_bytes", "max_output_bytes", "tags"]⟩
   | .repositoryPlacement => ⟨"RepositoryPlacement", "repository_id", "automation", ["repository_id", "agent_did", "host_path", "enabled", "tags"]⟩
   | .graphDefinition => ⟨"GraphDefinition", "graph_id", "automation", ["graph_id", "agent_did", "enabled", "created_at", "updated_at", "tags"]⟩
+  | .evalDefinition => ⟨"EvalDefinition", "definition_id", "automation", ["definition_id", "agent_did", "comparability_version", "title", "subject", "fixtures", "cases", "updated_at", "tags"]⟩
 
 abbrev Collection.collectionName (c : Collection) := (documentSpec c).collectionName
 abbrev Collection.uniqueField (c : Collection) := (documentSpec c).uniqueField
