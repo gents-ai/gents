@@ -3,6 +3,7 @@
    session projection: the timeline items are the bridge's own
    RenderedTimelineItem, rendered as they arrive. */
 import {
+  Fragment,
   createContext,
   useCallback,
   memo,
@@ -31,6 +32,7 @@ import {
 import { toast } from "sonner";
 import type {
   DeploymentView,
+  DerivedCancelCauseView,
   RenderedToolCallView,
   DesktopSessionSnapshot,
   GoalView,
@@ -75,6 +77,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
+import { activityStatus } from "./activity-status";
 import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar, BehaviorChip } from "./parts";
 import { BehaviorHoverCard } from "./HoverCards";
@@ -618,8 +621,10 @@ function runDetail(run: Extract<ToolRun, { kind: "run" }>) {
 
 const TranscriptItem = memo(function TranscriptItem({
   item,
+  status = null,
 }: {
   item: RenderedTimelineItem;
+  status?: string | null;
 }) {
   const workers = useContext(WorkersContext);
   const parentWork = useContext(ParentContext);
@@ -716,12 +721,64 @@ const TranscriptItem = memo(function TranscriptItem({
         <div data-testid="live-assistant">
           <AssistantMessage>
             {item.content && <Markdown>{item.content}</Markdown>}
-            <Thinking />
+            {status && <Thinking label={status} />}
           </AssistantMessage>
         </div>
       );
   }
 });
+
+const STOP_SOURCES: Record<string, string> = {
+  requestInterrupt: "a stop request on this request",
+  parentCascade: "a stop request on its parent",
+  requestLifecycle: "the request's lifecycle state",
+  deadline: "its deadline",
+};
+
+function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
+  const headline =
+    !cause || cause.cause === "userCancelled"
+      ? "You stopped this response."
+      : cause.cause === "deadline"
+        ? "This response stopped at its deadline."
+        : "This response was stopped.";
+  const at = cause?.at ? new Date(cause.at) : null;
+  return (
+    <Collapsible
+      className="px-2 text-xs text-muted-foreground"
+      data-testid="stopped-notice"
+    >
+      <p className="flex items-center gap-2">
+        {headline}
+        {cause && (
+          <CollapsibleTrigger className="cursor-pointer underline decoration-border underline-offset-4 hover:text-foreground">
+            Details
+          </CollapsibleTrigger>
+        )}
+      </p>
+      {cause && (
+        <CollapsibleContent>
+          <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
+            <dt>stopped by</dt>
+            <dd>{STOP_SOURCES[cause.source] ?? cause.source}</dd>
+            {at && !Number.isNaN(at.getTime()) && (
+              <>
+                <dt>at</dt>
+                <dd>{at.toLocaleTimeString()}</dd>
+              </>
+            )}
+            {cause.evidence.map((line) => (
+              <Fragment key={line}>
+                <dt>evidence</dt>
+                <dd className="break-all">{line}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </CollapsibleContent>
+      )}
+    </Collapsible>
+  );
+}
 
 type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
 
@@ -729,6 +786,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   actionsRef,
   holdsCount,
   inFlight,
+  stopping = false,
   ownerRef,
   session,
   workers,
@@ -739,6 +797,7 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   actionsRef: RefObject<TranscriptActions>;
   holdsCount: number;
   inFlight: boolean;
+  stopping?: boolean;
   ownerRef: RefObject<HTMLDivElement | null>;
   session: DesktopSessionSnapshot | null;
   workers: Workers;
@@ -754,6 +813,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   }, [session?.sessionId]);
 
   const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
+  const status = inFlight
+    ? activityStatus(session?.timelineItems ?? [], stopping)
+    : null;
   const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
     session?.turnState === "failed"
@@ -819,14 +881,18 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           <WorkerActionsContext.Provider value={workerActions}>
             <ParentContext.Provider value={parentWork}>
               {session?.timelineItems.map((item) => (
-                <TranscriptItem key={item.itemKey} item={item} />
+                <TranscriptItem
+                  key={item.itemKey}
+                  item={item}
+                  status={item.kind === "liveAssistant" ? status : null}
+                />
               ))}
             </ParentContext.Provider>
           </WorkerActionsContext.Provider>
         </WorkersContext.Provider>
       </DeploymentContext.Provider>
       {wasInterrupted && !inFlight && (
-        <p className="px-2 text-xs text-muted-foreground">Interrupted</p>
+        <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
       )}
       {showError && (
         <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
@@ -849,9 +915,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {inFlight && !live && holdsCount === 0 && (
+      {status && !live && holdsCount === 0 && (
         <AssistantMessage>
-          <Thinking />
+          <Thinking label={status} />
         </AssistantMessage>
       )}
     </div>
@@ -862,6 +928,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
   const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
+  const [stopInFlight, setStopInFlight] = useState<string | null>(null);
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
     null,
   );
@@ -1120,9 +1187,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
   /* stop: the desktop previews the cascade first; with no children it
      interrupts at once, otherwise it asks */
+  const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
+  const stopping =
+    inFlight &&
+    (session?.latestRequestOutcome?.cancelCause?.source === "requestInterrupt" ||
+      (stopInFlight !== null && stopInFlight === stoppableRequestId));
   const stop = async () => {
-    const requestId = shell.activeRequestId ?? session?.latestRequestId;
-    if (!requestId) return;
+    const requestId = stoppableRequestId;
+    if (!requestId || stopping) return;
+    setStopInFlight(requestId);
     try {
       const preview = await shell.api.previewInterruptCascade({
         requestId,
@@ -1141,15 +1214,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         cascade: false,
         expectedPreviewSignature: null,
       });
-      toast(
-        r.accepted
-          ? "Interrupt requested"
-          : r.alreadyInterrupted
-            ? "Already interrupted"
-            : "Not interrupted",
-      );
+      if (!r.accepted && !r.alreadyInterrupted)
+        toast("This response had already finished.");
     } catch (e) {
-      toast(`Couldn't interrupt: ${String(e)}`);
+      toast(`Couldn't stop: ${String(e)}`);
+    } finally {
+      setStopInFlight(null);
     }
   };
 
@@ -1335,6 +1405,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                 actionsRef={transcriptActions}
                 holdsCount={holdsHere.length}
                 inFlight={inFlight}
+                stopping={stopping}
                 ownerRef={column}
                 session={session}
                 workers={workers}
@@ -1441,7 +1512,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     }
                     onKeyDown={slash.onKeyDown}
                     sending={shell.sending || inFlight}
-                    onStop={inFlight ? stop : undefined}
+                    onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
                       status.kind === "disabled" && !inFlight
                         ? status.hint

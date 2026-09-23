@@ -75,8 +75,9 @@ describe("unified tool presentation", () => {
         created: false,
         replacementsApplied: 2,
         diff: [
-          { kind: "del", text: "old" },
-          { kind: "add", text: "new" },
+          { kind: "context", text: "fn main() {" },
+          { kind: "removed", text: "old" },
+          { kind: "added", text: "new" },
         ],
         fallbackOutput: null,
       }),
@@ -85,6 +86,13 @@ describe("unified tool presentation", () => {
     expect(screen.getByText("×2")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("tool-tool-1").querySelector("summary")!);
     expect(screen.getByText("new").closest("pre")).toHaveClass("tool-diff");
+    expect(screen.getByText("new").closest(".tool-diff-line")).toHaveClass("is-added");
+    expect(screen.getByText("old").closest(".tool-diff-line")).toHaveClass(
+      "is-removed",
+    );
+    expect(screen.getByText("fn main() {").closest(".tool-diff-line")).toHaveClass(
+      "is-context",
+    );
   });
 
   it("makes MCP identity useful without opening raw JSON", () => {

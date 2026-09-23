@@ -303,6 +303,30 @@ test.describe("kit shell", () => {
     await expect(page.getByTestId("context-details")).not.toBeVisible();
   });
 
+  test("file edit diffs mark added, removed and unchanged lines", async ({ page }) => {
+    await gotoHarness(page, "coding");
+    await page
+      .getByTestId("sessions-screen")
+      .getByRole("link", { name: /introduction-and-greetings/ })
+      .click();
+    const transcript = page.getByTestId("transcript-panel");
+    const removed = transcript.locator("[data-diff=removed]");
+    for (let opened = 0; opened < 4 && !(await removed.count()); opened += 1) {
+      await transcript
+        .locator("[data-slot=collapsible-trigger][aria-expanded=false]")
+        .filter({ hasText: /parser\.rs|edited|read|\$/ })
+        .first()
+        .click();
+    }
+    await expect(removed).toHaveText(/fn parse\(\) -> Ast \{ todo!\(\) \}/);
+    await expect(transcript.locator("[data-diff=added]")).toHaveText(
+      /fn parse\(\) -> Ast \{ Ast::default\(\) \}/,
+    );
+    await expect(transcript.locator("[data-diff=context]")).toHaveText(
+      /impl Parser \{/,
+    );
+  });
+
   test("condensed session behavior details are keyboard accessible", async ({
     page,
   }) => {

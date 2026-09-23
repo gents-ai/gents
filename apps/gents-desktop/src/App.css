@@ -3,6 +3,13 @@
 @source "./**/*.{ts,tsx}";
 @source inline("max-h-[calc(100dvh-2rem)]");
 
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
 html,
 body,
 #root {

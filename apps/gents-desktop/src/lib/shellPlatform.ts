@@ -54,3 +54,15 @@ export function applyShellPlatform(root: HTMLElement = document.documentElement)
     root.dataset.shell = "linux";
   }
 }
+
+export function revealInFolderLabel(): string | null {
+  if (isMacTauriShell()) return "Reveal in Finder";
+  if (isWindowsTauriShell()) return "Show in Explorer";
+  if (isLinuxTauriShell()) return "Show in folder";
+  return null;
+}
+
+export async function revealInFolder(path: string): Promise<void> {
+  const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+  await revealItemInDir(path);
+}

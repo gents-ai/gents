@@ -399,8 +399,9 @@ export function createDesktopUiHarness(
                     created: false,
                     replacementsApplied: 1,
                     diff: [
-                      { kind: "del", text: "fn parse() -> Ast { todo!() }" },
-                      { kind: "add", text: "fn parse() -> Ast { Ast::default() }" },
+                      { kind: "context", text: "impl Parser {" },
+                      { kind: "removed", text: "fn parse() -> Ast { todo!() }" },
+                      { kind: "added", text: "fn parse() -> Ast { Ast::default() }" },
                     ],
                     fallbackOutput: null,
                   },

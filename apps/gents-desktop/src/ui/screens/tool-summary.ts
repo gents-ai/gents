@@ -3,6 +3,8 @@
    both label a call the same way. */
 import type {
   RenderedToolCallView,
+  ToolDiffLineKind,
+  ToolDiffLineView,
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { shortPath } from "./tool-runs";
@@ -23,6 +25,20 @@ export const spoken = (command: string): string => {
     .filter((part) => part && !/^cd\b/.test(part));
   return parts.length ? parts.join(" && ") : command.trim();
 };
+
+export const isRedacted = (value: string | null | undefined) =>
+  value === "[redacted sensitive input]" || value === "[redacted sensitive output]";
+
+export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
+  added: "+",
+  removed: "-",
+  context: " ",
+};
+
+export const diffText = (diff: ToolDiffLineView[]) =>
+  diff.map((line) => `${DIFF_MARK[line.kind]}${line.text}`).join("\n");
+
+export const isAbsolutePath = (path: string) => /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(path);
 
 const compact = (value: string | null | undefined, max = 80) => {
   const flat = value?.replace(/\s+/g, " ").trim();
@@ -72,7 +88,13 @@ export function toolSummary(t: RenderedToolCallView): {
     };
   switch (p.kind) {
     case "command":
-      return { kind: "$", primary: spoken(p.command), secondary: exit(p), mono: true };
+      return isRedacted(p.command)
+        ? {
+            kind: "$",
+            primary: "Command hidden: it contains a credential",
+            secondary: exit(p),
+          }
+        : { kind: "$", primary: spoken(p.command), secondary: exit(p), mono: true };
     case "fileRead":
       return {
         kind: p.operation.replace("_file", ""),

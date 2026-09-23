@@ -6,8 +6,20 @@
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { cn } from "@gents/ui/lib/utils";
+import { Button } from "@gents/ui/components/button";
+import { toast } from "sonner";
+import { revealInFolder, revealInFolderLabel } from "../../lib/shellPlatform";
+import { isLocalAgent } from "../lib/firstRun";
+import { useDeployment } from "./deployment-context";
 import { CopyButton } from "./Markdown";
-import { duration, toolSummary } from "./tool-summary";
+import {
+  DIFF_MARK,
+  diffText,
+  duration,
+  isAbsolutePath,
+  isRedacted,
+  toolSummary,
+} from "./tool-summary";
 
 const pretty = (value: string) => {
   try {
@@ -49,6 +61,17 @@ export function ToolSummary({
 
 function Payload({ label, value }: { label: string; value?: string | null }) {
   if (!value?.trim()) return null;
+  if (isRedacted(value))
+    return (
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
+        <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
+          {label}
+        </span>
+        <p className="font-sans text-xs text-muted-foreground">
+          Hidden because it looks like it contains a credential.
+        </p>
+      </div>
+    );
   const text = pretty(value);
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-1">
@@ -147,31 +170,27 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
                 <span className="font-mono text-[10px] tracking-wide text-muted-foreground uppercase">
                   diff
                 </span>
-                <CopyButton
-                  getText={() =>
-                    p.diff
-                      .map((l) => `${l.kind === "added" ? "+" : "-"}${l.text}`)
-                      .join("\n")
-                  }
-                />
+                <CopyButton getText={() => diffText(p.diff)} />
               </div>
               <ScrollArea className="max-h-72 rounded-md bg-surface [&_[data-slot=scroll-area-viewport]]:max-h-[inherit]">
                 <pre className="w-max min-w-full py-2 font-mono text-[11px] leading-relaxed">
                   {p.diff.map((l, i) => (
                     <span
                       key={i}
+                      data-diff={l.kind}
                       className={cn(
                         "block px-3",
-                        l.kind === "added"
-                          ? "bg-success text-marker-foreground"
-                          : "bg-destructive/10 text-muted-foreground line-through decoration-destructive/40",
+                        l.kind === "added" && "bg-success text-marker-foreground",
+                        l.kind === "removed" &&
+                          "bg-destructive/10 text-muted-foreground line-through decoration-destructive/40",
+                        l.kind === "context" && "text-muted-foreground",
                       )}
                     >
                       <span
                         aria-hidden="true"
                         className="mr-2 inline-block w-2 select-none"
                       >
-                        {l.kind === "added" ? "+" : "-"}
+                        {DIFF_MARK[l.kind]}
                       </span>
                       {l.text}
                     </span>
@@ -180,6 +199,7 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
               </ScrollArea>
             </div>
           )}
+          {p.path && tool.statusKind !== "running" && <RevealFile path={p.path} />}
           <Payload label="output" value={p.fallbackOutput} />
         </>
       )}
@@ -224,5 +244,26 @@ export function ToolBody({ tool }: { tool: RenderedToolCallView }) {
         </div>
       )}
     </div>
+  );
+}
+
+function RevealFile({ path }: { path: string }) {
+  const deployment = useDeployment();
+  const label = revealInFolderLabel();
+  if (!label || !deployment || !isLocalAgent(deployment) || !isAbsolutePath(path))
+    return null;
+  return (
+    <Button
+      variant="outline"
+      size="xs"
+      className="justify-self-start font-sans"
+      onClick={() =>
+        void revealInFolder(path).catch((error: unknown) =>
+          toast(`Couldn't find ${path} on this computer: ${String(error)}`),
+        )
+      }
+    >
+      {label}
+    </Button>
   );
 }
