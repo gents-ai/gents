@@ -239,6 +239,51 @@ describe("setup re-entry at the provider step", () => {
     expect(api.claudeLogin).not.toHaveBeenCalled();
   });
 
+  it("offers Retry save in the fixed-provider form opened from a catalog row", async () => {
+    const { api, shell } = harness();
+    api.managedServerStatus.mockResolvedValue(
+      status({ state: "running", pairingReady: true }),
+    );
+    let held = true;
+    api.listProviderAccounts.mockImplementation(async () =>
+      held ? [{ ...account, pendingSave: true }] : [account],
+    );
+    api.retrySaveProviderAccount.mockImplementation(async () => {
+      held = false;
+      return account;
+    });
+    render(
+      <SetupScreen
+        shell={shell}
+        initialStep="inference"
+        purpose="add-backend"
+        provider="anthropic"
+        agentDid={AGENT}
+        onCancel={vi.fn()}
+        onDone={vi.fn()}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("heading", { name: "Set up Anthropic" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("radiogroup", { name: "Inference provider" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Retry save" }));
+    expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
+      AGENT,
+      "claude-subscription",
+    );
+    expect(api.claudeLogin).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: "Retry save" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("skips the runtime gate for a remote agent", async () => {
     const { api, shell } = harness();
     const remote = { ...deployment, agentDid: "did:key:zRemote", source: "enrolled" };
