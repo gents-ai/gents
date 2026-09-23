@@ -176,6 +176,10 @@ the LLM proposer and its evidence projection.
   - Promotion (M6b T41-4): a concurrent edit to a read-only, non-target closure document during the
     promote transaction is caught only if DefraDB detects read-write conflicts at commit; the target
     itself is always digest-guarded. Verify in M5 or as a Track 0 follow-up test.
+  - `eval/runner/plan.rs` computes seeds (`seed_base + trial_index`) without an overflow check
+    (M6b open item); M4's PR 1 runner task adds a checked add and a freeze-time refusal.
+  - `DecisionView.recomputed` is `Option<Decision>` after M6b's FW-2; M4's `optimization show`
+    renders the `None` case ("not recomputable: definition changed / runs invalidated").
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.

@@ -144,3 +144,11 @@ Filled in by the orchestrator at spin-up.
   process rules: batch tasks sharing a file or a library call; reviews overlap the next implementer;
   per task only the pertinent tests plus `cargo check -p gents --tests`; the full `cargo test -p gents`
   and `cargo check --workspace --all-targets` once per PR at its gate; `CARGO_BUILD_JOBS=8`; no trailers.
+- `m6b` complete 2026-09-23. Rebased onto the rewritten `eval/13` @ `38c95e8de` and trailer-stripped
+  (trees identical): `optimization/19-base` `8d0ca01ac` (16 cherry-picks), `20-job` `044592aec`,
+  `21-proposer` `6866f8769`, `22-driver` `1f08a7db3`, `23-promote` `6164d34d6` (promote/revert, live
+  tests, the final fix wave incl. the captures fallback F-1). Gates: lib 2675, driver 48 ×3, canary
+  3/1, conformance 269/269, workspace check clean; full `cargo test -p gents` fails only the two libp2p
+  timeouts. Artifacts in `.superpowers/sdd/2026-09-22-optimization-driver/` (ledger, gate reports,
+  final review, `pr-descriptions.md` with the layer map for redistributing the fix-wave commits at
+  push). **M4 base: `optimization/23-promote` @ `6164d34d6`.**
