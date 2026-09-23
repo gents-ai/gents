@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use serde_json::{json, Value};
 
@@ -188,17 +188,17 @@ pub(super) trait QuerySink: Send + Sync {
     fn execute(
         &self,
         query: &str,
-    ) -> impl std::future::Future<Output = defra_node::QueryResponse> + Send;
+    ) -> impl std::future::Future<Output = Result<defra_node::QueryResponse>> + Send;
 }
 
-/// The production sink: the embedded node itself.
+/// The production sink: the canonical read owner over the embedded node.
 struct NodeSink<'a> {
     node: &'a Arc<EmbeddedNode>,
 }
 
 impl QuerySink for NodeSink<'_> {
-    async fn execute(&self, query: &str) -> defra_node::QueryResponse {
-        self.node.execute(query).await
+    async fn execute(&self, query: &str) -> Result<defra_node::QueryResponse> {
+        graphql_with_transaction_retry(self.node, query, "grok canonical message projection").await
     }
 }
 
@@ -269,8 +269,7 @@ async fn project_messages_with_sink<S: QuerySink>(
         escape_graphql_string(physical),
         escape_graphql_string(physical)
     );
-    let response = sink.execute(&query).await;
-    ensure_no_errors(&response, "grok canonical message projection")?;
+    let response = sink.execute(&query).await?;
     let data = response
         .data
         .as_ref()
@@ -559,11 +558,11 @@ mod canonical_selection_tests {
     }
 
     impl QuerySink for Facts {
-        async fn execute(&self, _query: &str) -> defra_node::QueryResponse {
-            defra_node::QueryResponse::success(json!({
+        async fn execute(&self, _query: &str) -> Result<defra_node::QueryResponse> {
+            Ok(defra_node::QueryResponse::success(json!({
                 "AgentMessage": self.headers,
                 "AgentOutputSegment": self.segments,
-            }))
+            })))
         }
     }
 
