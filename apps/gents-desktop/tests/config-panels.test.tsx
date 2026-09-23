@@ -917,6 +917,76 @@ describe("configuration panels", () => {
     expect(api.saveTaskConfig).not.toHaveBeenCalled();
   });
 
+  it("adds a schedule to a task only on Create, as one apply with the trigger off", async () => {
+    const { api, shell } = harness();
+    api.applyConfigComponents
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({});
+    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+    const dialog = await screen.findByRole("dialog", { name: "When it runs" });
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
+    expect(api.saveTriggerConfig).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(await within(dialog).findByText("offline")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(2));
+
+    const [first, second] = api.applyConfigComponents.mock.calls.map(
+      (call) => call[0].document,
+    );
+    expect(second.schedules).toHaveLength(1);
+    expect(second.triggers).toEqual([
+      expect.objectContaining({
+        task_id: "task-a",
+        enabled: false,
+        source: { kind: "schedule", schedule_id: second.schedules[0].schedule_id },
+      }),
+    ]);
+    expect(second.tasks).toBeUndefined();
+    /* a retry writes the same documents, never a second copy */
+    expect(second.schedules[0].schedule_id).toBe(first.schedules[0].schedule_id);
+    expect(second.triggers[0].trigger_id).toBe(first.triggers[0].trigger_id);
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
+    expect(api.saveTriggerConfig).not.toHaveBeenCalled();
+  });
+
+  it("asks which collection an event watches instead of defaulting to requests", async () => {
+    const { api, shell } = harness();
+    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Event" }));
+    const dialog = await screen.findByRole("dialog", { name: "When it runs" });
+    expect(within(dialog).getByLabelText("Collection")).toHaveValue("");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(
+      await within(dialog).findByText("Name the collection to watch."),
+    ).toBeInTheDocument();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    expect(api.saveEventSourceConfig).not.toHaveBeenCalled();
+
+    await user.type(within(dialog).getByLabelText("Collection"), "MailboxItem");
+    const turnOn = within(dialog).getByRole("checkbox", { name: "Turn it on now" });
+    expect(turnOn).toHaveAttribute("aria-checked", "false");
+    await user.click(within(dialog).getByText("Turn it on now"));
+    expect(turnOn).toHaveAttribute("aria-checked", "true");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
+    const document = api.applyConfigComponents.mock.calls[0][0].document;
+    expect(document.event_sources).toEqual([
+      expect.objectContaining({
+        source_collection: "MailboxItem",
+        event_kind: "created",
+      }),
+    ]);
+    expect(document.triggers[0].enabled).toBe(true);
+  });
+
   it("does not publish a task result after the user changes compose intent", async () => {
     const { shell } = harness();
     let generation = 0;

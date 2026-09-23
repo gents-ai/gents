@@ -105,65 +105,9 @@ export function TaskEditor({
   const [besideTrigger, setBesideTrigger] = useState<string | null>(null);
   const besideTriggerView =
     deployment.triggers.find((x) => x.config.trigger_id === besideTrigger) ?? null;
-  /* a schedule or event source with sensible defaults, its trigger, then the trigger beside the page to adjust */
-  const addTrigger = async (kind: "schedule" | "event") => {
-    const agent_did = deployment.agentDid;
-    const trigger_id = newId("trig");
-    try {
-      let source:
-        | { kind: "schedule"; schedule_id: string }
-        | { kind: "event"; event_source_id: string };
-      if (kind === "schedule") {
-        const schedule_id = newId("sched");
-        await shell.applyConfig((api) =>
-          api.saveScheduleConfig({
-            document: {
-              agent_did,
-              schedule_id,
-              display_name: "Every day at 09:00",
-              cadence: {
-                kind: "cron",
-                expression: "0 9 * * *",
-                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-                missed_run_policy: "latest_only",
-              },
-            },
-          }),
-        );
-        source = { kind: "schedule", schedule_id };
-      } else {
-        const event_source_id = newId("evsrc");
-        await shell.applyConfig((api) =>
-          api.saveEventSourceConfig({
-            document: {
-              agent_did,
-              event_source_id,
-              display_name: "When an AgentRequest is created",
-              source_collection: "AgentRequest",
-              event_kind: "created",
-            },
-          }),
-        );
-        source = { kind: "event", event_source_id };
-      }
-      await shell.applyConfig((api) =>
-        api.saveTriggerConfig({
-          document: {
-            agent_did,
-            trigger_id,
-            display_name: task.name ?? task.taskId,
-            task_id: task.taskId,
-            source,
-            enabled: true,
-            concurrency: "serial",
-          },
-        }),
-      );
-      setBesideTrigger(trigger_id);
-    } catch (e) {
-      toast(`Couldn’t add it: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
+  /* a schedule or an event for this task: a dialog that writes nothing
+     until Create, then the new trigger beside the page to adjust */
+  const [adding, setAdding] = useState<"schedule" | "event" | null>(null);
   const [args, setArgs] = useState("{}");
   const [lastRun, setLastRun] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -322,18 +266,10 @@ export function TaskEditor({
         title="When it runs"
         action={
           <span className="flex gap-1">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void addTrigger("schedule")}
-            >
+            <Button size="sm" variant="outline" onClick={() => setAdding("schedule")}>
               <Plus /> Schedule
             </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => void addTrigger("event")}
-            >
+            <Button size="sm" variant="outline" onClick={() => setAdding("event")}>
               <Plus /> Event
             </Button>
           </span>
@@ -378,6 +314,18 @@ export function TaskEditor({
           );
         })}
       </Group>
+      <NewAutomationDialog
+        key={adding ?? "closed"}
+        shell={shell}
+        deployment={deployment}
+        open={adding !== null}
+        onOpenChange={(open) => {
+          if (!open) setAdding(null);
+        }}
+        task={task.taskId}
+        initialKind={adding ?? "schedule"}
+        onCreated={(triggerId) => setBesideTrigger(triggerId)}
+      />
       <EditorSheet
         open={besideTriggerView !== null}
         onClose={() => setBesideTrigger(null)}

@@ -1,10 +1,23 @@
-/* One dialog for "make it run on its own": when, what, who. It writes the
-   schedule or event source, the task and the trigger, the same documents
-   the desktop app uses, and lands on the trigger. Existing schedules,
-   sources and tasks can be reused instead of made. */
-import { useState } from "react";
-import type { DeploymentView } from "@source-inc/gents-desktop-client";
+/* One dialog for "make it run on its own": when, what, who. Nothing is
+   written until Create; then the schedule or event source, the task and
+   the trigger land together in one config component apply (one
+   transaction), with the same ids on a retry, so a failure leaves no half
+   of it behind. A new trigger starts off unless the person turns it on
+   here. Existing schedules, sources and tasks can be reused instead of
+   made. */
+import { useRef, useState } from "react";
+import type {
+  ConfigComponentsApplyRequest,
+  DeploymentView,
+  EventSource,
+  Schedule,
+  Trigger,
+} from "@source-inc/gents-desktop-client";
+
+type Task = NonNullable<ConfigComponentsApplyRequest["document"]["tasks"]>[number];
+type TriggerSource = Trigger["source"];
 import { Button } from "@gents/ui/components/button";
+import { Checkbox } from "@gents/ui/components/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -93,6 +106,9 @@ export function NewAutomationDialog({
   open,
   onOpenChange,
   forTask = false,
+  task,
+  initialKind,
+  onCreated,
 }: {
   shell: Shell;
   deployment: DeploymentView;
@@ -100,22 +116,32 @@ export function NewAutomationDialog({
   onOpenChange: (open: boolean) => void;
   /* from Tasks: always a new task, which may run manually; lands on the task */
   forTask?: boolean;
+  /* from a task's page: a trigger for that task, which stays where it is */
+  task?: string;
+  initialKind?: "schedule" | "event";
+  /* the new trigger's id, for a caller that stays on its page */
+  onCreated?: (triggerId: string) => void;
 }) {
   const defaultBehavior =
     deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
     deployment.behaviors[0]?.behaviorId ??
     "";
   const [name, setName] = useState("");
-  const [kind, setKind] = useState<"schedule" | "event" | "manual">(
-    forTask ? "manual" : "schedule",
-  );
+  const startKind = forTask ? "manual" : (initialKind ?? "schedule");
+  const [kind, setKind] = useState<"schedule" | "event" | "manual">(startKind);
   const [scheduleId, setScheduleId] = useState(NEW);
   const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("daily");
   const [cron, setCron] = useState("");
   const [eventId, setEventId] = useState(NEW);
-  const [collection, setCollection] = useState("AgentRequest");
+  /* no default collection: watching a collection the task itself writes to
+     (AgentRequest) would let it trigger itself, so the watch is a choice */
+  const [collection, setCollection] = useState("");
   const [eventKind, setEventKind] = useState("created");
-  const [taskId, setTaskId] = useState(NEW);
+  const [taskId, setTaskId] = useState(task ?? NEW);
+  const [enable, setEnable] = useState(false);
+  /* the ids of what Create writes, kept across a failed attempt */
+  const ids = useRef<Record<string, string>>({});
+  const idFor = (key: string, prefix: string) => (ids.current[key] ??= newId(prefix));
   const [prompt, setPrompt] = useState("");
   const [behaviorId, setBehaviorId] = useState(defaultBehavior);
   const [busy, setBusy] = useState(false);
@@ -125,14 +151,16 @@ export function NewAutomationDialog({
     if (busy) return;
     if (!next) {
       setName("");
-      setKind(forTask ? "manual" : "schedule");
+      setKind(startKind);
+      setEnable(false);
+      ids.current = {};
       setScheduleId(NEW);
       setPreset("daily");
       setCron("");
       setEventId(NEW);
-      setCollection("AgentRequest");
+      setCollection("");
       setEventKind("created");
-      setTaskId(NEW);
+      setTaskId(task ?? NEW);
       setPrompt("");
       setBehaviorId(defaultBehavior);
       setError(null);
@@ -140,8 +168,13 @@ export function NewAutomationDialog({
     onOpenChange(next);
   };
 
+  /* the behavior that will run it: the new task's pick, or the chosen task's */
+  const runningBehaviorId =
+    taskId === NEW
+      ? behaviorId
+      : deployment.tasks.find((t) => t.taskId === taskId)?.behaviorId;
   const behavior =
-    deployment.behaviors.find((b) => b.behaviorId === behaviorId) ?? null;
+    deployment.behaviors.find((b) => b.behaviorId === runningBehaviorId) ?? null;
   const behaviorOff = behavior !== null && !behavior.enabled;
 
   const create = async () => {
@@ -157,22 +190,23 @@ export function NewAutomationDialog({
     setBusy(true);
     try {
       const agent_did = deployment.agentDid;
-      const trigger_id = newId("trig");
+      const trigger_id = idFor("trigger", "trig");
       const displayName =
         name.trim() ||
         (taskId === NEW
           ? prompt.trim().split("\n")[0].slice(0, 60)
           : (deployment.tasks.find((t) => t.taskId === taskId)?.name ?? "Automation"));
+      const schedules: Schedule[] = [];
+      const eventSources: EventSource[] = [];
+      const tasks: Task[] = [];
+      const triggers: Trigger[] = [];
 
       /* when */
-      let source:
-        | { kind: "schedule"; schedule_id: string }
-        | { kind: "event"; event_source_id: string }
-        | null = null;
+      let source: TriggerSource | null = null;
       if (kind === "schedule") {
         let schedule_id = scheduleId;
         if (scheduleId === NEW) {
-          schedule_id = newId("sched");
+          schedule_id = idFor("schedule", "sched");
           const expression =
             preset === "custom" ? cron : PRESETS.find((p) => p.id === preset)!.cron;
           const cadence = {
@@ -180,23 +214,19 @@ export function NewAutomationDialog({
             ...validateCronSchedule(expression, TZ),
             missed_run_policy: "latest_only" as const,
           };
-          await shell.applyConfig((api) =>
-            api.saveScheduleConfig({
-              document: {
-                agent_did,
-                schedule_id,
-                display_name: cadenceInWords({ agent_did, schedule_id, cadence }),
-                cadence,
-              },
-            }),
-          );
+          schedules.push({
+            agent_did,
+            schedule_id,
+            display_name: cadenceInWords({ agent_did, schedule_id, cadence }),
+            cadence,
+          });
         }
         source = { kind: "schedule", schedule_id };
       } else if (kind === "event") {
         let event_source_id = eventId;
         if (eventId === NEW) {
           if (!collection.trim()) throw new Error("Name the collection to watch.");
-          event_source_id = newId("evsrc");
+          event_source_id = idFor("event", "evsrc");
           const doc = {
             agent_did,
             event_source_id,
@@ -205,9 +235,7 @@ export function NewAutomationDialog({
             event_kind: eventKind.trim() || null,
           };
           doc.display_name = eventInWords(doc);
-          await shell.applyConfig((api) =>
-            api.saveEventSourceConfig({ document: doc }),
-          );
+          eventSources.push(doc);
         }
         source = { kind: "event", event_source_id };
       }
@@ -215,51 +243,56 @@ export function NewAutomationDialog({
       /* what */
       let task_id = taskId;
       if (taskId === NEW) {
-        task_id = newId("task");
-        await shell.applyConfig((api) =>
-          api.saveTaskConfig({
-            document: {
-              agent_did,
-              task_id,
-              display_name: displayName,
-              description: null,
-              behavior_id: behaviorId,
-              prompt_template: prompt.trim(),
-              goal_objective_template: null,
-              goal_token_budget: null,
-              enabled: true,
-              output_schema_ref: null,
-            },
-          }),
-        );
+        task_id = idFor("task", "task");
+        tasks.push({
+          agent_did,
+          task_id,
+          display_name: displayName,
+          description: null,
+          behavior_id: behaviorId,
+          prompt_template: prompt.trim(),
+          goal_objective_template: null,
+          goal_token_budget: null,
+          enabled: true,
+          output_schema_ref: null,
+        });
       }
 
-      /* the trigger, on unless the behavior it needs is off */
+      /* the trigger: off unless turned on here, and never on for a behavior that is off */
       if (source)
-        await shell.applyConfig((api) =>
-          api.saveTriggerConfig({
-            document: {
-              agent_did,
-              trigger_id,
-              display_name: displayName,
-              task_id,
-              source,
-              enabled: !behaviorOff,
-              concurrency: "serial",
-            },
-          }),
-        );
-      close(false);
-      navigate(
-        forTask
-          ? { name: "agent", agentDid: agent_did, section: "tasks", item: task_id }
-          : {
-              name: "agent",
-              agentDid: agent_did,
-              section: "triggers",
-              item: trigger_id,
-            },
+        triggers.push({
+          agent_did,
+          trigger_id,
+          display_name: displayName,
+          task_id,
+          source,
+          enabled: enable && !behaviorOff,
+          concurrency: "serial",
+        });
+      await shell.applyConfig((api) =>
+        api.applyConfigComponents({
+          document: {
+            agent_principal: { agent_did },
+            ...(schedules.length ? { schedules } : {}),
+            ...(eventSources.length ? { event_sources: eventSources } : {}),
+            ...(tasks.length ? { tasks } : {}),
+            ...(triggers.length ? { triggers } : {}),
+          },
+        }),
       );
+      close(false);
+      if (onCreated && source) onCreated(trigger_id);
+      else
+        navigate(
+          forTask
+            ? { name: "agent", agentDid: agent_did, section: "tasks", item: task_id }
+            : {
+                name: "agent",
+                agentDid: agent_did,
+                section: "triggers",
+                item: trigger_id,
+              },
+        );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -271,7 +304,9 @@ export function NewAutomationDialog({
     <Dialog open={open} onOpenChange={close}>
       <DialogContent aria-modal="true" className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{forTask ? "New task" : "New trigger"}</DialogTitle>
+          <DialogTitle>
+            {forTask ? "New task" : task ? "When it runs" : "New trigger"}
+          </DialogTitle>
           <DialogDescription>
             When it runs, what it does, and which behavior does it. Everything else can
             be tuned afterwards.
@@ -376,6 +411,7 @@ export function NewAutomationDialog({
                     <Input
                       id="auto-collection"
                       className="font-mono"
+                      placeholder="MailboxItem"
                       value={collection}
                       onChange={(e) => setCollection(e.target.value)}
                     />
@@ -394,7 +430,7 @@ export function NewAutomationDialog({
             </>
           )}
 
-          {!forTask && (
+          {!forTask && !task && (
             <Choice
               id="auto-task"
               label="What"
@@ -449,6 +485,17 @@ export function NewAutomationDialog({
                 )}
               </Field>
             </>
+          )}
+          {kind !== "manual" && (
+            <div className="flex items-center gap-2 text-sm">
+              <Checkbox
+                id="auto-enable"
+                checked={enable && !behaviorOff}
+                disabled={behaviorOff}
+                onCheckedChange={(v) => setEnable(Boolean(v))}
+              />
+              <label htmlFor="auto-enable">Turn it on now</label>
+            </div>
           )}
           {error && <FieldError>{error}</FieldError>}
         </div>
