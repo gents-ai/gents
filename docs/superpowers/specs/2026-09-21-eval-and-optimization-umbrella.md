@@ -184,6 +184,16 @@ the LLM proposer and its evidence projection.
     failed once with DefraDB "directory is already locked" and passed alone; pre-existing, untouched
     by the stack. Filing is the user's call. Also: `gents-cli --lib` has 18 failures from toolchains
     missing on this machine (wasm32-wasip1, javy, pyodide/wasm-opt), not code.
+  - From M4 PR 3, for library owners: (1) make `optimization::driver::validate_job_id` public so
+    the CLI drops its own blank check; (2) add a `PolicyV2` "is placeholder" predicate that ignores
+    `max_rounds`, so the report's calibrated rule and the job banner agree; (3) INVESTIGATE: a reader
+    of the launching home's documents can block while the runner/driver future is unpolled — both
+    CLI follow loops hit it and contain it, root cause unconfirmed (suspect the local
+    `MutationWriteGate` held across an await); (4) `empty_activation_state` in `gents-cli`
+    `http/router.rs` is dead in non-test builds.
+  - Possible flake (M4 PR 3 gate): `cli_runtime cli_chat::chat_buffers_final_response_and_shows_tool_progress`
+    failed once posting GraphQL to a local port, passed alone and in a sequential re-run; likely a
+    build-overlap port race; untouched by the stack.
   - A second libp2p dial-timeout failure on this machine:
     `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger`, same class
     as the r5 case. Filing is the user's call.
