@@ -84,4 +84,67 @@ theorem publication_all_or_nothing (old : LiveState) (m : Manifest) :
   · exact Or.inl rfl
   · exact Or.inr rfl
 
+/-- Digest-guarded publication. `scope` lists the documents whose desired fields
+must still equal `expected`; a digest stands in for field equality at the Rust
+refinement boundary. This is a precondition on the one publication model, not a
+second one: an empty scope is exactly `publish`. -/
+def expectationsHold (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) : Bool :=
+  decide (∀ d ∈ scope, old.desired d = expected d)
+
+def publishIf (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest) : LiveState :=
+  if expectationsHold old scope expected then publish old candidate else old
+
+theorem publishIf_stale_unchanged (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest)
+    (h : expectationsHold old scope expected = false) :
+    publishIf old scope expected candidate = old := by
+  simp [publishIf, h]
+
+theorem publishIf_match_eq_publish (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest)
+    (h : expectationsHold old scope expected = true) :
+    publishIf old scope expected candidate = publish old candidate := by
+  simp [publishIf, h]
+
+/-- Existing callers carry no expectations and are unaffected. -/
+theorem publishIf_empty_scope (old : LiveState)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest) :
+    publishIf old [] expected candidate = publish old candidate := by
+  simp [publishIf, expectationsHold]
+
+theorem publishIf_preserves_observations (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest) :
+    (publishIf old scope expected candidate).live = old.live := by
+  unfold publishIf
+  split
+  · exact publication_preserves_observations old candidate
+  · rfl
+
+theorem publishIf_all_or_nothing (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest) :
+    (publishIf old scope expected candidate).desired = candidate.docs
+      ∨ publishIf old scope expected candidate = old := by
+  unfold publishIf
+  split
+  · exact publication_all_or_nothing old candidate
+  · exact Or.inr rfl
+
+/-- A replayed guarded publication converges: after success the expectation
+either still holds (then `publish` is idempotent) or is stale (then nothing moves). -/
+theorem publishIf_idempotent (old : LiveState) (scope : List DocRef)
+    (expected : DocRef → Option DesiredFields) (candidate : Manifest) :
+    publishIf (publishIf old scope expected candidate) scope expected candidate
+      = publishIf old scope expected candidate := by
+  by_cases h : expectationsHold old scope expected = true
+  · rw [publishIf_match_eq_publish old scope expected candidate h]
+    unfold publishIf
+    split
+    · exact publication_idempotent old candidate
+    · rfl
+  · have hf : expectationsHold old scope expected = false := by simpa using h
+    rw [publishIf_stale_unchanged old scope expected candidate hf]
+    exact publishIf_stale_unchanged old scope expected candidate hf
+
 end ApplyReconcile
