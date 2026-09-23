@@ -273,7 +273,7 @@ byte; `cargo test -p gents` on the tip (only the known libp2p tests).
 
 # Issue drafts (What / Plan), all to be linked to #1515
 
-## I1 — libp2p dial timeouts fail two P2P e2e tests on macOS
+## I1 — (DROPPED by the user: pre-existing on `main`, untouched by this work, out of scope) libp2p dial timeouts fail two P2P e2e tests on macOS
 **What:** `generated_r5_cross_principal_cases_drive_production_dispatch` (conformance) and
 `e2e_triggers::event_source_trigger_p2p_e2e::p2p_replicated_doc_fires_event_trigger` fail on
 unmodified `main` on a macOS dev machine with `Transport(timeout dialing …)`, and pass elsewhere.
