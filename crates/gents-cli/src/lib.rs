@@ -54,15 +54,8 @@ const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = p2p::sync::DEFAULT_MAX_CONC
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = p2p::sync::DEFAULT_RATE_LIMIT_BURST;
 const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = p2p::sync::DEFAULT_RATE_LIMIT_RATE;
 const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
-// Only `serve`'s own one-time startup banner (bound addresses, shim URLs,
-// "Press Ctrl-C to stop") is elevated above the `warn` baseline. This used to
-// also force several agent-loop internals (claim/queue/interrupt
-// transitions, session open/close, reconcile passes, hooks, trigger
-// evaluation) to `info`, which meant every chat turn scrolled a server
-// terminal full of state-machine chatter a new user has no way to interpret
-// ("the log output after inference selection is verbose and confusing",
-// #1622). Those targets now follow the ordinary `warn` baseline by default
-// and only surface when explicitly requested via `RUST_LOG`.
+// Agent-loop lifecycle targets stay at `warn` unless RUST_LOG raises them; only
+// the server's startup banner is `info` by default.
 const DEFAULT_LOG_FILTER: &str = concat!("warn,", "gents_server::commands::serve=info");
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
