@@ -19,7 +19,7 @@ for (const entry of fs.readdirSync(root, {withFileTypes:true})) {
  const manifest = json(manifestPath);
  const labels = new Map(), edges = [];
  const id = label => {if(!labels.has(label))labels.set(label,'n'+labels.size);return labels.get(label);};
- const config = manifest.kind === 'assets' ? null : (() => {
+ const config = ['assets', 'plugins'].includes(manifest.kind) ? null : (() => {
    assert.equal(typeof manifest.config, 'string', `${name}: document and graph packs need canonical config`);
    return json(new URL(manifest.config,dir));
  })();
