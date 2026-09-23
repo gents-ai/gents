@@ -5,11 +5,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { Shell } from "../src/ui/hooks/useShell";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
-import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
+import {
+  BehaviorEditor,
+  BehaviorsPanel,
+  newBehaviorView,
+} from "../src/ui/screens/agent/BehaviorsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
-import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
+import {
+  ProfileEditor,
+  ProfilesPanel,
+  newProfileDocument,
+} from "../src/ui/screens/agent/ProfilesPanel";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
 import { SkillsPanel } from "../src/ui/screens/agent/SkillsPanel";
@@ -548,16 +556,91 @@ describe("configuration panels", () => {
 
     await user.type(screen.getByLabelText("Display name"), "Reviewer");
     await user.click(screen.getByRole("button", { name: "Create" }));
-    await waitFor(() =>
-      expect(api.saveBehaviorConfig).toHaveBeenCalledWith(
-        expect.objectContaining({
-          document: expect.objectContaining({
-            display_name: "Reviewer",
-            enabled: false,
-          }),
-        }),
-      ),
+    /* the new context and the behavior that points at it are one apply */
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
+    const request = api.applyConfigComponents.mock.calls[0][0];
+    expect(request.document.agent_behaviors).toEqual([
+      expect.objectContaining({
+        display_name: "Reviewer",
+        enabled: false,
+        context_id: request.document.contexts[0].context_id,
+      }),
+    ]);
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps a new behavior's draft open on a failed save and retries the same context", async () => {
+    const { api, shell } = harness();
+    api.applyConfigComponents
+      .mockRejectedValueOnce(new Error("bridge offline"))
+      .mockResolvedValueOnce({});
+    const onSaved = vi.fn();
+    render(
+      <BehaviorEditor
+        shell={shell}
+        deployment={deployment}
+        behavior={newBehaviorView(deployment)}
+        draft={{ onSaved, onCancel: vi.fn() }}
+      />,
     );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("bridge offline");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Display name")).toHaveValue("Reviewer");
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    const [first, second] = api.applyConfigComponents.mock.calls.map(
+      (call) => call[0].document.contexts[0].context_id,
+    );
+    expect(second).toBe(first);
+  });
+
+  it("creates a prefilled new profile as it stands, and closes only on success", async () => {
+    const { api, shell } = harness();
+    api.applyConfigComponents
+      .mockRejectedValueOnce(new Error("write refused"))
+      .mockResolvedValueOnce({});
+    const onSaved = vi.fn();
+    /* a prefilled draft, as Add profile under a backend opens it */
+    const profile = {
+      ...newProfileDocument(deployment, "backend-a"),
+      model_name: deployment.inferenceProfiles[0]!.model_name,
+      backend_id: deployment.inferenceProfiles[0]!.backend_id,
+    };
+    render(
+      <ProfileEditor
+        shell={shell}
+        deployment={deployment}
+        profile={profile}
+        draft={{ onSaved, onCancel: vi.fn() }}
+        embedded
+      />,
+    );
+    const user = userEvent.setup();
+    /* model-aware defaults arrive before a profile can be written */
+    await waitFor(() =>
+      expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create).toBeEnabled();
+
+    await user.click(create);
+    expect(await screen.findByRole("alert")).toHaveTextContent("write refused");
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(profile.profile_id));
+    expect(api.applyConfigComponents).toHaveBeenCalledTimes(2);
+    expect(
+      api.applyConfigComponents.mock.calls[1][0].document.inference_profiles,
+    ).toEqual([expect.objectContaining({ profile_id: profile.profile_id })]);
   });
 
   it("coalesces repeated create activation while the operator write is pending", async () => {

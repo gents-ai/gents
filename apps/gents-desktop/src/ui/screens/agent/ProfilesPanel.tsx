@@ -203,161 +203,169 @@ export function ProfileEditor({
     Set<keyof InferenceSettingsDraft>
   >(new Set());
   const deliberateSelectionRef = useRef<string | null>(null);
-  const d = useDraft(saved, async (next) => {
-    if (!next.backendId.trim()) throw new Error("Backend is required");
-    if (!deployment.inferenceBackends.some((b) => b.backendId === next.backendId))
-      throw new Error("Choose an existing backend");
-    if (!next.modelName.trim()) throw new Error("Model is required");
-    const modelKey = `${next.backendId}\u0000${next.modelName.trim()}`;
-    if (!recommendation || recommendationKey !== modelKey)
-      throw new Error(
-        recommendationError ?? "Wait for model-aware settings before saving",
+  const d = useDraft(
+    saved,
+    async (next) => {
+      if (!next.backendId.trim()) throw new Error("Backend is required");
+      if (!deployment.inferenceBackends.some((b) => b.backendId === next.backendId))
+        throw new Error("Choose an existing backend");
+      if (!next.modelName.trim()) throw new Error("Model is required");
+      const modelKey = `${next.backendId}\u0000${next.modelName.trim()}`;
+      if (!recommendation || recommendationKey !== modelKey)
+        throw new Error(
+          recommendationError ?? "Wait for model-aware settings before saving",
+        );
+      const selected = deployment.inferenceBackends.find(
+        (backend) => backend.backendId === next.backendId,
       );
-    const selected = deployment.inferenceBackends.find(
-      (backend) => backend.backendId === next.backendId,
-    );
-    const effectiveSettings = settingsForDraft(
-      recommendation,
-      next,
-      selected?.maxConcurrent,
-      editedModelFields,
-    );
-    const validationError = validateInferenceSettings(
-      recommendation,
-      effectiveSettings,
-    );
-    if (validationError) throw new Error(validationError);
-    const hasSamplingValues = [
-      next.temperature,
-      next.topP,
-      next.topK,
-      next.seed,
-      next.minP,
-      next.frequencyPenalty,
-      next.presencePenalty,
-      next.repetitionPenalty,
-    ].some((value) => value.trim());
-    const effectiveSamplingId =
-      next.samplingId.trim() ||
-      (hasSamplingValues ? `${profile.profile_id}-sampling` : "");
-    const executionValuesPresent = [
-      next.maxTurns,
-      next.maxTotalTokens,
-      next.streamBatchMs,
-      next.streamLivenessSecs,
-      next.deadlineSecs,
-      next.retryPolicyId,
-    ].some((value) => value.trim());
-    if (executionValuesPresent && !next.executionId.trim())
-      throw new Error("Execution values require an execution document ID");
+      const effectiveSettings = settingsForDraft(
+        recommendation,
+        next,
+        selected?.maxConcurrent,
+        editedModelFields,
+      );
+      const validationError = validateInferenceSettings(
+        recommendation,
+        effectiveSettings,
+      );
+      if (validationError) throw new Error(validationError);
+      const hasSamplingValues = [
+        next.temperature,
+        next.topP,
+        next.topK,
+        next.seed,
+        next.minP,
+        next.frequencyPenalty,
+        next.presencePenalty,
+        next.repetitionPenalty,
+      ].some((value) => value.trim());
+      const effectiveSamplingId =
+        next.samplingId.trim() ||
+        (hasSamplingValues ? `${profile.profile_id}-sampling` : "");
+      const executionValuesPresent = [
+        next.maxTurns,
+        next.maxTotalTokens,
+        next.streamBatchMs,
+        next.streamLivenessSecs,
+        next.deadlineSecs,
+        next.retryPolicyId,
+      ].some((value) => value.trim());
+      if (executionValuesPresent && !next.executionId.trim())
+        throw new Error("Execution values require an execution document ID");
 
-    const contextWindow = optionalInteger("Context window", next.contextWindow, {
-      min: 1,
-    });
-    const maxOutputTokens = optionalInteger("Max output tokens", next.maxOutputTokens, {
-      min: 1,
-    });
-    const temperature = optionalNumber("Temperature", next.temperature, {
-      min: 0,
-    });
-    const topP = optionalNumber("Top P", next.topP, { min: 0, max: 1 });
-    const topK = optionalInteger("Top K", next.topK, { min: 1 });
-    const seed = optionalInteger("Seed", next.seed, { min: 0 });
-    const minP = optionalNumber("Min P", next.minP, { min: 0, max: 1 });
-    const frequencyPenalty = optionalNumber(
-      "Frequency penalty",
-      next.frequencyPenalty,
-      { min: -2, max: 2 },
-    );
-    const presencePenalty = optionalNumber("Presence penalty", next.presencePenalty, {
-      min: -2,
-      max: 2,
-    });
-    const repetitionPenalty = optionalNumber(
-      "Repetition penalty",
-      next.repetitionPenalty,
-      { min: Number.MIN_VALUE },
-    );
-    const maxTurns = optionalInteger("Max turns", next.maxTurns, { min: 1 });
-    const maxTotalTokens = optionalInteger("Max total tokens", next.maxTotalTokens, {
-      min: 1,
-    });
-    const streamBatchMs = optionalInteger("Stream batch", next.streamBatchMs, {
-      min: 1,
-    });
-    const streamLivenessSecs = optionalInteger(
-      "Stream liveness timeout",
-      next.streamLivenessSecs,
-      { min: 1 },
-    );
-    const deadlineSecs = optionalInteger("Deadline", next.deadlineSecs, { min: 1 });
-    if (
-      streamLivenessSecs != null &&
-      deadlineSecs != null &&
-      streamLivenessSecs >= deadlineSecs
-    )
-      throw new Error("Stream liveness timeout must be less than the deadline");
-
-    const sampling = deployment.inferenceSampling.find(
-      (row) => row.sampling_id === effectiveSamplingId,
-    );
-    const execution = deployment.inferenceExecution.find(
-      (row) => row.execution_id === next.executionId.trim(),
-    );
-    const nextProfile: InferenceProfile = {
-      ...profile,
-      display_name: next.displayName.trim() || null,
-      description: next.description.trim() || null,
-      backend_id: next.backendId,
-      model_name: next.modelName.trim(),
-      reasoning_effort: (next.reasoningEffort || null) as NonNullable<
-        InferenceProfile["reasoning_effort"]
-      > | null,
-      context_window: contextWindow,
-      max_output_tokens: maxOutputTokens,
-      sampling_id: effectiveSamplingId || null,
-      execution_id: next.executionId.trim() || null,
-      tags: next.tags.length ? next.tags : null,
-    };
-    const nextSampling: InferenceSampling | null = effectiveSamplingId
-      ? {
-          ...sampling,
-          agent_did: deployment.agentDid,
-          sampling_id: effectiveSamplingId,
-          temperature,
-          top_p: topP,
-          top_k: topK,
-          seed,
-          min_p: minP,
-          frequency_penalty: frequencyPenalty,
-          presence_penalty: presencePenalty,
-          repetition_penalty: repetitionPenalty,
-        }
-      : null;
-    const nextExecution: InferenceExecution | null = next.executionId.trim()
-      ? {
-          ...execution,
-          agent_did: deployment.agentDid,
-          execution_id: next.executionId.trim(),
-          max_turns: maxTurns,
-          max_total_tokens: maxTotalTokens,
-          stream_batch_ms: streamBatchMs,
-          stream_liveness_timeout_secs: streamLivenessSecs,
-          deadline_duration_secs: deadlineSecs,
-          retry_policy_id: next.retryPolicyId.trim() || null,
-        }
-      : null;
-    await shell.applyConfig((api) =>
-      api.applyConfigComponents({
-        document: {
-          agent_principal: { agent_did: deployment.agentDid },
-          inference_profiles: [nextProfile],
-          ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
-          ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
+      const contextWindow = optionalInteger("Context window", next.contextWindow, {
+        min: 1,
+      });
+      const maxOutputTokens = optionalInteger(
+        "Max output tokens",
+        next.maxOutputTokens,
+        {
+          min: 1,
         },
-      }),
-    );
-  });
+      );
+      const temperature = optionalNumber("Temperature", next.temperature, {
+        min: 0,
+      });
+      const topP = optionalNumber("Top P", next.topP, { min: 0, max: 1 });
+      const topK = optionalInteger("Top K", next.topK, { min: 1 });
+      const seed = optionalInteger("Seed", next.seed, { min: 0 });
+      const minP = optionalNumber("Min P", next.minP, { min: 0, max: 1 });
+      const frequencyPenalty = optionalNumber(
+        "Frequency penalty",
+        next.frequencyPenalty,
+        { min: -2, max: 2 },
+      );
+      const presencePenalty = optionalNumber("Presence penalty", next.presencePenalty, {
+        min: -2,
+        max: 2,
+      });
+      const repetitionPenalty = optionalNumber(
+        "Repetition penalty",
+        next.repetitionPenalty,
+        { min: Number.MIN_VALUE },
+      );
+      const maxTurns = optionalInteger("Max turns", next.maxTurns, { min: 1 });
+      const maxTotalTokens = optionalInteger("Max total tokens", next.maxTotalTokens, {
+        min: 1,
+      });
+      const streamBatchMs = optionalInteger("Stream batch", next.streamBatchMs, {
+        min: 1,
+      });
+      const streamLivenessSecs = optionalInteger(
+        "Stream liveness timeout",
+        next.streamLivenessSecs,
+        { min: 1 },
+      );
+      const deadlineSecs = optionalInteger("Deadline", next.deadlineSecs, { min: 1 });
+      if (
+        streamLivenessSecs != null &&
+        deadlineSecs != null &&
+        streamLivenessSecs >= deadlineSecs
+      )
+        throw new Error("Stream liveness timeout must be less than the deadline");
+
+      const sampling = deployment.inferenceSampling.find(
+        (row) => row.sampling_id === effectiveSamplingId,
+      );
+      const execution = deployment.inferenceExecution.find(
+        (row) => row.execution_id === next.executionId.trim(),
+      );
+      const nextProfile: InferenceProfile = {
+        ...profile,
+        display_name: next.displayName.trim() || null,
+        description: next.description.trim() || null,
+        backend_id: next.backendId,
+        model_name: next.modelName.trim(),
+        reasoning_effort: (next.reasoningEffort || null) as NonNullable<
+          InferenceProfile["reasoning_effort"]
+        > | null,
+        context_window: contextWindow,
+        max_output_tokens: maxOutputTokens,
+        sampling_id: effectiveSamplingId || null,
+        execution_id: next.executionId.trim() || null,
+        tags: next.tags.length ? next.tags : null,
+      };
+      const nextSampling: InferenceSampling | null = effectiveSamplingId
+        ? {
+            ...sampling,
+            agent_did: deployment.agentDid,
+            sampling_id: effectiveSamplingId,
+            temperature,
+            top_p: topP,
+            top_k: topK,
+            seed,
+            min_p: minP,
+            frequency_penalty: frequencyPenalty,
+            presence_penalty: presencePenalty,
+            repetition_penalty: repetitionPenalty,
+          }
+        : null;
+      const nextExecution: InferenceExecution | null = next.executionId.trim()
+        ? {
+            ...execution,
+            agent_did: deployment.agentDid,
+            execution_id: next.executionId.trim(),
+            max_turns: maxTurns,
+            max_total_tokens: maxTotalTokens,
+            stream_batch_ms: streamBatchMs,
+            stream_liveness_timeout_secs: streamLivenessSecs,
+            deadline_duration_secs: deadlineSecs,
+            retry_policy_id: next.retryPolicyId.trim() || null,
+          }
+        : null;
+      await shell.applyConfig((api) =>
+        api.applyConfigComponents({
+          document: {
+            agent_principal: { agent_did: deployment.agentDid },
+            inference_profiles: [nextProfile],
+            ...(nextSampling ? { inference_sampling: [nextSampling] } : {}),
+            ...(nextExecution ? { inference_execution: [nextExecution] } : {}),
+          },
+        }),
+      );
+    },
+    { isNew: draftMode !== undefined },
+  );
   const [executionDefaults, setExecutionDefaults] = useState<
     Record<string, number | null | undefined>
   >({});
@@ -784,13 +792,13 @@ export function ProfileEditor({
         />
       </Group>
       <DraftActions
-        dirty={draftMode ? true : d.dirty}
+        dirty={d.dirty}
         saving={d.saving}
         error={d.error}
         saveLabel={draftMode ? "Create" : undefined}
         onSave={() =>
           draftMode
-            ? void d.save().then(() => draftMode.onSaved(profile.profile_id))
+            ? void d.save().then((ok) => ok && draftMode.onSaved(profile.profile_id))
             : d.save()
         }
         onCancel={() => {

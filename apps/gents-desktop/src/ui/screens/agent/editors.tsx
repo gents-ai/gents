@@ -52,7 +52,7 @@ export function DraftActions({
   dirty: boolean;
   saving: boolean;
   error: string | null;
-  onSave: () => void | Promise<void>;
+  onSave: () => unknown;
   onCancel: () => void;
   saveLabel?: string;
 }) {

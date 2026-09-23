@@ -4,7 +4,7 @@
    it or start empty, and edit its instructions and capabilities in place.
    Everything waits for one Save. PROPOSED: not yet in the desktop app. */
 import { dependentsWarning } from "./dependents";
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -506,99 +506,111 @@ export function BehaviorEditor({
     kind: "tools" | "profile";
     id: string;
   } | null>(null);
-  const d = useDraft(saved, async (next, intent) => {
-    const want = (intent ?? {}) as SaveIntent;
-    const asCopy = Boolean(want.copy);
-    const creating = isNew(next.contextChoice) || asCopy;
-    const newName =
-      next.contextName.trim() ||
-      freshName(deployment, `${next.displayName.trim() || "New"} context`);
-    const target = creating
-      ? null
-      : (deployment.contexts.find((c) => c.context_id === next.contextChoice) ?? null);
-    const contextId = creating ? newId("ctx") : next.contextChoice;
-    const fields = {
-      system_prompt: next.systemPrompt || null,
-      tools_id: next.toolsId || null,
-      compaction_id: next.compactionId || null,
-      skill_ids: next.skillIds.length ? next.skillIds : null,
-    };
-    const edited =
-      target !== null &&
-      JSON.stringify(contextFields(target)) !==
-        JSON.stringify({
-          systemPrompt: next.systemPrompt,
-          toolsId: next.toolsId,
-          compactionId: next.compactionId,
-          skillIds: next.skillIds,
-        });
-    await shell.applyConfig(async (api) => {
-      /* the context first, so a failure leaves the behavior untouched */
-      if (creating) {
-        await api.applyConfigComponents({
-          document: {
-            agent_principal: { agent_did: deployment.agentDid },
-            contexts: [
-              {
-                context_id: contextId,
-                agent_did: deployment.agentDid,
-                display_name: newName,
-                description: null,
-                ...fields,
-                tags: null,
+  const pendingContextId = useRef<string | null>(null);
+  const d = useDraft(
+    saved,
+    async (next, intent) => {
+      const want = (intent ?? {}) as SaveIntent;
+      const asCopy = Boolean(want.copy);
+      const creating = isNew(next.contextChoice) || asCopy;
+      const newName =
+        next.contextName.trim() ||
+        freshName(deployment, `${next.displayName.trim() || "New"} context`);
+      const target = creating
+        ? null
+        : (deployment.contexts.find((c) => c.context_id === next.contextChoice) ??
+          null);
+      /* one id per new context for the life of this editor, so a retry after a
+       failure writes the same document instead of minting another */
+      if (creating && !pendingContextId.current)
+        pendingContextId.current = newId("ctx");
+      const contextId = creating ? pendingContextId.current! : next.contextChoice;
+      const fields = {
+        system_prompt: next.systemPrompt || null,
+        tools_id: next.toolsId || null,
+        compaction_id: next.compactionId || null,
+        skill_ids: next.skillIds.length ? next.skillIds : null,
+      };
+      const edited =
+        target !== null &&
+        JSON.stringify(contextFields(target)) !==
+          JSON.stringify({
+            systemPrompt: next.systemPrompt,
+            toolsId: next.toolsId,
+            compactionId: next.compactionId,
+            skillIds: next.skillIds,
+          });
+      const behaviorDocument = {
+        behavior_id: behavior.behaviorId,
+        agent_did: deployment.agentDid,
+        display_name: next.displayName.trim(),
+        description: next.description.trim() || null,
+        context_id: contextId || null,
+        inference_profile_id: next.inferenceProfileId,
+        enabled: draftMode ? Boolean(draftMode.enabled) : behavior.enabled,
+        tags: next.tags.length ? next.tags : null,
+        created_at: behavior.createdAt,
+      };
+      const contextDocument: AgentContext | null = creating
+        ? {
+            context_id: contextId,
+            agent_did: deployment.agentDid,
+            display_name: newName,
+            description: null,
+            ...fields,
+            tags: null,
+          }
+        : target && edited
+          ? { ...target, ...fields }
+          : null;
+      await shell.applyConfig((api) =>
+        /* the context and the behavior that points at it land together or not
+         at all: one component apply is one transaction */
+        contextDocument
+          ? api.applyConfigComponents({
+              document: {
+                agent_principal: { agent_did: deployment.agentDid },
+                contexts: [contextDocument],
+                agent_behaviors: [behaviorDocument],
               },
-            ],
-          },
-        });
-      } else if (target && edited) {
-        await api.patchConfigComponents({
-          agentDid: deployment.agentDid,
-          patches: [
-            { collection: "AgentContext", id: target.context_id, changes: fields },
-          ],
-        });
-      }
-      return api.saveBehaviorConfig({
-        document: {
-          behavior_id: behavior.behaviorId,
-          agent_did: deployment.agentDid,
-          display_name: next.displayName.trim(),
-          description: next.description.trim() || null,
-          context_id: contextId || null,
-          inference_profile_id: next.inferenceProfileId,
-          enabled: draftMode ? Boolean(draftMode.enabled) : behavior.enabled,
-          tags: next.tags.length ? next.tags : null,
-          created_at: behavior.createdAt,
-        },
-      });
-    });
-    /* say what happened to the contexts; offer to clear one left unused */
-    const said: string[] = [];
-    if (creating) said.push(`Created ${newName}.`);
-    const left =
-      context && context.context_id !== contextId
-        ? usersOf(deployment, context.context_id).filter(
-            (b) => b.behaviorId !== behavior.behaviorId,
-          )
-        : null;
-    if (context && left) {
-      said.push(
-        left.length
-          ? `${nameOf(context)} is still used by ${listNames(left.map((b) => b.displayName))}.`
-          : `${nameOf(context)} is no longer used.`,
+            })
+          : api.saveBehaviorConfig({ document: behaviorDocument }),
       );
-    }
-    const unused = context && left && left.length === 0 ? context : null;
-    if (!said.length) return undefined;
-    return {
-      savedToast: `Saved. ${said.join(" ")}`,
-      savedAction: unused
-        ? { label: "Delete it", onClick: () => void deleteContext(unused) }
-        : undefined,
-    };
-  });
+      if (creating) pendingContextId.current = null;
+      /* say what happened to the contexts; offer to clear one left unused */
+      const said: string[] = [];
+      if (creating) said.push(`Created ${newName}.`);
+      const left =
+        context && context.context_id !== contextId
+          ? usersOf(deployment, context.context_id).filter(
+              (b) => b.behaviorId !== behavior.behaviorId,
+            )
+          : null;
+      if (context && left) {
+        said.push(
+          left.length
+            ? `${nameOf(context)} is still used by ${listNames(left.map((b) => b.displayName))}.`
+            : `${nameOf(context)} is no longer used.`,
+        );
+      }
+      const unused = context && left && left.length === 0 ? context : null;
+      if (!said.length) return undefined;
+      return {
+        savedToast: `Saved. ${said.join(" ")}`,
+        savedAction: unused
+          ? { label: "Delete it", onClick: () => void deleteContext(unused) }
+          : undefined,
+      };
+    },
+    { isNew: draftMode !== undefined },
+  );
   const id = (f: string) => `${behavior.behaviorId}-${f}`;
   const errors = problems(deployment, d.draft, draftMode !== undefined);
+  /* a draft closes only once the bridge has the behavior */
+  const finish = async (intent: SaveIntent) => {
+    const ok = await d.save(intent);
+    if (ok && draftMode) draftMode.onSaved(behavior.behaviorId);
+  };
   /* problems stay at their fields; Save takes you to the first one */
   const save = (intent: SaveIntent = {}): void | Promise<void> => {
     const first = FIELD_ORDER.find(([field]) => errors[field]);
@@ -611,11 +623,7 @@ export function BehaviorEditor({
       setConfirmShared(true);
       return;
     }
-    if (draftMode)
-      return d.save(intent).then(() => {
-        draftMode.onSaved(behavior.behaviorId);
-      });
-    return d.save(intent);
+    return finish(intent);
   };
 
   /* the context the draft points at, or the one a new context copies */
@@ -1200,7 +1208,7 @@ export function BehaviorEditor({
               variant="outline"
               onClick={() => {
                 setConfirmShared(false);
-                void d.save({ ...pendingIntent, copy: true });
+                void finish({ ...pendingIntent, copy: true });
               }}
             >
               Save as its own copy
@@ -1209,7 +1217,7 @@ export function BehaviorEditor({
               variant="brand"
               onClick={() => {
                 setConfirmShared(false);
-                void d.save(pendingIntent);
+                void finish(pendingIntent);
               }}
             >
               {others.length === 1
@@ -1220,7 +1228,7 @@ export function BehaviorEditor({
         </AlertDialogContent>
       </AlertDialog>
       <DraftActions
-        dirty={draftMode ? true : d.dirty}
+        dirty={d.dirty}
         saving={d.saving}
         error={d.error}
         saveLabel={draftMode ? "Create" : undefined}
