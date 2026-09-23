@@ -375,7 +375,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::CALLBACK_RESULT_NAME,
         gents_protocol::schemas::CALLBACK_RESULT,
-        "bafyreiaxuay4dmn424aqjbvi6nqehzuscxcaf7smgyzn6dobawazdblfca"
+        "bafyreidllrkat7lmzme55vs5mohtvv5w4sogqip5aust4vcywdjlxy4jqq"
     ),
     baseline_entry!(
         gents_protocol::schemas::OAUTH_CREDENTIAL_NAME,

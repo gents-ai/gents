@@ -1062,3 +1062,59 @@ fn canonical_action_plan_sorts_object_keys() {
     let parsed = parse_action_plan_json(&canonical).unwrap();
     assert_eq!(parsed, plan);
 }
+
+/// Workspace packs select one binding's results with
+/// `{ binding_id: { _eq: ... } }`, so the stored result must carry it.
+#[tokio::test]
+async fn callback_results_are_selectable_by_their_binding() {
+    let node = test_node().await;
+    for (invocation_id, binding_id) in [
+        ("inv-a", "maintenance-execute-workspace"),
+        ("inv-b", "other"),
+    ] {
+        let stored = super::documents::create_callback_result(
+            node.as_ref(),
+            &super::documents::CallbackResultDoc {
+                result_id: format!("res-{invocation_id}"),
+                invocation_id: invocation_id.to_owned(),
+                binding_id: Some(binding_id.to_owned()),
+                owner_agent_did: "did:key:zWriter".to_owned(),
+                workspace_id: None,
+                work_unit_id: None,
+                caused_by_correlation: None,
+                created_at: None,
+            },
+        )
+        .await
+        .expect("result stored");
+        assert_eq!(stored.binding_id.as_deref(), Some(binding_id));
+    }
+
+    let response = node
+        .execute(
+            r#"{ CallbackResult(filter: { binding_id: { _eq: "maintenance-execute-workspace" } }) { invocation_id } }"#,
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_value(response.data.expect("data")["CallbackResult"].clone())
+            .expect("rows");
+    assert_eq!(rows, vec![json!({"invocation_id": "inv-a"})]);
+}
+
+#[test]
+fn every_invocation_origin_names_its_binding() {
+    use crate::document_config::CallbackInvocationOrigin;
+    let event = CallbackInvocationOrigin::Event {
+        binding_id: "one".to_owned(),
+        source_collection: "WorkUnit".to_owned(),
+        source_doc_id: "doc".to_owned(),
+        source_version: None,
+    };
+    let group = CallbackInvocationOrigin::EventGroup {
+        binding_id: "two".to_owned(),
+        group_key: "key".to_owned(),
+    };
+    assert_eq!(event.binding_id(), "one");
+    assert_eq!(group.binding_id(), "two");
+}

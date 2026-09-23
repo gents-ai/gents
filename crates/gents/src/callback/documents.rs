@@ -28,7 +28,7 @@ pub(crate) const SUCCEEDED_REPAIR_WINDOW: Duration = Duration::from_secs(24 * 60
 pub(crate) const SUCCEEDED_REPAIR_LIMIT: u32 = 256;
 
 const INVOCATION_FIELDS: &str = "invocation_id owner_agent_did callback_id origin input idempotency_key lifecycle_state attempts action_plan action_journal error claimed_at created_at";
-const RESULT_FIELDS: &str = "result_id invocation_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
+const RESULT_FIELDS: &str = "result_id invocation_id binding_id owner_agent_did workspace_id work_unit_id caused_by_correlation created_at";
 
 const ISOLATED_WORKSPACE_FIELDS: &str = r#"
     workspace_id
@@ -147,6 +147,10 @@ where
 pub struct CallbackResultDoc {
     pub result_id: String,
     pub invocation_id: String,
+    /// The binding that produced this result, so event sources can select
+    /// one binding's results with a plain filter.
+    #[serde(default)]
+    pub binding_id: Option<String>,
     /// Principal whose runtime owns execution and recovery.
     pub owner_agent_did: String,
     #[serde(default)]
@@ -733,6 +737,7 @@ pub async fn create_callback_result(
         .created_at
         .clone()
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let binding_id = result.binding_id.as_deref().unwrap_or("");
     let workspace = result.workspace_id.as_deref().unwrap_or("");
     let work_unit_id = result.work_unit_id.as_deref().unwrap_or("");
     let correlation = result.caused_by_correlation.as_deref().unwrap_or("");
@@ -741,6 +746,7 @@ pub async fn create_callback_result(
             create_CallbackResult(input: {{
                 result_id: "{result_id}",
                 invocation_id: "{invocation_id}",
+                binding_id: "{binding_id}",
                 owner_agent_did: "{owner}",
                 workspace_id: "{workspace}",
                 work_unit_id: "{work_unit_id}",
@@ -750,6 +756,7 @@ pub async fn create_callback_result(
         }}"#,
         result_id = escape_graphql_string(&result.result_id),
         invocation_id = escape_graphql_string(&result.invocation_id),
+        binding_id = escape_graphql_string(binding_id),
         owner = escape_graphql_string(&result.owner_agent_did),
         workspace = escape_graphql_string(workspace),
         work_unit_id = escape_graphql_string(work_unit_id),

@@ -640,6 +640,7 @@ async fn succeed_then_emit_result(
         &CallbackResultDoc {
             result_id: format!("res-{}", invocation.invocation_id),
             invocation_id: invocation.invocation_id.clone(),
+            binding_id: Some(invocation.origin.binding_id().to_string()),
             owner_agent_did: invocation.owner_agent_did.clone(),
             workspace_id: Some(workspace.workspace_id.clone()),
             work_unit_id: Some(workspace.work_unit_id.clone()),

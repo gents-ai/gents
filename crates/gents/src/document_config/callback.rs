@@ -167,3 +167,12 @@ pub enum CallbackInvocationOrigin {
         group_key: String,
     },
 }
+
+impl CallbackInvocationOrigin {
+    /// The binding that created this invocation.
+    pub fn binding_id(&self) -> &str {
+        match self {
+            Self::Event { binding_id, .. } | Self::EventGroup { binding_id, .. } => binding_id,
+        }
+    }
+}

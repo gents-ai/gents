@@ -24,6 +24,8 @@ mod wasm;
 mod tests;
 
 pub use documents::reject_secret_bearing_callback_fields;
+#[cfg(test)]
+pub(crate) use documents::{create_callback_result, CallbackResultDoc};
 pub(crate) use documents::{
     flush_workspace_docs, load_isolated_workspace, load_repository_placement,
     load_workspace_placement,
