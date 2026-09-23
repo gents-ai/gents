@@ -8,10 +8,9 @@ export function initials(name: string) {
   const all = name.trim().split(/\s+/);
   const words =
     all.length > 1 && ARTICLES.has(all[0]!.toLowerCase()) ? all.slice(1) : all;
-  return (words.length > 1 ? words[0]![0]! + words[1]![0]! : name.slice(0, 2)).replace(
-    /^(.)(.)$/,
-    (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase(),
-  );
+  return (
+    words.length > 1 ? words[0]![0]! + words[1]![0]! : words.join(" ").slice(0, 2)
+  ).replace(/^(.)(.)$/, (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
 }
 
 export function behaviorName(

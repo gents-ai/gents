@@ -1,6 +1,6 @@
 /* Automations in words. A trigger is a sentence, "Every weekday at 09:00 ·
    run Nightly audit with Implementer", and a readiness line that says why
-   it will not fire. All from the 7.3 documents, nothing invented. */
+   it will not fire. From the loaded documents and the bridge's readiness. */
 import { behaviorReadiness } from "@/lib/behavior-readiness";
 import type {
   DeploymentView,

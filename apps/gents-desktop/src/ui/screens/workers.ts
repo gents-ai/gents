@@ -1,6 +1,6 @@
 /* What the parent knows about the work it delegated: the lineage tree for
    its request joined to the session list and the operations snapshot. Read
-   only; every fact here has a field in the 7.8 contract, and where the
+   only; every fact here has a field in the bridge contract, and where the
    contract is silent the state says so instead of guessing. */
 import { useEffect, useMemo, useState } from "react";
 import type {

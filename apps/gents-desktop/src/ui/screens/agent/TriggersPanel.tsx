@@ -1,6 +1,6 @@
 /* Triggers: each read as a sentence, with the task, schedule and event
    source it needs creatable in place. Tasks is the page people start on;
-   this is the desktop's own tab. See CONFIG-FLOWS.md. */
+   this is the desktop's own tab. */
 import { useState } from "react";
 import { Timer, Zap } from "lucide-react";
 import type { DeploymentView, TriggerView } from "@source-inc/gents-desktop-client";

@@ -50,7 +50,7 @@ export const emptyFilter: SessionFilter = { states: [], sources: [], behaviors: 
 export const hasFilter = (f: SessionFilter) =>
   f.states.length > 0 || f.sources.length > 0 || f.behaviors.length > 0;
 
-const KEY = "gents-prototype-session-filter";
+const KEY = "gents-session-filter";
 const strings = (v: unknown) =>
   Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
 

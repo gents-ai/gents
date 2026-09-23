@@ -11,11 +11,10 @@ import {
   Zap,
 } from "lucide-react";
 
-/* the desktop app's config tabs, grouped by what the user is doing (see
-   CONFIG-FLOWS.md). PROPOSED: contexts have no entry, and triggers are
-   Automations; the `triggers` route still renders them. Each behavior edits its own
-   instructions and tools, and the Behaviors list links to unused contexts;
-   the `contexts` route stays for those links. */
+/* the config tabs, grouped by what the user is doing (gents-design config
+   flows). Contexts have no entry: each behavior edits its own instructions
+   and tools, and the Behaviors list links to unused contexts, so the
+   `contexts` route stays for those links. */
 export const SECTIONS = [
   { group: "Configure", id: "agent", label: "Agent", icon: Bot },
   { group: "Configure", id: "behaviors", label: "Behaviors", icon: Workflow },

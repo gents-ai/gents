@@ -13,13 +13,14 @@ import { shortPath } from "./tool-runs";
    it, exactly as it was issued. */
 export { shortPath };
 
+/* leading VAR=value assignments before a command; the command is what reads */
+const ASSIGNMENTS = /^(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S*)(?:\s+|$))+/;
+
 export const spoken = (command: string): string => {
   const parts = command
     .split("&&")
-    .map((part) => part.trim())
-    .filter(
-      (part) => part && !/^cd\b/.test(part) && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(part),
-    );
+    .map((part) => part.trim().replace(ASSIGNMENTS, "").trim())
+    .filter((part) => part && !/^cd\b/.test(part));
   return parts.length ? parts.join(" && ") : command.trim();
 };
 
