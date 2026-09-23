@@ -5,6 +5,7 @@ import Proofs.Conformance.LogicalOutputObligation
 import Proofs.Conformance.InvalidToolProgress
 import Proofs.Conformance.MailboxNotification
 import Proofs.Conformance.MailboxReply
+import Proofs.Conformance.MailboxHandoff
 import Proofs.Conformance.ArtifactAuthority
 import Proofs.EventDelivery.SubagentSource
 import Proofs.Conformance.WorkspacePathCapability
@@ -354,6 +355,8 @@ def snapshotJson : String :=
       ++ Conformance.MailboxNotificationContracts.casesJson ++ ","
     ++ "\"mailbox_reply_cases\":"
       ++ Conformance.MailboxReplyContracts.casesJson ++ ","
+    ++ "\"mailbox_handoff_cases\":"
+      ++ Conformance.MailboxHandoffContracts.casesJson ++ ","
     ++ "\"invalid_tool_progress_cases\":"
       ++ Conformance.InvalidToolProgressContracts.casesJson ++ ","
     ++ "\"operator_base_freeze_cases\":"

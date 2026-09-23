@@ -1396,7 +1396,6 @@ mod tests {
         assert_eq!(status("pending"), ChildStatus::Pending);
         assert_eq!(status("claimed"), ChildStatus::Running);
         assert_eq!(status("processing"), ChildStatus::Running);
-        assert_eq!(status("inputRequired"), ChildStatus::Running);
         assert_eq!(status("completed"), ChildStatus::Completed);
         assert_eq!(status("failed"), ChildStatus::Errored);
         assert_eq!(status("interrupted"), ChildStatus::Interrupted);

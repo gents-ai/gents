@@ -82,7 +82,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "codex_shim.projection.pending",
             "codex_shim.projection.claimed",
             "codex_shim.projection.processing",
-            "codex_shim.projection.input_required",
             "codex_shim.projection.completed_request",
             "codex_shim.projection.failed_request",
             "codex_shim.projection.dead_request",
@@ -90,7 +89,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "codex_shim.projection.supersession_override",
             "codex_shim.projection.interrupted_request",
             "codex_shim.projection.local_interrupt_preempts_core_state",
-            "codex_shim.projection.local_interrupt_input_required",
         ]
         .into_iter()
         .collect::<BTreeSet<_>>()
@@ -163,13 +161,6 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "CodexShim.local_interrupt_shortcut_sound".to_string(),
         ]
     );
-
-    let input_required =
-        lean_codex_shim_projection_case("codex_shim.projection.local_interrupt_input_required");
-    assert_eq!(input_required.request_state, "inputRequired");
-    assert!(input_required.local_interrupt_acked);
-    assert!(input_required.interruptible_request_state);
-    assert_eq!(input_required.projected_phase, "interrupted");
 
     let lifecycle_cases = lean_codex_shim_turn_lifecycle_cases();
     assert_eq!(lifecycle_cases.len(), 4);

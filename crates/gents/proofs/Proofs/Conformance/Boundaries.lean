@@ -11,9 +11,6 @@ structure Boundary where
   acceptedFollowUp : Option String := none
   deriving Repr
 
-def boundaryRequestInputRequiredReservedId : String :=
-  "boundary.request.input-required-reserved"
-
 def boundaryRequestDeadPreclaimOnlyId : String :=
   "boundary.request.dead-preclaim-only"
 
@@ -87,15 +84,7 @@ def boundaryRenderedCaptureKeyEncodingInjectivityId : String :=
   "boundary.rendered-capture.key-encoding-injectivity"
 
 def boundaries : List Boundary :=
-  [ { id := boundaryRequestInputRequiredReservedId
-    , domain := "RequestLifecycle"
-    , subject := "inputRequired vocabulary"
-    , statement :=
-        "inputRequired is reserved persisted and client protocol vocabulary; Rust does not emit it until a first-class approval or human-input loop exists."
-    , acceptedFollowUp :=
-        some "Future approval work should extend the core transition relation and Rust writer tests."
-    }
-  , { id := boundaryRequestDeadPreclaimOnlyId
+  [ { id := boundaryRequestDeadPreclaimOnlyId
     , domain := "RequestLifecycle"
     , subject := "dead terminal state"
     , statement :=

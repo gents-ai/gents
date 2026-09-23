@@ -1198,11 +1198,7 @@ async fn multiple_background_completions_append_notifications_and_coalesce_wake(
             .filter(|wake| {
                 matches!(
                     wake.lifecycle_state,
-                    Some(
-                        RequestLifecycleState::Claimed
-                            | RequestLifecycleState::Processing
-                            | RequestLifecycleState::InputRequired
-                    )
+                    Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
                 )
             })
             .count()

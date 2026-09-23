@@ -8,7 +8,6 @@ inductive RequestState where
   | pending
   | claimed
   | processing
-  | inputRequired
   | completed
   | failed
   | superseded
@@ -23,7 +22,6 @@ def toDefraDB : RequestState → String
   | .pending => "pending"
   | .claimed => "claimed"
   | .processing => "processing"
-  | .inputRequired => "inputRequired"
   | .completed => "completed"
   | .failed => "failed"
   | .superseded => "superseded"
@@ -35,7 +33,6 @@ def fromDefraDB? : String → Option RequestState
   | "pending" => some .pending
   | "claimed" => some .claimed
   | "processing" => some .processing
-  | "inputRequired" => some .inputRequired
   | "completed" => some .completed
   | "failed" => some .failed
   | "superseded" => some .superseded
@@ -93,15 +90,6 @@ instance : HasTerminal RequestState where
             | inr h => cases h with
               | inl h => exact absurd h (by decide)
               | inr h => exact absurd h (by decide))
-    | .inputRequired => isFalse (by intro h; cases h with
-        | inl h => exact absurd h (by decide)
-        | inr h => cases h with
-          | inl h => exact absurd h (by decide)
-          | inr h => cases h with
-            | inl h => exact absurd h (by decide)
-            | inr h => cases h with
-              | inl h => exact absurd h (by decide)
-              | inr h => exact absurd h (by decide))
 
 end RequestState
 
@@ -132,7 +120,6 @@ def coherentStateAdmission : RequestState → AdmissionState → Prop
   | .pending, a => a = .released
   | .claimed, a => a = .waiting ∨ a = .acquired
   | .processing, a => a = .executing
-  | .inputRequired, a => a = .executing
   | .completed, a => a = .released
   | .failed, a => a = .released
   | .superseded, a => a = .released
@@ -184,7 +171,6 @@ def releaseToTerminal (r : RequestContext) (terminal : RequestState) : RequestCo
   | .pending => { r with admission := .released }
   | .claimed => { r with admission := .released }
   | .processing => { r with admission := .released }
-  | .inputRequired => { r with admission := .released }
 
 theorem releaseToTerminal_state
     {r : RequestContext} {terminal : RequestState}

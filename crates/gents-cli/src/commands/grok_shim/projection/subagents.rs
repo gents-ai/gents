@@ -1503,7 +1503,7 @@ mod tests {
         }
 
         // Still-active states project progress only.
-        for active_state in ["pending", "claimed", "processing", "inputRequired"] {
+        for active_state in ["pending", "claimed", "processing"] {
             let children = vec![child_row("child-1", Some(active_state))];
             let (updates, _chronology) = project_child_rows(
                 &children,

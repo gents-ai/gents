@@ -417,11 +417,7 @@ fn request_pending(wake: &AgentRequestRow) -> bool {
 fn request_active(wake: &AgentRequestRow) -> bool {
     matches!(
         wake_lifecycle_state(wake),
-        Some(
-            RequestLifecycleState::Claimed
-                | RequestLifecycleState::Processing
-                | RequestLifecycleState::InputRequired
-        )
+        Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
     )
 }
 

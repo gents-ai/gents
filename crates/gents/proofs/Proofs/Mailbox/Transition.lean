@@ -45,7 +45,8 @@ def stamped (request : CreateRequest) : Bool :=
     request.identity.requesterDid != "" &&
     request.identity.agentDid != "" &&
     request.identity.itemKey != "" &&
-    request.identity.sourceId != ""
+    request.identity.sourceId != "" &&
+    request.docId != ""
 
 /-- Stamped create.  An in-flight retry for an owner-matching open prefix is
 the identity operation.  A terminal re-ask has no open prefix and may add a
@@ -55,13 +56,34 @@ def applyCreate (state : RegistryState) (request : CreateRequest) : RegistryStat
   else if request.identity.ownerPrefix ∈ state.openPrefixes then state
   else if request.identity.itemKey ∈ state.itemKeys then state
   else
-    { state with
-      openPrefixes := insert request.identity.ownerPrefix state.openPrefixes
-      itemKeys := insert request.identity.itemKey state.itemKeys }
+    { state with rows :=
+        ⟨request.storedEnvelope, true⟩ :: state.rows }
+
+/-- The stored-row receipt is produced only by the stamped-create owner. A
+matching open-row retry may reuse its actual immutable envelope; changed
+origin, session, handling or question content cannot be used as handoff
+evidence, even when a generic condition notification could update content. -/
+def storedCreateReceipt? (state : RegistryState) (request : CreateRequest) :
+    Option (RegistryState × StoredEnvelope) :=
+  if !stamped request then none else
+  let post := applyCreate state request
+  match post.rows.find? (fun row =>
+      row.isOpen &&
+      row.envelope.identity.ownerPrefix == request.identity.ownerPrefix &&
+      row.envelope.identity.agentDid == request.identity.agentDid &&
+      row.envelope.handling == request.handling &&
+      row.envelope.sessionId == request.sessionId &&
+      row.envelope.requestId == request.requestId &&
+      row.envelope.content == request.content) with
+  | none => none
+  | some row => some (post, row.envelope)
 
 /-- Terminalization removes the open prefix but never removes the durable key,
 which allows the next occurrence to mint a new key without reopening. -/
 def terminalizePrefix (state : RegistryState) (ownerPrefix : OwnerPrefix) : RegistryState :=
-  { state with openPrefixes := state.openPrefixes.erase ownerPrefix }
+  { state with rows := state.rows.map fun row =>
+      if row.envelope.identity.ownerPrefix == ownerPrefix then
+        { row with isOpen := false }
+      else row }
 
 end Mailbox

@@ -19,6 +19,16 @@ async fn persisted_reply(
     id: &str,
     tamper_signature: bool,
 ) -> AgentRequest {
+    persisted_request(node, identity, Some(&item.doc_id), id, tamper_signature).await
+}
+
+async fn persisted_request(
+    node: &EmbeddedNode,
+    identity: &KeyIdentity,
+    source_doc_id: Option<&str>,
+    id: &str,
+    tamper_signature: bool,
+) -> AgentRequest {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
     let mut create = AgentRequestCreate::base(
         id,
@@ -31,7 +41,7 @@ async fn persisted_reply(
         &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         AgentRequestAdmissionRecord::local_self(identity.did()),
     );
-    create.caused_by_source_doc_id = Some(item.doc_id.clone());
+    create.caused_by_source_doc_id = source_doc_id.map(str::to_owned);
     crate::sign_agent_request_create(identity, &mut create)
         .await
         .unwrap();
@@ -173,6 +183,159 @@ async fn signed_reply_claim_rolls_back_and_rejects_replay_and_dismissal() {
             .as_deref(),
         Some(winner.doc_id.as_str())
     );
+}
+
+#[tokio::test]
+async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
+    use crate::lifecycle::{
+        ClaimOutcome, ExecutionOrigin, RequestLifecycle, RequestTerminalOutcome, TerminalizeResult,
+    };
+    use crate::llm::tool::Tool;
+    use crate::streaming::DefraStreamWriter;
+    use crate::tool_call_lifecycle::runtime::{
+        scope_request_tool_execution_with_session, scope_tool_request_identity,
+    };
+    use std::time::Duration;
+
+    // The model uses symbolic Nat/request and physical document IDs; the
+    // native fixture maps those identities to signed UUID/document rows while
+    // preserving their equality, separation, session, and action relations.
+    let modeled = crate::lean_vocab_test::lean_contract_snapshot()
+        .mailbox_handoff_cases
+        .iter()
+        .find(|case| case["variant"] == "fresh-linked")
+        .expect("modeled linked handoff case");
+    assert_eq!(modeled["request_id"], modeled["producer_request_id"]);
+    assert_eq!(modeled["request_id"], modeled["tool_request_id"]);
+    assert_eq!(modeled["session_id"], modeled["reply_session_id"]);
+    assert_eq!(modeled["reply_bound_session_id"], modeled["session_id"]);
+    let node = tests::test_node().await;
+    let temp = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
+    crate::test_support::install_test_behavior(&node, identity.did(), "operator").await;
+    let producer = persisted_request(&node, &identity, None, "producer-request", false).await;
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "operator",
+        identity.did(),
+        producer.clone(),
+        60,
+        ExecutionOrigin::Interactive,
+        "handoff-test",
+    );
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let writer = DefraStreamWriter::new(node.clone(), identity.did(), Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+
+    let tool = MailboxCreateTool::new(
+        node.clone(),
+        MailboxNotificationPolicy {
+            identity: NotificationIdentity::Event,
+            kind: serde_json::from_value(modeled["kind"].clone()).unwrap(),
+            action: serde_json::from_value(modeled["action"].clone()).unwrap(),
+            expected_collection: None,
+        },
+    );
+    let receipt_json = scope_tool_request_identity(
+        Some(identity.did().to_owned()),
+        Some(identity.did().to_owned()),
+        Some("operator".into()),
+        Some(producer.request_id.clone()),
+        scope_request_tool_execution_with_session(
+            None,
+            tokio_util::sync::CancellationToken::new(),
+            None,
+            None,
+            Some(producer.session_id.clone()),
+            tool.call(MailboxContentArgs {
+                title: modeled["content"].as_str().unwrap().into(),
+                summary: None,
+                payload: None,
+            }),
+        ),
+    )
+    .await
+    .unwrap();
+    let receipt: Value = serde_json::from_str(&receipt_json).unwrap();
+    assert_eq!(receipt["outcome"], "created");
+    let mailbox_doc_id = receipt["item"]["_docID"].as_str().unwrap();
+    let filed = load_mailbox_item(&node, mailbox_doc_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let returned: MailboxItem = serde_json::from_value(receipt["item"].clone()).unwrap();
+    assert_eq!(
+        super::notification_tests::stored_value(&filed),
+        super::notification_tests::stored_value(&returned)
+    );
+    assert_eq!(
+        filed.status == "open",
+        modeled["stored_open_receipt"].as_bool().unwrap()
+    );
+    assert_eq!(
+        filed.request_id.as_deref(),
+        Some(producer.request_id.as_str())
+    );
+    assert_eq!(
+        filed.session_id.as_deref(),
+        Some(producer.session_id.as_str())
+    );
+
+    assert!(modeled["handoff_accepted"].as_bool().unwrap());
+    assert_eq!(
+        lifecycle
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
+            .await
+            .unwrap(),
+        TerminalizeResult::Won,
+    );
+    assert_eq!(
+        load_mailbox_item(&node, mailbox_doc_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "open"
+    );
+
+    let reply = signed_reply(&node, &identity, &filed, "reply-request").await;
+    assert_ne!(reply.doc_id, producer.doc_id);
+    assert_eq!(reply.session_id, producer.session_id);
+    assert_eq!(
+        reply.caused_by_source_doc_id.as_deref(),
+        Some(mailbox_doc_id)
+    );
+    let mut reply_lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "operator",
+        identity.did(),
+        reply.clone(),
+        60,
+        ExecutionOrigin::Interactive,
+        "handoff-test",
+    );
+    assert_eq!(
+        reply_lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    let consumed = load_mailbox_item(&node, mailbox_doc_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(consumed.status, "acted");
+    assert_eq!(
+        consumed.resolved_doc_id.as_deref(),
+        Some(reply.doc_id.as_str())
+    );
+    assert!(modeled["linked_reply_accepted"].as_bool().unwrap());
+    node.shutdown().await;
 }
 
 #[test]

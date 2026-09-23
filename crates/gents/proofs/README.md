@@ -528,6 +528,15 @@ The current proof suite covers twenty practical areas:
     event identity; open condition content can update without changing the
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated
     cases exercise the database write owner and its typed receipts.
+    `Mailbox/Handoff` composes the stored open-row receipt, foreground tool
+    completion, and ordinary request-lease terminalization for an explicit
+    session handoff, then delegates a distinct signed reply request to the
+    existing reply-claim owner. General success theorems bind the durable open
+    question and reply source, session, requester, and target agent to the
+    producer; generated cases cover positive and rejected boundaries. Native
+    coverage drives the positive committed mailbox-tool receipt, completion, and reply
+    sequence through existing owners. Negative handoff guards remain model-only;
+    generic Ask/Gate notifications do not automatically complete a request.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
     explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
@@ -802,7 +811,6 @@ States:
 - `pending`
 - `claimed`
 - `processing`
-- `inputRequired`
 - `completed`
 - `failed`
 - `superseded`
@@ -817,9 +825,6 @@ Operational meaning:
 - `pending` has not been claimed by a backend slot yet
 - `claimed` owns admission but has not started inference
 - `processing` is actively executing
-- `inputRequired` is reserved for a blocked external-input cycle; current Rust
-  runtime code does not emit it because autonomous tool calls run inline, and
-  active runtime filters exclude it until that loop is modeled
 - `dead` is persisted by the request machine only for stale pre-claim TTL
   expiry; post-claim provider failure, retry exhaustion, tool failure, and
   deadline expiry are terminal `failed`. The subagent-liveness recovery sweep
@@ -1419,13 +1424,11 @@ reconstructed count never exceeds backend `max_concurrent`.
 
 The finite-state checks currently establish:
 
-- generated Request transition cases enumerate the full 10x10 state square as
-  legal, illegal, or product-unreachable, with `inputRequired` pairs classified
-  as reserved current-product vocabulary
+- generated Request transition cases enumerate the full 9x9 state square as
+  legal or illegal
 - generated Process transition cases enumerate the full 5x5 state square as
   legal or illegal
-- every active current-product non-terminal request state has at least one
-  successor; reserved `inputRequired` remains vocabulary-only
+- every active current-product non-terminal request state has at least one successor
 - every non-terminal process state has at least one successor
 - every non-terminal persistence state has at least one successor
 - every non-terminal storage-observation state has at least one successor
@@ -1438,8 +1441,8 @@ The finite-state checks currently establish:
 These checks are useful because they catch structural model regressions quickly,
 even before theorem-level reasoning matters. Rust consumes the generated
 Request and Process transition cases directly: legal cases are driven through
-deterministic lifecycle/status paths, ordinary illegal cases must have no Rust
-writer path, and reserved cases must cite their boundary. The `Fintype` instances
+deterministic lifecycle/status paths, and illegal cases must have no Rust
+writer path. The `Fintype` instances
 structurally pin the finite vocabularies; the cardinality output is diagnostic
 and is not itself a separate proof obligation beyond those instances and the
 theorems established in `Proofs/Properties/Decidable.lean`.
@@ -1452,10 +1455,6 @@ are not deviations.
 
 Current boundaries:
 
-- `inputRequired` is reserved persisted/client vocabulary. Rust parses it as
-  non-terminal client vocabulary if observed, but active runtime lifecycle
-  filters use only `pending`, `claimed`, and `processing` until external input
-  is modeled.
 - `dead` is current product behavior only for stale pre-claim TTL expiry.
   Post-claim provider failure, retry exhaustion, tool failure, and deadline
   expiry remain terminal `failed`.
@@ -1566,8 +1565,8 @@ Resume receipts also report the Goal status observed in their transaction.
 Recovering an old child while the Goal is paused returns that child with
 `created: false` and `goal_status: paused`; it does not silently claim reactivation.
 Separate native overlapping-write tests bypass the process-local mutation gate.
-InputRequired and WorkspaceBindingPending remain unfinished requests: a resume
-cannot duplicate work that already waits for input or workspace placement.
+WorkspaceBindingPending remains an unfinished request: a resume cannot
+duplicate work that already waits for workspace placement.
 
 `GoalAutomation/RequestHead.lean` preserves canonical request ordering among
 causal heads while excluding an authenticated continuation's physical parent.

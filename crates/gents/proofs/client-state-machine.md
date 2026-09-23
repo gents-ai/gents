@@ -71,8 +71,8 @@ These override any response because terminal lifecycle states are irreversible.
 
 ### 3. Non-Terminal Lifecycle Plus Response
 
-If the request is in a non-terminal state (`pending`, `claimed`, `processing`,
-or reserved `inputRequired`), the response may be more current than the request
+If the request is in a non-terminal state (`pending`, `claimed`, or `processing`),
+the response may be more current than the request
 under P2P replication lag. Trust the response.
 
 | `AgentResponse.status` | Client state |
@@ -97,7 +97,6 @@ and currently has none.
 
 | Server state | Client mapping | Note |
 |---|---|---|
-| `inputRequired` | `waitingForClaim` unless a response exists | Reserved protocol vocabulary. Rust parses it for compatibility but does not emit it today. |
 | `dead` | `failed` | Real persisted state for stale pre-claim TTL expiry. Post-claim provider failure, retry exhaustion, tool failure, and deadline expiry remain `failed`. |
 
 `interrupted` is a terminal client state in both Lean and Rust.
@@ -307,7 +306,7 @@ on an already normalized attempt list.
 | Property | Statement |
 |---|---|
 | T1 Merge assumption | Equivalent merged observations are expected to converge before derivation; Lean records only `deriveTurn` determinism |
-| T2 Monotonicity | The 11 current-product server lifecycle state pairs never decrease client rank; `inputRequired` is vocabulary-only and not an active transition pair |
+| T2 Monotonicity | The current-product server lifecycle state pairs never decrease client rank |
 | T3 Terminal coherence | Client terminal iff the server observation is effectively terminal |
 | T4 Totality | Defined for every observation with at least one attempt |
 | T5 Turn replacement | Chain extension derives from the new tip; supersession is monotonic; retry restart is the one allowed rank decrease |

@@ -77,11 +77,64 @@ theorem admitted_fresh_create_records_prefix (state : RegistryState)
     (hfresh : request.identity.itemKey ∉ state.itemKeys) :
     request.identity.ownerPrefix ∈ (applyCreate state request).openPrefixes ∧
       request.identity.itemKey ∈ (applyCreate state request).itemKeys := by
+  have hcreate : applyCreate state request =
+      { state with rows := ⟨request.storedEnvelope, true⟩ :: state.rows } := by
+    simp [applyCreate, hstamped, hclosed, hfresh]
+  rw [hcreate]
+  simp [RegistryState.openPrefixes, RegistryState.itemKeys,
+    CreateRequest.storedEnvelope]
+
+theorem admitted_fresh_create_stores_envelope (state : RegistryState)
+    (request : CreateRequest) (hstamped : stamped request = true)
+    (hclosed : request.identity.ownerPrefix ∉ state.openPrefixes)
+    (hfresh : request.identity.itemKey ∉ state.itemKeys) :
+    request.storedEnvelope ∈
+      ((applyCreate state request).rows.map (·.envelope)) := by
   simp [applyCreate, hstamped, hclosed, hfresh]
+
+theorem stored_receipt_is_durable (state post : RegistryState)
+    (request : CreateRequest) (row : StoredEnvelope)
+    (h : storedCreateReceipt? state request = some (post, row)) :
+    (∃ stored ∈ post.rows, stored.envelope = row ∧ stored.isOpen = true) ∧
+      row.identity.ownerPrefix = request.identity.ownerPrefix ∧
+      row.handling = request.handling ∧ row.sessionId = request.sessionId ∧
+      row.requestId = request.requestId ∧ row.content = request.content := by
+  by_cases hstamp : stamped request = true
+  · let next := applyCreate state request
+    cases hfind : next.rows.find? (fun found =>
+        found.isOpen &&
+        found.envelope.identity.ownerPrefix == request.identity.ownerPrefix &&
+        found.envelope.identity.agentDid == request.identity.agentDid &&
+        found.envelope.handling == request.handling &&
+        found.envelope.sessionId == request.sessionId &&
+        found.envelope.requestId == request.requestId &&
+        found.envelope.content == request.content) with
+    | none => simp [storedCreateReceipt?, hstamp, next, hfind] at h
+    | some found =>
+        have hmem := List.mem_of_find?_eq_some hfind
+        have hpred := List.find?_some hfind
+        simp [storedCreateReceipt?, hstamp, next, hfind] at h
+        rcases h with ⟨rfl, rfl⟩
+        constructor
+        · have hopen : found.isOpen = true := by
+            simp only [Bool.and_eq_true] at hpred
+            aesop
+          exact ⟨found, by simpa [next] using hmem, rfl, hopen⟩
+        · simp_all
+  · simp [storedCreateReceipt?, hstamp] at h
 
 theorem terminalize_never_reopens (state : RegistryState)
     (ownerPrefix : OwnerPrefix) :
     ownerPrefix ∉ (terminalizePrefix state ownerPrefix).openPrefixes := by
-  simp [terminalizePrefix]
+  intro hmember
+  simp only [terminalizePrefix, RegistryState.openPrefixes,
+    List.mem_toFinset, List.mem_map] at hmember
+  obtain ⟨row, hfiltered, hprefix⟩ := hmember
+  have ⟨hmapped, hisOpen⟩ := List.mem_filter.mp hfiltered
+  obtain ⟨original, _, heq⟩ := List.mem_map.mp hmapped
+  rw [← heq] at hisOpen hprefix
+  by_cases h : original.envelope.identity.ownerPrefix = ownerPrefix
+  · simp [h] at hisOpen
+  · simp [h] at hprefix
 
 end Mailbox

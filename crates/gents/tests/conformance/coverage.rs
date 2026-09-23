@@ -83,7 +83,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             "pending",
             "claimed",
             "processing",
-            "inputRequired",
             "completed",
             "failed",
             "superseded",
@@ -100,7 +99,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_illegal("SessionRecovery", "dead", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "superseded", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "interrupted", "pending");
-    assert_lean_transition_is_illegal("SessionRecovery", "inputRequired", "pending");
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
