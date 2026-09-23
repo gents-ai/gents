@@ -18,7 +18,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 
 use crate::agent::p2p_reconcile::{EnrollmentAuthorityHandle, PeerAdmissionAuthority};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::AgentIdentity;
 use crate::watcher::AgentRequest;
 
@@ -789,20 +789,12 @@ async fn verify_cross_principal_child_source(
         child_request_id: Option<String>,
         delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     }
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
                 tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id child_request_id delegated_workspace
             }} }}"#,
             escape_graphql_string(tool_doc_id),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload cross-principal source bridge failed: {:?}",
-            response.errors
-        )));
-    }
+        ), "reload cross-principal source bridge").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let bridge: BridgeRow = crate::graphql::first_row(&response, "AgentToolCall")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
@@ -958,20 +950,12 @@ async fn verify_exact_parent_tool_call(
         spawn_behavior_id: Option<String>,
         delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     }
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(&node, &format!(
             r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
             tool_call_id request_id request_doc_id agent_did spawn_target_did spawn_behavior_id delegated_workspace
         }} }}"#,
             escape_graphql_string(tool_doc_id),
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime source tool call failed: {:?}",
-            response.errors
-        )));
-    }
+        ), "reload runtime source tool call").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let tool: ToolRow = crate::graphql::first_row(&response, "AgentToolCall")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
@@ -1084,16 +1068,10 @@ async fn verify_automated_trigger_source(
         enabled: bool,
     }
     let doc = required_row_string(trigger_doc_id, "trigger document ID")?;
-    let response = node.execute(&format!(
+    let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ Trigger(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ trigger_id agent_did task_id source enabled }} }}"#,
         escape_graphql_string(doc),
-    )).await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime trigger failed: {:?}",
-            response.errors
-        )));
-    }
+    ), "reload runtime trigger").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let triggers: Vec<TriggerRow> =
         crate::graphql::rows(&response, "Trigger").map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1115,16 +1093,10 @@ async fn verify_automated_trigger_source(
             ),
         "runtime trigger physical source, principal, kind, or availability changed",
     )?;
-    let response = node.execute(&format!(
+    let response = graphql_with_transaction_retry(node, &format!(
         r#"{{ Task(filter: {{ task_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, limit: 2) {{ behavior_id enabled }} }}"#,
         escape_graphql_string(&trigger.task_id), escape_graphql_string(agent_did),
-    )).await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload runtime trigger task failed: {:?}",
-            response.errors
-        )));
-    }
+    ), "reload runtime trigger task").await.map_err(AgentRequestAdmissionError::unavailable)?;
     let tasks: Vec<TaskRow> =
         crate::graphql::rows(&response, "Task").map_err(AgentRequestAdmissionError::denied)?;
     deny_if(
@@ -1304,19 +1276,17 @@ async fn load_signed_request(
     doc_id: &str,
 ) -> AdmissionResult<AgentRequestRow> {
     let doc_id = escape_graphql_string(doc_id);
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
                 {SIGNED_REQUEST_FIELDS}
             }} }}"#,
-        ))
-        .await;
-    if response.has_errors() {
-        return Err(AgentRequestAdmissionError::unavailable(anyhow::anyhow!(
-            "reload AgentRequest admission row failed: {:?}",
-            response.errors
-        )));
-    }
+        ),
+        "reload AgentRequest admission row",
+    )
+    .await
+    .map_err(AgentRequestAdmissionError::unavailable)?;
     crate::graphql::first_row(&response, "AgentRequest")
         .map_err(AgentRequestAdmissionError::denied)?
         .ok_or_else(|| {
