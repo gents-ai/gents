@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::graphql::{escape_graphql_string, first_row, rows};
+use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry, rows};
 
 async fn committed_mutation(
     node: &EmbeddedNode,
@@ -324,12 +324,7 @@ pub async fn list_enabled_bindings(
         escape_graphql_string(owner),
         fields.join(" ")
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "query CallbackBinding failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &query, "query CallbackBinding").await?;
     let mut bindings: Vec<CallbackBindingDoc> = rows(&response, "CallbackBinding")?;
     let mut ids = HashSet::new();
     for binding in &bindings {
@@ -372,13 +367,8 @@ pub async fn load_trusted_callback_signers(node: &EmbeddedNode) -> Result<BTreeS
             agent_did
         }
     }"#;
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query trusted AgentPrincipal signers failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        graphql_with_transaction_retry(node, query, "query trusted AgentPrincipal signers").await?;
     let rows: Vec<Value> = rows(&response, "AgentPrincipal")?;
     Ok(rows
         .into_iter()
@@ -407,13 +397,12 @@ pub async fn load_invocation(
         id = escape_graphql_string(invocation_id),
         owner = escape_graphql_string(owner),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackInvocation {invocation_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        &format!("query CallbackInvocation {invocation_id}"),
+    )
+    .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -436,13 +425,9 @@ pub async fn load_invocation_by_key(
         key = escape_graphql_string(key),
         owner = escape_graphql_string(owner),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackInvocation by idempotency_key failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        graphql_with_transaction_retry(node, &query, "query CallbackInvocation by idempotency_key")
+            .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -485,13 +470,9 @@ async fn list_recent_succeeded_missing_result(
         cutoff = escape_graphql_string(&cutoff),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query recent succeeded CallbackInvocation failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        graphql_with_transaction_retry(node, &query, "query recent succeeded CallbackInvocation")
+            .await?;
     let succeeded: Vec<CallbackInvocationDoc> = rows(&response, "CallbackInvocation")?;
     if succeeded.is_empty() {
         return Ok(Vec::new());
@@ -545,13 +526,12 @@ async fn load_callback_results_for_invocations(
         owner = escape_graphql_string(owner),
         limit = SUCCEEDED_REPAIR_LIMIT,
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackResult batch for succeeded repair failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        "query CallbackResult batch for succeeded repair",
+    )
+    .await?;
     let rows: Vec<CallbackResultInvocationRow> = rows(&response, "CallbackResult")?;
     Ok(rows.into_iter().map(|row| row.invocation_id).collect())
 }
@@ -574,13 +554,12 @@ async fn query_owner_invocations(
         owner = escape_graphql_string(owner_agent_did),
         states = states,
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackInvocation states {states} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        &format!("query CallbackInvocation states {states}"),
+    )
+    .await?;
     rows(&response, "CallbackInvocation")
 }
 
@@ -599,13 +578,12 @@ pub async fn load_callback_result(
         id = escape_graphql_string(invocation_id),
         owner = escape_graphql_string(owner),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query CallbackResult for {invocation_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        &format!("query CallbackResult for {invocation_id}"),
+    )
+    .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -841,13 +819,12 @@ pub(crate) async fn load_isolated_workspace(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query IsolatedWorkspace {workspace_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        &format!("query IsolatedWorkspace {workspace_id}"),
+    )
+    .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -870,13 +847,12 @@ pub(crate) async fn load_workspace_placement(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query WorkspacePlacement {workspace_id} failed: {:?}",
-            response.errors
-        );
-    }
+    let response = graphql_with_transaction_retry(
+        node,
+        &query,
+        &format!("query WorkspacePlacement {workspace_id}"),
+    )
+    .await?;
     anyhow::ensure!(
         rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"

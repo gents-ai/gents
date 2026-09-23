@@ -59,7 +59,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/background_completion/side_effects.rs", 1),
     ("crates/gents/src/background_tools.rs", 9),
     ("crates/gents/src/background_tools/subagent_control.rs", 1),
-    ("crates/gents/src/callback/documents.rs", 10),
     ("crates/gents/src/callback/scan.rs", 3),
     ("crates/gents/src/completion_factory.rs", 1),
     ("crates/gents/src/document_config/behavior.rs", 2),
