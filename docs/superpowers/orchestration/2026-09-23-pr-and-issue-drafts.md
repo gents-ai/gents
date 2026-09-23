@@ -354,3 +354,22 @@ process-or-container executor behind the same `TrialExecutor` seam, a runner-hos
 proxy, and cross-process cancel.
 **Plan:** Design the executor over the existing `gents serve` + host-control recipe; enforce the
 evaluator DID through ACP; re-admit sandboxed workspace bash modes where enforcement is provable.
+
+## I13 — `pack install --digest` checks its digest outside the write transaction
+**What:** The CLI compares a pack's artifact digest before opening the install transaction, so
+drift between that check and the write is undetected. The guarded publication (PR 1) is the
+mechanism to close this.
+**Plan:** Build the install plan with `with_expected` on the documents the pack replaces, so the
+check moves inside the transaction and refuses with `StaleExpectation`; add a test that edits a
+document between the digest check and the install.
+
+## I14 — Emit Lean case-class witnesses for the reducers
+**What:** `Proofs/Eval.lean` proves the case-class reduction monotone but emits no cases for it,
+so the Rust reducers are fenced only by hand tests while the coverage ledger marks the domain
+covered.
+**Plan:** Emit case-class rows into the contract snapshot and add the conformance consumer, in the
+same shape as the outcome cases.
+
+## PR ↔ issue association (numbers substituted after the issues are created)
+PR 1 → I13 · PR 2 → I11, I14 · PR 3 → I12 · PR 4 → I8 · PR 5 → I9, I10 · PR 6 → I2, I3, I5, I6 ·
+side branch (held) → I4, I7 · dropped: I1.
