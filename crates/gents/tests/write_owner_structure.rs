@@ -28,10 +28,6 @@ const READ_OWNER_FILES: &[&str] = &[
 const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 1),
     ("apps/gents-desktop/src-tauri/src/runner/live_fixture/agent.rs", 1),
-    ("crates/gents-desktop-bridge/src/commands/mcp_health.rs", 2),
-    ("crates/gents-desktop-bridge/src/commands/task.rs", 1),
-    ("crates/gents-desktop-bridge/src/snapshot/session/request_context.rs", 1),
-    ("crates/gents-desktop-bridge/src/tauri_commands/operations.rs", 2),
     ("crates/gents-migration/src/materialize.rs", 1),
     ("crates/gents/src/backend_registry.rs", 1),
     ("crates/gents/src/background_completion/datetime_fields.rs", 1),

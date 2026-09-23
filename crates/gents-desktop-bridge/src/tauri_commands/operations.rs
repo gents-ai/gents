@@ -6,7 +6,7 @@ use chrono::Utc;
 use gents::backend_registry::{list_all_backends, lookup_backend_observation};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::subagent_tree::{
     build_subagent_tree, effective_subagent_tree_max_depth, SubagentTree, SubagentTreeAccess,
 };
@@ -93,16 +93,9 @@ async fn fetch_background_tool_calls(
 ) -> Result<Vec<ToolCallRow>, BridgeError> {
     let query = background_tool_calls_query(agent_did);
 
-    let response = core.node().execute(&query).await;
-    if response.has_errors() {
-        return Err(response
-            .errors
-            .iter()
-            .map(|e| e.message.as_str())
-            .collect::<Vec<_>>()
-            .join("; ")
-            .into());
-    }
+    let response = graphql_with_transaction_retry(&core.node(), &query, "background tool calls")
+        .await
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))?;
 
     let data = response
         .data
@@ -556,13 +549,12 @@ async fn fetch_recent_calls(
         limit = RECENT_CALLS_PER_BACKEND,
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "list InferenceCall for backend {backend_id} failed: {:?}",
-            resp.errors
-        );
-    }
+    let resp = graphql_with_transaction_retry(
+        &node,
+        &query,
+        &format!("list InferenceCall for backend {backend_id}"),
+    )
+    .await?;
 
     Ok(resp
         .data
