@@ -1,6 +1,7 @@
 //! Eval core contract (#1515): the outcome vocabulary, scoring rules and the
 //! fact-only run, trial and verdict documents. Execution lives in the runner.
 
+pub mod checks;
 pub mod documents;
 pub mod outcome;
 pub mod runner;
