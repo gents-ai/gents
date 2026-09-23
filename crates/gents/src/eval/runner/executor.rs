@@ -16,9 +16,11 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
+use crate::document_config::EvalCapture;
 use crate::eval::runner::embedded::observe::{
     InferenceCallEvidence, MessageEvidence, ToolCallEvidence,
 };
+use crate::eval::runner::progress::StageProgress;
 use crate::eval::runner::scripted::ScriptKey;
 use crate::eval::{Anchor, OutcomeKind, ProviderReason, TrialUsage};
 
@@ -42,12 +44,16 @@ pub struct TrialSpec {
     pub inference: InferenceBinding,
     pub fixtures: TrialFixtures,
     pub stages: Vec<StageSpec>,
-    pub captures: Vec<Capture>,
     /// `<run dir>/trials/<trial_id>`.
     pub trial_dir: PathBuf,
     /// Populated only when [`TrialExecutor::wants_script_key`]; the one field
     /// that carries a `case_id`.
     pub script_key: Option<ScriptKey>,
+    /// Stage boundaries for `<run dir>/progress.json` (spec 4b §6). Not
+    /// part of what a trial may know: skipped by serde, ignored by equality,
+    /// and a no-op unless the loop attached a writer.
+    #[serde(skip)]
+    pub progress: StageProgress,
 }
 
 impl TrialSpec {
@@ -68,9 +74,9 @@ impl TrialSpec {
             },
             fixtures: TrialFixtures::default(),
             stages: Vec::new(),
-            captures: Vec::new(),
             trial_dir: PathBuf::new(),
             script_key: None,
+            progress: StageProgress::default(),
         }
     }
 }
@@ -110,6 +116,9 @@ pub struct StageSpec {
     pub stage_id: String,
     pub prompt: String,
     pub deadline_secs: u64,
+    /// What to read out of the home when this stage ends: the stage's own
+    /// captures, or the run's request-level list when the stage declares none.
+    pub captures: Vec<Capture>,
 }
 
 /// What to read out of a finished trial home.
@@ -126,6 +135,31 @@ pub enum Capture {
         name: String,
         glob: String,
     },
+}
+
+/// A definition's capture as the runner reads it. The two types are one shape
+/// on two sides of the freeze: the definition's is authored and validated,
+/// the runner's is what a trial executes.
+impl From<&EvalCapture> for Capture {
+    fn from(capture: &EvalCapture) -> Self {
+        match capture {
+            EvalCapture::Documents {
+                name,
+                collection,
+                filter,
+                fields,
+            } => Self::Documents {
+                name: name.clone(),
+                collection: collection.clone(),
+                filter: filter.clone(),
+                fields: fields.clone(),
+            },
+            EvalCapture::File { name, glob } => Self::File {
+                name: name.clone(),
+                glob: glob.clone(),
+            },
+        }
+    }
 }
 
 /// Where a trial's durable evidence lives once it has been provisioned.
@@ -323,6 +357,9 @@ pub trait TrialExecutor: Send + Sync {
 
     /// Reads captures back out of a home that already ran, when it still
     /// exists.
+    ///
+    /// Captures are per stage, so a caller supplies the captures of the stage
+    /// it is reading, taken from the case as the run loop's `stage_specs` does.
     ///
     /// Recollected evidence is capture evidence, not gradeable evidence. A
     /// finished home records which requests a session held, not which stage

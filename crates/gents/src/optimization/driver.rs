@@ -1205,7 +1205,7 @@ pub async fn run_job(
             };
             append(access, &mut job, entry).await?;
         }
-        execute_run(
+        let ran = execute_run(
             access,
             request,
             &origin,
@@ -1215,7 +1215,9 @@ pub async fn run_job(
             cancel.clone(),
         )
         .await?;
-        if cancel.is_cancelled() {
+        // Ruling F1: a run its cancel marker stopped is unfinished. The job
+        // stops at it, journals nothing more, and a resume continues it.
+        if cancel.is_cancelled() || ran.cancelled {
             return stopped(&job);
         }
 
@@ -1315,7 +1317,7 @@ pub async fn run_job(
                 };
                 append(access, &mut job, entry).await?;
             }
-            execute_run(
+            let ran = execute_run(
                 access,
                 request,
                 &origin,
@@ -1325,7 +1327,9 @@ pub async fn run_job(
                 cancel.clone(),
             )
             .await?;
-            if cancel.is_cancelled() {
+            // Ruling F1: a run its cancel marker stopped is unfinished. The job
+            // stops at it, journals nothing more, and a resume continues it.
+            if cancel.is_cancelled() || ran.cancelled {
                 return stopped(&job);
             }
             run_ids.push(plan.run_id.clone());
@@ -1412,7 +1416,7 @@ pub async fn run_job(
                 };
                 append(access, &mut job, entry).await?;
             }
-            execute_run(
+            let ran = execute_run(
                 access,
                 request,
                 &origin,
@@ -1422,7 +1426,9 @@ pub async fn run_job(
                 cancel.clone(),
             )
             .await?;
-            if cancel.is_cancelled() {
+            // Ruling F1: a run its cancel marker stopped is unfinished. The job
+            // stops at it, journals nothing more, and a resume continues it.
+            if cancel.is_cancelled() || ran.cancelled {
                 return stopped(&job);
             }
             let run_ids = vec![plan.run_id.clone()];

@@ -12,6 +12,7 @@ pub mod executor;
 pub mod freeze;
 pub mod grade;
 pub mod plan;
+pub mod progress;
 pub mod record;
 pub mod scripted;
 
@@ -20,16 +21,23 @@ pub use executor::{
     StageEvidence, StageSpec, TrialEvidence, TrialExecutor, TrialFixtures, TrialLocator, TrialSpec,
 };
 pub use freeze::{
-    freeze, freeze_refused, CellRequest, CellSource, FreezeRefused, FrozenCell, FrozenRun,
-    RunRequest,
+    freeze, freeze_refused, read_frozen_definition, CellRequest, CellSource, FreezeRefused,
+    FrozenCell, FrozenRun, RunRequest, DEFINITION_FILE,
 };
 pub use grade::{grade, VerdictRow};
-pub use plan::{completion_is_not_evidence, not_evidence_slots, plan, trial_id_for, PlannedTrial};
+pub use plan::{
+    abandonment_bounded_slots, completion_is_not_evidence, not_evidence_slots, plan, trial_id_for,
+    PlannedTrial, MAX_ABANDONED_ATTEMPTS,
+};
+pub use progress::{
+    host_alive, is_fresh, read_progress, InFlight, Progress, StageProgress, PROGRESS_FILE,
+};
 pub use record::{DocumentRecorder, Recorder};
 pub use scripted::{ScriptKey, ScriptedExecutor};
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -41,8 +49,10 @@ use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalCase, EvalFixtures, EvalSplit};
 use crate::eval::checks::CheckRegistry;
 use crate::eval::runner::freeze::thaw;
+use crate::eval::runner::progress::ProgressWriter;
 use crate::eval::{
-    Anchor, OutcomeKind, StageCompletion, TrialCompletion, TrialIdentity, VerdictDraft,
+    Anchor, OutcomeKind, RunRecord, StageCompletion, TrialCompletion, TrialIdentity, TrialRecord,
+    VerdictDraft,
 };
 
 /// What one pass over a run produced. Counts, not judgements: how a run scored
@@ -57,13 +67,18 @@ pub struct RunOutcome {
     /// Slots whose every permitted attempt finished without evidence. A count
     /// of slots, not of attempts, so it does not overlap [`Self::completed`].
     ///
-    /// Computed once, on the pass that plans nothing: only then has every slot
-    /// spent the attempts the run allows. A run that ended another way — the
-    /// breaker tripped, or it was cancelled — reports `0` here, because it
-    /// never reached the point where the count means anything. Read the
-    /// trials, not this field, to count what an interrupted run learned.
+    /// Computed once the run owes nothing: only then has every slot spent the
+    /// attempts the run allows. A run that ended another way — the breaker
+    /// tripped, or it was cancelled — reports `0` here, because it never
+    /// reached the point where the count means anything. Read the trials, not
+    /// this field, to count what an interrupted run learned.
     pub not_evidence: u32,
     pub breaker_tripped: bool,
+    /// The caller's token or a cancel marker stopped this pass while the run
+    /// still owed slots. A cancel that lands after the last slot is settled
+    /// leaves this `false`: the run finished. A caller that decides on the run
+    /// (the optimizer) must not read a cancelled pass as a finished one.
+    pub cancelled: bool,
 }
 
 /// Too many trials in a row produced no evidence, so the run stopped rather
@@ -96,6 +111,121 @@ pub fn provider_down(error: &anyhow::Error) -> Option<&ProviderDown> {
     error.downcast_ref::<ProviderDown>()
 }
 
+/// The file whose presence asks a run to stop: `<run dir>/cancel` (spec 4a
+/// §3). Another process on this machine writes it with [`request_cancel`];
+/// the loop checks for it wherever it checks its own cancellation token, and
+/// [`run`] and [`resume`] remove it before planning. It carries no state and
+/// is not a document, so a remote host never sees it; remote cancel is spec
+/// 2b's.
+pub const CANCEL_MARKER: &str = "cancel";
+
+/// `<runs_dir>/<run_id>`, for a run id that is one ordinary path component.
+pub fn run_dir(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
+    freeze::directory_name("run_id", run_id)?;
+    Ok(runs_dir.join(run_id))
+}
+
+/// Ask the process hosting `run_id` to stop launching at its next check.
+pub fn request_cancel(runs_dir: &Path, run_id: &str) -> Result<PathBuf> {
+    let dir = run_dir(runs_dir, run_id)?;
+    if !dir.is_dir() {
+        return Err(anyhow::Error::from(FreezeRefused(format!(
+            "run {run_id} has no directory {}",
+            dir.display()
+        ))));
+    }
+    let marker = dir.join(CANCEL_MARKER);
+    std::fs::write(&marker, b"").with_context(|| format!("writing {}", marker.display()))?;
+    tracing::warn!(run_id, marker = %marker.display(), "eval run cancel requested");
+    Ok(marker)
+}
+
+/// Whether the loop should stop: its token is cancelled, or the marker is
+/// present, in which case the token is cancelled so every in-flight trial and
+/// every later check reads the same answer.
+fn cancel_requested(run_dir: &Path, cancel: &CancellationToken) -> bool {
+    if cancel.is_cancelled() {
+        return true;
+    }
+    if run_dir.join(CANCEL_MARKER).exists() {
+        tracing::warn!(
+            run_dir = %run_dir.display(),
+            "eval run cancel marker found; the run stops launching"
+        );
+        cancel.cancel();
+        return true;
+    }
+    false
+}
+
+/// Remove the marker a cancelled run left, if any.
+fn clear_cancel(run_dir: &Path) -> Result<()> {
+    let marker = run_dir.join(CANCEL_MARKER);
+    match std::fs::remove_file(&marker) {
+        Ok(()) => {
+            tracing::info!(
+                marker = %marker.display(),
+                "eval run cancel marker cleared before planning"
+            );
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("removing {}", marker.display())),
+    }
+}
+
+/// How often the loop checks the cancel marker while a batch is in flight or
+/// while it waits out a backoff, and refreshes `progress.json` while slots are
+/// in flight: the backoff base, capped at one second and never zero.
+fn marker_poll(options: &RunOptions) -> Duration {
+    options
+        .poll_backoff_base
+        .min(Duration::from_secs(MARKER_POLL_CAP_SECS))
+        .max(Duration::from_millis(1))
+}
+
+/// The longest [`marker_poll`] any runner uses, whatever its options.
+const MARKER_POLL_CAP_SECS: u64 = 1;
+
+/// How long a `progress.json` entry stays fresh without being rewritten:
+/// three of the longest marker periods a runner uses. A running loop rewrites
+/// its entries at least once per period, so an entry older than this belongs
+/// to a process that stopped. A reader cannot know the options the writer ran
+/// with, so the window is the one that covers every runner. This is the one
+/// staleness window: [`running_elsewhere`] uses it, and so does anything else
+/// that asks whether a slot is still being run, such as `gents eval watch`.
+pub const STALE_WINDOW: Duration = Duration::from_secs(3 * MARKER_POLL_CAP_SECS);
+
+/// How many slots the run still owes, by the planner's own rule: a slot that
+/// spent its infrastructure retries or its abandonment bound owes nothing,
+/// although the report still shows it as not evidence or abandoned.
+pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize {
+    plan(
+        &record.origin,
+        &record.run_id,
+        trials,
+        record.origin.max_infra_retries,
+    )
+    .len()
+}
+
+/// A live process refreshed one of the run's `progress.json` entries within
+/// [`STALE_WINDOW`]. An absent or unreadable file holds nothing.
+pub fn running_elsewhere(run_dir: &Path) -> bool {
+    read_progress(run_dir).is_some_and(|progress| {
+        progress
+            .slots
+            .values()
+            .any(|slot| is_fresh(slot, STALE_WINDOW))
+    })
+}
+
+/// Finished, for `gents eval rm` without `--force` and for `gents eval gc`:
+/// the run owes nothing and no live process is running a slot of it.
+pub fn run_finished(record: &RunRecord, trials: &[TrialRecord], run_dir: &Path) -> bool {
+    slots_owed(record, trials) == 0 && !running_elsewhere(run_dir)
+}
+
 /// How long the loop waits before planning a slot that produced no evidence
 /// again. Not comparability data: a run's result does not depend on it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +253,7 @@ pub async fn run(
     options: &RunOptions,
 ) -> Result<RunOutcome> {
     let frozen = freeze(access, request, executor.isolation()).await?;
+    clear_cancel(&frozen.run_dir)?;
     let recorder = DocumentRecorder(access);
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
@@ -145,6 +276,7 @@ pub async fn resume(
     options: &RunOptions,
 ) -> Result<RunOutcome> {
     let frozen = thaw(access, owner, run_id, runs_dir, executor.isolation()).await?;
+    clear_cancel(&frozen.run_dir)?;
     let recorder = DocumentRecorder(access);
     execute_frozen(&frozen, &recorder, executor, registry, cancel, options).await
 }
@@ -176,6 +308,9 @@ pub(crate) async fn execute_frozen(
     cancel: CancellationToken,
     options: &RunOptions,
 ) -> Result<RunOutcome> {
+    // A child of the caller's token: a cancel marker stops this run and never
+    // the work that hosts it (an optimization job runs several runs).
+    let cancel = cancel.child_token();
     let owner = frozen.record.owner.as_str();
     let run_id = frozen.record.run_id.as_str();
     let origin = &frozen.record.origin;
@@ -186,14 +321,18 @@ pub(crate) async fn execute_frozen(
         ..RunOutcome::default()
     };
     let mut consecutive = 0u32;
+    // One writer per pass: a resumed run starts from an empty file, which
+    // also clears whatever a crashed process left in flight.
+    let progress = ProgressWriter::new(&frozen.run_dir);
 
     loop {
+        if cancel_requested(&frozen.run_dir, &cancel) {
+            break;
+        }
         let existing = recorder.load_trials(owner, run_id).await?;
         let planned = plan(origin, run_id, &existing, origin.max_infra_retries);
         if planned.is_empty() {
-            // Nothing left to plan, so every slot still without evidence has
-            // spent every attempt the run allows.
-            outcome.not_evidence = not_evidence_slots(&existing);
+            outcome.not_evidence = settled(run_id, &existing);
             break;
         }
 
@@ -204,11 +343,18 @@ pub(crate) async fn execute_frozen(
         let mut tripped: Option<u32> = None;
         {
             let mut running = futures::stream::iter(planned.iter().map(|slot| {
-                execute_trial(frozen, slot, recorder, executor, registry, &cancel, &stop)
+                execute_trial(
+                    frozen, slot, recorder, executor, registry, &cancel, &stop, &progress,
+                )
             }))
             .buffer_unordered(concurrency);
 
             let mut observed_cancel = false;
+            let mut watch = tokio::time::interval(marker_poll(options));
+            watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // The file is rewritten at most this often, however fast the
+            // marker timer runs.
+            let heartbeat_gap = marker_poll(options).max(Duration::from_millis(250));
             loop {
                 let next = if observed_cancel {
                     running.next().await
@@ -218,6 +364,14 @@ pub(crate) async fn execute_frozen(
                         _ = cancel.cancelled() => {
                             observed_cancel = true;
                             stop.store(true, Ordering::Relaxed);
+                            continue;
+                        }
+                        _ = watch.tick() => {
+                            // The in-flight entries are alive; a marker
+                            // written mid-batch cancels the child token, which
+                            // interrupts the executors' current requests.
+                            progress.heartbeat(heartbeat_gap);
+                            cancel_requested(&frozen.run_dir, &cancel);
                             continue;
                         }
                         next = running.next() => next,
@@ -264,7 +418,7 @@ pub(crate) async fn execute_frozen(
                 consecutive_not_evidence,
             }));
         }
-        if cancel.is_cancelled() {
+        if cancel_requested(&frozen.run_dir, &cancel) {
             break;
         }
         // One wait for the whole pass, long enough for its most-retried slot.
@@ -273,25 +427,76 @@ pub(crate) async fn execute_frozen(
             .map(|attempt| backoff_for(options, *attempt))
             .max()
         {
-            tokio::select! {
-                _ = cancel.cancelled() => break,
-                _ = tokio::time::sleep(backoff) => {}
+            tracing::info!(
+                run_id,
+                backoff = ?backoff,
+                "eval run waits before planning the slots that produced no evidence again"
+            );
+            // The marker is looked for during the wait too, so a cancel does
+            // not sit behind a long backoff.
+            let wait = tokio::time::sleep(backoff);
+            tokio::pin!(wait);
+            let mut watch = tokio::time::interval(marker_poll(options));
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = watch.tick() => {
+                        if cancel_requested(&frozen.run_dir, &cancel) {
+                            break;
+                        }
+                    }
+                    _ = &mut wait => break,
+                }
+            }
+            if cancel.is_cancelled() {
+                break;
             }
         }
     }
 
+    if cancel.is_cancelled() {
+        // A cancel that lands once the run owes nothing stopped nothing: the
+        // pass finished, and says so.
+        let existing = recorder.load_trials(owner, run_id).await?;
+        if slots_owed(&frozen.record, &existing) == 0 {
+            outcome.not_evidence = settled(run_id, &existing);
+        } else {
+            outcome.cancelled = true;
+        }
+    }
     tracing::info!(
         run_id,
         completed = outcome.completed,
         abandoned = outcome.abandoned,
         not_evidence = outcome.not_evidence,
+        cancelled = outcome.cancelled,
         "eval run pass finished"
     );
     Ok(outcome)
 }
 
+/// The not-evidence count of a run that owes nothing, logging the slots the
+/// abandonment bound stopped.
+///
+/// Nothing is left to plan, so every slot still without evidence has spent
+/// what the run allows: `max_infra_retries + 1` attempts that finished without
+/// evidence, or [`MAX_ABANDONED_ATTEMPTS`] that never finished.
+fn settled(run_id: &str, existing: &[TrialRecord]) -> u32 {
+    let bounded = abandonment_bounded_slots(existing);
+    if bounded > 0 {
+        tracing::warn!(
+            run_id,
+            slots = bounded,
+            max_abandoned_attempts = MAX_ABANDONED_ATTEMPTS,
+            "eval run stopped planning slots whose attempts were abandoned too often; they stay unanswered"
+        );
+    }
+    not_evidence_slots(existing)
+}
+
 /// One trial: provision it, record that it exists, run it, grade it, and
 /// record what it came to.
+#[allow(clippy::too_many_arguments)]
 async fn execute_trial(
     frozen: &FrozenRun,
     planned: &PlannedTrial,
@@ -300,8 +505,9 @@ async fn execute_trial(
     registry: &CheckRegistry,
     cancel: &CancellationToken,
     stop: &AtomicBool,
+    progress: &Arc<ProgressWriter>,
 ) -> Result<Slot> {
-    if stop.load(Ordering::Relaxed) || cancel.is_cancelled() {
+    if stop.load(Ordering::Relaxed) || cancel_requested(&frozen.run_dir, cancel) {
         return Ok(Slot::Skipped);
     }
     let owner = frozen.record.owner.as_str();
@@ -317,7 +523,7 @@ async fn execute_trial(
         .iter()
         .find(|cell| cell.spec.cell_id == planned.cell_id)
         .with_context(|| format!("run {run_id} froze no cell {:?}", planned.cell_id))?;
-    let spec = trial_spec(frozen, planned, case, cell, executor.wants_script_key())?;
+    let mut spec = trial_spec(frozen, planned, case, cell, executor.wants_script_key())?;
 
     let locator = executor.provision(&spec).await;
     let identity = TrialIdentity {
@@ -339,6 +545,27 @@ async fn execute_trial(
         executor.discard(&spec.trial_id).await;
         return Err(error);
     }
+    progress.slot_started(
+        &planned.trial_id,
+        InFlight {
+            cell_id: planned.cell_id.clone(),
+            case_id: planned.case_id.clone(),
+            trial_index: planned.trial_index,
+            attempt: planned.attempt,
+            stage_id: None,
+            started_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            // Stamped by `slot_started`.
+            pid: 0,
+            written_at: String::new(),
+        },
+    );
+    // Removes the entry however this trial leaves: completed, abandoned, or
+    // an error writing its rows.
+    let _in_flight = InFlightGuard {
+        progress,
+        trial_id: &planned.trial_id,
+    };
+    spec.progress = StageProgress::for_trial(progress, &planned.trial_id);
 
     let evidence = executor.execute(&spec, cancel.child_token()).await;
     if cancel.is_cancelled() {
@@ -378,6 +605,18 @@ async fn execute_trial(
         attempt: planned.attempt,
         not_evidence,
     })
+}
+
+/// Ends a slot's `progress.json` entry when the trial's turn ends.
+struct InFlightGuard<'a> {
+    progress: &'a ProgressWriter,
+    trial_id: &'a str,
+}
+
+impl Drop for InFlightGuard<'_> {
+    fn drop(&mut self) {
+        self.progress.slot_ended(self.trial_id);
+    }
 }
 
 /// `<run dir>/trials/<trial_id>/evidence.json`: the trial's evidence digest
@@ -441,16 +680,7 @@ fn trial_spec(
             frozen.definition.fixtures.as_ref(),
             case.fixtures.as_ref(),
         )?,
-        stages: case
-            .stages
-            .iter()
-            .map(|stage| StageSpec {
-                stage_id: stage.stage_id.clone(),
-                prompt: stage.prompt.clone(),
-                deadline_secs: stage.deadline_secs,
-            })
-            .collect(),
-        captures: frozen.captures.clone(),
+        stages: stage_specs(case, &frozen.captures),
         trial_dir: frozen.run_dir.join("trials").join(&planned.trial_id),
         script_key: wants_script_key.then(|| ScriptKey {
             cell_label: planned.cell_label.clone(),
@@ -458,7 +688,27 @@ fn trial_spec(
             trial_index: planned.trial_index,
             attempt: planned.attempt,
         }),
+        progress: StageProgress::default(),
     })
+}
+
+/// The stages a trial submits, each with the captures read when it ends: the
+/// stage's own `capture` list, or the run's request-level list when the stage
+/// declares none.
+fn stage_specs(case: &EvalCase, fallback: &[Capture]) -> Vec<StageSpec> {
+    case.stages
+        .iter()
+        .map(|stage| StageSpec {
+            stage_id: stage.stage_id.clone(),
+            prompt: stage.prompt.clone(),
+            deadline_secs: stage.deadline_secs,
+            captures: if stage.capture.is_empty() {
+                fallback.to_vec()
+            } else {
+                stage.capture.iter().map(Capture::from).collect()
+            },
+        })
+        .collect()
 }
 
 /// The definition's fixtures, then the case's: a case adds to what every case
@@ -480,6 +730,14 @@ fn fixtures(
         for asset in &declared.assets {
             fixtures.files.push(asset_file(pack_dir, asset)?);
         }
+        // Inline files are authored with the case, so they never need the
+        // subject pack to carry test data.
+        fixtures
+            .files
+            .extend(declared.files.iter().map(|file| FixtureFile {
+                path: file.path.clone(),
+                contents: file.contents.clone().into_bytes(),
+            }));
     }
     Ok(fixtures)
 }
@@ -609,9 +867,12 @@ mod tests {
 
     use super::*;
     use crate::document_config::EvalFixtureDocument;
+    use crate::document_config::EvalFixtureFile;
     use crate::eval::checks::{Check, CheckVerdict};
     use crate::eval::runner::freeze::tests::{Launching, OWNER};
-    use crate::eval::{invalidate_run, load_trials, load_verdicts, TrialRecord, VerdictRecord};
+    use crate::eval::{
+        invalidate_run, load_run, load_trials, load_verdicts, TrialRecord, VerdictRecord,
+    };
     use crate::Collection;
 
     /// Two validation cases and one train case, each one stage with one
@@ -1033,6 +1294,7 @@ mod tests {
         let shared = EvalFixtures {
             assets: vec!["seed.json".into()],
             documents: Vec::new(),
+            files: Vec::new(),
             schemas: vec!["type A {}".into()],
         };
         let per_case = EvalFixtures {
@@ -1040,6 +1302,10 @@ mod tests {
             documents: vec![EvalFixtureDocument {
                 collection: "A".into(),
                 document: json!({"id": 1}),
+            }],
+            files: vec![EvalFixtureFile {
+                path: "inventory/edge-07.json".into(),
+                contents: "{\"disk\": \"84%\"}\n".into(),
             }],
             schemas: vec!["type B {}".into()],
         };
@@ -1049,10 +1315,16 @@ mod tests {
         assert_eq!(merged.documents.len(), 1);
         assert_eq!(
             merged.files,
-            [FixtureFile {
-                path: "seed.json".into(),
-                contents: b"{}".to_vec(),
-            }]
+            [
+                FixtureFile {
+                    path: "seed.json".into(),
+                    contents: b"{}".to_vec(),
+                },
+                FixtureFile {
+                    path: "inventory/edge-07.json".into(),
+                    contents: b"{\"disk\": \"84%\"}\n".to_vec(),
+                },
+            ]
         );
 
         let escaping = EvalFixtures {
@@ -1104,6 +1376,7 @@ mod tests {
                 abandoned: 0,
                 not_evidence: 0,
                 breaker_tripped: false,
+                cancelled: false,
             }
         );
 
@@ -1629,6 +1902,271 @@ mod tests {
             .is_empty());
     }
 
+    /// Writes its run's cancel marker the first time it executes a trial,
+    /// then answers like the scripted executor: another process running
+    /// `gents eval cancel` while this one works.
+    struct MarkOnFirstExecute {
+        inner: ScriptedExecutor,
+        runs_dir: PathBuf,
+        run_id: String,
+        marked: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for MarkOnFirstExecute {
+        fn isolation(&self) -> Isolation {
+            self.inner.isolation()
+        }
+
+        fn wants_script_key(&self) -> bool {
+            self.inner.wants_script_key()
+        }
+
+        async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
+            self.inner.provision(spec).await
+        }
+
+        async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
+            if !self.marked.swap(true, Ordering::SeqCst) {
+                request_cancel(&self.runs_dir, &self.run_id).unwrap();
+            }
+            self.inner.execute(spec, cancel).await
+        }
+
+        async fn recollect(
+            &self,
+            at: &TrialLocator,
+            captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            self.inner.recollect(at, captures).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_cancel_marker_stops_the_loop_at_its_next_launch_and_resume_clears_it() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-marker");
+        request.cells.truncate(1);
+        request.trials_per_case = 1;
+        let caller = CancellationToken::new();
+        let executor = MarkOnFirstExecute {
+            inner: ScriptedExecutor::new().with_default(passed()),
+            runs_dir: launching.runs_dir(),
+            run_id: "run-marker".into(),
+            marked: AtomicBool::new(false),
+        };
+        let outcome = run(
+            &launching.access,
+            &request,
+            &executor,
+            &CheckRegistry::builtin(),
+            caller.clone(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            (outcome.completed, outcome.abandoned),
+            (1, 0),
+            "the trial that was running finishes; the next is never launched"
+        );
+        assert!(outcome.cancelled, "the pass says why it stopped (F1)");
+        assert!(
+            !caller.is_cancelled(),
+            "the marker stops this run, never the caller's other work"
+        );
+        let marker = launching.runs_dir().join("run-marker").join(CANCEL_MARKER);
+        assert!(marker.exists());
+        assert_eq!(
+            load_trials(&launching.access, OWNER, "run-marker")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let resumed = resume(
+            &launching.access,
+            OWNER,
+            "run-marker",
+            &launching.runs_dir(),
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.completed, 1);
+        assert!(
+            !marker.exists(),
+            "resume removes the marker before it plans"
+        );
+        assert_eq!(
+            load_trials(&launching.access, OWNER, "run-marker")
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+    }
+
+    /// `run` and `resume` clear the marker before the loop, so the loop is
+    /// driven directly to see a marker that is already there.
+    #[tokio::test]
+    async fn a_marker_written_before_the_loop_starts_launches_nothing() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-early");
+        one_slot(&mut request);
+        let frozen = freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        request_cancel(&launching.runs_dir(), "run-early").unwrap();
+        let outcome = execute_frozen(
+            &frozen,
+            &DocumentRecorder(&launching.access),
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            RunOutcome {
+                run_id: "run-early".into(),
+                cancelled: true,
+                ..RunOutcome::default()
+            }
+        );
+        assert!(load_trials(&launching.access, OWNER, "run-early")
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    /// Writes its run's cancel marker right after the trial's completion is
+    /// recorded: a `gents eval cancel` that lands once the run owes nothing.
+    struct MarkAfterComplete<'a> {
+        inner: DocumentRecorder<'a>,
+        runs_dir: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl Recorder for MarkAfterComplete<'_> {
+        async fn create_trial(&self, owner: &str, identity: &TrialIdentity) -> Result<()> {
+            self.inner.create_trial(owner, identity).await
+        }
+
+        async fn append_verdict(
+            &self,
+            owner: &str,
+            split: EvalSplit,
+            draft: &VerdictDraft,
+        ) -> Result<()> {
+            self.inner.append_verdict(owner, split, draft).await
+        }
+
+        async fn complete_trial(
+            &self,
+            owner: &str,
+            trial_id: &str,
+            completion: &TrialCompletion,
+        ) -> Result<()> {
+            self.inner
+                .complete_trial(owner, trial_id, completion)
+                .await?;
+            request_cancel(&self.runs_dir, "run-late").map(|_| ())
+        }
+
+        async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
+            self.inner.load_trials(owner, run_id).await
+        }
+    }
+
+    /// A marker that lands after the last completion stops nothing the run
+    /// still owed, so the pass reports a finished run, not a cancelled one.
+    #[tokio::test]
+    async fn a_marker_written_after_the_last_completion_is_not_a_cancelled_run() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-late");
+        one_slot(&mut request);
+        let frozen = freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let recorder = MarkAfterComplete {
+            inner: DocumentRecorder(&launching.access),
+            runs_dir: launching.runs_dir(),
+        };
+        let outcome = execute_frozen(
+            &frozen,
+            &recorder,
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            launching
+                .runs_dir()
+                .join("run-late")
+                .join(CANCEL_MARKER)
+                .exists(),
+            "the marker landed"
+        );
+        assert_eq!(outcome.completed, 1);
+        assert!(!outcome.cancelled, "the run owes nothing: {outcome:?}");
+    }
+
+    /// Ruling U8: `run` on a run id that already exists reuses the run, and
+    /// clears a leftover marker exactly as `resume` does.
+    #[tokio::test]
+    async fn run_on_an_existing_run_id_clears_the_marker_like_resume() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-again");
+        one_slot(&mut request);
+        freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let marker = request_cancel(&launching.runs_dir(), "run-again").unwrap();
+        let outcome = run(
+            &launching.access,
+            &request,
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.completed, 1);
+        assert!(!outcome.cancelled);
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn request_cancel_refuses_a_missing_run_directory_and_a_path_for_an_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = request_cancel(dir.path(), "absent").unwrap_err();
+        assert!(
+            freeze_refused(&missing).is_some_and(|refusal| refusal.0.contains("has no directory")),
+            "{missing:#}"
+        );
+        let escaping = request_cancel(dir.path(), "../elsewhere").unwrap_err();
+        assert!(
+            freeze_refused(&escaping)
+                .is_some_and(|refusal| refusal.0.contains("one ordinary path component")),
+            "{escaping:#}"
+        );
+        assert_eq!(
+            run_dir(dir.path(), "run-1").unwrap(),
+            dir.path().join("run-1")
+        );
+    }
+
     #[tokio::test]
     async fn an_invalidated_run_refuses_resume() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -1742,5 +2280,502 @@ mod tests {
         let (parallel_trials, parallel_verdicts) = run_at(4).await;
         assert_eq!(serial_trials, parallel_trials);
         assert_eq!(serial_verdicts, parallel_verdicts);
+    }
+
+    /// A stage reads what it declares; a stage that declares nothing reads what
+    /// the run requested, which is how an M2 definition keeps its captures.
+    #[test]
+    fn a_stage_captures_what_it_declares_and_otherwise_what_the_run_requested() {
+        let case: EvalCase = serde_json::from_value(json!({
+            "case_id": "k",
+            "split": "train",
+            "stages": [
+                {
+                    "stage_id": "declared",
+                    "prompt": "p",
+                    "deadline_secs": 60,
+                    "capture": [
+                        {
+                            "kind": "documents",
+                            "name": "items",
+                            "collection": "MailboxItem",
+                            "filter": {"requester_did": {"_eq": "$trial"}},
+                            "fields": ["title", "status"]
+                        },
+                        {"kind": "file", "name": "notes", "glob": "**/*.txt"}
+                    ]
+                },
+                {"stage_id": "bare", "prompt": "p", "deadline_secs": 60}
+            ]
+        }))
+        .unwrap();
+        let fallback = vec![Capture::Documents {
+            name: "rows".into(),
+            collection: "Row".into(),
+            filter: json!({}),
+            fields: Vec::new(),
+        }];
+
+        let stages = stage_specs(&case, &fallback);
+
+        assert_eq!(
+            (stages[0].stage_id.as_str(), stages[0].deadline_secs),
+            ("declared", 60)
+        );
+        assert_eq!(
+            stages[0].captures,
+            vec![
+                Capture::Documents {
+                    name: "items".into(),
+                    collection: "MailboxItem".into(),
+                    filter: json!({"requester_did": {"_eq": "$trial"}}),
+                    fields: vec!["title".into(), "status".into()],
+                },
+                Capture::File {
+                    name: "notes".into(),
+                    glob: "**/*.txt".into(),
+                },
+            ]
+        );
+        assert_eq!(stages[1].captures, fallback);
+    }
+
+    /// Spec 4b §9: before the fix, a slot cancelled mid-trial under
+    /// `max_infra_retries: 0` was never planned again and its pair was lost.
+    #[tokio::test]
+    async fn a_cancelled_slot_is_planned_again_under_no_infrastructure_retries() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-abandoned");
+        one_slot(&mut request);
+        request.max_infra_retries = 0;
+        let cancel = CancellationToken::new();
+        let outcome = run(
+            &launching.access,
+            &request,
+            &CancelOnFirstExecute {
+                run: cancel.clone(),
+            },
+            &CheckRegistry::builtin(),
+            cancel,
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!((outcome.completed, outcome.abandoned), (0, 1));
+
+        let resumed = resume(
+            &launching.access,
+            OWNER,
+            "run-abandoned",
+            &launching.runs_dir(),
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.completed, 1, "the abandoned attempt spent no retry");
+        let mut attempts: Vec<(u32, bool)> = load_trials(&launching.access, OWNER, "run-abandoned")
+            .await
+            .unwrap()
+            .iter()
+            .map(|trial| (trial.identity.attempt, trial.completion.is_some()))
+            .collect();
+        attempts.sort();
+        assert_eq!(attempts, vec![(1, false), (2, true)]);
+    }
+
+    /// Reports its one stage the way the embedded executor does and records
+    /// what `progress.json` said while the trial was inside it.
+    struct StageReporting {
+        run_dir: PathBuf,
+        seen: Mutex<Vec<Option<Progress>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for StageReporting {
+        fn isolation(&self) -> Isolation {
+            Isolation::Embedded
+        }
+
+        async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
+            TrialLocator {
+                trial_agent_did: "did:key:trial".into(),
+                session_id: "session".into(),
+                home_hint: None,
+            }
+        }
+
+        async fn execute(&self, spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
+            spec.progress.stage_started("check");
+            let during = read_progress(&self.run_dir);
+            spec.progress.stage_ended("check");
+            self.seen.lock().unwrap().push(during);
+            passed()
+        }
+
+        async fn recollect(
+            &self,
+            _at: &TrialLocator,
+            _captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn progress_names_the_stage_an_in_flight_slot_is_in_and_forgets_it_at_the_end() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-progress");
+        one_slot(&mut request);
+        let run_dir = launching.runs_dir().join("run-progress");
+        let executor = StageReporting {
+            run_dir: run_dir.clone(),
+            seen: Mutex::new(Vec::new()),
+        };
+        run(
+            &launching.access,
+            &request,
+            &executor,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+        let seen = executor.seen.lock().unwrap().clone();
+        let during = seen[0]
+            .as_ref()
+            .expect("progress.json exists while the trial runs");
+        let (trial_id, slot) = during.slots.iter().next().expect("one slot in flight");
+        assert_eq!(
+            trial_id,
+            &trial_id_for("run-progress", "base", "case-a", 0, 1)
+        );
+        assert_eq!(
+            (
+                slot.cell_id.as_str(),
+                slot.case_id.as_str(),
+                slot.trial_index,
+                slot.attempt,
+                slot.stage_id.as_deref()
+            ),
+            ("base", "case-a", 0, 1, Some("check"))
+        );
+        let after = read_progress(&run_dir).expect("the file stays after the run");
+        assert!(after.slots.is_empty(), "{after:?}");
+    }
+
+    /// Writes its run's marker, then waits inside the trial for its own
+    /// cancellation, the way a real stage waits on a request.
+    struct MarksThenWaits {
+        runs_dir: PathBuf,
+        run_id: String,
+        interrupted: AtomicBool,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for MarksThenWaits {
+        fn isolation(&self) -> Isolation {
+            Isolation::Embedded
+        }
+
+        async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
+            TrialLocator {
+                trial_agent_did: "did:key:trial".into(),
+                session_id: "session".into(),
+                home_hint: None,
+            }
+        }
+
+        async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
+            request_cancel(&self.runs_dir, &self.run_id).unwrap();
+            tokio::select! {
+                _ = cancel.cancelled() => self.interrupted.store(true, Ordering::SeqCst),
+                _ = tokio::time::sleep(Duration::from_secs(30)) => {}
+            }
+            passed()
+        }
+
+        async fn recollect(
+            &self,
+            _at: &TrialLocator,
+            _captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn a_marker_written_mid_trial_interrupts_the_trial_in_flight() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-mid");
+        one_slot(&mut request);
+        let executor = MarksThenWaits {
+            runs_dir: launching.runs_dir(),
+            run_id: "run-mid".into(),
+            interrupted: AtomicBool::new(false),
+        };
+        let outcome = run(
+            &launching.access,
+            &request,
+            &executor,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        assert!(
+            executor.interrupted.load(Ordering::SeqCst),
+            "the trial saw its token cancelled, not its 30 s timeout"
+        );
+        assert_eq!((outcome.completed, outcome.abandoned), (0, 1));
+        let trials = load_trials(&launching.access, OWNER, "run-mid")
+            .await
+            .unwrap();
+        assert_eq!(trials.len(), 1);
+        assert!(trials[0].completion.is_none(), "left open for a resume");
+    }
+
+    /// Reads its own `progress.json` entry twice, 600 ms apart: longer than
+    /// the 250 ms floor on the heartbeat.
+    struct WatchesHeartbeat {
+        run_dir: PathBuf,
+        seen: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for WatchesHeartbeat {
+        fn isolation(&self) -> Isolation {
+            Isolation::Embedded
+        }
+
+        async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
+            TrialLocator {
+                trial_agent_did: "did:key:trial".into(),
+                session_id: "session".into(),
+                home_hint: None,
+            }
+        }
+
+        async fn execute(&self, _spec: &TrialSpec, _cancel: CancellationToken) -> TrialEvidence {
+            let written_at = || {
+                read_progress(&self.run_dir)
+                    .and_then(|progress| progress.slots.values().next().cloned())
+                    .map(|slot| slot.written_at)
+                    .unwrap_or_default()
+            };
+            let first = written_at();
+            tokio::time::sleep(Duration::from_millis(600)).await;
+            let second = written_at();
+            self.seen.lock().unwrap().extend([first, second]);
+            passed()
+        }
+
+        async fn recollect(
+            &self,
+            _at: &TrialLocator,
+            _captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            None
+        }
+    }
+
+    /// Signals when the loop begins a backoff between passes: the event the
+    /// loop logs as it starts the wait carries a `backoff` field.
+    struct BackoffBegan(Arc<tokio::sync::Notify>);
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for BackoffBegan {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _context: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            if event.metadata().target() == module_path!().trim_end_matches("::tests")
+                && event.metadata().fields().field("backoff").is_some()
+            {
+                self.0.notify_one();
+            }
+        }
+    }
+
+    /// A marker written while the loop waits out a 30 s backoff ends the wait
+    /// at a later `marker_poll` tick. The marker is written only once the loop
+    /// has said it is backing off, and a little after, so neither the check
+    /// after the pass nor the wait's first immediate tick can see it: only
+    /// the timer inside the wait can. A loop that never backs off fails here.
+    #[tokio::test]
+    async fn a_marker_written_during_the_backoff_ends_the_wait() {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let began = Arc::new(tokio::sync::Notify::new());
+        let subscriber = tracing::Dispatch::new(
+            tracing_subscriber::Registry::default().with(BackoffBegan(began.clone())),
+        );
+        let _subscriber = tracing::dispatcher::set_default(&subscriber);
+
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-backoff");
+        one_slot(&mut request);
+        let slow = RunOptions {
+            poll_backoff_base: Duration::from_secs(30),
+            poll_backoff_cap: Duration::from_secs(30),
+        };
+        let runs_dir = launching.runs_dir();
+        let operator = async {
+            tokio::time::timeout(Duration::from_secs(20), began.notified())
+                .await
+                .expect("the loop began its backoff after the not-evidence attempt");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            request_cancel(&runs_dir, "run-backoff").unwrap();
+            std::time::Instant::now()
+        };
+        let executor =
+            ScriptedExecutor::new().with_default(ScriptedExecutor::not_evidence("did:key:trial"));
+        let registry = CheckRegistry::builtin();
+        let (outcome, marked) = tokio::join!(
+            run(
+                &launching.access,
+                &request,
+                &executor,
+                &registry,
+                CancellationToken::new(),
+                &slow,
+            ),
+            operator,
+        );
+        let outcome = outcome.unwrap();
+        assert!(
+            marked.elapsed() < Duration::from_secs(5),
+            "the 30 s backoff was cut short at the next tick: {:?}",
+            marked.elapsed()
+        );
+        assert!(outcome.cancelled);
+        assert_eq!((outcome.completed, outcome.abandoned), (1, 0));
+        assert_eq!(
+            load_trials(&launching.access, OWNER, "run-backoff")
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the retry the backoff waited for never launched"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_loop_refreshes_in_flight_entries_while_a_trial_runs() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-beat");
+        one_slot(&mut request);
+        let executor = WatchesHeartbeat {
+            run_dir: launching.runs_dir().join("run-beat"),
+            seen: Mutex::new(Vec::new()),
+        };
+        run(
+            &launching.access,
+            &request,
+            &executor,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        let seen = executor.seen.lock().unwrap().clone();
+        assert!(!seen[0].is_empty(), "{seen:?}");
+        assert!(
+            seen[1] > seen[0],
+            "written_at advanced while the trial ran: {seen:?}"
+        );
+        assert_eq!(marker_poll(&options()), Duration::from_millis(1));
+        assert_eq!(marker_poll(&RunOptions::default()), Duration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn a_run_is_finished_when_it_owes_nothing_and_no_live_process_holds_a_slot() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-fin");
+        one_slot(&mut request);
+        let frozen = freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let record = load_run(&launching.access, OWNER, "run-fin")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(slots_owed(&record, &[]), 1);
+        assert!(!run_finished(&record, &[], &frozen.run_dir));
+
+        run(
+            &launching.access,
+            &request,
+            &ScriptedExecutor::new().with_default(passed()),
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        let trials = load_trials(&launching.access, OWNER, "run-fin")
+            .await
+            .unwrap();
+        assert_eq!(slots_owed(&record, &trials), 0);
+        assert!(run_finished(&record, &trials, &frozen.run_dir));
+
+        // This process holds a slot of the run: not finished.
+        let writer = ProgressWriter::new(&frozen.run_dir);
+        writer.slot_started(
+            "held",
+            InFlight {
+                cell_id: "base".into(),
+                case_id: "case-a".into(),
+                trial_index: 0,
+                attempt: 2,
+                stage_id: None,
+                started_at: String::new(),
+                pid: 0,
+                written_at: String::new(),
+            },
+        );
+        assert!(running_elsewhere(&frozen.run_dir));
+        assert!(!run_finished(&record, &trials, &frozen.run_dir));
+
+        let rewrite = |change: &dyn Fn(&mut InFlight)| {
+            let mut progress = read_progress(&frozen.run_dir).unwrap();
+            change(progress.slots.get_mut("held").unwrap());
+            std::fs::write(
+                frozen.run_dir.join(PROGRESS_FILE),
+                serde_json::to_vec(&progress).unwrap(),
+            )
+            .unwrap();
+        };
+        // A live process that stopped refreshing the entry longer ago than
+        // the staleness window does not hold it.
+        rewrite(&|slot| slot.written_at = "2026-01-01T00:00:00.000Z".into());
+        assert!(!running_elsewhere(&frozen.run_dir));
+
+        // A fresh entry from a process that no longer exists does not hold it.
+        rewrite(&|slot| {
+            slot.written_at =
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            slot.pid = u32::MAX;
+        });
+        assert!(!running_elsewhere(&frozen.run_dir));
+        assert!(run_finished(&record, &trials, &frozen.run_dir));
+
+        assert_eq!(STALE_WINDOW, marker_poll(&RunOptions::default()) * 3);
+        assert!(
+            [0, 1, 250, 999, 1_000, 5_000, u64::MAX].iter().all(|ms| {
+                let options = RunOptions {
+                    poll_backoff_base: Duration::from_millis(*ms),
+                    poll_backoff_cap: Duration::from_secs(60),
+                };
+                marker_poll(&options) * 3 <= STALE_WINDOW
+            }),
+            "one window covers a runner started with any options"
+        );
     }
 }

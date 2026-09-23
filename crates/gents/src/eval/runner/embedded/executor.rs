@@ -3,8 +3,8 @@
 //! Provisioning creates the home and the workspace the trial will run in, so
 //! the run can record where a trial lives before it runs. Execution installs
 //! the frozen pack, the trial's inference binding and its fixtures into that
-//! home, boots a runtime on it, submits one request per stage, and reads the
-//! captures back out. Nothing the trial is told names a check, a tier, a split
+//! home, boots a runtime on it, submits one request per stage, and reads each
+//! stage's captures back out when it ends. Nothing the trial is told names a check, a tier, a split
 //! or a case: grading happens afterwards, from the evidence alone.
 //!
 //! Neither [`TrialExecutor::provision`] nor [`TrialExecutor::execute`] returns
@@ -670,7 +670,9 @@ async fn run_stages(
 ) -> Vec<StageEvidence> {
     let mut stages = Vec::new();
     for stage in &spec.stages {
+        spec.progress.stage_started(&stage.stage_id);
         let evidence = run_stage(spec, cancel, home, locator, workspace, stage).await;
+        spec.progress.stage_ended(&stage.stage_id);
         let failed = evidence.failure_kind.is_some();
         stages.push(evidence);
         if failed {
@@ -704,7 +706,7 @@ async fn run_stage(
             &home.node,
             &locator.trial_agent_did,
             workspace,
-            &spec.captures,
+            &stage.captures,
         )
         .await,
     }
@@ -1648,23 +1650,7 @@ mod tests {
         let home = EmbeddedHome::create_temp("submit-failure").await.unwrap();
         seed_request(&home, "seeded").await;
 
-        let mut spec = TrialSpec::empty_for_tests("t1");
-        spec.captures = vec![
-            Capture::Documents {
-                name: "requests".to_string(),
-                collection: "AgentRequest".to_string(),
-                filter: json!({"request_id": {"_eq": "seeded"}}),
-                fields: vec!["behavior_id".to_string()],
-            },
-            // No such collection in this home, so the read fails rather than
-            // returning nothing.
-            Capture::Documents {
-                name: "unreadable".to_string(),
-                collection: "NoSuchCollection".to_string(),
-                filter: json!({}),
-                fields: Vec::new(),
-            },
-        ];
+        let spec = TrialSpec::empty_for_tests("t1");
         // Nothing has registered a signing identity for this DID, so building
         // the stage's signed request fails before anything is written.
         let locator = TrialLocator {
@@ -1676,6 +1662,22 @@ mod tests {
             stage_id: "only".to_string(),
             prompt: "hello".to_string(),
             deadline_secs: 1,
+            captures: vec![
+                Capture::Documents {
+                    name: "requests".to_string(),
+                    collection: "AgentRequest".to_string(),
+                    filter: json!({"request_id": {"_eq": "seeded"}}),
+                    fields: vec!["behavior_id".to_string()],
+                },
+                // No such collection in this home, so the read fails rather
+                // than returning nothing.
+                Capture::Documents {
+                    name: "unreadable".to_string(),
+                    collection: "NoSuchCollection".to_string(),
+                    filter: json!({}),
+                    fields: Vec::new(),
+                },
+            ],
         };
 
         let evidence = run_stage(

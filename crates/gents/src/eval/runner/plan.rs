@@ -92,14 +92,57 @@ pub fn not_evidence_slots(existing: &[TrialRecord]) -> u32 {
         .count() as u32
 }
 
+/// How many abandoned attempts (a null completion: the host crashed or the
+/// run was cancelled mid-trial) a slot may accumulate before it is planned no
+/// more. Abandonment is not a verdict on the subject or the provider, so it
+/// spends no `max_infra_retries`; this bound only stops a trial that kills
+/// its host every time from looping forever (spec 4b §9, ruling T35-1).
+pub const MAX_ABANDONED_ATTEMPTS: u32 = 10;
+
+/// How many slots [`MAX_ABANDONED_ATTEMPTS`] stopped: slots with that many
+/// abandoned attempts and no completed attempt that was evidence. Kept apart
+/// from [`plan`], which every listing of runs calls; the loop asks once, when
+/// its plan comes back empty, to say why those slots stay unanswered.
+pub fn abandonment_bounded_slots(existing: &[TrialRecord]) -> u32 {
+    // Per slot: abandoned attempts, and the latest completed attempt with
+    // whether it was evidence.
+    let mut slots: BTreeMap<(&str, &str, u32), (u32, Option<(u32, bool)>)> = BTreeMap::new();
+    for record in existing {
+        let key = (
+            record.identity.cell_id.as_str(),
+            record.identity.case_id.as_str(),
+            record.identity.trial_index,
+        );
+        let (abandoned, latest) = slots.entry(key).or_default();
+        let attempt = record.identity.attempt;
+        match &record.completion {
+            None => *abandoned += 1,
+            Some(completion) => {
+                if latest.is_none_or(|(highest, _)| attempt >= highest) {
+                    *latest = Some((attempt, !completion_is_not_evidence(completion)));
+                }
+            }
+        }
+    }
+    slots
+        .values()
+        .filter(|(abandoned, latest)| {
+            *abandoned >= MAX_ABANDONED_ATTEMPTS && !latest.is_some_and(|(_, evidence)| evidence)
+        })
+        .count() as u32
+}
+
 /// The trials `run_id` still owes, given what it has already written.
 ///
-/// A slot is done once an attempt finished with evidence about the subject.
+/// A slot is done once its latest completed attempt is evidence about the
+/// subject.
 /// A slot whose latest completed attempt is not evidence, and a slot whose
 /// attempts were all abandoned, are planned again at one past their highest
-/// attempt, so the new row never collides with an old one — until the slot has
-/// used `max_infra_retries + 1` attempts, after which the run stops paying for
-/// a question it keeps failing to ask.
+/// attempt, so the new row never collides with an old one. Two bounds stop
+/// that: `max_infra_retries + 1` attempts that finished without evidence, and
+/// [`MAX_ABANDONED_ATTEMPTS`] attempts that never finished. An abandoned
+/// attempt counts only toward the second, so a cancel never costs a slot its
+/// pair.
 pub fn plan(
     origin: &RunOrigin,
     run_id: &str,
@@ -119,12 +162,18 @@ pub fn plan(
                         && record.identity.trial_index == trial_index
                 });
                 let mut highest = None;
+                let mut abandoned = 0u32;
+                let mut not_evidence = 0u32;
                 let mut latest_completed: Option<(u32, &TrialCompletion)> = None;
                 for record in attempts {
                     highest = highest.max(Some(record.identity.attempt));
                     let Some(completion) = &record.completion else {
+                        abandoned += 1;
                         continue;
                     };
+                    if completion_is_not_evidence(completion) {
+                        not_evidence += 1;
+                    }
                     if latest_completed
                         .is_none_or(|(attempt, _)| record.identity.attempt >= attempt)
                     {
@@ -136,10 +185,35 @@ pub fn plan(
                 {
                     continue;
                 }
-                let attempt = highest.map_or(1, |attempt| attempt + 1);
-                if attempt > max_infra_retries.saturating_add(1) {
+                if not_evidence > max_infra_retries || abandoned >= MAX_ABANDONED_ATTEMPTS {
                     continue;
                 }
+                // Unreachable for a run the loop wrote: attempts count up from
+                // one. A hand-written row at `u32::MAX` loses the slot, loudly.
+                let Some(attempt) = highest.map_or(Some(1), |attempt| attempt.checked_add(1))
+                else {
+                    tracing::error!(
+                        run_id,
+                        cell_id = %cell.cell_id,
+                        case_id,
+                        trial_index,
+                        "eval trial attempt number overflows u32; slot not planned"
+                    );
+                    continue;
+                };
+                // Unreachable for a frozen run: freezing refuses a seed range
+                // past `i64::MAX`. A hand-written origin loses the slot, loudly.
+                let Some(seed) = origin.seed_base.checked_add(i64::from(trial_index)) else {
+                    tracing::error!(
+                        run_id,
+                        cell_id = %cell.cell_id,
+                        case_id,
+                        trial_index,
+                        seed_base = origin.seed_base,
+                        "eval trial seed overflows i64; slot not planned"
+                    );
+                    continue;
+                };
                 planned.push(PlannedTrial {
                     trial_id: trial_id_for(run_id, &cell.cell_id, case_id, trial_index, attempt),
                     cell_id: cell.cell_id.clone(),
@@ -147,7 +221,7 @@ pub fn plan(
                     case_id: (*case_id).to_string(),
                     trial_index,
                     attempt,
-                    seed: origin.seed_base + trial_index as i64,
+                    seed,
                 });
             }
         }
@@ -373,7 +447,7 @@ mod tests {
                 3,
             ),
             Some(3),
-            "an abandoned row and a finished one that learned nothing both count as attempts"
+            "an abandoned row takes an attempt number but spends no retry"
         );
         assert_eq!(
             not_evidence_slots(&[
@@ -390,6 +464,156 @@ mod tests {
             ]),
             0
         );
+    }
+
+    /// Spec 4b §9 (M6b ruling T35-1): the retry cap counts attempts that
+    /// finished without evidence. An abandoned attempt, a crash or a cancel,
+    /// is not a verdict on the provider and is bounded separately.
+    #[test]
+    fn abandoned_attempts_do_not_spend_infrastructure_retries() {
+        let origin = origin(&["base"], &["a-case"], 1);
+        let abandoned = |attempt: u32| record("base", "a-case", 0, attempt, false);
+        let cases: Vec<(&str, Vec<TrialRecord>, u32, Option<u32>)> = vec![
+            (
+                "a cancelled first attempt is planned again with no retries",
+                vec![abandoned(1)],
+                0,
+                Some(2),
+            ),
+            (
+                "an attempt that finished without evidence spends the only try",
+                vec![no_evidence("base", "a-case", 1)],
+                0,
+                None,
+            ),
+            (
+                "abandoned attempts around a no-evidence one leave the cap unspent",
+                vec![abandoned(1), no_evidence("base", "a-case", 2), abandoned(3)],
+                1,
+                Some(4),
+            ),
+            (
+                "the cap counts no-evidence completions only",
+                vec![
+                    abandoned(1),
+                    no_evidence("base", "a-case", 2),
+                    no_evidence("base", "a-case", 3),
+                ],
+                1,
+                None,
+            ),
+            (
+                "nine abandoned attempts still plan a tenth",
+                (1..=9).map(abandoned).collect(),
+                0,
+                Some(10),
+            ),
+            (
+                "an attempt number with no successor loses the slot, not the run",
+                vec![abandoned(u32::MAX)],
+                0,
+                None,
+            ),
+            (
+                "ten abandoned attempts stop the slot",
+                (1..=10).map(abandoned).collect(),
+                0,
+                None,
+            ),
+            (
+                "a completed attempt ends the slot however many were abandoned",
+                (1..=10)
+                    .map(abandoned)
+                    .chain(std::iter::once(record("base", "a-case", 0, 11, true)))
+                    .collect(),
+                0,
+                None,
+            ),
+        ];
+        for (why, existing, max_infra_retries, expected) in cases {
+            let next = plan(&origin, "r", &existing, max_infra_retries)
+                .first()
+                .map(|planned| planned.attempt);
+            assert_eq!(next, expected, "{why}");
+        }
+        assert_eq!(MAX_ABANDONED_ATTEMPTS, 10);
+    }
+
+    #[test]
+    fn abandonment_bounded_slots_counts_the_slots_the_bound_stopped() {
+        let abandoned = |case: &str, attempt: u32| record("base", case, 0, attempt, false);
+        let cases: Vec<(&str, Vec<TrialRecord>, u32)> = vec![
+            ("nothing written", Vec::new(), 0),
+            (
+                "nine abandoned attempts are under the bound",
+                (1..=9).map(|attempt| abandoned("a", attempt)).collect(),
+                0,
+            ),
+            (
+                "ten abandoned attempts reach it",
+                (1..=10).map(|attempt| abandoned("a", attempt)).collect(),
+                1,
+            ),
+            (
+                "ten abandoned and one no-evidence completion is still stopped",
+                (1..=10)
+                    .map(|attempt| abandoned("a", attempt))
+                    .chain(std::iter::once(no_evidence("base", "a", 11)))
+                    .collect(),
+                1,
+            ),
+            (
+                "a later evidence completion answers the slot",
+                (1..=10)
+                    .map(|attempt| abandoned("a", attempt))
+                    .chain(std::iter::once(record("base", "a", 0, 11, true)))
+                    .collect(),
+                0,
+            ),
+            (
+                "each slot counts once",
+                (1..=10)
+                    .flat_map(|attempt| [abandoned("a", attempt), abandoned("b", attempt)])
+                    .collect(),
+                2,
+            ),
+        ];
+        for (why, existing, expected) in cases {
+            assert_eq!(abandonment_bounded_slots(&existing), expected, "{why}");
+        }
+    }
+
+    /// A trial's seed is `seed_base + trial_index`. Freezing refuses a range
+    /// past `i64::MAX`, so a slot whose seed would overflow is only reachable
+    /// from a hand-written origin; `plan` skips it rather than wrap.
+    #[test]
+    fn a_slot_whose_seed_would_overflow_is_skipped() {
+        let cases: Vec<(&str, i64, Vec<(u32, i64)>)> = vec![
+            (
+                "an ordinary base seeds each trial index in turn",
+                100,
+                vec![(0, 100), (1, 101), (2, 102)],
+            ),
+            (
+                "the last index may seed exactly i64::MAX",
+                i64::MAX - 2,
+                vec![(0, i64::MAX - 2), (1, i64::MAX - 1), (2, i64::MAX)],
+            ),
+            (
+                "one past i64::MAX skips that slot and keeps the earlier ones",
+                i64::MAX - 1,
+                vec![(0, i64::MAX - 1), (1, i64::MAX)],
+            ),
+        ];
+        for (why, seed_base, expected) in cases {
+            let mut origin = origin(&["base"], &["a-case"], 3);
+            origin.seed_base = seed_base;
+            let seeds: Vec<(u32, i64)> = plan(&origin, "r", &[], 3)
+                .iter()
+                .map(|planned| (planned.trial_index, planned.seed))
+                .collect();
+            assert_eq!(seeds, expected, "{why}");
+        }
     }
 
     /// A trial that reached no stage at all, and one whose only stages were

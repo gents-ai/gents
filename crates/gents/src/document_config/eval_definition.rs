@@ -67,6 +67,16 @@ pub struct EvalFixtureDocument {
     pub document: serde_json::Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub struct EvalFixtureFile {
+    /// Relative to the trial workspace; it may not leave it.
+    pub path: String,
+    /// The file's UTF-8 text.
+    pub contents: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -89,6 +99,17 @@ pub struct EvalFixtures {
         ts(as = "Option<Vec<EvalFixtureDocument>>", optional = nullable)
     )]
     pub documents: Vec<EvalFixtureDocument>,
+    /// Inline files, authored with the case, to write into the trial workspace.
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(as = "Option<Vec<EvalFixtureFile>>", optional = nullable)
+    )]
+    pub files: Vec<EvalFixtureFile>,
     /// App-collection SDL to install in the trial before its documents.
     #[serde(
         default,
@@ -240,6 +261,7 @@ impl EvalDefinition {
             !self.cases.is_empty(),
             "eval definition {id} requires at least one case"
         );
+        validate_fixture_files(self.fixtures.as_ref(), &format!("eval definition {id}"))?;
         let mut case_ids = BTreeSet::new();
         for case in &self.cases {
             let case_id = &case.case_id;
@@ -251,6 +273,10 @@ impl EvalDefinition {
                 case_ids.insert(case_id),
                 "eval definition {id} has duplicate case_id {case_id}"
             );
+            validate_fixture_files(
+                case.fixtures.as_ref(),
+                &format!("eval definition {id} case {case_id}"),
+            )?;
             ensure!(
                 !case.stages.is_empty(),
                 "eval definition {id} case {case_id} requires at least one stage"
@@ -325,6 +351,25 @@ impl EvalDefinition {
         }
         Ok(())
     }
+}
+
+/// A fixture file lands inside the trial workspace: its path is non-empty,
+/// relative, and made only of ordinary components, so no `..`, `.`, root or
+/// prefix can move it anywhere else.
+fn validate_fixture_files(fixtures: Option<&EvalFixtures>, owner: &str) -> Result<()> {
+    for file in fixtures.map_or(&[][..], |fixtures| &fixtures.files) {
+        let path = &file.path;
+        let path_ref = std::path::Path::new(path);
+        ensure!(
+            !path.is_empty()
+                && path_ref.is_relative()
+                && path_ref
+                    .components()
+                    .all(|component| matches!(component, std::path::Component::Normal(_))),
+            "{owner} fixture file path {path:?} must be a relative path inside the trial workspace"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -546,6 +591,59 @@ mod tests {
             },
             "capture out has an empty glob",
         );
+    }
+
+    #[test]
+    fn fixture_files_round_trip_and_are_omitted_when_empty() {
+        let mut value = definition();
+        value["cases"][0]["fixtures"] = json!({
+            "files": [{"path": "inventory/a.json", "contents": "{\"sku\": 1}"}]
+        });
+        let parsed = parse(value.clone());
+        parsed.validate().unwrap();
+        let fixtures = parsed.cases[0].fixtures.as_ref().unwrap();
+        assert_eq!(
+            fixtures.files,
+            vec![EvalFixtureFile {
+                path: "inventory/a.json".into(),
+                contents: "{\"sku\": 1}".into(),
+            }]
+        );
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            serialized["cases"][0]["fixtures"],
+            value["cases"][0]["fixtures"]
+        );
+        assert_eq!(parse(serialized), parsed);
+
+        let mut nulled = definition();
+        nulled["fixtures"] = json!({"files": null});
+        let parsed = parse(nulled);
+        let fixtures = parsed.fixtures.as_ref().unwrap();
+        assert!(fixtures.files.is_empty());
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert!(
+            serialized["fixtures"].get("files").is_none(),
+            "an empty files list is omitted, never []"
+        );
+
+        let mut unknown = definition();
+        unknown["fixtures"] = json!({"files": [{"path": "a", "contents": "", "mode": 1}]});
+        assert!(serde_json::from_value::<EvalDefinition>(unknown).is_err());
+    }
+
+    #[test]
+    fn a_fixture_file_path_must_stay_inside_the_trial_workspace() {
+        for path in ["../x", "/x", "a/../b", "", "./a"] {
+            invalid(
+                |v| v["cases"][0]["fixtures"] = json!({"files": [{"path": path, "contents": ""}]}),
+                &format!("case disk-warning fixture file path {path:?}"),
+            );
+            invalid(
+                |v| v["fixtures"] = json!({"files": [{"path": path, "contents": ""}]}),
+                &format!("eval definition monitor-findings fixture file path {path:?}"),
+            );
+        }
     }
 
     /// `mint_recreate_identity` stamps a fresh `updated_at` so that reinstalling

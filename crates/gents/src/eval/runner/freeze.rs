@@ -75,8 +75,9 @@ pub struct RunRequest {
     pub purpose: String,
     pub source_commit: String,
     pub source_dirty: bool,
-    /// What to read out of each finished trial home. Not comparability data,
-    /// so it rides beside the run rather than in its origin.
+    /// The request-level captures: what a stage reads out of its trial home
+    /// when it declares no captures of its own. Not comparability data, so it
+    /// rides beside the run rather than in its origin.
     pub captures: Vec<Capture>,
     /// `<launching home>/eval/runs`.
     pub runs_dir: PathBuf,
@@ -151,6 +152,7 @@ pub async fn freeze(
     validate_purpose(&request.purpose)?;
     validate_evaluator(&request.evaluator_did)?;
     validate_cell_identity(request)?;
+    validate_seed_range(request)?;
     let definition = load_definition(access, &request.owner, &request.definition_id).await?;
     let case_ids = select_cases(request, &definition)?;
 
@@ -195,6 +197,7 @@ pub async fn freeze(
         materialize_pack(cell, pack)?;
     }
     write_sidecar(&run_dir, &sidecar)?;
+    write_frozen_definition(&run_dir, &definition)?;
 
     let record = match existing {
         Some(record) => record,
@@ -228,8 +231,10 @@ pub async fn freeze(
 /// Rebuild the run `run_id` from its row and the directory it already wrote.
 ///
 /// Resuming re-reads what freezing decided rather than deciding it again: the
-/// packs under the run directory are the run's own copy, and the definition is
-/// only held to the digest the run froze. What is checked again is what could
+/// packs under the run directory are the run's own copy, and so is
+/// [`DEFINITION_FILE`] (a run frozen before that file existed reads the
+/// installed definition instead); either is held to the digest the run
+/// froze. What is checked again is what could
 /// have changed underneath and would change what a trial means: the
 /// definition's digest, each materialized pack's digest, the inference
 /// documents the cells name, and — because the resuming executor need not be
@@ -256,20 +261,26 @@ pub(crate) async fn thaw(
         ))
     })?;
 
-    let definition_id = &record.origin.definition.definition_id;
-    let definition: EvalDefinition =
-        read_document(access, Collection::EvalDefinition, owner, definition_id)
-            .await?
-            .ok_or_else(|| {
-                refused(format!(
-                    "run {run_id} names no eval definition {definition_id:?}"
-                ))
-            })?;
-    if definition_ref(&definition)?.digest != record.origin.definition.digest {
-        return Err(refused(format!(
-            "eval definition {definition_id:?} changed since run {run_id} froze it"
-        )));
-    }
+    let definition = match read_frozen_definition(&run_dir, &record.origin.definition)? {
+        Some(definition) => definition,
+        None => {
+            let definition_id = &record.origin.definition.definition_id;
+            let definition: EvalDefinition =
+                read_document(access, Collection::EvalDefinition, owner, definition_id)
+                    .await?
+                    .ok_or_else(|| {
+                        refused(format!(
+                            "run {run_id} names no eval definition {definition_id:?}"
+                        ))
+                    })?;
+            if definition_ref(&definition)?.digest != record.origin.definition.digest {
+                return Err(refused(format!(
+                    "eval definition {definition_id:?} changed since run {run_id} froze it"
+                )));
+            }
+            definition
+        }
+    };
 
     let mut cells = Vec::with_capacity(record.origin.cells.len());
     for spec in &record.origin.cells {
@@ -380,6 +391,19 @@ fn validate_cell_identity(request: &RunRequest) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A trial's seed is `seed_base + trial_index`, so the last trial index's seed
+/// has to fit in an i64; the planner never wraps one.
+fn validate_seed_range(request: &RunRequest) -> Result<()> {
+    let last_index = i64::from(request.trials_per_case.saturating_sub(1));
+    if request.seed_base.checked_add(last_index).is_some() {
+        return Ok(());
+    }
+    Err(refused(format!(
+        "seed_base {} with trials_per_case {} seeds past i64::MAX",
+        request.seed_base, request.trials_per_case
+    )))
 }
 
 /// One configuration document of the launching home, in its canonical form.
@@ -838,6 +862,43 @@ fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {
     let path = sidecar_path(run_dir);
     std::fs::write(&path, serde_json::to_vec_pretty(sidecar)?)
         .with_context(|| format!("writing {}", path.display()))
+}
+
+/// `<run dir>/definition.json`: the definition exactly as freezing loaded it.
+/// A report and a resume read this copy, so a later edit of the installed
+/// definition cannot change what a finished run means.
+pub const DEFINITION_FILE: &str = "definition.json";
+
+fn write_frozen_definition(run_dir: &Path, definition: &EvalDefinition) -> Result<()> {
+    std::fs::create_dir_all(run_dir).with_context(|| format!("creating {}", run_dir.display()))?;
+    let path = run_dir.join(DEFINITION_FILE);
+    std::fs::write(&path, serde_json::to_vec_pretty(definition)?)
+        .with_context(|| format!("writing {}", path.display()))
+}
+
+/// The definition `run_dir` froze, verified against the digest its run
+/// recorded. `Ok(None)` for a run frozen before the file existed; the caller
+/// then falls back to the installed definition while it still matches.
+pub fn read_frozen_definition(
+    run_dir: &Path,
+    frozen: &DefinitionRef,
+) -> Result<Option<EvalDefinition>> {
+    let path = run_dir.join(DEFINITION_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    let definition: EvalDefinition =
+        serde_json::from_slice(&bytes).with_context(|| format!("parsing {}", path.display()))?;
+    if definition_ref(&definition)?.digest != frozen.digest {
+        return Err(refused(format!(
+            "{} no longer digests to the definition its run froze ({})",
+            path.display(),
+            frozen.digest
+        )));
+    }
+    Ok(Some(definition))
 }
 
 /// A `run_id` means one run. The same request reuses it; anything else about
@@ -1302,6 +1363,39 @@ pub(crate) mod tests {
         );
     }
 
+    /// A trial's seed is `seed_base + trial_index`, so the last trial's seed
+    /// has to fit in an i64. A range past it is refused before anything is
+    /// written; a base of `i64::MAX` with one trial per case still fits.
+    #[tokio::test]
+    async fn freeze_refuses_a_seed_range_past_i64() {
+        let launching = Launching::new().await;
+        let pack = launching.pack("pack", "Off");
+
+        let mut overflowing = launching.request("run-1", &pack);
+        overflowing.seed_base = i64::MAX;
+        overflowing.trials_per_case = 2;
+        let error = freeze(&launching.access, &overflowing, Isolation::Embedded)
+            .await
+            .unwrap_err();
+        let reason = refusal(&error);
+        assert!(
+            reason.contains("seed_base") && reason.contains("trials_per_case"),
+            "{reason}"
+        );
+        assert!(
+            !launching.runs_dir().join("run-1").exists(),
+            "a refused request writes nothing"
+        );
+
+        let mut fitting = launching.request("run-2", &pack);
+        fitting.seed_base = i64::MAX;
+        fitting.trials_per_case = 1;
+        let frozen = freeze(&launching.access, &fitting, Isolation::Embedded)
+            .await
+            .unwrap();
+        assert_eq!(frozen.record.origin.seed_base, i64::MAX);
+    }
+
     #[tokio::test]
     async fn freeze_refuses_a_changed_origin_for_an_existing_run_id() {
         let launching = Launching::new().await;
@@ -1557,5 +1651,87 @@ pub(crate) mod tests {
             .await
             .unwrap_err();
         assert!(refusal(&error).contains("capture"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn freeze_writes_the_definition_it_froze_and_resume_reads_it_back() {
+        let launching = Launching::new().await;
+        let pack = launching.pack("pack", "Off");
+        let frozen = freeze(
+            &launching.access,
+            &launching.request("run-def", &pack),
+            Isolation::Embedded,
+        )
+        .await
+        .unwrap();
+        let path = frozen.run_dir.join(DEFINITION_FILE);
+        assert!(path.is_file());
+        let read = read_frozen_definition(&frozen.run_dir, &frozen.record.origin.definition)
+            .unwrap()
+            .expect("the file is there");
+        assert_eq!(read, frozen.definition);
+
+        // The live definition changes; the run keeps the one it froze.
+        let mut edited = serde_json::to_value(&frozen.definition).unwrap();
+        edited["title"] = json!("edited after the freeze");
+        launching
+            .install(vec![(Collection::EvalDefinition, edited)])
+            .await;
+        let thawed = thaw(
+            &launching.access,
+            OWNER,
+            "run-def",
+            &launching.runs_dir(),
+            Isolation::Embedded,
+        )
+        .await
+        .unwrap();
+        assert_eq!(thawed.definition, frozen.definition);
+
+        // A file that no longer digests to the origin is refused.
+        let mut tampered = serde_json::to_value(&frozen.definition).unwrap();
+        tampered["comparability_version"] = json!(99);
+        std::fs::write(&path, serde_json::to_vec(&tampered).unwrap()).unwrap();
+        let error =
+            read_frozen_definition(&frozen.run_dir, &frozen.record.origin.definition).unwrap_err();
+        assert!(refusal(&error).contains("no longer digests"), "{error:#}");
+        let error = thaw(
+            &launching.access,
+            OWNER,
+            "run-def",
+            &launching.runs_dir(),
+            Isolation::Embedded,
+        )
+        .await
+        .unwrap_err();
+        assert!(refusal(&error).contains("no longer digests"), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn a_run_frozen_without_the_file_falls_back_to_the_live_definition() {
+        let launching = Launching::new().await;
+        let pack = launching.pack("pack", "Off");
+        let frozen = freeze(
+            &launching.access,
+            &launching.request("run-old", &pack),
+            Isolation::Embedded,
+        )
+        .await
+        .unwrap();
+        std::fs::remove_file(frozen.run_dir.join(DEFINITION_FILE)).unwrap();
+        assert_eq!(
+            read_frozen_definition(&frozen.run_dir, &frozen.record.origin.definition).unwrap(),
+            None
+        );
+        let thawed = thaw(
+            &launching.access,
+            OWNER,
+            "run-old",
+            &launching.runs_dir(),
+            Isolation::Embedded,
+        )
+        .await
+        .unwrap();
+        assert_eq!(thawed.definition, frozen.definition);
     }
 }

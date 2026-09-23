@@ -71,7 +71,7 @@ pub fn latest_attempts<'a>(trials: &'a [TrialRecord], cell_id: &str) -> Vec<&'a 
 /// Each completed slot of `cell_id` in one run, with its case and the
 /// verdicts that count for it: the latest attempt's verdicts, stage ids mapped
 /// to the case's stage indices, after `latest_verdicts` supersession.
-fn counted_slots<'a>(
+pub(crate) fn counted_slots<'a>(
     definition: &'a EvalDefinition,
     rows: &'a RunRows,
     cell_id: &str,
@@ -182,7 +182,7 @@ pub fn concat_paired(parts: &[PairedEvidence]) -> PairedEvidence {
 }
 
 /// Tokens reported by one cell's counted trials, and how many reported none.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct CellUsage {
     pub tokens: u64,
     pub trials: u64,

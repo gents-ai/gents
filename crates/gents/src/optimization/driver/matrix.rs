@@ -19,10 +19,10 @@
 //! held-out run after a final structural duplicate. A token cancelled inside a
 //! run's first trial ([`CancellingExecutor`]) stops it with the run journaled
 //! and undecided: the validation run, the re-run, the held-out run. The runner
-//! abandons that trial and plans its slot again only under an infrastructure
-//! retry, so those twins run with `max_infra_retries: 1`. Under
-//! `max_infra_retries: 0` an abandoned slot is never planned again, and its
-//! pair is lost to the resume.
+//! abandons that trial and plans its slot again at the next attempt; since
+//! spec 4b §9 an abandoned attempt spends no infrastructure retry, so a
+//! cancelled slot keeps its pair under any `max_infra_retries`. These twins
+//! run with `max_infra_retries: 1` and script attempt 2 as attempt 1.
 //!
 //! One point is out of the token's reach: after a validation run completes
 //! and before its re-run is journaled. No seam is called between the two, so
@@ -30,7 +30,8 @@
 //! tests `a_check_charges_only_runs_started_before_it` and
 //! `a_resumed_round_is_charged_the_tokens_its_twin_was`, not here.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -43,7 +44,7 @@ use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze::tests::{Launching, OWNER};
 use crate::eval::runner::{
     trial_id_for, Capture, Isolation, RunOptions, ScriptKey, ScriptedExecutor, StageEvidence,
-    TrialEvidence, TrialExecutor, TrialLocator, TrialSpec,
+    TrialEvidence, TrialExecutor, TrialLocator, TrialSpec, CANCEL_MARKER,
 };
 use crate::eval::{load_run, load_trials, load_verdicts, OutcomeKind, TrialUsage};
 use crate::optimization::driver::{
@@ -295,8 +296,8 @@ impl Proposer for DeadlineProposer {
 /// Cancels `token` inside the first trial of `run_id`, after the driver has
 /// journaled that run as started: the trial is abandoned, every other slot is
 /// skipped, and the run is left open with no decision. The abandoned slot is
-/// planned again only if the run allows an infrastructure retry, so the twins
-/// that use this set `max_infra_retries: 1` and script attempt 2 as attempt 1.
+/// planned again at attempt 2, which spends no infrastructure retry (spec 4b
+/// §9); the twins that use this script attempt 2 as attempt 1.
 struct CancellingExecutor<'a> {
     inner: &'a ScriptedExecutor,
     run_id: String,
@@ -333,6 +334,52 @@ impl TrialExecutor for CancellingExecutor<'_> {
         });
         if in_run {
             self.token.cancel();
+        }
+        self.inner.execute(spec, cancel).await
+    }
+
+    async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence> {
+        self.inner.recollect(at, captures).await
+    }
+}
+
+/// Writes its run's cancel marker the first time it runs a candidate trial:
+/// an operator's `gents eval cancel` on the job's first validation run.
+struct CancelsFirstValidationRun<'a> {
+    inner: &'a ScriptedExecutor,
+    marked: AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl TrialExecutor for CancelsFirstValidationRun<'_> {
+    fn isolation(&self) -> Isolation {
+        self.inner.isolation()
+    }
+
+    fn wants_script_key(&self) -> bool {
+        self.inner.wants_script_key()
+    }
+
+    async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
+        self.inner.provision(spec).await
+    }
+
+    async fn discard(&self, trial_id: &str) {
+        self.inner.discard(trial_id).await;
+    }
+
+    async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
+        let candidate = spec
+            .script_key
+            .as_ref()
+            .is_some_and(|key| key.cell_label == "candidate");
+        if candidate && !self.marked.swap(true, Ordering::SeqCst) {
+            let run_dir = spec
+                .home_dir
+                .parent()
+                .and_then(Path::parent)
+                .expect("a trial home is <run dir>/trials/<trial_id>");
+            std::fs::write(run_dir.join(CANCEL_MARKER), b"").unwrap();
         }
         self.inner.execute(spec, cancel).await
     }
@@ -1427,8 +1474,8 @@ fn accepting_executor_with_retry() -> ScriptedExecutor {
 /// Ruling T35-3: cancel inside the first trial of `<job>-b-<run_suffix>`, a
 /// run the driver journaled as started and has not decided, then resume and
 /// compare with the uninterrupted `<job>-a`. The runner abandons that trial
-/// and leaves the run open; both twins allow one infrastructure retry, so the
-/// resume plans the abandoned slot again at attempt 2, which `executor`
+/// and leaves the run open; the resume plans the abandoned slot again at
+/// attempt 2, which spends no infrastructure retry and which `executor`
 /// answers as it answered attempt 1.
 async fn assert_twin_after_cancel_inside(
     executor: &ScriptedExecutor,
@@ -1735,4 +1782,54 @@ async fn an_inconclusive_round_whose_rerun_is_unaffordable_keeps_its_decision_an
             state: JobState::Exhausted
         })
     ));
+}
+
+/// Ruling F1: the marker stops only the run's own child token, so before
+/// the fix the driver decided on half a validation run.
+#[tokio::test]
+async fn a_cancelled_validation_run_journals_no_decision_and_the_job_resumes() {
+    let harness = Harness::new().await;
+    let executor = script(base_executor(), "baseline", &VALIDATION_CASES, |_| fail());
+    let request = harness.request("job-cancelled", DEFINITION, budgets(1_000));
+    let marking = CancelsFirstValidationRun {
+        inner: &executor,
+        marked: AtomicBool::new(false),
+    };
+    let stopped = drive(
+        &harness,
+        &request,
+        &marking,
+        &repeating_proposer(CANDIDATE_PROMPT),
+        &CheckRegistry::builtin(),
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(stopped.state, JobState::Running);
+    let entries = journal(&harness, "job-cancelled").await;
+    assert!(
+        entries.iter().any(|entry| matches!(
+            entry,
+            JournalEntry::RunStarted {
+                split: EvalSplit::Validation,
+                ..
+            }
+        )),
+        "{entries:#?}"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| matches!(entry, JournalEntry::Decided { .. })),
+        "a cancelled run is never decided on: {entries:#?}"
+    );
+
+    let resumed = settle(
+        &harness,
+        &request,
+        &executor,
+        &repeating_proposer(CANDIDATE_PROMPT),
+    )
+    .await;
+    assert_eq!(resumed.state, JobState::ReadyToPromote, "{resumed:#?}");
 }

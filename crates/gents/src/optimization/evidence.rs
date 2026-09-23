@@ -31,16 +31,32 @@ pub const CANDIDATE_CELL: &str = "candidate";
 /// field's purpose, and past it the result is `None`. A cell with no trial
 /// that reported usage has no mean at all, so the result is `None` as well.
 pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<TokenTotals> {
-    let (mut baseline, mut candidate) = ((0u64, 0u64), (0u64, 0u64));
-    let (mut counted, mut missing) = (0u128, 0u128);
+    let (mut baseline, mut candidate) = (CellUsage::default(), CellUsage::default());
     for rows in runs {
-        let base = cell_usage(rows, BASELINE_CELL);
-        let cand = cell_usage(rows, CANDIDATE_CELL);
-        baseline = (baseline.0 + base.tokens, baseline.1 + reported(&base));
-        candidate = (candidate.0 + cand.tokens, candidate.1 + reported(&cand));
-        counted += u128::from(base.trials + cand.trials);
-        missing += u128::from(base.missing + cand.missing);
+        add(&mut baseline, cell_usage(rows, BASELINE_CELL));
+        add(&mut candidate, cell_usage(rows, CANDIDATE_CELL));
     }
+    totals(baseline, candidate, max_missing_usage_bp)
+}
+
+fn add(total: &mut CellUsage, one: CellUsage) {
+    total.tokens += one.tokens;
+    total.trials += one.trials;
+    total.missing += one.missing;
+}
+
+/// The cost gate's token totals for two cells, by the rule [`token_totals`]
+/// documents: unknown usage is not free; past the tolerated missing share, or
+/// with a cell that reported nothing, `None`. Pure: `eval::report::compare`
+/// calls it too, so an operator's comparison and the optimizer skip the cost
+/// gate on exactly the same data.
+pub fn totals(
+    baseline: CellUsage,
+    candidate: CellUsage,
+    max_missing_usage_bp: u64,
+) -> Option<TokenTotals> {
+    let counted = u128::from(baseline.trials) + u128::from(candidate.trials);
+    let missing = u128::from(baseline.missing) + u128::from(candidate.missing);
     if counted == 0 || missing * 10_000 > u128::from(max_missing_usage_bp) * counted {
         tracing::info!(
             counted = counted as u64,
@@ -49,19 +65,20 @@ pub fn token_totals(runs: &[RunRows], max_missing_usage_bp: u64) -> Option<Token
         );
         return None;
     }
-    if baseline.1 == 0 || candidate.1 == 0 {
+    let (baseline_reported, candidate_reported) = (reported(&baseline), reported(&candidate));
+    if baseline_reported == 0 || candidate_reported == 0 {
         tracing::info!(
-            baseline_reported = baseline.1,
-            candidate_reported = candidate.1,
+            baseline_reported,
+            candidate_reported,
             "optimization cost gate skipped: a cell has no trial that reported usage"
         );
         return None;
     }
     Some(TokenTotals {
-        baseline_tokens: baseline.0,
-        baseline_trials: baseline.1,
-        candidate_tokens: candidate.0,
-        candidate_trials: candidate.1,
+        baseline_tokens: baseline.tokens,
+        baseline_trials: baseline_reported,
+        candidate_tokens: candidate.tokens,
+        candidate_trials: candidate_reported,
     })
 }
 
@@ -310,5 +327,34 @@ mod tests {
             decision_seed(&["job-r1-v0".to_owned(), "job-r1-v1".to_owned()]),
             "a re-run changes the seed, because it changes the evidence"
         );
+    }
+
+    #[test]
+    fn totals_skip_the_cost_gate_past_the_missing_share_and_for_a_silent_cell() {
+        let usage = |tokens, trials, missing| CellUsage {
+            tokens,
+            trials,
+            missing,
+        };
+        assert_eq!(
+            totals(usage(100, 10, 0), usage(120, 10, 0), 2000),
+            Some(TokenTotals {
+                baseline_tokens: 100,
+                baseline_trials: 10,
+                candidate_tokens: 120,
+                candidate_trials: 10,
+            })
+        );
+        assert_eq!(
+            totals(usage(100, 10, 3), usage(120, 10, 2), 2000),
+            None,
+            "5 of 20 trials missing is past 2000 bp"
+        );
+        assert_eq!(
+            totals(usage(0, 2, 2), usage(120, 10, 0), 5000),
+            None,
+            "a cell whose every trial is unmetered has no mean"
+        );
+        assert_eq!(totals(usage(0, 0, 0), usage(0, 0, 0), 2000), None);
     }
 }

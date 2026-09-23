@@ -14,6 +14,7 @@ pub mod job;
 pub mod policy;
 pub mod promote;
 pub mod proposer;
+pub mod references;
 pub mod show;
 pub mod subject;
 pub mod target;
@@ -23,7 +24,8 @@ pub use driver::{
     split_case_count, JobOutcome, JobRefused, JobRequest, Spend,
 };
 pub use evidence::{
-    decision_evidence, decision_seed, token_totals, train_feedback, BASELINE_CELL, CANDIDATE_CELL,
+    decision_evidence, decision_seed, token_totals, totals, train_feedback, BASELINE_CELL,
+    CANDIDATE_CELL,
 };
 pub use gate::{structural_gate, text_gate, StructuralRejection};
 pub use job::{
@@ -38,6 +40,7 @@ pub use policy::{
 };
 pub use promote::{promote, promote_refused, revert, PromoteRefused, Promotion};
 pub use proposer::{CheckFeedback, Proposal, ProposalInput, Proposer, Rejection, ScriptedProposer};
+pub use references::{held_runs, job_ids, journal_run_ids, referenced_run_ids, removable};
 pub use show::{show, DecisionView, JobView};
 pub use subject::{baseline_text, materialize_candidate, materialize_pack, MaterializedPack};
 pub use target::{
