@@ -16,13 +16,13 @@ use gents_protocol::output::{
     ToolResultPart, TranscriptMessage,
 };
 
-use super::{assert_native_payload_presentation_case, PayloadPresentationAdapter};
-use crate::lean_vocab_test::{
+use super::super::{
     ExecutionFuture, LeanCanonicalClosure, LeanCanonicalMessage, LeanCanonicalSegment,
     LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData, LeanMediaKind,
     LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
     LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart, LeanResultPart,
 };
+use super::{assert_native_payload_presentation_case, PayloadPresentationAdapter};
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
@@ -51,7 +51,7 @@ fn generation(value: u64) -> String {
     format!("lean-generation-{value}")
 }
 
-fn reference(value: &crate::lean_vocab_test::LeanPayloadRef) -> Result<PayloadRef> {
+fn reference(value: &super::super::LeanPayloadRef) -> Result<PayloadRef> {
     Ok(PayloadRef {
         close_doc_id: segment_id(value.close_id),
         stream: u32::try_from(value.stream)?,
@@ -535,7 +535,7 @@ impl PayloadPresentationAdapter for NativePayloadPresentationAdapter {
 
 #[tokio::test]
 async fn generated_payload_presentation_cases_use_native_reconstruction() {
-    let cases = crate::lean_vocab_test::lean_canonical_payload_presentation_cases();
+    let cases = super::super::lean_canonical_payload_presentation_cases();
     assert!(
         !cases.is_empty(),
         "generated payload presentation inventory is empty"
