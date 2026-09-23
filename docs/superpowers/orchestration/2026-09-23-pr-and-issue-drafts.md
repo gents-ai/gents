@@ -238,7 +238,7 @@ flake); `cargo test -p gents --test eval_runner_canary`; conformance 269/269;
 
 ---
 
-## Side PR — `test/monitor-findings-eval` → `feat/eval-runner`
+## Side branch — `test/monitor-findings-eval` (HELD: not a PR; the user keeps it as the base for the self-improving loops that follow. Draft retained for later.)
 
 **title:** Monitor-findings eval: subject pack, twenty cases, nine checks and the definition pack
 
