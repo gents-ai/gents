@@ -65,6 +65,15 @@ impl CheckRegistry {
         self.checks.keys().copied().collect()
     }
 
+    /// Registers `check` over the builtin set. Test-only: the shipped
+    /// registry is the builtin one, and a definition may only name a check
+    /// that ships with it.
+    #[cfg(test)]
+    pub(crate) fn with(mut self, check: Box<dyn Check>) -> Self {
+        self.register(check);
+        self
+    }
+
     fn register(&mut self, check: Box<dyn Check>) {
         self.checks.insert(check.name(), check);
     }
