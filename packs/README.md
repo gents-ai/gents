@@ -88,9 +88,11 @@ paths is wired yet. A plugin declares:
   run with a bound silently missing.
 - `input_schema`, which is what a model is shown.
 - `manifold`, what the plugin asks the sandbox to allow. Absent means it asks
-  for nothing, which is right for a pure transform. An operator's ceiling
-  narrows this at admission and can never widen it. A plugin may not listen
-  on a port: a pack's plugins are called, never served.
+  for nothing, which is right for a pure transform. At admission the grant
+  is narrowed to what the plugin declared and to gents' fixed ceiling, which
+  is sealed today: an admitted plugin gets no filesystem, network or
+  environment access, whatever it declares. A plugin may not listen on a
+  port: a pack's plugins are called, never served.
 
 The call ABI is deliberately narrow: canonical JSON arguments arrive on
 standard input, one JSON value is written to standard output, and standard
@@ -115,9 +117,10 @@ gents plugin run acme/format_check --input '{"path":"src"}'
 gents plugin remove acme/format_check
 ```
 
-Installing a pack installs its plugins into the same store `gents plugin
-install` uses, so a plugin that arrived inside a pack is runnable by name
-exactly like one installed alone.
+Installing an `assets` or `plugins` pack installs its plugins into the same
+store `gents plugin install` uses, so a plugin that arrived inside a pack is
+runnable by name exactly like one installed alone. A `documents` or `graph`
+pack does not install plugins yet.
 
 A built pack is a single gzip-compressed tar: a plain container any archive
 tool can read, holding `manifest.json` and every asset the manifest declares,
@@ -241,8 +244,9 @@ runtime completion behavior.
 Keep concise run summaries, reviewed outputs and issue links. Never bundle
 `runs/`, node homes, credentials, build caches or raw logs. Package embedding
 uses declared assets, not recursive discovery of an operator's workspace.
-Source resolution is separate from installation; GitHub and registry sources
-are future work, not implemented download features.
+`gents pack install <name>` resolves a pack compiled into the binary first and
+falls back to the registry. A graph pack installs only from the binary today,
+and there is no GitHub source.
 
 ## Worked examples
 
