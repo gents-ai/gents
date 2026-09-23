@@ -63,7 +63,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/hook.rs", 1),
     ("crates/gents/src/hook/persistence/helpers.rs", 1),
     ("crates/gents/src/hook/persistence/subagent_bridge.rs", 1),
-    ("crates/gents/src/interrupt.rs", 4),
     ("crates/gents/src/lifecycle/background_wake_recovery.rs", 1),
     ("crates/gents/src/lifecycle/claim.rs", 1),
     ("crates/gents/src/lifecycle/materialize.rs", 1),
