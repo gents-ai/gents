@@ -273,7 +273,7 @@ function BehaviorAxis({
           {picked.length === 1 ? picked[0].name : "Behavior"}
         </span>
       </ComboboxTrigger>
-      <ComboboxContent className="w-60">
+      <ComboboxContent className="w-60" aria-label="Filter by behavior">
         <ComboboxInput placeholder="Find a behavior" showTrigger={false} />
         <ComboboxEmpty>No behavior by that name.</ComboboxEmpty>
         <ComboboxList>

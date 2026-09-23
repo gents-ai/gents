@@ -421,7 +421,10 @@ export function RefRow({
             </span>
           </ComboboxTrigger>
           {/* wide, so the summary beside each name has room; searchable past a few */}
-          <ComboboxContent className="w-[28rem] min-w-[28rem] max-md:w-[calc(100vw-2rem)] max-md:min-w-0">
+          <ComboboxContent
+            aria-label={`Choose ${String(label).toLowerCase()}`}
+            className="w-[28rem] min-w-[28rem] max-md:w-[calc(100vw-2rem)] max-md:min-w-0"
+          >
             {shown.length > 6 && (
               <ComboboxInput
                 showTrigger={false}
@@ -561,7 +564,7 @@ export function ChipsRow({
               placeholder={value.length ? "" : placeholder}
             />
           </ComboboxChips>
-          <ComboboxContent>
+          <ComboboxContent aria-label={`Choose ${String(label).toLowerCase()}`}>
             <ComboboxEmpty>{empty}</ComboboxEmpty>
             <ComboboxList>
               {(v: string) => (

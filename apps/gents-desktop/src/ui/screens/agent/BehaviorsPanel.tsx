@@ -234,7 +234,10 @@ function ContextPicker({
           {value ? labelFor(value) : "Choose"}
         </span>
       </ComboboxTrigger>
-      <ComboboxContent className="w-96 min-w-96 max-md:w-[calc(100vw-2rem)] max-md:min-w-0">
+      <ComboboxContent
+        aria-label="Instructions and tools from"
+        className="w-96 min-w-96 max-md:w-[calc(100vw-2rem)] max-md:min-w-0"
+      >
         <ComboboxInput
           showTrigger={false}
           aria-label="Search contexts"

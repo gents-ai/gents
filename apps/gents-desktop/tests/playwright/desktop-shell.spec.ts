@@ -184,6 +184,10 @@ test.describe("kit shell", () => {
     /* the behavior filter counts what each choice would leave: Ops has no
        session here, so it is offered with its zero and cannot be picked */
     await filters.getByRole("combobox", { name: "Behavior" }).click();
+    /* the popup is a dialog with a search field; it carries its own name */
+    await expect(
+      page.getByRole("dialog", { name: "Filter by behavior" }),
+    ).toBeVisible();
     const ops = page.getByRole("option", { name: /Ops\s*0$/ });
     await expect(ops).toBeVisible();
     await expect(ops).toHaveAttribute("aria-disabled", "true");
