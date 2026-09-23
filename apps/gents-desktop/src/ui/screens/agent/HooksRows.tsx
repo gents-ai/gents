@@ -23,28 +23,78 @@ export const PHASES: { value: TaskHookPhase; label: string }[] = [
   { value: "finally", label: "Always, afterwards" },
 ];
 
-/* the draft keeps the command as one line; argv is split on spaces, with
-   double quotes keeping an argument together */
+/* The draft shows the command as one line. The stored argv is kept beside
+   it and written back untouched unless that row's command text is edited,
+   so a save never reshapes a hook nobody changed. An edited line is parsed
+   with a lossless scheme: an argument that is empty or holds whitespace, a
+   quote or a backslash is written in double quotes with \\ and \" escaped;
+   outside quotes every character is literal, so a typed Windows path keeps
+   its backslashes. parse(format(argv)) is argv for every argv. */
 export type HookDraft = {
   hook_id: string;
   phase: TaskHookPhase;
   command: string;
   timeout: string;
+  /* the argv as stored, and the line it was shown as */
+  stored?: { argv: string[]; line: string } | null;
 };
 
-export const toHookDraft = (h: TaskHook): HookDraft => ({
-  hook_id: h.hook_id,
-  phase: h.phase,
-  command: h.command
-    .map((a: string) => (/\s/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a))
-    .join(" "),
-  timeout: h.timeout_secs == null ? "" : String(h.timeout_secs),
-});
+const needsQuotes = (a: string) => a === "" || /[\s"'\\]/.test(a);
 
-export const splitCommand = (line: string): string[] =>
-  (line.match(/"(?:[^"\\]|\\.)*"|\S+/g) ?? []).map((a) =>
-    a.startsWith('"') ? a.slice(1, -1).replace(/\\"/g, '"') : a,
-  );
+export const formatCommand = (argv: string[]): string =>
+  argv
+    .map((a) => (needsQuotes(a) ? `"${a.replace(/[\\"]/g, (c) => `\\${c}`)}"` : a))
+    .join(" ");
+
+export function splitCommand(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inToken = false;
+  let i = 0;
+  while (i < line.length) {
+    const c = line[i]!;
+    if (/\s/.test(c)) {
+      if (inToken) out.push(current);
+      current = "";
+      inToken = false;
+      i += 1;
+    } else if (c === '"') {
+      inToken = true;
+      i += 1;
+      while (i < line.length && line[i] !== '"') {
+        if (line[i] === "\\" && (line[i + 1] === '"' || line[i + 1] === "\\")) {
+          current += line[i + 1];
+          i += 2;
+        } else {
+          current += line[i];
+          i += 1;
+        }
+      }
+      i += 1; /* the closing quote, or the end of an unterminated one */
+    } else {
+      inToken = true;
+      current += c;
+      i += 1;
+    }
+  }
+  if (inToken) out.push(current);
+  return out;
+}
+
+export const toHookDraft = (h: TaskHook): HookDraft => {
+  const line = formatCommand(h.command);
+  return {
+    hook_id: h.hook_id,
+    phase: h.phase,
+    command: line,
+    timeout: h.timeout_secs == null ? "" : String(h.timeout_secs),
+    stored: { argv: [...h.command], line },
+  };
+};
+
+/* the argv to write: the stored one while its line is untouched */
+export const argvOf = (r: HookDraft): string[] =>
+  r.stored && r.command === r.stored.line ? r.stored.argv : splitCommand(r.command);
 
 /* the document hooks, or a message saying what is wrong */
 export function hooksFromDraft(rows: HookDraft[]): TaskHook[] | string {
@@ -55,7 +105,7 @@ export function hooksFromDraft(rows: HookDraft[]): TaskHook[] | string {
     if (!hook_id) return `Hook ${i + 1} needs an ID`;
     if (ids.has(hook_id)) return `Duplicate hook ID: ${hook_id}`;
     ids.add(hook_id);
-    const command = splitCommand(r.command);
+    const command = argvOf(r);
     if (!command.length) return `Hook ${hook_id} needs a command`;
     let timeout_secs: number | null = null;
     if (r.timeout.trim()) {
