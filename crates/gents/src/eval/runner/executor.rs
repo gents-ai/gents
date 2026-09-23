@@ -155,8 +155,19 @@ pub struct StageEvidence {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CaptureResult {
-    Documents { rows: Vec<Value> },
-    Files { files: Vec<FileRef> },
+    Documents {
+        rows: Vec<Value>,
+    },
+    Files {
+        files: Vec<FileRef>,
+        /// Matches the capture refused because they resolve outside the
+        /// trial's workspace — a symlink out of it, say. Recorded rather than
+        /// dropped, so a check can tell an empty capture from a capture whose
+        /// files were not the trial's to hand over. Defaulted, so evidence
+        /// written before this existed still reads.
+        #[serde(default)]
+        outside_workspace: Vec<String>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -166,8 +177,10 @@ pub struct FileRef {
     pub bytes: u64,
 }
 
-/// What one execution produced. The digest covers the evidence itself, so two
-/// runs of the same trial in different homes compare equal.
+/// What one execution produced. The digest covers the evidence itself, so it is
+/// a per-trial integrity anchor: it says that this evidence is the evidence that
+/// was written, and nothing more. Comparability across runs rests on the anchor,
+/// not on two executions digesting alike.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrialEvidence {
     pub locator: TrialLocator,
@@ -189,26 +202,40 @@ impl TrialEvidence {
             anchor: &'a Anchor,
         }
 
+        // Neither fallback should be reachable: every field of the input
+        // serializes. If one ever stops doing so the digest becomes the hash of
+        // nothing and two unlike trials compare equal, so it is reported rather
+        // than absorbed.
         let value = serde_json::to_value(DigestInput {
             stages,
             usage,
             anchor,
         })
-        .unwrap_or(Value::Null);
-        let bytes = serde_json::to_vec(&canonical(value)).unwrap_or_default();
+        .unwrap_or_else(|error| {
+            tracing::error!(
+                error = %format!("{error:#}"),
+                "eval trial evidence did not serialize; its digest covers nothing"
+            );
+            Value::Null
+        });
+        let bytes = serde_json::to_vec(&canonical(value)).unwrap_or_else(|error| {
+            tracing::error!(
+                error = %format!("{error:#}"),
+                "eval trial evidence digest input did not encode; its digest covers nothing"
+            );
+            Vec::new()
+        });
         format!("{:x}", Sha256::digest(bytes))
     }
 
-    /// Evidence for a trial that never ran: nothing observed, and an anchor
-    /// that says so.
-    pub fn infrastructure(locator: TrialLocator) -> Self {
-        let stages = Vec::new();
-        let usage = TrialUsage::default();
-        let anchor = Anchor {
-            terminal_states: Vec::new(),
-            requests: 0,
-            inference_calls: 0,
-        };
+    /// The one constructor: the digest follows from what it is given, so a
+    /// `TrialEvidence` cannot be built carrying a digest of something else.
+    pub fn new(
+        locator: TrialLocator,
+        stages: Vec<StageEvidence>,
+        usage: TrialUsage,
+        anchor: Anchor,
+    ) -> Self {
         let evidence_digest = Self::digest(&stages, &usage, &anchor);
         Self {
             locator,
@@ -217,6 +244,21 @@ impl TrialEvidence {
             anchor,
             evidence_digest,
         }
+    }
+
+    /// Evidence for a trial that never ran: nothing observed, and an anchor
+    /// that says so.
+    pub fn infrastructure(locator: TrialLocator) -> Self {
+        Self::new(
+            locator,
+            Vec::new(),
+            TrialUsage::default(),
+            Anchor {
+                terminal_states: Vec::new(),
+                requests: 0,
+                inference_calls: 0,
+            },
+        )
     }
 }
 
@@ -260,9 +302,20 @@ pub trait TrialExecutor: Send + Sync {
     /// Creates the trial's identity (and, for embedded, its home) so the
     /// `EvalTrial` row can be written before execution. Never returns `Err`: a
     /// failed provisioning returns a locator whose `trial_agent_did` is
-    /// `"did:unprovisioned"`, and [`Self::execute`] then reports
-    /// [`OutcomeKind::Infrastructure`].
+    /// `"did:unprovisioned"`, and [`Self::execute`] then returns
+    /// [`TrialEvidence::infrastructure`] — evidence holding no stage, which
+    /// [`crate::eval::runner::grade`] grades as
+    /// [`OutcomeKind::Infrastructure`] for every check the case declared.
     async fn provision(&self, spec: &TrialSpec) -> TrialLocator;
+
+    /// Release a trial that was provisioned and will never run.
+    ///
+    /// An executor that holds something between [`Self::provision`] and
+    /// [`Self::execute`] — the embedded one holds a booted home — has to be
+    /// told when the loop abandons the trial, or that home runs until the
+    /// process ends. The default does nothing, which is right for an executor
+    /// that holds nothing.
+    async fn discard(&self, _trial_id: &str) {}
 
     /// Never returns `Err`. Observes `cancel`: on cancellation, interrupts the
     /// current request and returns what it has.
@@ -270,6 +323,16 @@ pub trait TrialExecutor: Send + Sync {
 
     /// Reads captures back out of a home that already ran, when it still
     /// exists.
+    ///
+    /// Recollected evidence is capture evidence, not gradeable evidence. A
+    /// finished home records which requests a session held, not which stage
+    /// submitted them, so the stages this returns are named by their position
+    /// in the session (`"0"`, `"1"`, …) and match no case's `stage_id`:
+    /// passing them to [`crate::eval::runner::grade`] would grade every check
+    /// as a skipped prerequisite. A caller that wants a regrade has to map the
+    /// positions onto the case's stage ids first, which is M4's work.
+    /// `interrupted_on_deadline` is likewise unknowable afterwards, so a stage
+    /// that was interrupted on its deadline is not reported as one here.
     async fn recollect(&self, at: &TrialLocator, captures: &[Capture]) -> Option<TrialEvidence>;
 }
 

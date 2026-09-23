@@ -1,0 +1,32 @@
+{
+  "agent_principal": {
+    "default_behavior_id": "canary"
+  },
+  "agent_behaviors": [
+    {
+      "behavior_id": "canary",
+      "display_name": "Eval canary",
+      "context_id": "canary-context",
+      "inference_profile_id": "gents:inference-slot:primary"
+    }
+  ],
+  "contexts": [
+    {
+      "context_id": "canary-context",
+      "display_name": "Eval canary",
+      "system_prompt": "./agent_behaviors/canary/system_prompt.md",
+      "tools_id": "canary-tools"
+    }
+  ],
+  "tools": [
+    {
+      "tools_id": "canary-tools",
+      "display_name": "Eval canary tools",
+      "host": {
+        "files": {
+          "mode": "ReadOnly"
+        }
+      }
+    }
+  ]
+}

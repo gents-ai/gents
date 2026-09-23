@@ -41,7 +41,9 @@ use crate::config_client::ConfigAccess;
 use crate::document_config::{EvalCase, EvalFixtures, EvalSplit};
 use crate::eval::checks::CheckRegistry;
 use crate::eval::runner::freeze::thaw;
-use crate::eval::{OutcomeKind, StageCompletion, TrialCompletion, TrialIdentity, VerdictDraft};
+use crate::eval::{
+    Anchor, OutcomeKind, StageCompletion, TrialCompletion, TrialIdentity, VerdictDraft,
+};
 
 /// What one pass over a run produced. Counts, not judgements: how a run scored
 /// is derived from its verdicts, not from here.
@@ -54,6 +56,12 @@ pub struct RunOutcome {
     pub abandoned: u32,
     /// Slots whose every permitted attempt finished without evidence. A count
     /// of slots, not of attempts, so it does not overlap [`Self::completed`].
+    ///
+    /// Computed once, on the pass that plans nothing: only then has every slot
+    /// spent the attempts the run allows. A run that ended another way — the
+    /// breaker tripped, or it was cancelled — reports `0` here, because it
+    /// never reached the point where the count means anything. Read the
+    /// trials, not this field, to count what an interrupted run learned.
     pub not_evidence: u32,
     pub breaker_tripped: bool,
 }
@@ -312,23 +320,25 @@ async fn execute_trial(
     let spec = trial_spec(frozen, planned, case, cell, executor.wants_script_key())?;
 
     let locator = executor.provision(&spec).await;
-    recorder
-        .create_trial(
-            owner,
-            &TrialIdentity {
-                trial_id: planned.trial_id.clone(),
-                run_id: run_id.to_owned(),
-                cell_id: planned.cell_id.clone(),
-                case_id: planned.case_id.clone(),
-                trial_index: planned.trial_index,
-                attempt: planned.attempt,
-                trial_agent_did: locator.trial_agent_did.clone(),
-                session_id: locator.session_id.clone(),
-                seed: planned.seed,
-                home_hint: locator.home_hint.clone(),
-            },
-        )
-        .await?;
+    let identity = TrialIdentity {
+        trial_id: planned.trial_id.clone(),
+        run_id: run_id.to_owned(),
+        cell_id: planned.cell_id.clone(),
+        case_id: planned.case_id.clone(),
+        trial_index: planned.trial_index,
+        attempt: planned.attempt,
+        trial_agent_did: locator.trial_agent_did.clone(),
+        session_id: locator.session_id.clone(),
+        seed: planned.seed,
+        home_hint: locator.home_hint.clone(),
+    };
+    // The trial was provisioned and will now never run, so whatever the
+    // executor is holding for it is released before the error leaves: an
+    // embedded home nobody takes would otherwise run until the process ends.
+    if let Err(error) = recorder.create_trial(owner, &identity).await {
+        executor.discard(&spec.trial_id).await;
+        return Err(error);
+    }
 
     let evidence = executor.execute(&spec, cancel.child_token()).await;
     if cancel.is_cancelled() {
@@ -363,10 +373,49 @@ async fn execute_trial(
     recorder
         .complete_trial(owner, &planned.trial_id, &completion)
         .await?;
+    write_evidence_sidecar(&spec.home_dir, &evidence);
     Ok(Slot::Completed {
         attempt: planned.attempt,
         not_evidence,
     })
+}
+
+/// `<run dir>/trials/<trial_id>/evidence.json`: the trial's evidence digest
+/// and the anchor it covers.
+///
+/// `TrialCompletion` has no field for the digest, and widening it is an M1
+/// amendment this milestone does not make, so the runner keeps it beside the
+/// retained home instead — the same directory the trial's own home lives in.
+/// It is a record, not an input: nothing the loop decides reads it back, so a
+/// write that fails is reported and the trial still counts. A spec with no
+/// home directory (the scripted executor's) has nowhere to put it.
+fn write_evidence_sidecar(home_dir: &Path, evidence: &TrialEvidence) {
+    #[derive(serde::Serialize)]
+    struct EvidenceSidecar<'a> {
+        evidence_digest: &'a str,
+        anchor: &'a Anchor,
+    }
+
+    if home_dir.as_os_str().is_empty() {
+        return;
+    }
+    let path = home_dir.join("evidence.json");
+    let written = serde_json::to_vec_pretty(&EvidenceSidecar {
+        evidence_digest: &evidence.evidence_digest,
+        anchor: &evidence.anchor,
+    })
+    .context("encoding the trial evidence record")
+    .and_then(|bytes| {
+        std::fs::create_dir_all(home_dir)
+            .and_then(|()| std::fs::write(&path, bytes))
+            .with_context(|| format!("writing {}", path.display()))
+    });
+    if let Err(error) = written {
+        tracing::warn!(
+            error = %format!("{error:#}"),
+            "eval trial evidence digest was not recorded beside its home"
+        );
+    }
 }
 
 /// Everything the trial is allowed to know, assembled from the frozen cell and
@@ -604,7 +653,7 @@ mod tests {
         launching
             .install(vec![(Collection::EvalDefinition, definition(check))])
             .await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         (launching, pack)
     }
 
@@ -613,6 +662,7 @@ mod tests {
         RunRequest {
             run_id: run_id.into(),
             owner: OWNER.into(),
+            evaluator_did: launching.evaluator_did(),
             definition_id: "loop-def".into(),
             split: EvalSplit::Validation,
             case_ids: None,
@@ -812,6 +862,47 @@ mod tests {
 
         async fn load_trials(&self, owner: &str, run_id: &str) -> Result<Vec<TrialRecord>> {
             self.inner.load_trials(owner, run_id).await
+        }
+    }
+
+    /// A [`ScriptedExecutor`] that records which trials the loop handed back,
+    /// so a test can see a provisioned trial released rather than stranded.
+    struct DiscardingExecutor {
+        inner: ScriptedExecutor,
+        discarded: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for DiscardingExecutor {
+        fn isolation(&self) -> Isolation {
+            self.inner.isolation()
+        }
+
+        fn wants_script_key(&self) -> bool {
+            self.inner.wants_script_key()
+        }
+
+        async fn provision(&self, spec: &TrialSpec) -> TrialLocator {
+            self.inner.provision(spec).await
+        }
+
+        async fn discard(&self, trial_id: &str) {
+            self.discarded
+                .lock()
+                .expect("the discard log")
+                .push(trial_id.to_owned());
+        }
+
+        async fn execute(&self, spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
+            self.inner.execute(spec, cancel).await
+        }
+
+        async fn recollect(
+            &self,
+            at: &TrialLocator,
+            captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            self.inner.recollect(at, captures).await
         }
     }
 
@@ -1040,6 +1131,21 @@ mod tests {
             .iter()
             .all(|verdict| verdict.kind == OutcomeKind::Passed && verdict.feedback.is_none()));
 
+        // `TrialCompletion` has no field for the evidence digest, so the loop
+        // records it beside each trial's retained home.
+        for trial in &trials {
+            let path = frozen
+                .run_dir
+                .join("trials")
+                .join(&trial.identity.trial_id)
+                .join("evidence.json");
+            let recorded: Value =
+                serde_json::from_slice(&std::fs::read(&path).expect("an evidence record"))
+                    .expect("the evidence record parses");
+            assert_eq!(recorded["evidence_digest"], passed().evidence_digest);
+            assert_eq!(recorded["anchor"]["requests"], 1, "{recorded}");
+        }
+
         let calls = recorder.log();
         for trial in &trials {
             let id = &trial.identity.trial_id;
@@ -1121,6 +1227,65 @@ mod tests {
                 ("base".to_string(), "case-a".to_string(), 0, 2, true),
             ],
             "the abandoned row stays, and the repaired attempt completes"
+        );
+    }
+
+    /// The loop provisioned a trial and then could not write its row. The
+    /// executor may be holding a whole booted home for it, so the loop hands
+    /// the trial back before the error leaves; otherwise that home would run
+    /// until the process ended.
+    #[tokio::test]
+    async fn a_trial_whose_row_cannot_be_written_is_handed_back_to_the_executor() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-1");
+        one_slot(&mut request);
+        let executor = DiscardingExecutor {
+            inner: ScriptedExecutor::new().with_default(passed()),
+            discarded: Mutex::new(Vec::new()),
+        };
+        let recorder = FaultingRecorder::new(&launching.access).failing("create_trial", 1);
+
+        let frozen = freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        let error = execute_frozen(
+            &frozen,
+            &recorder,
+            &executor,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("injected"), "{error:#}");
+
+        let owed = plan(&frozen.record.origin, "run-1", &[], 1);
+        assert_eq!(owed.len(), 1);
+        assert_eq!(
+            executor
+                .discarded
+                .lock()
+                .expect("the discard log")
+                .as_slice(),
+            [owed[0].trial_id.clone()],
+            "the provisioned trial was released"
+        );
+        assert!(
+            executor
+                .inner
+                .calls
+                .lock()
+                .expect("the execute log")
+                .is_empty(),
+            "a trial whose row was never written is not run"
+        );
+        assert!(
+            load_trials(&launching.access, OWNER, "run-1")
+                .await
+                .unwrap()
+                .is_empty(),
+            "the row the loop failed to write is not there"
         );
     }
 
@@ -1208,6 +1373,73 @@ mod tests {
         assert_eq!(not_evidence_slots(&trials), 1);
     }
 
+    /// A harness fault inside a stage — the stage's request could not be
+    /// written, or its evidence could not be read back — is a fact about the
+    /// runner, not about the subject. The slot must be asked again rather than
+    /// closed with a zero.
+    #[tokio::test]
+    async fn a_stage_that_failed_on_the_harness_re_plans_the_slot() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-1");
+        one_slot(&mut request);
+        request.max_infra_retries = 1;
+
+        let executor = ScriptedExecutor::new()
+            .with(
+                key("case-a", 1),
+                ScriptedExecutor::failed_evidence(
+                    "did:key:trial",
+                    "check",
+                    OutcomeKind::Infrastructure,
+                    None,
+                ),
+            )
+            .with(key("case-a", 2), passed());
+        let outcome = run(
+            &launching.access,
+            &request,
+            &executor,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!((outcome.completed, outcome.not_evidence), (2, 0));
+        let trials = load_trials(&launching.access, OWNER, "run-1")
+            .await
+            .unwrap();
+        assert_eq!(
+            trial_keys(&trials),
+            [
+                ("base".to_string(), "case-a".to_string(), 0, 1, true),
+                ("base".to_string(), "case-a".to_string(), 0, 2, true),
+            ],
+            "the first attempt learned nothing, so the slot owed another"
+        );
+        assert!(completion_is_not_evidence(&completion_of(&trials, 1)));
+
+        // And it is recorded as infrastructure rather than scored against the
+        // subject.
+        let verdicts = load_verdicts(&launching.access, OWNER, "run-1")
+            .await
+            .unwrap();
+        let first = trials
+            .iter()
+            .find(|trial| trial.identity.attempt == 1)
+            .expect("the first attempt");
+        let rows = verdicts
+            .iter()
+            .filter(|verdict| verdict.trial_id == first.identity.trial_id)
+            .collect::<Vec<_>>();
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert_eq!(
+            (rows[0].kind, rows[0].score_bp),
+            (OutcomeKind::Infrastructure, None)
+        );
+    }
+
     #[tokio::test]
     async fn the_breaker_trips_on_consecutive_not_evidence_and_resume_continues() {
         let (launching, pack) = launching("captured_rows_count").await;
@@ -1280,10 +1512,10 @@ mod tests {
     }
 
     /// The guarantee freezing gave — an embedded trial never runs a pack that
-    /// grants it this host's shell — is the executor's, not the run's, so a
-    /// resume under a different executor has to be asked again.
+    /// grants it host bash — is the executor's, not the run's, so a resume
+    /// under a different executor has to be asked again.
     #[tokio::test]
-    async fn resume_refuses_an_embedded_executor_for_a_pack_that_grants_unrestricted_bash() {
+    async fn resume_refuses_an_embedded_executor_for_a_pack_that_grants_host_bash() {
         let (launching, _) = launching("captured_rows_count").await;
         let pack = launching.pack("unrestricted", "Unrestricted");
         let mut request = request(&launching, &pack, "run-1");
@@ -1307,7 +1539,7 @@ mod tests {
         let reason = freeze_refused(&error)
             .unwrap_or_else(|| panic!("expected a FreezeRefused, got {error:#}"));
         assert!(
-            reason.0.contains("monitor-tools") && reason.0.contains("unrestricted bash"),
+            reason.0.contains("monitor-tools") && reason.0.contains("Unrestricted"),
             "{reason}"
         );
     }

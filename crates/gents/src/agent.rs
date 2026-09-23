@@ -157,7 +157,7 @@ pub trait RuntimeSnapshotObserver: Send + Sync {
     fn on_router_generation_activated(&self, _generation: u64, _configuration_fingerprint: &str) {}
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DocumentRuntimeOptions {
     pub tool_ceiling: ToolCeiling,
     pub mcp_pool: McpPool,

@@ -189,24 +189,67 @@ pub async fn boot_runtime(
     identity: Arc<dyn AgentIdentity>,
     options: DocumentRuntimeOptions,
 ) -> Result<(RunningRuntime, Gents)> {
+    boot_runtime_within(home, identity, options, RUNTIME_READY_TIMEOUT).await
+}
+
+/// [`boot_runtime`] with an explicit readiness budget, so a test can make
+/// readiness fail without waiting out the production timeout.
+///
+/// A runtime that never became ready is still spawned and still holds the
+/// node, so it is stopped before the readiness error is reported: the caller
+/// gets a home it can close, not one pinned by a task it was never handed.
+/// That stop is itself bounded, so a runtime that does not answer its shutdown
+/// signal cannot turn a reported failure into a hang.
+pub(crate) async fn boot_runtime_within(
+    home: &EmbeddedHome,
+    identity: Arc<dyn AgentIdentity>,
+    options: DocumentRuntimeOptions,
+    ready_timeout: Duration,
+) -> Result<(RunningRuntime, Gents)> {
     let agent =
         Gents::from_default_behavior_documents(home.node.clone(), identity, options).await?;
     let agent_did = agent.agent_did().to_string();
     let (shutdown, shutdown_rx) = watch::channel(false);
     let handle = tokio::spawn(agent.clone().run(shutdown_rx));
-    wait_for_runtime_ready(home.node.as_ref(), &agent_did).await?;
-    Ok((
-        RunningRuntime {
-            shutdown,
-            handle,
-            agent_did,
-        },
-        agent,
-    ))
+    let runtime = RunningRuntime {
+        shutdown,
+        handle,
+        agent_did: agent_did.clone(),
+    };
+    if let Err(error) =
+        wait_for_runtime_ready_within(home.node.as_ref(), &agent_did, ready_timeout).await
+    {
+        // Bounded: a runtime that ignores its shutdown signal must not turn a
+        // reported infrastructure failure into a caller that never returns.
+        // Giving up on it leaks a task, which is the lesser of the two.
+        match tokio::time::timeout(RUNTIME_READY_TIMEOUT, runtime.shutdown()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(stopping)) => tracing::warn!(
+                error = %format!("{stopping:#}"),
+                agent_did = %agent_did,
+                "runtime that never became ready did not stop cleanly"
+            ),
+            Err(_) => tracing::warn!(
+                agent_did = %agent_did,
+                timeout = ?RUNTIME_READY_TIMEOUT,
+                "runtime that never became ready did not stop within its budget; abandoning it"
+            ),
+        }
+        return Err(error);
+    }
+    Ok((runtime, agent))
 }
 
 pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) -> Result<()> {
-    let deadline = tokio::time::Instant::now() + RUNTIME_READY_TIMEOUT;
+    wait_for_runtime_ready_within(node, agent_did, RUNTIME_READY_TIMEOUT).await
+}
+
+async fn wait_for_runtime_ready_within(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    ready_timeout: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + ready_timeout;
     let mut sleep = Duration::from_millis(50);
     loop {
         let snapshot = fetch_runtime_snapshot(node, agent_did).await?;
@@ -227,7 +270,7 @@ pub async fn wait_for_runtime_ready(node: &EmbeddedNode, agent_did: &str) -> Res
         }
         if tokio::time::Instant::now() >= deadline {
             bail!(
-                "agent did not reach ready state within {RUNTIME_READY_TIMEOUT:?}; \
+                "agent did not reach ready state within {ready_timeout:?}; \
                  last runtime snapshot: {snapshot:?}; readiness: {readiness:?}"
             );
         }
@@ -368,6 +411,33 @@ mod tests {
         drop(home);
         let reopened = EmbeddedHome::open_retained(&retained).await.unwrap();
         assert_eq!(reopened.did(), did);
+    }
+
+    /// A zero readiness budget fails the boot rather than reporting a ready
+    /// runtime, which is what lets the executor treat an unready home as
+    /// infrastructure.
+    ///
+    /// This does not assert that `boot_runtime_within` stopped the runtime it
+    /// spawned on that path. A bare temp home configures no behavior, so the
+    /// spawned `Gents::run` task ends on its own: `Arc::strong_count` and
+    /// `EmbeddedHome::reopen` read the same before and after the shutdown, and
+    /// an assertion on either would pass with the shutdown removed.
+    #[tokio::test]
+    async fn a_zero_readiness_budget_fails_the_boot() {
+        let home = EmbeddedHome::create_temp("boot-unready").await.unwrap();
+        let error = match boot_runtime_within(
+            &home,
+            home.identity.clone(),
+            DocumentRuntimeOptions::default(),
+            Duration::ZERO,
+        )
+        .await
+        {
+            Ok(_) => panic!("a zero readiness budget must not report a ready runtime"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("ready state"), "{error}");
+        home.node.shutdown().await;
     }
 
     #[tokio::test]
