@@ -7,7 +7,7 @@ import {
   NARROW_BREAKPOINT_PX,
   type DesktopClientSnapshot,
 } from "@source-inc/gents-desktop-client";
-import type { BridgeContract } from "@source-inc/gents-desktop-client/generated/BridgeContract";
+import type { SessionLiveDeltaView } from "@source-inc/gents-desktop-client/generated/SessionLiveDeltaView";
 import { FleetDashboard } from "@source-inc/gents-desktop-fleet";
 import {
   InferenceSetupWizard,
@@ -22,7 +22,7 @@ import {
 
 const client = createDesktopClient();
 const store = createDesktopStore(client);
-const generatedContract: BridgeContract | null = null;
+const generatedDelta: SessionLiveDeltaView | null = null;
 const publicSnapshot: DesktopClientSnapshot | null = null;
 const timestamp = formatMessageTime("2026-07-27T00:00:00Z");
 
@@ -58,7 +58,7 @@ void InferenceSetupWizard;
 void LocalRuntimeConnect;
 void projectChatShell;
 void store;
-void generatedContract;
+void generatedDelta;
 void publicSnapshot;
 void timestamp;
 void publicComponents;

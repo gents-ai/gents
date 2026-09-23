@@ -1,29 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  createDesktopClient,
-  EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
-  BRIDGE_CONTRACT_VERSION,
-  PACKAGE_VERSION,
-} from "./client.js";
+import { createDesktopClient } from "./client.js";
 import { createDesktopStore } from "./store.js";
 import { createMemoryTransport } from "./testing.js";
 
 function wait(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function compatibleBridgeContract() {
-  return {
-    contractVersion: BRIDGE_CONTRACT_VERSION,
-    packageVersion: PACKAGE_VERSION,
-    wireSchemaHash: EXPECTED_BRIDGE_WIRE_SCHEMA_HASH,
-    events: [],
-    eventReasons: [],
-    errorCodes: [],
-    commands: [],
-    permissionSets: [],
-  };
 }
 
 describe("createDesktopStore", () => {
@@ -70,7 +52,6 @@ describe("createDesktopStore", () => {
           await wait(5);
           return {};
         },
-        desktop_bridge_contract: compatibleBridgeContract,
         desktop_client_snapshot: () => ({ bootstrap: {}, client: null }),
         desktop_client_shutdown: () => ({}),
       },
@@ -82,9 +63,28 @@ describe("createDesktopStore", () => {
     await Promise.all([store.start(), store.start(), store.start()]);
 
     expect(starts).toBe(1);
+    expect(transport.calls[0]?.command).toBe("desktop_client_start");
     expect(transport.listenerCount()).toBe(1);
     await store.stop();
     expect(transport.listenerCount()).toBe(0);
+  });
+
+  it("leaves the store stopped and unsubscribed when startup fails", async () => {
+    const transport = createMemoryTransport({
+      handlers: {
+        desktop_client_start: () => {
+          throw new Error("runtime is unavailable");
+        },
+      },
+    });
+    const store = createDesktopStore(createDesktopClient(transport));
+
+    await expect(store.start()).rejects.toThrow("runtime is unavailable");
+    expect(store.getState().started).toBe(false);
+    expect(transport.listenerCount()).toBe(0);
+    expect(transport.calls.map(({ command }) => command)).toEqual([
+      "desktop_client_start",
+    ]);
   });
 
   it("coalesces a burst of update events into one refresh", async () => {
@@ -92,7 +92,6 @@ describe("createDesktopStore", () => {
     const transport = createMemoryTransport({
       handlers: {
         desktop_client_start: () => ({}),
-        desktop_bridge_contract: compatibleBridgeContract,
         desktop_client_snapshot: () => ({
           bootstrap: {},
           client: null,

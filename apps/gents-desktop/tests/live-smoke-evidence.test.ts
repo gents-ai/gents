@@ -115,7 +115,6 @@ function requestDiagnostics(
     response: {
       status: "completed",
       errorMessage: null,
-      progressSeq: 3,
       materializedMessageSequence: 2,
       materializedAt: "2026-06-24T00:00:02Z",
       completedAt: "2026-06-24T00:00:03Z",

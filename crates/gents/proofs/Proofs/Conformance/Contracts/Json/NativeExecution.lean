@@ -372,6 +372,43 @@ def leaseOrderingCases : List Case :=
   , mkCase "real_spawn_dispatched_wait_explicitly_renews"
       (routedWorld 5) [.realSpawnAccept, .dispatch 5, .renew 8 10] ]
 
+/-- Four inference sources whose insertion order and JSON spelling both
+disagree with numeric `(scope, turn, attempt)` identity order. -/
+private def numericRecoveryRawA : Segment :=
+  { raw 910 9 0 5 with coordinate := ⟨10, .provider 9 9 9⟩ }
+
+private def numericRecoveryRawB : Segment :=
+  { raw 911 10 0 5 with coordinate := ⟨10, .provider 9 9 10⟩ }
+
+private def numericRecoveryRawC : Segment :=
+  { raw 912 0 0 5 with coordinate := ⟨10, .provider 9 10 0⟩ }
+
+private def numericRecoveryRawD : Segment :=
+  { raw 913 0 0 5 with coordinate := ⟨10, .provider 10 0 0⟩ }
+
+private def numericRecoveryItems : List RecoveryItem :=
+  [ ⟨{ partialClose 920 9 1 10 with coordinate := numericRecoveryRawA.coordinate },
+      some (recoveryMessage 930 920 0 10)⟩
+  , ⟨{ partialClose 921 10 1 10 with coordinate := numericRecoveryRawB.coordinate },
+      some (recoveryMessage 931 921 1 10)⟩
+  , ⟨{ partialClose 922 0 1 10 with coordinate := numericRecoveryRawC.coordinate },
+      some (recoveryMessage 932 922 2 10)⟩
+  , ⟨{ partialClose 923 0 1 10 with coordinate := numericRecoveryRawD.coordinate },
+      some (recoveryMessage 933 923 3 10)⟩ ]
+
+private def numericRecoveryInputs : List Input :=
+  [.appendRaw 1 5 numericRecoveryRawD,
+   .appendRaw 1 5 numericRecoveryRawC,
+   .appendRaw 1 5 numericRecoveryRawB,
+   .appendRaw 1 5 numericRecoveryRawA,
+   .recoverTerminal 2 10 8 .failed (.message 933) numericRecoveryItems]
+
+example : ((run (world 5) 600 numericRecoveryInputs).bind List.getLast?).map
+    (fun observation => (observation.accepted,
+      observation.messages.map (fun message => (message.header.id, message.sequence)))) =
+    some (true, [(930, 0), (931, 1), (932, 2), (933, 3)]) := by
+  native_decide
+
 /-- Terminal recovery is distinct from resumable generation replacement. The
 selection is exact and supplied to the canonical transaction, not chosen by
 the observation adapter. -/
@@ -386,7 +423,9 @@ def terminalRecoveryCases : List Case :=
   , mkCase "expired_interrupt_recovery_without_output_selects_none"
       (world 5) [.recoverTerminal 2 10 8 .interrupted .noMessage []]
   , mkCase "terminal_recovery_rejects_invalid_selection"
-      (world 5) [.recoverTerminal 2 10 8 .failed (.message 999) []] ]
+      (world 5) [.recoverTerminal 2 10 8 .failed (.message 999) []]
+  , mkCase "recovery_orders_numeric_scope_turn_and_attempt"
+      (world 5) numericRecoveryInputs ]
 
 /-- One native transaction covers the tool close and its paired result header.
 The separate close/deliver steps remain executable model witnesses, not claims

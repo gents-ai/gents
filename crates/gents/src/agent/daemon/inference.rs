@@ -104,6 +104,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         doc_id: &str,
         history: &[crate::llm::message::Message],
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        stream_writer: &crate::streaming::DefraStreamWriter,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
         request_token: &tokio_util::sync::CancellationToken,
@@ -391,7 +392,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     async {
                         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
                             &persistence_hook,
-                            &self.stream_writer,
+                            stream_writer,
                             lifecycle,
                             doc_id,
                         );
@@ -563,12 +564,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
                         if let Some(text) = final_text.as_deref() {
                             if streamed_text.is_empty() {
-                                let _ = self.stream_writer.write_tokens(doc_id, text).await?;
+                                let _ = stream_writer.write_tokens(doc_id, text).await?;
                                 streamed_text.push_str(text);
                             } else if let Some(remainder) = text.strip_prefix(&streamed_text) {
                                 if !remainder.is_empty() {
                                     let _ =
-                                        self.stream_writer.write_tokens(doc_id, remainder).await?;
+                                        stream_writer.write_tokens(doc_id, remainder).await?;
                                     streamed_text.push_str(remainder);
                                 }
                             }
@@ -723,8 +724,9 @@ mod tests {
         }
         async fn stream(
             &self,
-            _request: CompletionRequest,
+            request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
             self.0.fetch_add(1, Ordering::SeqCst);
             let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
                 Ok(RawStreamingChoice::Message("admitted reply".to_string())),
@@ -1151,7 +1153,7 @@ mod tests {
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
             FailurePolicy::default(),
-            None,
+            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
             Arc::new(StartupBarrier::ready_for_test()),
@@ -1171,10 +1173,35 @@ mod tests {
         }));
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
+        let first_doc_id = first.doc_id.clone();
         daemon.process_request(first, shutdown_rx.clone()).await;
         assert!(
             calls.load(Ordering::SeqCst) > 0,
             "the admitted request must reach the provider before revocation"
+        );
+        let escaped_first_doc_id = crate::graphql::escape_graphql_string(&first_doc_id);
+        let first_terminal = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_first_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
+            ))
+            .await;
+        assert!(!first_terminal.has_errors(), "{:?}", first_terminal.errors);
+        let first_row: serde_json::Value =
+            crate::graphql::first_row(&first_terminal, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        assert_eq!(
+            first_row["lifecycle_state"], "completed",
+            "first request failed after provider call: {first_row}"
+        );
+        let first_selection: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(first_row["terminal_output"].clone()).unwrap();
+        assert!(
+            matches!(
+                first_selection,
+                gents_protocol::output::TerminalOutput::Message { .. }
+            ),
+            "the first request must select its published reply"
         );
         let calls_before_revocation = calls.load(Ordering::SeqCst);
 
@@ -1196,7 +1223,7 @@ mod tests {
         let escaped_request_doc_id = crate::graphql::escape_graphql_string(&second_doc_id);
         let rejected = node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state}} }}"#
+                r#"{{ AgentRequest(filter: {{_docID: {{_eq:"{escaped_request_doc_id}"}}}}, limit:1) {{lifecycle_state terminal_output}} }}"#
             ))
             .await;
         assert!(!rejected.has_errors(), "{:?}", rejected.errors);
@@ -1209,6 +1236,15 @@ mod tests {
             .and_then(|row| row.get("lifecycle_state"))
             .and_then(serde_json::Value::as_str);
         assert_eq!(lifecycle_state, Some("failed"));
+        let second_selection: gents_protocol::output::TerminalOutput = serde_json::from_value(
+            rejected.data.as_ref().unwrap()["AgentRequest"][0]["terminal_output"].clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            second_selection,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            "a later failed request must not inherit the earlier reply"
+        );
 
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(data_path);
@@ -1282,7 +1318,7 @@ mod tests {
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
             FailurePolicy::default(),
-            None,
+            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
             Arc::new(StartupBarrier::ready_for_test()),

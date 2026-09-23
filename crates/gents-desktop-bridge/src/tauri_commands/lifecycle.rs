@@ -9,7 +9,6 @@ use tauri::{AppHandle, Emitter, Manager, Runtime, State};
 use tokio::sync::watch;
 
 use crate::config::BootstrapPolicy;
-use crate::contract::{current_contract, BridgeContract};
 use crate::error::{BridgeError, BridgeErrorCode};
 use crate::snapshot::{build_bootstrap_summary_for_policy, build_client_snapshot_with_grants};
 use crate::state::{
@@ -20,11 +19,6 @@ use crate::types::{
 };
 
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
-
-#[tauri::command]
-pub async fn desktop_bridge_contract() -> Result<BridgeContract, BridgeError> {
-    Ok(current_contract())
-}
 
 #[tauri::command]
 pub async fn desktop_bootstrap_summary(

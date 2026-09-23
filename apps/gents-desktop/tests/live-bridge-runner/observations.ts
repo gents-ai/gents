@@ -59,7 +59,6 @@ export function requestProgressSignature(diagnostics: RequestDiagnostics) {
     requestStatus: diagnostics.request?.status ?? null,
     requestLifecycleState: diagnostics.request?.lifecycleState ?? null,
     responseStatus: diagnostics.response?.status ?? null,
-    responseProgressSeq: progressNumber(diagnostics.response?.progressSeq),
     materializedMessageSequence: progressNumber(
       diagnostics.response?.materializedMessageSequence,
     ),
@@ -77,8 +76,6 @@ export function requestProgressSignature(diagnostics: RequestDiagnostics) {
 
 function isRemoteAheadOfDesktop(diagnostics: RequestDiagnosticsBundle) {
   return (
-    progressNumber(diagnostics.remote.response?.progressSeq) >
-      progressNumber(diagnostics.desktop.response?.progressSeq) ||
     progressNumber(diagnostics.remote.response?.materializedMessageSequence) >
       progressNumber(diagnostics.desktop.response?.materializedMessageSequence) ||
     progressNumber(diagnostics.remote.response?.contentLen) >

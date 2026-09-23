@@ -6,4 +6,4 @@ export type SessionLiveDeltaView = {
 /**
  * delta | unchanged | snapshotRequired
  */
-outcome: string, revision: SessionProjectionRevisionView, requestId: string, progressSeq: number | null, turnState: string | null, status: string | null, content: SessionLiveTextPatchView | null, reasoning: SessionLiveTextPatchView | null, };
+outcome: string, revision: SessionProjectionRevisionView, requestId: string, turnState: string | null, status: string | null, content: SessionLiveTextPatchView | null, reasoning: SessionLiveTextPatchView | null, };

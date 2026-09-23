@@ -10,9 +10,9 @@ impl DefraSessionHook {
         &self,
         message: &Message,
         internal_call_ids: &[String],
-    ) -> Vec<crate::streaming::SpawnAdmissionPlan> {
+    ) -> anyhow::Result<Vec<crate::streaming::SpawnAdmissionPlan>> {
         let Message::Assistant { content, .. } = message else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let tool_calls = content
             .iter()
@@ -22,40 +22,45 @@ impl DefraSessionHook {
             })
             .collect::<Vec<_>>();
         if tool_calls.len() != internal_call_ids.len() {
-            return Vec::new();
+            return Ok(Vec::new());
+        }
+        let candidates = tool_calls
+            .into_iter()
+            .filter_map(|call| {
+                if call.function.name != SPAWN_SUBAGENT_TOOL_NAME {
+                    return None;
+                }
+                serde_json::from_value::<SpawnSubagentArgs>(call.function.arguments.clone())
+                    .ok()
+                    .filter(|parsed| {
+                        !parsed.name.trim().is_empty() && !parsed.prompt.trim().is_empty()
+                    })
+                    .map(|parsed| (call, parsed))
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Ok(Vec::new());
         }
         let request_id = {
             let state = self.state.lock().await;
             state.current_request_id.clone()
         };
         let Some(request_id) = request_id else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        let Ok(parent) = load_parent_subagent_context(&self.node, &request_id).await else {
-            return Vec::new();
-        };
+        let parent = load_parent_subagent_context(&self.node, &request_id)
+            .await
+            .with_context(|| format!("preplan spawn admission for parent request {request_id}"))?;
         let delegated_workspace = match parent_delegated_workspace(&parent) {
             Ok(workspace) => workspace,
             Err(error) => {
                 tracing::warn!(request_id, error = %error, "skip spawn admission with malformed parent workspace provenance");
-                return Vec::new();
+                return Ok(Vec::new());
             }
         };
         let mut plans = Vec::new();
-        for call in tool_calls {
-            if call.function.name != SPAWN_SUBAGENT_TOOL_NAME {
-                continue;
-            }
-            let Ok(parsed) =
-                serde_json::from_value::<SpawnSubagentArgs>(call.function.arguments.clone())
-            else {
-                continue;
-            };
-            if parsed.name.trim().is_empty()
-                || parsed.prompt.trim().is_empty()
-                || !parent.subagent_spawn_enabled
-                || parent.subagent_depth >= MAX_SUBAGENT_DEPTH
-            {
+        for (call, parsed) in candidates {
+            if !parent.subagent_spawn_enabled || parent.subagent_depth >= MAX_SUBAGENT_DEPTH {
                 continue;
             }
             let Some(target) = resolve_context_target(&parent, parsed.name.trim()) else {
@@ -92,7 +97,7 @@ impl DefraSessionHook {
                 await_mode,
             });
         }
-        plans
+        Ok(plans)
     }
 
     pub(super) async fn ensure_assistant_turn_sequence(

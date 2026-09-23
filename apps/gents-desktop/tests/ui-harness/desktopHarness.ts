@@ -360,7 +360,6 @@ export function createDesktopUiHarness(
                   },
                   partialOutputTail:
                     "Compiling gents v0.7.0\ntest lifecycle::claims ... ok\ntest lifecycle::persistence ... ok",
-                  partialOutputSeq: 4096,
                 },
               ],
             },
@@ -1152,7 +1151,6 @@ export function createDesktopUiHarness(
           outcome: "snapshotRequired",
           revision,
           requestId: request.requestId,
-          progressSeq: streamSequence,
           turnState: session.turnState,
           status: session.status,
           content: null,
@@ -1180,7 +1178,6 @@ export function createDesktopUiHarness(
             : "delta",
         revision,
         requestId: request.requestId,
-        progressSeq: streamSequence,
         turnState: session.turnState,
         status: session.status,
         content,

@@ -487,7 +487,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               return `${item.itemKey}:${item.tools
                 .map(
                   (tool) =>
-                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputSeq ?? 0}:${tool.partialOutputTail?.length ?? 0}`,
+                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputTail?.length ?? 0}`,
                 )
                 .join(",")}`;
           }

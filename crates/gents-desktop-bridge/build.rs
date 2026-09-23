@@ -1,5 +1,4 @@
 const COMMANDS: &[&str] = &[
-    "desktop_bridge_contract",
     "desktop_bootstrap_summary",
     "desktop_native_e2e_config",
     "desktop_native_e2e_status",

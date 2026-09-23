@@ -28,7 +28,7 @@ pub trait CanonicalSessionHook<Accepted: Send, Plan: Send>: SessionHook {
         &self,
         message: &Message,
         internal_call_ids: &[String],
-    ) -> Vec<Plan>;
+    ) -> anyhow::Result<Vec<Plan>>;
 
     async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
         -> anyhow::Result<()>;

@@ -114,7 +114,7 @@ where
                 let spawn_admissions = self
                     .persistence_hook
                     .preplan_spawn_admissions(&message, &self.pending_tool_internal_ids)
-                    .await;
+                    .await?;
                 let published = self
                     .stream_writer
                     .publish_native_turn_with_spawn_admissions(

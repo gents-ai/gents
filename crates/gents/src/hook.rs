@@ -1072,7 +1072,7 @@ impl
         &self,
         message: &Message,
         internal_call_ids: &[String],
-    ) -> Vec<crate::streaming::SpawnAdmissionPlan> {
+    ) -> anyhow::Result<Vec<crate::streaming::SpawnAdmissionPlan>> {
         DefraSessionHook::preplan_spawn_admissions(self, message, internal_call_ids).await
     }
 

@@ -1,45 +1,13 @@
-//! Bridge contract fingerprint: command inventory, permission sets, events,
-//! error codes, generated wire schema, and version.
+//! Command, permission-set, and event inventory used by bridge consistency
+//! checks. No runtime contract-version handshake is published.
 
-use serde::{Deserialize, Serialize};
-use ts_rs::TS;
-
-use crate::error::BridgeErrorCode;
-
-/// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-pub const CONTRACT_VERSION: &str = "9.0";
-
-/// Exact digest of the committed generated TypeScript wire tree. The client
-/// checks this in addition to semantic versioning, so a DTO shape change
-/// cannot silently ship under an unchanged contract version.
-pub const WIRE_SCHEMA_HASH: &str =
-    "f655fa32d4f8535bebbbe69e1467c11364d42b9f8297fab7a97093902b9e2f51";
-
-/// Package version string shared with workspace release train.
-pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct BridgeContract {
-    pub contract_version: String,
-    pub package_version: String,
-    pub wire_schema_hash: String,
-    pub events: Vec<String>,
-    pub event_reasons: Vec<String>,
-    pub error_codes: Vec<String>,
-    pub commands: Vec<CommandContract>,
-    pub permission_sets: Vec<PermissionSetContract>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandContract {
     pub name: String,
     pub permission_set: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionSetContract {
     pub name: String,
     /// `"read"` or `"mutate"` — never mixed within one set.
@@ -65,12 +33,11 @@ pub const CLAUDE_LOGIN_URL_EVENT: &str = "desktop://claude-login-url";
 /// Coarse ping reasons on `desktop://client-updated`.
 pub const EVENT_REASONS: &[&str] = &["store", "health", "lifecycle", "config"];
 
-/// Provisional command → permission-set map from the design table.
-/// Phase 3 finalizes assignment under the no-read/mutate-mixing rule.
+/// Command → permission-set inventory checked against the plugin and Tauri
+/// permission files.
 pub fn command_inventory() -> Vec<CommandContract> {
     let entries: &[(&str, &str)] = &[
         // core
-        ("desktop_bridge_contract", "core"),
         ("desktop_bootstrap_summary", "core"),
         ("desktop_client_snapshot", "core"),
         ("desktop_observer_metrics", "core"),
@@ -225,117 +192,11 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
     .collect()
 }
 
-pub fn error_code_inventory() -> Vec<String> {
-    [
-        BridgeErrorCode::ClientNotRunning,
-        BridgeErrorCode::ClientStartFailed,
-        BridgeErrorCode::NotFound,
-        BridgeErrorCode::InvalidArgument,
-        BridgeErrorCode::Unsupported,
-        BridgeErrorCode::EndpointUnreachable,
-        BridgeErrorCode::StalePreview,
-        BridgeErrorCode::CascadeDepthExceeded,
-        BridgeErrorCode::PathEscapesRoot,
-        BridgeErrorCode::Backend,
-        BridgeErrorCode::Pairing,
-        BridgeErrorCode::Unknown,
-    ]
-    .into_iter()
-    .map(|code| code.as_str().to_string())
-    .collect()
-}
-
-pub fn current_contract() -> BridgeContract {
-    BridgeContract {
-        contract_version: CONTRACT_VERSION.to_string(),
-        package_version: PACKAGE_VERSION.to_string(),
-        wire_schema_hash: WIRE_SCHEMA_HASH.to_string(),
-        events: vec![
-            CLIENT_UPDATED_EVENT.to_string(),
-            CODEX_LOGIN_URL_EVENT.to_string(),
-            GROK_LOGIN_URL_EVENT.to_string(),
-            CLAUDE_LOGIN_URL_EVENT.to_string(),
-            MANAGED_SERVER_UPDATED_EVENT.to_string(),
-            MANAGED_SERVER_TRAY_START_EVENT.to_string(),
-            MANAGED_SERVER_TRAY_STOP_EVENT.to_string(),
-            MANAGED_SERVER_TRAY_RESTART_EVENT.to_string(),
-        ],
-        event_reasons: EVENT_REASONS.iter().map(|s| (*s).to_string()).collect(),
-        error_codes: error_code_inventory(),
-        commands: command_inventory(),
-        permission_sets: permission_set_inventory(),
-    }
-}
-
-/// Pretty-printed fingerprint JSON (stable key order via serde_json::Value sort).
-pub fn fingerprint_json() -> String {
-    let value = serde_json::to_value(current_contract()).expect("contract serializes");
-    let sorted = sort_json(value);
-    let mut out = serde_json::to_string_pretty(&sorted).expect("pretty json");
-    out.push('\n');
-    out
-}
-
-fn sort_json(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let mut keys: Vec<_> = map.keys().cloned().collect();
-            keys.sort();
-            let mut out = serde_json::Map::new();
-            for key in keys {
-                out.insert(key.clone(), sort_json(map.get(&key).unwrap().clone()));
-            }
-            serde_json::Value::Object(out)
-        }
-        serde_json::Value::Array(items) => {
-            serde_json::Value::Array(items.into_iter().map(sort_json).collect())
-        }
-        other => other,
-    }
-}
-
-/// Path to the committed fingerprint relative to the workspace root.
-pub const FINGERPRINT_REL_PATH: &str = "contracts/desktop-bridge.json";
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde::Deserialize;
     use std::collections::{BTreeMap, BTreeSet};
-    use std::path::PathBuf;
-
-    fn generated_wire_schema_hash() -> String {
-        let generated = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../packages/gents-desktop-client/src/generated");
-        let mut paths = std::fs::read_dir(&generated)
-            .expect("read generated wire bindings")
-            .map(|entry| entry.expect("generated binding entry").path())
-            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("ts"))
-            .filter(|path| {
-                path.file_name().and_then(|value| value.to_str())
-                    != Some("BridgeContractFingerprint.ts")
-            })
-            .collect::<Vec<_>>();
-        paths.sort();
-        let mut hasher = blake3::Hasher::new();
-        for path in paths {
-            let name = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .expect("generated binding filename");
-            hasher.update(name.as_bytes());
-            hasher.update(&[0]);
-            hasher.update(&std::fs::read(&path).expect("read generated binding"));
-            hasher.update(&[0]);
-        }
-        hasher.finalize().to_hex().to_string()
-    }
-
-    #[test]
-    fn wire_schema_hash_matches_generated_bindings() {
-        assert_eq!(WIRE_SCHEMA_HASH, generated_wire_schema_hash());
-    }
-
     #[derive(Debug, Deserialize)]
     struct PermissionSetFile {
         set: Vec<PermissionSetDefinition>,
@@ -557,7 +418,6 @@ mod tests {
         // active actions (address probe, service test, repair) classify as
         // mutate deliberately: set purity tracks privilege, not just IO.
         const COMMAND_KINDS: &[(&str, &str)] = &[
-            ("desktop_bridge_contract", "read"),
             ("desktop_bootstrap_summary", "read"),
             ("desktop_client_snapshot", "read"),
             ("desktop_observer_metrics", "read"),
@@ -699,40 +559,28 @@ mod tests {
     }
 
     #[test]
-    fn fingerprint_matches_committed_snapshot() {
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("workspace root");
-        let path = workspace_root.join(FINGERPRINT_REL_PATH);
-        let expected = fingerprint_json();
-        let actual = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-            panic!(
-                "missing committed fingerprint at {}: {error}\n\nWrite it with:\n  cargo test -p gents-desktop-bridge write_fingerprint -- --ignored\n",
-                path.display()
-            )
-        });
-        assert_eq!(
-            actual, expected,
-            "desktop bridge contract fingerprint drifted.\n\
-             If the change is intentional, regenerate with:\n\
-             cargo test -p gents-desktop-bridge write_fingerprint -- --ignored\n\
-             and bump contract_version (MINOR additive / MAJOR breaking)."
-        );
-    }
-
-    #[test]
-    #[ignore = "run explicitly to regenerate contracts/desktop-bridge.json"]
-    fn write_fingerprint() {
-        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("workspace root");
-        let path = workspace_root.join(FINGERPRINT_REL_PATH);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).expect("create contracts dir");
+    fn event_names_and_reasons_remain_distinct() {
+        let mut names = BTreeSet::new();
+        for event in [
+            CLIENT_UPDATED_EVENT,
+            CODEX_LOGIN_URL_EVENT,
+            GROK_LOGIN_URL_EVENT,
+            CLAUDE_LOGIN_URL_EVENT,
+            MANAGED_SERVER_UPDATED_EVENT,
+            MANAGED_SERVER_TRAY_START_EVENT,
+            MANAGED_SERVER_TRAY_STOP_EVENT,
+            MANAGED_SERVER_TRAY_RESTART_EVENT,
+        ] {
+            assert!(
+                event.starts_with("desktop://"),
+                "unexpected desktop event {event}"
+            );
+            assert!(names.insert(event), "duplicate desktop event {event}");
         }
-        std::fs::write(&path, fingerprint_json()).expect("write fingerprint");
-        eprintln!("wrote {}", path.display());
+        assert_eq!(
+            EVENT_REASONS.len(),
+            EVENT_REASONS.iter().copied().collect::<BTreeSet<_>>().len(),
+            "client update reasons must be unique",
+        );
     }
 }

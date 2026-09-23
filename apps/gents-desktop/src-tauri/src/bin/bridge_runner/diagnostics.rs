@@ -30,7 +30,6 @@ pub(crate) struct RequestRowDiagnostics {
 pub(crate) struct ResponseRowDiagnostics {
     status: Option<String>,
     error_message: Option<String>,
-    progress_seq: Option<i64>,
     materialized_message_sequence: Option<i64>,
     materialized_at: Option<String>,
     completed_at: Option<String>,
@@ -63,7 +62,7 @@ pub(crate) struct RequestDiagnostics {
     request: Option<RequestRowDiagnostics>,
     response: Option<ResponseRowDiagnostics>,
     matching_response_count: usize,
-    matching_response_progress_seqs: Vec<i64>,
+    matching_message_sequences: Vec<i64>,
     matching_response_statuses: Vec<String>,
     tool_calls: ToolCallDiagnostics,
     tool_result_count: usize,
@@ -324,7 +323,6 @@ async fn build_request_diagnostics(
     let response = matching_responses.last().map(|row| ResponseRowDiagnostics {
         status: Some("complete".to_string()),
         error_message: row.reconstruction_error.clone(),
-        progress_seq: row.sequence,
         materialized_message_sequence: row.sequence,
         materialized_at: row.timestamp.clone(),
         completed_at: row.timestamp.clone(),
@@ -398,7 +396,7 @@ async fn build_request_diagnostics(
         }),
         response,
         matching_response_count: matching_responses.len(),
-        matching_response_progress_seqs: matching_responses
+        matching_message_sequences: matching_responses
             .iter()
             .map(|row| row.sequence.unwrap_or_default())
             .collect(),

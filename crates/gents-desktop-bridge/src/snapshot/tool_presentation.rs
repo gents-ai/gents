@@ -486,7 +486,6 @@ mod tests {
             tool_call_id: Some("tool-1".into()),
             args: Some(args.into()),
             partial_output_tail: None,
-            partial_output_seq: None,
             result: Some(result.into()),
             reconstruction: crate::types::MessageReconstructionView {
                 state: crate::types::ReconstructionState::Ready,
