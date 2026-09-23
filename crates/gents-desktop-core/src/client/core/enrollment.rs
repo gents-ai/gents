@@ -14,7 +14,7 @@ use gents::agent::p2p_reconcile::enrollment::{
     EnrollmentRequest as PureRequest, EnrollmentRouteDirection as PureRouteDirection,
     EnrollmentRouteReceipt as PureRouteReceipt, NetworkAdminPin as PureAdminPin,
 };
-use gents::graphql::{ensure_no_errors, escape_graphql_string, rows};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry, rows};
 use gents::AgentIdentity;
 use gents_protocol::enrollment::{
     decode_offer, derive_enrollment_id, enrollment_schema_fingerprint, AuthorizationRevisionKind,
@@ -227,8 +227,12 @@ impl ClientCore {
     }
 
     pub async fn active_status_enrollment_requests(&self) -> Result<Vec<EnrollmentRequestResult>> {
-        let response = self.node.execute(STATUS_ENROLLMENT_QUERY).await;
-        ensure_no_errors(&response, "load desktop enrollment requests")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            STATUS_ENROLLMENT_QUERY,
+            "load desktop enrollment requests",
+        )
+        .await?;
         let pins = rows::<EnrollmentPinRow>(&response, "NetworkAdminPin")?
             .into_iter()
             .fold(BTreeMap::<String, Vec<String>>::new(), |mut pins, row| {
@@ -352,8 +356,12 @@ impl ClientCore {
         let query = format!(
             r#"{{ NetworkAdminPin(filter: {{ network_id: {{ _eq: "{network_id_escaped}" }} }}) {{ admin_did }} }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "loading local enrollment admin pin")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "loading local enrollment admin pin",
+        )
+        .await?;
         let pins = rows::<AdminPinRow>(&response, "NetworkAdminPin")?;
         match pins.as_slice() {
             [pin] if pin.admin_did == admin_did => return Ok(()),
@@ -396,8 +404,12 @@ impl ClientCore {
         match committed {
             Ok(_) => Ok(()),
             Err(commit_error) => {
-                let response = self.node.execute(&query).await;
-                ensure_no_errors(&response, "recovering local enrollment admin pin")?;
+                let response = graphql_with_transaction_retry(
+                    &self.node,
+                    &query,
+                    "recovering local enrollment admin pin",
+                )
+                .await?;
                 let pins = rows::<AdminPinRow>(&response, "NetworkAdminPin")?;
                 anyhow::ensure!(
                     matches!(pins.as_slice(), [pin] if pin.admin_did == admin_did),
@@ -436,8 +448,12 @@ impl ClientCore {
                 owner_agent profile client_nonce issued_at expires_at candidate_sig
             }} }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "loading retryable enrollment request")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "loading retryable enrollment request",
+        )
+        .await?;
         let rows = rows::<EnrollmentRequestRow>(&response, "NetworkEnrollmentRequest")?;
         let Some(row) = select_retryable_local_request(
             &rows,
@@ -873,8 +889,12 @@ async fn load_status_enrollment_approvals(
     principal: &PrincipalIdentity,
     local_peer_id: &str,
 ) -> Result<BTreeMap<String, EnrollmentAuthorityOutcome>> {
-    let response = node.execute(STATUS_ENROLLMENT_QUERY).await;
-    ensure_no_errors(&response, "load status enrollment approvals")?;
+    let response = graphql_with_transaction_retry(
+        node,
+        STATUS_ENROLLMENT_QUERY,
+        "load status enrollment approvals",
+    )
+    .await?;
     let mut conflicts = BTreeMap::<String, Vec<String>>::new();
     let mut generational_conflicts = BTreeMap::<String, Vec<(Option<u64>, String)>>::new();
     let mut request_scopes = BTreeMap::<String, (String, String)>::new();
