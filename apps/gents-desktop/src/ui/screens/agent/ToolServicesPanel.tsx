@@ -2,6 +2,7 @@ import type {
   DeploymentView,
   ToolServiceRegistry,
 } from "@source-inc/gents-desktop-client";
+import { dependentsWarning } from "./dependents";
 import type { Shell } from "@/hooks/useShell";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
@@ -200,6 +201,7 @@ function Editor({
       />
       <DeleteButton
         label={service.display_name ?? service.service_id}
+        warning={dependentsWarning(deployment, "tool-service", service.service_id)}
         base={base}
         onDelete={() =>
           shell.applyConfig((api) =>

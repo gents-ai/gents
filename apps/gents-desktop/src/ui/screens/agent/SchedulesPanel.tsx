@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { dependentsWarning } from "./dependents";
 import { toast } from "sonner";
 import type { DeploymentView, Schedule } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
@@ -190,6 +191,7 @@ export function ScheduleEditor({
       {!embedded && (
         <DeleteButton
           label={schedule.display_name ?? schedule.schedule_id}
+          warning={dependentsWarning(deployment, "schedule", schedule.schedule_id)}
           base={base}
           onDelete={() =>
             shell.applyConfig((api) =>

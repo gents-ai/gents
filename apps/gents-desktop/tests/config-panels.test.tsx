@@ -1057,6 +1057,54 @@ describe("configuration panels", () => {
     }
   });
 
+  it("names the documents a delete leaves without their reference", async () => {
+    const user = userEvent.setup();
+    const cases: Array<[React.ReactElement, RegExp]> = [
+      [
+        <ProfilesPanel
+          shell={harness().shell}
+          deployment={deployment}
+          item="profile-a"
+        />,
+        /Used by \d+ behaviors?; they lose this reference\./,
+      ],
+      [
+        <SchedulesPanel
+          shell={harness().shell}
+          deployment={deployment}
+          item="timer-a"
+        />,
+        /Used by 1 trigger; they lose this reference\./,
+      ],
+    ];
+    for (const [panel, warning] of cases) {
+      const view = render(panel);
+      await user.click(
+        screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
+      );
+      expect(within(screen.getByRole("alertdialog")).getByText(warning)).toBeVisible();
+      view.unmount();
+    }
+  });
+
+  it("asks for the name before a list row's delete runs", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<TasksPanel shell={shell} deployment={deployment} />);
+    const name = deployment.tasks[0]!.name ?? deployment.tasks[0]!.taskId;
+    await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
+    await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
+    const dialog = screen.getByRole("alertdialog");
+    const button = within(dialog).getByRole("button", { name: /^Delete / });
+    expect(button).toBeDisabled();
+    await user.type(within(dialog).getByRole("textbox"), name);
+    await user.click(button);
+    expect(api.deleteTaskConfig).toHaveBeenCalledWith({
+      taskId: deployment.tasks[0]!.taskId,
+      agentDid: deployment.agentDid,
+    });
+  });
+
   it("routes every destructive panel action through its typed delete command", async () => {
     const cases: Array<{
       renderPanel: (shell: Shell) => React.ReactElement;
@@ -1143,22 +1191,21 @@ describe("configuration panels", () => {
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
       expect(api[testCase.method], testCase.method).not.toHaveBeenCalled();
-      /* the name is asked for only when something depends on the document,
-         and always for behaviors and backends */
-      const confirmation = screen.queryByRole("textbox", {
+      /* every delete asks for the document's name, as it did before the sync */
+      const confirmation = screen.getByRole("textbox", {
         name: /^Type .+ to confirm$/,
       });
-      if (testCase.method === "deleteBehaviorConfig")
-        expect(confirmation, testCase.method).not.toBeNull();
-      if (testCase.method === "deleteBackendConfig")
-        expect(confirmation, testCase.method).not.toBeNull();
-      if (confirmation) {
-        const accessibleName = confirmation.getAttribute("aria-label")!;
-        await user.type(
-          confirmation,
-          accessibleName.replace(/^Type /, "").replace(/ to confirm$/, ""),
-        );
-      }
+      const accessibleName = confirmation.getAttribute("aria-label")!;
+      expect(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: /^Delete /,
+        }),
+        testCase.method,
+      ).toBeDisabled();
+      await user.type(
+        confirmation,
+        accessibleName.replace(/^Type /, "").replace(/ to confirm$/, ""),
+      );
       await user.click(
         within(screen.getByRole("alertdialog")).getByRole("button", {
           name: /^Delete /,

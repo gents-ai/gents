@@ -3,6 +3,7 @@ import type {
   Tools,
   SubagentTargetDocument,
 } from "@source-inc/gents-desktop-client";
+import { dependentsWarning } from "./dependents";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
@@ -414,6 +415,7 @@ export function ToolsEditor({
       {!embedded && !draftMode && (
         <DeleteButton
           label={tools.display_name ?? tools.tools_id}
+          warning={dependentsWarning(deployment, "tools", tools.tools_id)}
           base={base}
           onDelete={() =>
             shell.applyConfig((api) =>

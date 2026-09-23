@@ -3,6 +3,7 @@
    visible block on the behavior: pick one, see who else uses it, duplicate
    it or start empty, and edit its instructions and capabilities in place.
    Everything waits for one Save. PROPOSED: not yet in the desktop app. */
+import { dependentsWarning } from "./dependents";
 import { Fragment, useEffect, useState } from "react";
 import {
   ArrowLeft,
@@ -1235,8 +1236,8 @@ export function BehaviorEditor({
       />
       {!draftMode && !embedded && (
         <DeleteButton
-          strict
           label={behavior.displayName}
+          warning={dependentsWarning(deployment, "behavior", behavior.behaviorId)}
           base={base}
           companion={
             soleContext

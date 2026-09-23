@@ -1,4 +1,5 @@
 import type { DeploymentView, EventSource } from "@source-inc/gents-desktop-client";
+import { dependentsWarning } from "./dependents";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
 import {
@@ -235,6 +236,11 @@ export function EventSourceEditor({
       {!embedded && (
         <DeleteButton
           label={source.display_name ?? source.event_source_id}
+          warning={dependentsWarning(
+            deployment,
+            "event-source",
+            source.event_source_id,
+          )}
           base={base}
           onDelete={() =>
             shell.applyConfig((api) =>

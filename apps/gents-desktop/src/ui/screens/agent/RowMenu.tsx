@@ -25,7 +25,6 @@ export function RowMenu({
   onDuplicate,
   onDelete,
   warning,
-  strict,
   children,
 }: {
   name: string;
@@ -41,8 +40,6 @@ export function RowMenu({
   onDuplicate?: () => Promise<string>;
   onDelete?: () => Promise<unknown>;
   warning?: string;
-  /* always ask for the name */
-  strict?: boolean;
   /* extra menu items, before Delete */
   children?: React.ReactNode;
 }) {
@@ -134,7 +131,6 @@ export function RowMenu({
           onOpenChange={setConfirm}
           onDelete={onDelete}
           warning={warning}
-          strict={strict}
         />
       )}
     </div>

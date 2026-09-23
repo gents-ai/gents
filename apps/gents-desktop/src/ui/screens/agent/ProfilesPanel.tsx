@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { dependentsWarning } from "./dependents";
 import type {
   BackendProviderKind,
   DeploymentView,
@@ -805,6 +806,7 @@ export function ProfileEditor({
       {!embedded && !draftMode && (
         <DeleteButton
           label={profile.display_name ?? profile.profile_id}
+          warning={dependentsWarning(deployment, "profile", profile.profile_id)}
           base={base}
           onDelete={() =>
             shell.applyConfig((api) =>

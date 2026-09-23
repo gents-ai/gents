@@ -1,5 +1,6 @@
 /* Tasks, as the desktop app's Tasks tab: TaskSaveRequest fields, the
    run facts, and a manual run with JSON args. */
+import { dependentsWarning } from "./dependents";
 import { useState } from "react";
 import { toast } from "sonner";
 import type { DeploymentView, TaskView } from "@source-inc/gents-desktop-client";
@@ -451,6 +452,7 @@ export function TaskEditor({
       {!embedded && (
         <DeleteButton
           label={task.name ?? task.taskId}
+          warning={dependentsWarning(deployment, "task", task.taskId)}
           base={base}
           onDelete={() =>
             shell.applyConfig((api) =>

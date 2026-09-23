@@ -4,6 +4,7 @@
    ChatGPT/Codex and Grok exist only through a subscription sign-in, so
    the account card sits in the row with connect, cancel and disconnect.
    Everything else is the desktop app's Backends panel field for field. */
+import { dependentsWarning } from "./dependents";
 import { useEffect, useRef, useState } from "react";
 import { PROVIDER_VISUALS, SetupScreen, type ProviderId } from "../setup/SetupScreen";
 import type { InferenceProviderOption } from "@source-inc/gents-desktop-client";
@@ -673,8 +674,8 @@ export function BackendEditor({
       />
       {!embedded && (
         <DeleteButton
-          strict
           label={backend.name ?? backend.backendId}
+          warning={dependentsWarning(deployment, "backend", backend.backendId)}
           base={base}
           onDelete={() =>
             shell.applyConfig((api) =>
@@ -853,7 +854,6 @@ export function InferencePanel({
                     }),
                   ),
               }}
-              strict
               onDelete={() =>
                 shell.applyConfig((api) =>
                   api.deleteBackendConfig({

@@ -449,7 +449,8 @@ export const NOUNS: Record<string, string> = {
 };
 
 /* The typed-name confirmation every delete goes through, from the editor's
-   Danger zone or a list row's menu. */
+   Danger zone or a list row's menu. The name is always asked for; `warning`
+   says which documents lose their reference (see dependents.ts). */
 export function ConfirmDelete({
   label,
   noun,
@@ -459,7 +460,6 @@ export function ConfirmDelete({
   after,
   warning,
   companion,
-  strict,
 }: {
   label: string;
   noun: string;
@@ -472,14 +472,11 @@ export function ConfirmDelete({
   warning?: string;
   /* a document that can go with it, offered as a ticked box */
   companion?: { label: string; onDelete: () => Promise<unknown> };
-  /* ask for the name: on by itself when the delete takes something else with it */
-  strict?: boolean;
 }) {
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [alsoDelete, setAlsoDelete] = useState(true);
-  const typeName = strict ?? (warning !== undefined || companion !== undefined);
-  const confirmed = !typeName || typed.trim() === label.trim();
+  const confirmed = typed.trim() === label.trim();
   const close = (next: boolean) => {
     if (deleting) return;
     onOpenChange(next);
@@ -515,27 +512,19 @@ export function ConfirmDelete({
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {label}?</AlertDialogTitle>
           <AlertDialogDescription>
-            This removes the {noun} for good.{warning ? ` ${warning}` : ""}
-            {typeName && (
-              <>
-                {" "}
-                To confirm, type its name:{" "}
-                <span className="font-medium text-foreground">{label}</span>
-              </>
-            )}
+            This removes the {noun} for good.{warning ? ` ${warning}` : ""} To confirm,
+            type its name: <span className="font-medium text-foreground">{label}</span>
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {typeName && (
-          <Input
-            autoFocus
-            aria-label={`Type ${label} to confirm`}
-            value={typed}
-            onChange={(e) => setTyped(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void remove();
-            }}
-          />
-        )}
+        <Input
+          autoFocus
+          aria-label={`Type ${label} to confirm`}
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void remove();
+          }}
+        />
         {companion && (
           <label className="flex items-center gap-2 text-sm">
             <Checkbox
@@ -561,7 +550,8 @@ export function ConfirmDelete({
 }
 
 /* The end of an editor: a Danger zone group, set apart from the fields and
-   their Save, whose delete asks for the document's name before it runs. */
+   their Save. Its delete goes through ConfirmDelete, which always asks for
+   the document's name before it runs. */
 export function DeleteButton({
   label,
   onDelete,
@@ -569,7 +559,6 @@ export function DeleteButton({
   after,
   warning,
   companion,
-  strict,
 }: {
   label: string;
   onDelete: () => Promise<unknown>;
@@ -580,8 +569,6 @@ export function DeleteButton({
   warning?: string;
   /* a document that can go with it, offered as a ticked box */
   companion?: { label: string; onDelete: () => Promise<unknown> };
-  /* always ask for the name, whatever depends on it */
-  strict?: boolean;
 }) {
   const noun = NOUNS[base.section] ?? "item";
   const [open, setOpen] = useState(false);
@@ -611,7 +598,6 @@ export function DeleteButton({
         after={after ?? { ...base, item: undefined }}
         warning={warning}
         companion={companion}
-        strict={strict}
       />
     </FieldSet>
   );

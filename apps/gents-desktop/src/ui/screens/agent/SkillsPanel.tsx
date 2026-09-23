@@ -1,6 +1,7 @@
 /* Skills, as the desktop app's Skills tab: id (immutable after create),
    name, enabled, display name, description, instructions and tool
    dependencies, saved through SkillSaveRequest. */
+import { dependentsWarning } from "./dependents";
 import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
@@ -164,6 +165,7 @@ function SkillEditor({
       />
       <DeleteButton
         label={skill.name ?? skill.skillId}
+        warning={dependentsWarning(deployment, "skill", skill.skillId)}
         base={base}
         onDelete={() =>
           shell.applyConfig((api) =>
