@@ -137,3 +137,10 @@ Filled in by the orchestrator at spin-up.
   calibration. Residuals for issues: the gents-cli scenario sidecar closure lacks a `../` check
   (predates this stack; eval sidecars now pass through it); subject README line 36 half stale.
   Unproven until calibration: `requester_did == $trial` end to end.
+- M4 fully planned 2026-09-22: spec `2026-09-22-eval-report-and-cli-design.md` (4a + 4b +
+  amendments); plan `2026-09-22-eval-report-and-cli.md`, 5 PRs (`eval/50-report` … `54-compare-breakdowns`),
+  reviewed once (16 findings, all ruled and applied). Base: M6b's final `optimization/23-promote` tip
+  after its fix wave. `m4` starts on `--model opus` when `m6b` reports plan complete, with the user's
+  process rules: batch tasks sharing a file or a library call; reviews overlap the next implementer;
+  per task only the pertinent tests plus `cargo check -p gents --tests`; the full `cargo test -p gents`
+  and `cargo check --workspace --all-targets` once per PR at its gate; `CARGO_BUILD_JOBS=8`; no trailers.
