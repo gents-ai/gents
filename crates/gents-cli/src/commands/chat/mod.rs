@@ -65,6 +65,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     goal,
                     args.timeout_secs,
                     args.poll_secs,
+                    args.verbose,
                 )
                 .await?;
                 if let Some(path) = args.output_file.as_deref() {
@@ -103,12 +104,14 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         );
     }
 
+    let prompt_label = chat_prompt_label(&args, runtime_state.as_ref());
+
     let stdin = io::stdin();
     let mut pending_goal = goal;
     let mut lines = stdin.lock().lines();
     let mut stdout = io::stdout();
     loop {
-        write!(stdout, "> ")?;
+        write!(stdout, "{prompt_label}> ")?;
         stdout.flush()?;
         let Some(line) = lines.next() else {
             break;
@@ -131,11 +134,25 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
             pending_goal.take(),
             args.timeout_secs,
             args.poll_secs,
+            args.verbose,
         )
         .await?;
     }
 
     Ok(())
+}
+
+/// Minimal, one-line context for the interactive prompt: which agent is
+/// listening. Falls back through the sources that can name it, and finally
+/// to a generic label rather than a bare `>` with no context (#1622).
+fn chat_prompt_label(
+    args: &ChatArgs,
+    runtime_state: Option<&crate::shared::StoredRuntimeState>,
+) -> String {
+    args.agent_name
+        .clone()
+        .or_else(|| runtime_state.map(|state| state.agent_name.clone()))
+        .unwrap_or_else(|| "gents".to_string())
 }
 
 #[derive(Clone, Copy)]
@@ -153,6 +170,7 @@ async fn submit_chat_turn_with_goal(
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
     poll_secs: u64,
+    verbose: bool,
 ) -> Result<RequestOutputEnvelope> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
     let submitted = match goal {
@@ -186,6 +204,7 @@ async fn submit_chat_turn_with_goal(
         existing_tool_calls,
         timeout_secs,
         poll_secs,
+        verbose,
     )
     .await
 }
