@@ -1,6 +1,7 @@
 /* Automations in words. A trigger is a sentence, "Every weekday at 09:00 ·
    run Nightly audit with Implementer", and a readiness line that says why
    it will not fire. All from the 7.3 documents, nothing invented. */
+import { behaviorReadiness } from "@/lib/behavior-readiness";
 import type {
   DeploymentView,
   EventSource,
@@ -79,7 +80,10 @@ export function sourceInWords(
 export type Readiness =
   { ok: true; note: string | null } | { ok: false; reason: string };
 
-/* why a trigger will not fire, in the order a user can fix it */
+/* why a trigger will not fire, in the order a user can fix it: its own
+   switch and references from the loaded documents, then the behavior's
+   readiness as the bridge reports it. `ok` means nothing here blocks it;
+   it is never shown as a promise that the run will succeed. */
 export function triggerReadiness(
   deployment: DeploymentView,
   t: TriggerView,
@@ -99,7 +103,11 @@ export function triggerReadiness(
   if (task.enabled === false) return { ok: false, reason: "Task is disabled" };
   const b = deployment.behaviors.find((x) => x.behaviorId === task.behaviorId);
   if (!b) return { ok: false, reason: "Behavior is missing" };
-  if (!b.enabled) return { ok: false, reason: `${b.displayName} is disabled` };
+  /* whether the behavior can run is the bridge's readiness decision, not a
+     guess from the documents here */
+  const readiness = behaviorReadiness(deployment, b.behaviorId);
+  if (!readiness.ready)
+    return { ok: false, reason: `${b.displayName}: ${readiness.reason}` };
   if (t.lastStatus === "failed")
     return {
       ok: true,

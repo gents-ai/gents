@@ -188,9 +188,7 @@ export function TriggerEditor({
         <p
           className={`mt-1 text-sm ${readiness.ok ? "text-muted-foreground" : "text-destructive"}`}
         >
-          {readiness.ok
-            ? (readiness.note ?? "Ready")
-            : `Won’t fire: ${readiness.reason}`}
+          {readiness.ok ? readiness.note : `Won’t fire: ${readiness.reason}`}
         </p>
       </header>
       <Group title="Trigger">
