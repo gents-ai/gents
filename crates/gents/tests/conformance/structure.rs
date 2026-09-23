@@ -57,14 +57,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("EthSubmission", Module("conformance/eth_submission.rs")),
         ("Enrollment", Module("conformance/enrollment.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
-        (
-            "Eval",
-            Gap(
-                "#1515 eval core contract: the outcome vocabularies and \
-                 eval_outcome_cases are emitted; conformance::eval binds them once \
-                 gents::eval::outcome lands in the eval contract stack.",
-            ),
-        ),
+        ("Eval", Module("conformance/eval.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),

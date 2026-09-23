@@ -118,6 +118,35 @@ pub struct EvalCheckRef {
     pub weight: u32,
 }
 
+/// Evidence a stage collects from the trial after it ends, keyed by `name`
+/// for the checks of that stage.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum EvalCapture {
+    /// App-collection rows matching a DefraDB filter.
+    Documents {
+        name: String,
+        collection: String,
+        /// A DefraDB filter object for `collection`.
+        #[cfg_attr(feature = "typescript", ts(type = "unknown"))]
+        filter: serde_json::Value,
+        /// Fields to read; empty reads every field.
+        #[serde(default)]
+        fields: Vec<String>,
+    },
+    /// Workspace files matching a glob.
+    File { name: String, glob: String },
+}
+
+impl EvalCapture {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Documents { name, .. } | Self::File { name, .. } => name,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -135,6 +164,16 @@ pub struct EvalStage {
         ts(as = "Option<Vec<EvalCheckRef>>", optional = nullable)
     )]
     pub checks: Vec<EvalCheckRef>,
+    #[serde(
+        default,
+        deserialize_with = "super::serde_helpers::deserialize_default_on_null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    #[cfg_attr(
+        feature = "typescript",
+        ts(as = "Option<Vec<EvalCapture>>", optional = nullable)
+    )]
+    pub capture: Vec<EvalCapture>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -232,10 +271,16 @@ impl EvalDefinition {
                     stage.deadline_secs > 0,
                     "eval definition {id} case {case_id} stage {stage_id} deadline_secs must be positive"
                 );
+                let mut check_names = BTreeSet::new();
                 for check in &stage.checks {
                     ensure!(
                         !check.check.trim().is_empty(),
                         "eval definition {id} case {case_id} stage {stage_id} has an empty check name"
+                    );
+                    ensure!(
+                        check_names.insert(check.check.as_str()),
+                        "eval definition {id} case {case_id} stage {stage_id} has duplicate check {}",
+                        check.check
                     );
                     ensure!(
                         check.weight >= 1,
@@ -248,6 +293,28 @@ impl EvalDefinition {
                             "eval definition {id} case {case_id}: {LLM_JUDGE_CHECK} is development-tier only"
                         );
                         acceptance += 1;
+                    }
+                }
+                let mut capture_names = BTreeSet::new();
+                for capture in &stage.capture {
+                    let name = capture.name();
+                    ensure!(
+                        !name.trim().is_empty(),
+                        "eval definition {id} case {case_id} stage {stage_id} has an empty capture name"
+                    );
+                    ensure!(
+                        capture_names.insert(name),
+                        "eval definition {id} case {case_id} stage {stage_id} has duplicate capture name {name}"
+                    );
+                    match capture {
+                        EvalCapture::Documents { collection, .. } => ensure!(
+                            !collection.trim().is_empty(),
+                            "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty collection"
+                        ),
+                        EvalCapture::File { glob, .. } => ensure!(
+                            !glob.trim().is_empty(),
+                            "eval definition {id} case {case_id} stage {stage_id} capture {name} has an empty glob"
+                        ),
                     }
                 }
             }
@@ -367,6 +434,117 @@ mod tests {
         invalid(
             |v| v["cases"][0]["stages"][0]["checks"][1]["tier"] = "acceptance".into(),
             "llm_judge",
+        );
+    }
+
+    #[test]
+    fn a_stage_with_a_documents_capture_round_trips() {
+        let mut value = definition();
+        value["cases"][0]["stages"][0]["capture"] = json!([
+            {
+                "kind": "documents",
+                "name": "findings",
+                "collection": "MonitorFinding",
+                "filter": {"severity": {"_eq": "warning"}},
+                "fields": ["title", "severity"]
+            },
+            {"kind": "file", "name": "report", "glob": "reports/*.md"}
+        ]);
+        let parsed = parse(value.clone());
+        parsed.validate().unwrap();
+        assert_eq!(
+            parsed.cases[0].stages[0].capture[0],
+            EvalCapture::Documents {
+                name: "findings".into(),
+                collection: "MonitorFinding".into(),
+                filter: json!({"severity": {"_eq": "warning"}}),
+                fields: vec!["title".into(), "severity".into()],
+            }
+        );
+        assert_eq!(
+            parsed.cases[0].stages[0].capture[1],
+            EvalCapture::File {
+                name: "report".into(),
+                glob: "reports/*.md".into(),
+            }
+        );
+        let serialized = serde_json::to_value(&parsed).unwrap();
+        assert_eq!(
+            serialized["cases"][0]["stages"][0]["capture"],
+            value["cases"][0]["stages"][0]["capture"]
+        );
+        assert_eq!(parse(serialized), parsed);
+
+        let bare = parse(definition());
+        assert!(bare.cases[0].stages[0].capture.is_empty());
+        let serialized = serde_json::to_value(&bare).unwrap();
+        assert!(
+            serialized["cases"][0]["stages"][0].get("capture").is_none(),
+            "an empty capture list is omitted, never []"
+        );
+
+        let mut defaulted = definition();
+        defaulted["cases"][0]["stages"][0]["capture"] = json!([
+            {"kind": "documents", "name": "rows", "collection": "Row", "filter": {}}
+        ]);
+        let parsed = parse(defaulted);
+        assert!(matches!(
+            &parsed.cases[0].stages[0].capture[0],
+            EvalCapture::Documents { fields, .. } if fields.is_empty()
+        ));
+
+        let mut unknown = definition();
+        unknown["cases"][0]["stages"][0]["capture"] =
+            json!([{"kind": "file", "name": "r", "glob": "*", "extra": 1}]);
+        assert!(serde_json::from_value::<EvalDefinition>(unknown).is_err());
+    }
+
+    #[test]
+    fn duplicate_check_refs_in_one_stage_are_refused() {
+        invalid(
+            |v| {
+                let check = v["cases"][0]["stages"][0]["checks"][0].clone();
+                v["cases"][0]["stages"][0]["checks"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(check);
+            },
+            "case disk-warning stage check has duplicate check mailbox_findings",
+        );
+    }
+
+    #[test]
+    fn capture_names_are_unique_and_capture_fields_non_empty() {
+        invalid(
+            |v| {
+                v["cases"][0]["stages"][0]["capture"] = json!([
+                    {"kind": "file", "name": "out", "glob": "a/*"},
+                    {"kind": "documents", "name": "out", "collection": "Row", "filter": {}}
+                ]);
+            },
+            "duplicate capture name out",
+        );
+        invalid(
+            |v| {
+                v["cases"][0]["stages"][0]["capture"] =
+                    json!([{"kind": "file", "name": " ", "glob": "a/*"}]);
+            },
+            "empty capture name",
+        );
+        invalid(
+            |v| {
+                v["cases"][0]["stages"][0]["capture"] = json!([
+                    {"kind": "documents", "name": "rows", "collection": "", "filter": {}}
+                ]);
+            },
+            "capture rows has an empty collection",
+        );
+        invalid(
+            |v| {
+                v["cases"][0]["stages"][0]["capture"] =
+                    json!([{"kind": "file", "name": "out", "glob": ""}]);
+            },
+            "capture out has an empty glob",
         );
     }
 

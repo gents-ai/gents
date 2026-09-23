@@ -420,20 +420,20 @@ def vocabularyCoverage : List CoverageEntry :=
       "MailboxSourceKind"
       "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
       "mailbox" allSurfaces
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "vocabulary"
       "EvalOutcomeKind"
-      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
       "eval" [Surface.operatorCli]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "vocabulary"
       "EvalProviderReason"
-      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
       "eval" [Surface.operatorCli]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "vocabulary"
       "EvalEvidenceClass"
-      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
       "eval" [Surface.operatorCli]
   ]
 
@@ -737,10 +737,10 @@ def caseCoverage : List CoverageEntry :=
       "ApplyReconcileCases"
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "eval_outcome_cases"
       "EvalOutcomeCases"
-      "Consumed by conformance::eval once gents::eval::outcome lands in the eval contract stack.")
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
       "eval" [Surface.operatorCli]
   , tagged (consumerCoverage
       "publish_if_cases"
