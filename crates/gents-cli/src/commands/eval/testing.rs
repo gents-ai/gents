@@ -40,6 +40,8 @@ pub(crate) const VALIDATION_CASES: [&str; 6] =
 pub(crate) const HELD_OUT_CASES: [&str; 6] = ["ho-a", "ho-b", "ho-c", "ho-d", "ho-e", "ho-f"];
 pub(crate) const TRIALS: u32 = 2;
 pub(crate) const BASELINE_PROMPT: &str = "Watch the mailbox.\n";
+/// What a scripted proposer offers: the optimizer matrix's candidate text.
+pub(crate) const CANDIDATE_PROMPT: &str = "Watch the mailbox, and name the collection.\n";
 
 pub(crate) struct Fixture {
     pub(crate) ctx: EvalContext,

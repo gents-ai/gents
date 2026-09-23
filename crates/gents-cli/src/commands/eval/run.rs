@@ -5,7 +5,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::io::Write;
-use std::time::Duration;
 
 use anyhow::Result;
 use gents::eval::documents::default_breaker_threshold;
@@ -14,12 +13,12 @@ use gents::eval::report::load_report;
 use gents::eval::runner::{self, CellRequest, RunOutcome, RunRequest, CANCEL_MARKER};
 use gents::{default_behavior_id_for_agent, default_inference_profile_id_for_behavior};
 
-use super::{default_id, render, source_commit, source_dirty, write_json, Deps, EvalContext};
+use super::{
+    default_id, follow_progress, render, source_commit, source_dirty, write_json, Deps,
+    EvalContext, Progress,
+};
 use crate::cli::{EvalResumeArgs, EvalRunArgs};
 use crate::commands::pack::{resolve_subject_pack, SubjectPack};
-
-/// How often the documents are read for slots that landed.
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(super) async fn run(
     ctx: &EvalContext,
@@ -191,7 +190,7 @@ async fn run_request(
 async fn follow<F>(
     ctx: &EvalContext,
     run_id: &str,
-    mut landed: BTreeSet<String>,
+    landed: BTreeSet<String>,
     print: bool,
     out: &mut dyn Write,
     running: F,
@@ -199,26 +198,27 @@ async fn follow<F>(
 where
     F: Future<Output = Result<RunOutcome>>,
 {
-    tokio::pin!(running);
-    let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
-    // A slow read delays the next one rather than being followed at once by
-    // the ticks it missed.
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    // The progress read is polled beside the run, never instead of it: the
-    // run may hold a transaction the read waits on.
-    let result = loop {
-        tokio::select! {
-            result = &mut running => break result,
-            () = async {
-                ticker.tick().await;
-                report_landed(ctx, run_id, &mut landed, &mut *out).await;
-            }, if print => {}
-        }
+    let mut progress = LandedTrials {
+        ctx,
+        run_id,
+        landed,
+        out,
     };
-    if print {
-        report_landed(ctx, run_id, &mut landed, out).await;
+    follow_progress(print, &mut progress, running).await
+}
+
+/// The run's slots that landed, printed once each.
+struct LandedTrials<'a> {
+    ctx: &'a EvalContext,
+    run_id: &'a str,
+    landed: BTreeSet<String>,
+    out: &'a mut dyn Write,
+}
+
+impl Progress for LandedTrials<'_> {
+    async fn report(&mut self) {
+        report_landed(self.ctx, self.run_id, &mut self.landed, &mut *self.out).await;
     }
-    result
 }
 
 /// Print every completed attempt not printed yet. A failed read only delays

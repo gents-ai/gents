@@ -450,6 +450,7 @@ async fn async_main() -> Result<()> {
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
         Command::Eval { command } => commands::eval::dispatch(command).await,
+        Command::Optimization { command } => commands::optimization::dispatch(command).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();

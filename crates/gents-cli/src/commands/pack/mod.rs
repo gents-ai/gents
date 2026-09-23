@@ -302,8 +302,8 @@ pub(crate) struct SubjectPack {
 }
 
 impl SubjectPack {
-    /// Only tests read it until `gents optimization run` needs a directory.
-    #[cfg(test)]
+    /// The pack's directory, when it resolved to one (always, when
+    /// resolved with `directory` set).
     pub(crate) fn directory(&self) -> Option<&std::path::Path> {
         match &self.source {
             gents::eval::runner::CellSource::Directory(dir) => Some(dir),

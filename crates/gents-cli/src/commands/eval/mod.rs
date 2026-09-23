@@ -43,6 +43,11 @@ impl EvalContext {
     pub(crate) fn runs_dir(&self) -> PathBuf {
         runs_dir(&self.home_dir)
     }
+
+    /// `<home>/eval/jobs`: each job owns `<jobs_dir>/<job_id>/`.
+    pub(crate) fn jobs_dir(&self) -> PathBuf {
+        self.home_dir.join("eval").join("jobs")
+    }
 }
 
 /// `<home>/eval/runs`, where the runner freezes every run.
@@ -79,7 +84,9 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     // Only a command that hosts a loop replaces the default interrupt: a
     // read-only command stays killable by Ctrl-C.
     let cancel = if matches!(command, EvalCommand::Run(_) | EvalCommand::Resume(_)) {
-        cancel_on_ctrl_c()
+        cancel_on_ctrl_c(
+            "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now",
+        )
     } else {
         CancellationToken::new()
     };
@@ -132,20 +139,27 @@ async fn cancel_without_context(args: &crate::cli::EvalRunIdArgs) -> Result<()> 
 /// A token Ctrl-C cancels. The loop then stops launching, leaves in-flight
 /// trials open for a resume, and the command prints how to resume. A second
 /// Ctrl-C exits at once with 130, without waiting for in-flight trials.
-pub(crate) fn cancel_on_ctrl_c() -> CancellationToken {
+/// `first_warning` is logged at the first interrupt and says how the caller's
+/// command is resumed.
+pub(crate) fn cancel_on_ctrl_c(first_warning: &'static str) -> CancellationToken {
     let token = CancellationToken::new();
     let cancel = token.clone();
     tokio::spawn(async move {
-        on_interrupts(tokio::signal::ctrl_c, &cancel, || std::process::exit(130)).await;
+        on_interrupts(tokio::signal::ctrl_c, &cancel, first_warning, || {
+            std::process::exit(130)
+        })
+        .await;
     });
     token
 }
 
-/// The first interrupt `next` yields cancels `cancel`; the second calls
-/// `exit`. A failure to listen ends the handler: the token stays as it is.
+/// The first interrupt `next` yields logs `first_warning` and cancels
+/// `cancel`; the second calls `exit`. A failure to listen ends the handler:
+/// the token stays as it is.
 async fn on_interrupts<S>(
     mut next: impl FnMut() -> S,
     cancel: &CancellationToken,
+    first_warning: &str,
     exit: impl FnOnce(),
 ) where
     S: std::future::Future<Output = std::io::Result<()>>,
@@ -153,15 +167,51 @@ async fn on_interrupts<S>(
     if next().await.is_err() {
         return;
     }
-    tracing::warn!(
-        "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now"
-    );
+    tracing::warn!("{first_warning}");
     cancel.cancel();
     if next().await.is_err() {
         return;
     }
     tracing::warn!("second interrupt: exiting without waiting for in-flight trials");
     exit();
+}
+
+/// How often a command hosting a loop reads the documents for progress.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// A progress read [`follow_progress`] repeats while a loop runs.
+pub(crate) trait Progress {
+    /// Print what landed since the last call. A failed read only delays the
+    /// lines; it never stops the loop.
+    async fn report(&mut self);
+}
+
+/// Drive `running` to its end, with `progress` reported on a timer and once
+/// more at the end when `print` is set. The read is polled beside the loop,
+/// never instead of it: the loop may hold a transaction the read waits on.
+pub(crate) async fn follow_progress<T>(
+    print: bool,
+    progress: &mut impl Progress,
+    running: impl std::future::Future<Output = T>,
+) -> T {
+    tokio::pin!(running);
+    let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
+    // A slow read delays the next one rather than being followed at once by
+    // the ticks it missed.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let result = loop {
+        tokio::select! {
+            result = &mut running => break result,
+            () = async {
+                ticker.tick().await;
+                progress.report().await;
+            }, if print => {}
+        }
+    };
+    if print {
+        progress.report().await;
+    }
+    result
 }
 
 /// A refusal the library returned, re-raised with exactly its own text
@@ -323,7 +373,10 @@ mod tests {
                             .ok_or_else(|| std::io::Error::other("closed"))
                     }
                 };
-                on_interrupts(next, &token, || exited.store(true, Ordering::SeqCst)).await;
+                on_interrupts(next, &token, "interrupt", || {
+                    exited.store(true, Ordering::SeqCst)
+                })
+                .await;
             })
         };
         let within = std::time::Duration::from_secs(10);
@@ -343,6 +396,7 @@ mod tests {
         on_interrupts(
             || async { Err(std::io::Error::other("no handler")) },
             &listening_failed,
+            "interrupt",
             || panic!("never exits"),
         )
         .await;

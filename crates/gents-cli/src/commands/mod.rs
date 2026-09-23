@@ -22,6 +22,7 @@ pub(crate) mod init;
 pub(crate) mod mailbox;
 pub(crate) mod mcp;
 pub(crate) mod native_fs_runner;
+pub(crate) mod optimization;
 pub(crate) mod p2p;
 pub(crate) mod pack;
 pub(crate) mod plugin;
