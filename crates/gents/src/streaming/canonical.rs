@@ -64,6 +64,12 @@ pub(crate) enum ProviderReplayRejection {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub(crate) enum ProviderWorkspaceRejection {
+    #[error("remote spawn workspace differs from accepted parent request")]
+    ParentStampChanged,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum ProviderAppendRejection {
     #[error("cannot append to a closed provider source")]
     ClosedSource,
@@ -548,10 +554,9 @@ async fn publish_provider_turn_with_time(
                 let remote_admission = admission
                     .filter(|plan| plan.spawn_target_did != prepared.agent_did);
                 if let Some(plan) = remote_admission {
-                    anyhow::ensure!(
-                        plan.delegated_workspace == accepted_parent_workspace(&request)?,
-                        "remote spawn workspace differs from accepted parent request"
-                    );
+                    if plan.delegated_workspace != accepted_parent_workspace(&request)? {
+                        return Err(ProviderWorkspaceRejection::ParentStampChanged.into());
+                    }
                 }
                 let delegated_input = remote_admission
                     .map(|_| gents_protocol::output::DelegatedToolInput {
@@ -796,12 +801,12 @@ async fn replay_publication_in_txn(
             .is_some_and(|plan| plan.spawn_target_did != exemplar.agent_did);
         if should_delegate {
             let source = accepted_parent_workspace(&parent_request)?;
-            anyhow::ensure!(
-                persisted_admission
-                    .as_ref()
-                    .is_some_and(|plan| plan.delegated_workspace == source),
-                "publication replay workspace differs from accepted parent request"
-            );
+            if !persisted_admission
+                .as_ref()
+                .is_some_and(|plan| plan.delegated_workspace == source)
+            {
+                return Err(ProviderWorkspaceRejection::ParentStampChanged.into());
+            }
         }
         let expected_arguments = match expected {
             gents_protocol::message::Message::Assistant { content, .. } => content
@@ -1107,4 +1112,24 @@ async fn load_source_in_txn(
                 .filter(|row| row.segment.source == prepared.source)
                 .collect()
         })
+}
+
+#[cfg(test)]
+mod workspace_guard_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_parent_provenance_is_not_a_workspace_stamp_rejection() {
+        let request = AgentRequestRow {
+            request_id: "injected-malformed-parent".to_owned(),
+            workspace_id: Some("workspace-without-authority".to_owned()),
+            ..Default::default()
+        };
+        let error = accepted_parent_workspace(&request)
+            .expect_err("incomplete parent provenance must fail validation");
+        assert!(
+            error.downcast_ref::<ProviderWorkspaceRejection>().is_none(),
+            "only an authenticated stamp mismatch is a modeled rejection: {error:#}"
+        );
+    }
 }

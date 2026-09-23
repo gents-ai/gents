@@ -334,7 +334,7 @@ def routedDepthWorld (depth : Nat) : World :=
 
 /-- The actual provider-native spawn argument stream used by conformance. -/
 def realSpawnArguments : String :=
-  "{\"name\":\"lean-behavior-8\",\"prompt\":\"work\",\"await_mode\":\"background\"}"
+  "{\"await_mode\":\"background\",\"name\":\"lean-behavior-8\",\"prompt\":\"work\"}"
 
 def realSpawnArgumentBytes : List UInt8 := realSpawnArguments.toUTF8.data.toList
 

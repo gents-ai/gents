@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_protocol::output::reconstruction::{ObservedSegment, reconstruct_message};
+use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation, PayloadRef,
     PresentedPayload, SourceClose, TranscriptMessage,
@@ -25,9 +25,15 @@ use crate::lean_vocab_test::{
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
 fn fixture_time(value: u64) -> Result<DateTime<Utc>> {
+    fixture_time_at(FIXTURE_EPOCH_SECONDS, value)
+}
+
+fn fixture_time_at(epoch_seconds: i64, value: u64) -> Result<DateTime<Utc>> {
     let seconds = i64::try_from(value).context("modeled time exceeds native range")?;
-    DateTime::from_timestamp(FIXTURE_EPOCH_SECONDS + seconds, 0)
-        .context("modeled time overflows native timestamp")
+    let timestamp = epoch_seconds
+        .checked_add(seconds)
+        .context("modeled time overflows native timestamp")?;
+    DateTime::from_timestamp(timestamp, 0).context("modeled time overflows native timestamp")
 }
 
 fn symbolic_generation(value: u64) -> String {
@@ -38,9 +44,333 @@ fn parse_generation(value: Option<&str>) -> Option<u64> {
     value?.strip_prefix("lean-generation-")?.parse().ok()
 }
 
-fn modeled_time(value: &str) -> Result<u64> {
-    u64::try_from(DateTime::parse_from_rfc3339(value)?.timestamp() - FIXTURE_EPOCH_SECONDS)
-        .context("native timestamp precedes fixture epoch")
+fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64> {
+    let elapsed = DateTime::parse_from_rfc3339(value)?
+        .timestamp()
+        .checked_sub(epoch_seconds)
+        .context("native timestamp differs beyond modeled range")?;
+    u64::try_from(elapsed).context("native timestamp precedes fixture epoch")
+}
+
+fn modeled_principal_did(symbolic: u64, local: u64, physical_local: &str) -> String {
+    if symbolic == local {
+        physical_local.to_owned()
+    } else {
+        format!("did:test:lean:principal-{symbolic}")
+    }
+}
+
+fn seed_workspace_lineage(
+    seed: &LeanCanonicalExecutionSeed,
+    physical_local: &str,
+) -> Option<crate::lifecycle::WorkspaceLineage> {
+    seed.workspace
+        .as_ref()
+        .map(|workspace| crate::lifecycle::WorkspaceLineage {
+            workspace_id: Some(format!("lean-workspace-{}", workspace.workspace_id)),
+            workspace_owner_agent_did: Some(modeled_principal_did(
+                workspace.workspace_owner_agent_did,
+                seed.principal,
+                physical_local,
+            )),
+            workspace_authority: Some(workspace.workspace_authority.clone()),
+            workspace_seal_hash: workspace
+                .workspace_seal_hash
+                .map(|seal| format!("lean-seal-{seal}")),
+        })
+}
+
+fn seed_delegated_workspace(
+    seed: &LeanCanonicalExecutionSeed,
+    physical_local: &str,
+) -> Option<gents_protocol::output::DelegatedWorkspace> {
+    let lineage = seed_workspace_lineage(seed, physical_local)?;
+    Some(gents_protocol::output::DelegatedWorkspace {
+        workspace_id: lineage.workspace_id?,
+        workspace_owner_agent_did: lineage.workspace_owner_agent_did?,
+        workspace_authority: lineage.workspace_authority?,
+        workspace_seal_hash: lineage.workspace_seal_hash,
+    })
+}
+
+async fn seed_workspace_documents(
+    node: &EmbeddedNode,
+    seed: &LeanCanonicalExecutionSeed,
+    principal: &str,
+) -> Result<Option<tempfile::TempDir>> {
+    let Some(lineage) = seed_workspace_lineage(seed, principal) else {
+        return Ok(None);
+    };
+    let workspace_id = lineage
+        .workspace_id
+        .context("modeled workspace omitted identity")?;
+    let owner = lineage
+        .workspace_owner_agent_did
+        .context("modeled workspace omitted owner")?;
+    let path_guard = tempfile::tempdir().context("native workspace placement directory")?;
+    let host_path = path_guard.path().join("workspace");
+    std::fs::create_dir(&host_path).context("create native workspace placement")?;
+    let workspace = crate::workspace::IsolatedWorkspaceDoc {
+        path_capability: crate::workspace::WorkspacePathCapability::exact_paths(vec![])?,
+        workspace_id: workspace_id.clone(),
+        work_unit_id: format!("lean-work-unit-{}", seed.request_id),
+        repository_id: format!("lean-repository-{}", seed.request_id),
+        base_sha: "lean-base".to_owned(),
+        branch: format!("lean-branch-{}", seed.request_id),
+        creation_policy: "git_worktree_diff".to_owned(),
+        adapter: "git_worktree".to_owned(),
+        owner_agent_did: owner.clone(),
+        writer_principal: principal.to_owned(),
+        integrator_principal: principal.to_owned(),
+        instruction_manifest: "{}".to_owned(),
+        seal_hash: lineage.workspace_seal_hash,
+        lifecycle_state: "ready".to_owned(),
+        caused_by_invocation_id: format!("lean-invocation-{}", seed.request_id),
+        caused_by_correlation: format!("lean-correlation-{}", seed.request_id),
+    };
+    let placement = crate::workspace::WorkspacePlacementDoc {
+        workspace_id,
+        owner_agent_did: owner,
+        host_path: host_path.to_string_lossy().into_owned(),
+        repository_placement_id: format!("lean-repository-placement-{}", seed.request_id),
+        adapter: "git_worktree".to_owned(),
+        adapter_version: "1".to_owned(),
+        dirty_base: false,
+        dirty_base_summary: String::new(),
+        provisioning_state: "ready".to_owned(),
+        observed_tree_hash: String::new(),
+    };
+    for mutation in [
+        crate::workspace::isolated_workspace_upsert_mutation(&workspace),
+        crate::workspace::workspace_placement_upsert_mutation(
+            &placement,
+            &Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        ),
+    ] {
+        let response = node.execute(&mutation).await;
+        anyhow::ensure!(
+            !response.has_errors(),
+            "seed native workspace documents: {:?}",
+            response.errors
+        );
+    }
+    Ok(Some(path_guard))
+}
+
+async fn install_signed_ancestor_target(node: &EmbeddedNode, principal: &str) -> Result<()> {
+    use crate::config_client::{ConfigAccess, DesiredStateApplyDocument, DesiredStateApplyPlan};
+    let tools = serde_json::json!({
+        "agent_did": principal,
+        "tools_id": "general:tools",
+        "subagents": {"spawn_enabled": true, "target_ids": ["lean-child-target"]},
+    });
+    let target = serde_json::json!({
+        "target_id": "lean-child-target",
+        "agent_did": principal,
+        "target_agent_did": principal,
+        "behavior_id": "general",
+        "name": "child",
+    });
+    let plan = DesiredStateApplyPlan::new(vec![
+        DesiredStateApplyDocument {
+            collection: crate::Collection::Tools,
+            add: tools.clone(),
+            update: tools,
+        },
+        DesiredStateApplyDocument {
+            collection: crate::Collection::SubagentTarget,
+            add: target.clone(),
+            update: target,
+        },
+    ])?;
+    ConfigAccess::transact_local(node, None, "lean.signed_ancestor_target", |txn| {
+        let plan = &plan;
+        Box::pin(async move { crate::config_client::apply_desired_state_plan(txn, plan).await })
+    })
+    .await?;
+    Ok(())
+}
+
+/// Build every nonzero depth through a signed root, accepted native spawn
+/// bridges, and the production child-request owner. Only the last child is
+/// left pending for the modeled durable claim in `initialize`.
+async fn seed_signed_ancestor_chain(
+    node: &Arc<EmbeddedNode>,
+    identity: &Arc<dyn AgentIdentity>,
+    seed: &LeanCanonicalExecutionSeed,
+) -> Result<(String, String)> {
+    let target_depth = u32::try_from(seed.subagent_depth).context("modeled depth exceeds u32")?;
+    anyhow::ensure!(
+        target_depth > 0 && target_depth <= crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH,
+        "native ancestor fixture requires a supported nonzero depth"
+    );
+    let principal = identity.did().to_owned();
+    let root_id = format!("lean-ancestor-{}-0", seed.request_id);
+    let root_session_id = format!("lean-ancestor-session-{}", seed.request_id);
+    let root_spec = crate::lifecycle::RequestSpec {
+        workspace: seed_workspace_lineage(seed, &principal),
+        ..crate::lifecycle::RequestSpec::new(
+            crate::lifecycle::RequestIdentity {
+                requester_did: None,
+                request_id: root_id.clone(),
+                agent_did: principal.clone(),
+                behavior_id: "general".to_owned(),
+                session_id: root_session_id,
+                content: "lean ancestor".to_owned(),
+                execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                created_at: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            },
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(&principal),
+        )
+    };
+    let root = crate::lifecycle::build_signed_request(
+        root_spec,
+        crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
+    )
+    .await?;
+    let response = node
+        .execute(&root.graphql_mutation().map_err(anyhow::Error::msg)?)
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "create signed ancestor: {:?}",
+        response.errors
+    );
+    let root_doc_id = crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .context("signed ancestor omitted physical identity")?
+        .to_owned();
+    let root_row = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&root_doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    anyhow::ensure!(
+        !root_row.has_errors(),
+        "read signed ancestor: {:?}",
+        root_row.errors
+    );
+    let root_row = crate::graphql::first_row::<AgentRequestRow>(&root_row, "AgentRequest")?
+        .context("signed ancestor disappeared")?;
+    let queued: crate::watcher::AgentRequest = root_row.try_into()?;
+    let verified = crate::request_admission::verify_fresh_local_self_request(
+        node,
+        identity.as_ref(),
+        &queued,
+        "general",
+    )
+    .await
+    .map_err(anyhow::Error::from)?;
+    let mut parent = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        &principal,
+        verified,
+        300,
+    );
+    anyhow::ensure!(
+        parent.claim().await? == crate::lifecycle::ClaimOutcome::Claimed,
+        "signed ancestor was not claimable"
+    );
+
+    for parent_depth in 0..target_depth {
+        let tool_call_id = format!("lean-ancestor-tool-{}-{parent_depth}", seed.request_id);
+        let child_id = if parent_depth + 1 == target_depth {
+            format!("lean-request-{}", seed.request_id)
+        } else {
+            format!("lean-ancestor-{}-{}", seed.request_id, parent_depth + 1)
+        };
+        let tool =
+            crate::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+                node.clone(),
+                &mut parent,
+                &principal,
+                0,
+                crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+                &tool_call_id,
+                serde_json::json!({"name":"child", "prompt":"work", "await_mode":"background"}),
+                Some(crate::streaming::SpawnAdmissionPlan {
+                    tool_call_id: tool_call_id.clone(),
+                    child_request_id: child_id.clone(),
+                    spawn_target_did: principal.clone(),
+                    spawn_behavior_id: "general".to_owned(),
+                    delegated_workspace: seed_delegated_workspace(seed, &principal),
+                    await_mode: crate::tool_call_lifecycle::AwaitMode::Background,
+                }),
+                crate::tool_call_lifecycle::AwaitMode::Background,
+                crate::tool_call_lifecycle::CancelPolicy::Cascade,
+                false,
+            )
+            .await?;
+        let parent_doc_id = parent.request().doc_id.clone();
+        let parent_id = parent.request().request_id.clone();
+        let tool_doc_id = tool
+            .doc_id()
+            .context("ancestor spawn omitted tool identity")?
+            .to_owned();
+        crate::tool_call_lifecycle::create_subagent_request_with_request_id_and_workspace(
+            node,
+            child_id.clone(),
+            parent_id,
+            parent_doc_id,
+            tool_call_id,
+            tool_doc_id,
+            parent_depth,
+            principal.clone(),
+            "general".to_owned(),
+            "work".to_owned(),
+            None,
+            seed_workspace_lineage(seed, &principal),
+        )
+        .await?;
+        let child = node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&child_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        )).await;
+        anyhow::ensure!(!child.has_errors(), "read signed child: {:?}", child.errors);
+        let child = crate::graphql::first_row::<AgentRequestRow>(&child, "AgentRequest")?
+            .context("signed child disappeared")?;
+        anyhow::ensure!(
+            child.subagent_depth == Some(i64::from(parent_depth + 1)),
+            "signed child owner did not advance depth"
+        );
+        if parent_depth + 1 == target_depth {
+            return Ok((
+                child
+                    .doc_id
+                    .context("signed child omitted physical identity")?,
+                child
+                    .session_id
+                    .context("signed child omitted session identity")?,
+            ));
+        }
+        let queued: crate::watcher::AgentRequest = child.try_into()?;
+        let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+            node.clone(),
+            identity.clone(),
+            crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+        );
+        let verified = verifier
+            .verify_fresh(&queued, "general")
+            .await
+            .map_err(anyhow::Error::from)?;
+        parent = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            "general",
+            &principal,
+            verified,
+            300,
+        );
+        anyhow::ensure!(
+            parent.claim().await? == crate::lifecycle::ClaimOutcome::Claimed,
+            "signed intermediate child was not claimable"
+        );
+    }
+    unreachable!("nonzero depth returns its final child")
 }
 
 // Native session sequences are one-based; the Lean allocator starts at zero.
@@ -60,6 +390,8 @@ pub(crate) struct NativeCanonicalExecutionAdapter;
 
 pub(crate) struct NativeCanonicalExecution {
     node: Arc<EmbeddedNode>,
+    _workspace_guard: Option<tempfile::TempDir>,
+    fixture_epoch_seconds: i64,
     request_doc_id: String,
     request_id: u64,
     principal_id: u64,
@@ -91,6 +423,14 @@ pub(crate) struct NativeCanonicalExecution {
 }
 
 impl NativeCanonicalExecution {
+    fn fixture_time(&self, value: u64) -> Result<DateTime<Utc>> {
+        fixture_time_at(self.fixture_epoch_seconds, value)
+    }
+
+    fn modeled_time(&self, value: &str) -> Result<u64> {
+        modeled_time_at(self.fixture_epoch_seconds, value)
+    }
+
     async fn revoke_corrupt(
         &mut self,
         now: u64,
@@ -122,7 +462,7 @@ impl NativeCanonicalExecution {
             "canonical output integrity failure",
             &symbolic_generation(expected_generation),
             &symbolic_generation(fresh_generation),
-            fixture_time(now)?,
+            self.fixture_time(now)?,
         )
         .await?;
         if matches!(result, crate::lifecycle::TerminalizeResult::Lost) {
@@ -232,7 +572,12 @@ impl NativeCanonicalExecution {
         .await?
         .context("modeled tool disappeared before atomic completion")?;
         let accepted = tool
-            .complete_raw_with_presentation_at(&raw, &rendered, presentation, fixture_time(now)?)
+            .complete_raw_with_presentation_at(
+                &raw,
+                &rendered,
+                presentation,
+                self.fixture_time(now)?,
+            )
             .await?;
         if !accepted {
             return self.observe(false).await;
@@ -373,7 +718,7 @@ impl NativeCanonicalExecution {
             &symbolic_generation(expected_generation),
             expiry,
             symbolic_generation(fresh_generation),
-            fixture_time(now)?,
+            self.fixture_time(now)?,
             Some(choice),
             Some(if outcome == "interrupted" {
                 gents_protocol::request_lifecycle::RequestLifecycleState::Interrupted
@@ -700,7 +1045,7 @@ impl NativeCanonicalExecution {
             writer,
             flush,
             close,
-            created_at: modeled_time(&segment.created_at)?,
+            created_at: self.modeled_time(&segment.created_at)?,
         })
     }
 
@@ -881,7 +1226,7 @@ impl NativeCanonicalExecution {
             sequence: modeled_sequence(u64::from(message.sequence))?,
             native_id: message.native_id.clone(),
             blocks,
-            created_at: modeled_time(&message.created_at)?,
+            created_at: self.modeled_time(&message.created_at)?,
         })
     }
 
@@ -910,9 +1255,8 @@ impl NativeCanonicalExecution {
         let lease_deadline = row
             .execution_lease_expires_at
             .as_deref()
-            .map(DateTime::parse_from_rfc3339)
-            .transpose()?
-            .and_then(|deadline| u64::try_from(deadline.timestamp() - FIXTURE_EPOCH_SECONDS).ok());
+            .map(|deadline| self.modeled_time(deadline))
+            .transpose()?;
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let tools = self.node.execute(&format!(
             r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID request_doc_id lifecycle_state message_sequence await_mode stuck_since cancel_cascade_intent_at }} }}"#,
@@ -976,7 +1320,7 @@ impl NativeCanonicalExecution {
                 tool_stuck_since = tool
                     .get("stuck_since")
                     .and_then(serde_json::Value::as_str)
-                    .map(modeled_time)
+                    .map(|value| self.modeled_time(value))
                     .transpose()?;
                 // Lean's transcript inFlight tracks the accepted parent's
                 // unsettled foreground ownership, not a still-running physical
@@ -987,7 +1331,7 @@ impl NativeCanonicalExecution {
                 tool_cancel_intent_at = tool
                     .get("cancel_cascade_intent_at")
                     .and_then(serde_json::Value::as_str)
-                    .map(modeled_time)
+                    .map(|value| self.modeled_time(value))
                     .transpose()?;
                 physical_tool_request = Some(self.request_id);
                 accepted_sequence = Some(sequence);
@@ -1088,55 +1432,79 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     && seed.lease.token_charge_count == 0,
                 "native fixture does not support this seeded lease history"
             );
-            let expiry = fixture_time(seed.lease.effective_expiry)?;
-            let now = fixture_time(seed.lease.now)?;
+            let seed_creation_time = fixture_time(seed.lease.now)?;
             let request_id = format!("lean-request-{}", seed.request_id);
-            let session_id = format!("lean-session-{}", seed.session_id);
-            anyhow::ensure!(
-                seed.subagent_depth == 0 && seed.workspace.is_none(),
-                "signed native admission for delegated depth or workspace provenance is not implemented"
-            );
+            let initial_session_id = format!("lean-session-{}", seed.session_id);
             let key_dir = tempfile::tempdir().context("native fixture identity directory")?;
-            let identity =
-                crate::KeyIdentity::load_or_create(key_dir.path().join("agent.key"), None)?;
+            let identity: Arc<dyn AgentIdentity> = Arc::new(crate::KeyIdentity::load_or_create(
+                key_dir.path().join("agent.key"),
+                None,
+            )?);
             let principal = identity.did().to_owned();
             let node = Arc::new(EmbeddedNode::builder().build().await?);
             crate::ensure_runtime_schemas(&node).await?;
             crate::test_support::install_test_behavior(&node, &principal, "general").await;
-            let create = crate::lifecycle::build_signed_request(
-                crate::lifecycle::RequestSpec::new(
+            let workspace_guard = seed_workspace_documents(&node, seed, &principal).await?;
+            if seed.subagent_depth > 0 {
+                install_signed_ancestor_target(&node, &principal).await?;
+            }
+            let (request_doc_id, session_id) = if seed.subagent_depth == 0 {
+                let create = crate::lifecycle::build_signed_request(
+                    crate::lifecycle::RequestSpec {
+                        workspace: seed_workspace_lineage(seed, &principal),
+                        ..crate::lifecycle::RequestSpec::new(
                     crate::lifecycle::RequestIdentity {
                         requester_did: None,
                         request_id: request_id.clone(),
                         agent_did: principal.clone(),
                         behavior_id: "general".to_owned(),
-                        session_id: session_id.clone(),
+                        session_id: initial_session_id.clone(),
                         content: "lean native execution".to_owned(),
                         execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
-                        created_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        created_at: seed_creation_time
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     },
                     gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
                         &principal,
                     ),
-                ),
-                crate::lifecycle::RequestSigner::Identity(&identity),
+                )
+                    },
+                    crate::lifecycle::RequestSigner::Identity(identity.as_ref()),
             )
             .await?;
-            let response = node
-                .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
-                .await;
-            anyhow::ensure!(
-                !response.has_errors(),
-                "initialize native request: {:?}",
-                response.errors
-            );
-            let request_doc_id =
-                crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
-                    .and_then(|row| row.get("_docID"))
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|id| !id.trim().is_empty())
-                    .context("native request create omitted its physical identity")?
-                    .to_owned();
+                let response = node
+                    .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+                    .await;
+                anyhow::ensure!(
+                    !response.has_errors(),
+                    "initialize native request: {:?}",
+                    response.errors
+                );
+                let request_doc_id =
+                    crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
+                        .and_then(|row| row.get("_docID"))
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|id| !id.trim().is_empty())
+                        .context("native request create omitted its physical identity")?
+                        .to_owned();
+                (request_doc_id, initial_session_id)
+            } else {
+                seed_signed_ancestor_chain(&node, &identity, seed).await?
+            };
+            // The real child owner authors ancestors at wall time. Translate
+            // only this fixture's modeled clock after those writes, so the
+            // modeled final claim cannot precede its signed creation.
+            let fixture_epoch_seconds = if seed.subagent_depth == 0 {
+                FIXTURE_EPOCH_SECONDS
+            } else {
+                Utc::now()
+                    .timestamp()
+                    .checked_add(1)
+                    .and_then(|value| value.checked_sub(i64::try_from(seed.lease.now).ok()?))
+                    .context("native modeled clock offset overflow")?
+            };
+            let now = fixture_time_at(fixture_epoch_seconds, seed.lease.now)?;
+            let expiry = fixture_time_at(fixture_epoch_seconds, seed.lease.effective_expiry)?;
             let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
             anyhow::ensure!(
                 !lookup.has_errors(),
@@ -1150,11 +1518,26 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 "native signed request was not pending"
             );
             let queued: crate::watcher::AgentRequest = row.try_into()?;
-            let verified = crate::request_admission::verify_fresh_local_self_request(
-                &node, &identity, &queued, "general",
-            )
-            .await
-            .map_err(anyhow::Error::from)?;
+            let verified = if seed.subagent_depth == 0 {
+                crate::request_admission::verify_fresh_local_self_request(
+                    &node,
+                    identity.as_ref(),
+                    &queued,
+                    "general",
+                )
+                .await
+                .map_err(anyhow::Error::from)?
+            } else {
+                let verifier = crate::request_admission::AgentRequestAdmissionVerifier::new(
+                    node.clone(),
+                    identity.clone(),
+                    crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+                );
+                verifier
+                    .verify_fresh(&queued, "general")
+                    .await
+                    .map_err(anyhow::Error::from)?
+            };
             let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
                 node.clone(),
                 "general",
@@ -1231,6 +1614,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             Ok(NativeCanonicalExecution {
                 node,
+                _workspace_guard: workspace_guard,
+                fixture_epoch_seconds,
                 request_doc_id,
                 request_id: seed.request_id,
                 principal_id: seed.principal,
@@ -1274,8 +1659,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         &native.node,
                         &native.request_doc_id,
                         &symbolic_generation(*generation),
-                        fixture_time(*expected_deadline)?,
-                        fixture_time(*now)?,
+                        native.fixture_time(*expected_deadline)?,
+                        native.fixture_time(*now)?,
                     )
                     .await?;
                     native
@@ -1300,7 +1685,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         &native.node,
                         &symbolic_generation(*generation),
                         &prepared,
-                        fixture_time(*now)?,
+                        native.fixture_time(*now)?,
                     )
                     .await;
                     let doc_id = match doc_id {
@@ -1327,7 +1712,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     let node = Arc::clone(&native.node);
                     let nested_node = Arc::clone(&node);
                     let generation = symbolic_generation(*generation);
-                    let now = fixture_time(*now)?;
+                    let now = native.fixture_time(*now)?;
                     let attempted = crate::config_client::ConfigAccess::transact_local(
                         &node,
                         None,
@@ -1419,7 +1804,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             native.principal.clone(),
                             Some(native.principal.clone()),
                             accepted.clone(),
-                            fixture_time(*deadline)?,
+                            native.fixture_time(*deadline)?,
                             *await_mode,
                             *cancel_policy,
                         )?
@@ -1435,7 +1820,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .context("accepted physical tool disappeared before dispatch")?
                     };
                     match tool
-                        .start_running_at(fixture_time(*now)?, &symbolic_generation(*generation))
+                        .start_running_at(native.fixture_time(*now)?, &symbolic_generation(*generation))
                         .await
                     {
                         Ok(()) => native.observe(true).await,
@@ -1489,7 +1874,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         &symbolic_generation(*generation),
                         outcome,
                         selection,
-                        fixture_time(*now)?,
+                        native.fixture_time(*now)?,
                     )
                     .await;
                     let result = match result {
@@ -1564,9 +1949,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .admit_spawned_background_child_at(
                             crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission {
                                 tool_name: admission.operation.clone(),
-                                deadline_at: fixture_time(admission.deadline)?,
+                                deadline_at: native.fixture_time(admission.deadline)?,
                             },
-                            fixture_time(*now)?,
+                            native.fixture_time(*now)?,
                         )
                         .await?;
                     let physical_child = child
@@ -1738,7 +2123,7 @@ impl NativeCanonicalExecution {
                 closing: closing.clone(),
                 header: header_factory,
             }),
-            fixture_time(now)?,
+            self.fixture_time(now)?,
         )
         .await;
         let message_doc_id = match result {
@@ -1928,14 +2313,19 @@ impl NativeCanonicalExecution {
                 Ok(crate::streaming::SpawnAdmissionPlan {
                     tool_call_id: call_id,
                     child_request_id: format!("lean-child-{child}"),
-                    spawn_target_did: format!("did:test:lean:principal-{}", route.target),
+                    spawn_target_did: modeled_principal_did(
+                        route.target,
+                        self.principal_id,
+                        &self.principal,
+                    ),
                     spawn_behavior_id: format!("lean-behavior-{admitted_behavior}"),
                     delegated_workspace: admission.delegated_workspace.as_ref().map(|workspace| {
                         gents_protocol::output::DelegatedWorkspace {
                             workspace_id: format!("lean-workspace-{}", workspace.workspace_id),
-                            workspace_owner_agent_did: format!(
-                                "did:test:lean:principal-{}",
-                                workspace.workspace_owner_agent_did
+                            workspace_owner_agent_did: modeled_principal_did(
+                                workspace.workspace_owner_agent_did,
+                                self.principal_id,
+                                &self.principal,
                             ),
                             workspace_authority: workspace.workspace_authority.clone(),
                             workspace_seal_hash: workspace
@@ -1947,12 +2337,13 @@ impl NativeCanonicalExecution {
                 })
             })
             .collect::<Result<Vec<_>>>()?;
-        let tool_deadline_at = fixture_time(
-            admissions
-                .first()
-                .map_or(now, |admission| admission.deadline),
-        )?
-        .to_rfc3339();
+        let tool_deadline_at = self
+            .fixture_time(
+                admissions
+                    .first()
+                    .map_or(now, |admission| admission.deadline),
+            )?
+            .to_rfc3339();
         let published = crate::streaming::canonical::publish_provider_turn_at(
             &self.node,
             &symbolic_generation(generation),
@@ -1964,7 +2355,7 @@ impl NativeCanonicalExecution {
                 tool_deadline_at,
                 spawn_admissions: spawn_admissions.clone(),
             },
-            fixture_time(now)?,
+            self.fixture_time(now)?,
         )
         .await;
         let published = match published {
@@ -1979,6 +2370,13 @@ impl NativeCanonicalExecution {
             Err(error)
                 if error
                     .downcast_ref::<crate::streaming::canonical::ProviderReplayRejection>()
+                    .is_some() =>
+            {
+                return self.observe(false).await;
+            }
+            Err(error)
+                if error
+                    .downcast_ref::<crate::streaming::canonical::ProviderWorkspaceRejection>()
                     .is_some() =>
             {
                 return self.observe(false).await;
@@ -2219,7 +2617,7 @@ impl NativeCanonicalExecution {
             },
             native_id: message.native_id.clone(),
             blocks,
-            created_at: fixture_time(message.created_at)?.to_rfc3339(),
+            created_at: self.fixture_time(message.created_at)?.to_rfc3339(),
         })
     }
 
@@ -2334,7 +2732,7 @@ impl NativeCanonicalExecution {
                 },
                 crate::lean_vocab_test::LeanCanonicalClosure::Retracted => SourceClose::Retracted,
             }),
-            created_at: fixture_time(record.created_at)?.to_rfc3339(),
+            created_at: self.fixture_time(record.created_at)?.to_rfc3339(),
         })
     }
 
@@ -2427,7 +2825,7 @@ impl NativeCanonicalExecution {
                 },
                 crate::lean_vocab_test::LeanCanonicalClosure::Retracted => SourceClose::Retracted,
             }),
-            created_at: fixture_time(record.created_at)?.to_rfc3339(),
+            created_at: self.fixture_time(record.created_at)?.to_rfc3339(),
         })
     }
 }
@@ -2578,7 +2976,8 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
             ))
             .await;
         assert!(!response.has_errors(), "{:#?}", response.errors);
-        let rows = response.data.unwrap()["AgentToolCall"]
+        let data = response.data.unwrap();
+        let rows = data["AgentToolCall"]
             .as_array()
             .expect("accepted bridge rows");
         assert_eq!(rows.len(), 1, "accepted bridge must be physically unique");
@@ -2596,9 +2995,10 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
             .as_ref()
             .expect("modeled boundary has a parent workspace stamp");
         let expected_workspace_id = format!("lean-workspace-{}", parent_stamp.workspace_id);
-        let expected_owner = format!(
-            "did:test:lean:principal-{}",
-            parent_stamp.workspace_owner_agent_did
+        let expected_owner = modeled_principal_did(
+            parent_stamp.workspace_owner_agent_did,
+            seed.principal,
+            &native.principal,
         );
         assert_eq!(
             rows[0]["delegated_workspace"]["workspace_id"].as_str(),
@@ -2694,7 +3094,7 @@ async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
 #[tokio::test]
 async fn canonical_tool_output_uses_modeled_physical_source_facts() {
     use crate::session::canonical_rows::{
-        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, output_segment_create_variables,
+        output_segment_create_variables, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
     };
 
     let witness = crate::lean_vocab_test::lean_r4c_background_work_case(
