@@ -469,6 +469,41 @@ describe("configuration panels", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("keeps a profile whose backend is gone on the Providers page", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
+    const orphan = {
+      ...deployment.inferenceProfiles[0]!,
+      profile_id: "profile-orphan",
+      display_name: "Orphaned profile",
+      backend_id: "backend-deleted",
+    };
+    render(
+      <ProfilesPanel
+        shell={shell}
+        deployment={{
+          ...deployment,
+          inferenceProfiles: [...deployment.inferenceProfiles, orphan],
+        }}
+      />,
+    );
+    expect(await screen.findByText("Orphaned profile")).toBeInTheDocument();
+    expect(screen.getAllByText("Backend is missing").length).toBeGreaterThan(0);
+  });
+
+  it("says when the provider catalog cannot be read and reads it again on Retry", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog offline"))
+      .mockResolvedValueOnce({ providers: [] });
+    render(<InferencePanel shell={shell} deployment={deployment} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("catalog offline");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(api.getInferenceSetupCatalog).toHaveBeenCalledTimes(2);
+  });
+
   it("opens shared provider setup without eagerly creating a blank backend", async () => {
     const { api, shell } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({

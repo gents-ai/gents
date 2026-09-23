@@ -875,62 +875,63 @@ export function ProfilesPanel({
   };
   /* Add profile under a backend: the dialog opens on it */
   const [creating, setCreating] = useState<string | null>(null);
+  const profileRow = (p: InferenceProfile): ListRow => {
+    const problem = modelProblem(deployment, p);
+    return {
+      id: p.profile_id,
+      href: href({ ...base, item: p.profile_id }),
+      title: p.display_name ?? p.profile_id,
+      meta: (() => {
+        const users = deployment.behaviors.filter(
+          (b) => b.inferenceProfileId === p.profile_id,
+        ).length;
+        return `${p.model_name}${users ? ` · ${users} ${users === 1 ? "behavior" : "behaviors"}` : ""}`;
+      })(),
+      badge: problem ?? undefined,
+      badgeTone: "bad" as const,
+      tags: p.tags,
+      trailing: (
+        <RowMenu
+          name={p.display_name ?? p.profile_id}
+          base={base}
+          id={p.profile_id}
+          onDuplicate={async () => {
+            const profile_id = newId("profile");
+            await shell.applyConfig((api) =>
+              api.saveInferenceProfileConfig({
+                document: {
+                  ...p,
+                  profile_id,
+                  display_name: `${p.display_name ?? p.profile_id} copy`,
+                },
+              }),
+            );
+            return profile_id;
+          }}
+          onDelete={() =>
+            shell.applyConfig((api) =>
+              api.deleteInferenceProfileConfig({
+                profileId: p.profile_id,
+                agentDid: deployment.agentDid,
+              }),
+            )
+          }
+          warning={(() => {
+            const n = deployment.behaviors.filter(
+              (x) => x.inferenceProfileId === p.profile_id,
+            ).length;
+            return n
+              ? `${n} ${n === 1 ? "behavior loses" : "behaviors lose"} its profile.`
+              : undefined;
+          })()}
+        />
+      ),
+    };
+  };
   const modelRows = (b: InferenceBackendView): ListRow[] => [
     ...deployment.inferenceProfiles
       .filter((p) => p.backend_id === b.backendId)
-      .map((p) => {
-        const problem = modelProblem(deployment, p);
-        return {
-          id: p.profile_id,
-          href: href({ ...base, item: p.profile_id }),
-          title: p.display_name ?? p.profile_id,
-          meta: (() => {
-            const users = deployment.behaviors.filter(
-              (b) => b.inferenceProfileId === p.profile_id,
-            ).length;
-            return `${p.model_name}${users ? ` · ${users} ${users === 1 ? "behavior" : "behaviors"}` : ""}`;
-          })(),
-          badge: problem ?? undefined,
-          badgeTone: "bad" as const,
-          tags: p.tags,
-          trailing: (
-            <RowMenu
-              name={p.display_name ?? p.profile_id}
-              base={base}
-              id={p.profile_id}
-              onDuplicate={async () => {
-                const profile_id = newId("profile");
-                await shell.applyConfig((api) =>
-                  api.saveInferenceProfileConfig({
-                    document: {
-                      ...p,
-                      profile_id,
-                      display_name: `${p.display_name ?? p.profile_id} copy`,
-                    },
-                  }),
-                );
-                return profile_id;
-              }}
-              onDelete={() =>
-                shell.applyConfig((api) =>
-                  api.deleteInferenceProfileConfig({
-                    profileId: p.profile_id,
-                    agentDid: deployment.agentDid,
-                  }),
-                )
-              }
-              warning={(() => {
-                const n = deployment.behaviors.filter(
-                  (x) => x.inferenceProfileId === p.profile_id,
-                ).length;
-                return n
-                  ? `${n} ${n === 1 ? "behavior loses" : "behaviors lose"} its profile.`
-                  : undefined;
-              })()}
-            />
-          ),
-        };
-      }),
+      .map(profileRow),
     {
       id: `add:${b.backendId}`,
       title: "Add profile",
@@ -979,7 +980,19 @@ export function ProfilesPanel({
           if (profileId) navigate({ ...base, item: profileId });
         }}
       />
-      <InferencePanel shell={shell} deployment={deployment} under={modelRows} />
+      <InferencePanel
+        shell={shell}
+        deployment={deployment}
+        under={modelRows}
+        /* a profile whose backend is gone has no row to sit under; it stays
+           listed, with its problem, so it can be repointed or deleted */
+        orphans={deployment.inferenceProfiles
+          .filter(
+            (p) =>
+              !deployment.inferenceBackends.some((b) => b.backendId === p.backend_id),
+          )
+          .map(profileRow)}
+      />
     </>
   );
 }

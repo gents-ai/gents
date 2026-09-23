@@ -692,21 +692,29 @@ export function BackendEditor({
 }
 
 /* the provider catalog the bridge publishes, once per mount */
+/* the provider catalog; a failed read is said, with a way to ask again */
 function useSetupCatalog(shell: Shell) {
   const [providers, setProviders] = useState<InferenceProviderOption[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
-    shell.api
-      .getInferenceSetupCatalog?.()
-      .then((c) => {
+    setError(null);
+    const read = shell.api.getInferenceSetupCatalog?.();
+    if (!read) return;
+    read.then(
+      (c) => {
         if (live) setProviders(c.providers);
-      })
-      .catch(() => {});
+      },
+      (e: unknown) => {
+        if (live) setError(e instanceof Error ? e.message : String(e));
+      },
+    );
     return () => {
       live = false;
     };
-  }, [shell.api]);
-  return providers;
+  }, [shell.api, attempt]);
+  return { providers, error, retry: () => setAttempt((n) => n + 1) };
 }
 
 /* which catalog provider a configured backend belongs to */
@@ -738,6 +746,7 @@ export function InferencePanel({
   item,
   onAddingChange,
   under,
+  orphans = [],
 }: {
   shell: Shell;
   deployment: DeploymentView;
@@ -746,6 +755,8 @@ export function InferencePanel({
   onAddingChange?: (adding: boolean) => void;
   /* rows to nest under a configured backend: its models */
   under?: (b: InferenceBackendView) => ListRow[];
+  /* profiles whose backend no longer exists, listed after the backends */
+  orphans?: ListRow[];
 }) {
   const base = {
     name: "agent" as const,
@@ -758,7 +769,8 @@ export function InferencePanel({
     section: "profiles",
   };
   const { accounts, reload } = useAccounts(shell, deployment.agentDid);
-  const providers = useSetupCatalog(shell);
+  const catalog = useSetupCatalog(shell);
+  const providers = catalog.providers;
   /* the provider whose inputs are open, from a catalog row or Add another */
   const [adding, setAddingState] = useState<ProviderId | null>(null);
   const setAdding = (next: ProviderId | null) => {
@@ -809,131 +821,145 @@ export function InferencePanel({
     return `${profiles.length} ${profiles.length === 1 ? "profile" : "profiles"} · ${KINDS.find((k) => k.value === b.providerKind)?.label ?? b.providerKind} · ${cred}`;
   };
   return (
-    <ListDetail
-      base={base}
-      item={item}
-      back={{ route: models, label: "Providers" }}
-      rows={[
-        ...configured.map(({ b, provider }) => ({
-          id: b.backendId,
-          children: under?.(b),
-          metaLeadToggles: true,
-          title: b.name ?? b.backendId,
-          /* the provider, only when the backend's name does not already say it */
-          titleNote: (() => {
-            const title = providers.find((p) => p.id === provider)?.displayName ?? "";
-            const name = (b.name ?? b.backendId).toLowerCase();
-            return name.includes(title.toLowerCase()) ||
-              name.includes(title.toLowerCase().replace(/\s+/g, ""))
-              ? undefined
-              : title;
-          })(),
-          meta: rowMeta(b),
-          icon: <ProviderLogo kind={b.providerKind} endpoint={b.endpoint} />,
-          /* only trouble is worth a badge; a healthy backend just has its switch on */
-          badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
-          badgeTone: "bad" as const,
-          trailing: (
-            <RowMenu
-              name={b.name ?? b.backendId}
-              base={base}
-              id={b.backendId}
-              enabled={{
-                checked: b.enabled !== false,
-                onChange: (enabled) =>
+    <>
+      {catalog.error && !item && (
+        <div
+          role="alert"
+          className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm"
+        >
+          <span>Couldn’t load the provider catalog: {catalog.error}</span>
+          <Button variant="outline" size="sm" onClick={catalog.retry}>
+            Retry
+          </Button>
+        </div>
+      )}
+      <ListDetail
+        base={base}
+        item={item}
+        back={{ route: models, label: "Providers" }}
+        rows={[
+          ...configured.map(({ b, provider }) => ({
+            id: b.backendId,
+            children: under?.(b),
+            metaLeadToggles: true,
+            title: b.name ?? b.backendId,
+            /* the provider, only when the backend's name does not already say it */
+            titleNote: (() => {
+              const title = providers.find((p) => p.id === provider)?.displayName ?? "";
+              const name = (b.name ?? b.backendId).toLowerCase();
+              return name.includes(title.toLowerCase()) ||
+                name.includes(title.toLowerCase().replace(/\s+/g, ""))
+                ? undefined
+                : title;
+            })(),
+            meta: rowMeta(b),
+            icon: <ProviderLogo kind={b.providerKind} endpoint={b.endpoint} />,
+            /* only trouble is worth a badge; a healthy backend just has its switch on */
+            badge: healthy(b.probeStatus) ? undefined : (b.probeStatus ?? undefined),
+            badgeTone: "bad" as const,
+            trailing: (
+              <RowMenu
+                name={b.name ?? b.backendId}
+                base={base}
+                id={b.backendId}
+                enabled={{
+                  checked: b.enabled !== false,
+                  onChange: (enabled) =>
+                    shell.applyConfig((api) =>
+                      api.patchConfigComponents({
+                        agentDid: deployment.agentDid,
+                        patches: [
+                          {
+                            collection: "InferenceBackend",
+                            id: b.backendId,
+                            changes: { enabled },
+                          },
+                        ],
+                      }),
+                    ),
+                }}
+                onDelete={() =>
                   shell.applyConfig((api) =>
-                    api.patchConfigComponents({
+                    api.deleteBackendConfig({
+                      backendId: b.backendId,
                       agentDid: deployment.agentDid,
-                      patches: [
-                        {
-                          collection: "InferenceBackend",
-                          id: b.backendId,
-                          changes: { enabled },
-                        },
-                      ],
                     }),
-                  ),
-              }}
-              onDelete={() =>
-                shell.applyConfig((api) =>
-                  api.deleteBackendConfig({
-                    backendId: b.backendId,
-                    agentDid: deployment.agentDid,
-                  }),
-                )
-              }
-              warning={(() => {
-                const n = deployment.inferenceProfiles.filter(
-                  (p) => p.backend_id === b.backendId,
-                ).length;
-                return n
-                  ? `${n} ${n === 1 ? "profile uses" : "profiles use"} it.`
-                  : undefined;
-              })()}
-            >
-              {/* another local server or a second key, yes; a second subscription, no:
-                  a principal_oauth backend has no account of its own, it uses the
-                  agent's one sign-in for that provider */}
-              {provider !== "anthropic" && provider !== "grok" && (
-                <DropdownMenuItem onClick={() => setAdding(provider)}>
-                  Add another{" "}
-                  {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
-                </DropdownMenuItem>
-              )}
-            </RowMenu>
-          ),
-        })),
-        ...missing.map((p) => ({
-          id: `setup:${p.id}`,
-          title: p.displayName,
-          meta: p.description,
-          icon: (
-            <img
-              src={PROVIDER_VISUALS[p.id].logo}
-              alt=""
-              className="size-4 opacity-70 dark:invert"
+                  )
+                }
+                warning={(() => {
+                  const n = deployment.inferenceProfiles.filter(
+                    (p) => p.backend_id === b.backendId,
+                  ).length;
+                  return n
+                    ? `${n} ${n === 1 ? "profile uses" : "profiles use"} it.`
+                    : undefined;
+                })()}
+              >
+                {/* another local server or a second key, yes; a second subscription, no:
+                    a principal_oauth backend has no account of its own, it uses the
+                    agent's one sign-in for that provider */}
+                {provider !== "anthropic" && provider !== "grok" && (
+                  <DropdownMenuItem onClick={() => setAdding(provider)}>
+                    Add another{" "}
+                    {providers.find((x) => x.id === provider)?.displayName ?? "backend"}
+                  </DropdownMenuItem>
+                )}
+              </RowMenu>
+            ),
+          })),
+          ...orphans,
+          ...missing.map((p) => ({
+            id: `setup:${p.id}`,
+            title: p.displayName,
+            meta: p.description,
+            icon: (
+              <img
+                src={PROVIDER_VISUALS[p.id].logo}
+                alt=""
+                className="size-4 opacity-70 dark:invert"
+              />
+            ),
+            badge: "Not set up",
+            onOpen: () => setAdding(p.id),
+          })),
+        ]}
+        createLabel=""
+        empty="No providers."
+        createMenu={
+          <DropdownMenu>
+            <DropdownMenuTrigger render={<Button variant="outline" />}>
+              <Plus /> New backend
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-auto min-w-52">
+              <DropdownMenuGroup>
+                {providers.map((p) => (
+                  <DropdownMenuItem key={p.id} onClick={() => setAdding(p.id)}>
+                    <img
+                      src={PROVIDER_VISUALS[p.id].logo}
+                      alt=""
+                      className="size-4 opacity-70 dark:invert"
+                    />
+                    {p.displayName}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        }
+        detail={(id) => {
+          const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
+          return (
+            <BackendEditor
+              key={backend.backendId}
+              shell={shell}
+              deployment={deployment}
+              backend={backend}
+              accounts={accounts}
+              reload={reload}
             />
-          ),
-          badge: "Not set up",
-          onOpen: () => setAdding(p.id),
-        })),
-      ]}
-      createLabel=""
-      empty="No providers."
-      createMenu={
-        <DropdownMenu>
-          <DropdownMenuTrigger render={<Button variant="outline" />}>
-            <Plus /> New backend
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-auto min-w-52">
-            <DropdownMenuGroup>
-              {providers.map((p) => (
-                <DropdownMenuItem key={p.id} onClick={() => setAdding(p.id)}>
-                  <img
-                    src={PROVIDER_VISUALS[p.id].logo}
-                    alt=""
-                    className="size-4 opacity-70 dark:invert"
-                  />
-                  {p.displayName}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      }
-      detail={(id) => {
-        const backend = deployment.inferenceBackends.find((b) => b.backendId === id)!;
-        return (
-          <BackendEditor
-            key={backend.backendId}
-            shell={shell}
-            deployment={deployment}
-            backend={backend}
-            accounts={accounts}
-            reload={reload}
-          />
-        );
-      }}
-    />
+          );
+        }}
+      />
+    </>
   );
 }
