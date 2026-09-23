@@ -37,15 +37,16 @@ pub enum Collection {
     CallbackModule,
     RepositoryPlacement,
     GraphDefinition,
+    EvalDefinition,
 }
 
 /// Deterministic document traversal for desired-state writes. This enumeration
 /// provides no reference-safety guarantee; publication must validate the complete
 /// manifest and atomically commit it, including legal reference cycles.
-pub const DESIRED_STATE_APPLY_ORDER: [Collection; 26] = Collection::ALL;
+pub const DESIRED_STATE_APPLY_ORDER: [Collection; 27] = Collection::ALL;
 
 impl Collection {
-    pub const ALL: [Collection; 26] = [
+    pub const ALL: [Collection; 27] = [
         Self::AgentPrincipal,
         Self::AgentBehavior,
         Self::AgentContext,
@@ -72,6 +73,7 @@ impl Collection {
         Self::CallbackModule,
         Self::RepositoryPlacement,
         Self::GraphDefinition,
+        Self::EvalDefinition,
     ];
 
     pub fn file_name(self) -> Option<&'static str> {
@@ -109,6 +111,7 @@ impl Collection {
             Self::CallbackModule => Some("callback_modules"),
             Self::RepositoryPlacement => Some("repository_placements"),
             Self::GraphDefinition => Some("graphs"),
+            Self::EvalDefinition => Some("eval_definitions"),
         }
     }
 
@@ -140,6 +143,7 @@ impl Collection {
             Self::CallbackModule => "CallbackModule",
             Self::RepositoryPlacement => "RepositoryPlacement",
             Self::GraphDefinition => "GraphDefinition",
+            Self::EvalDefinition => "EvalDefinition",
         }
     }
 
@@ -172,6 +176,7 @@ impl Collection {
             Self::CallbackModule => "module_id",
             Self::RepositoryPlacement => "repository_id",
             Self::GraphDefinition => "graph_id",
+            Self::EvalDefinition => "definition_id",
         }
     }
 }

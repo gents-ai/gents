@@ -419,6 +419,9 @@ impl ConfigReferences {
             Collection::EventSource => decode::<EventSource>(value)?.validate()?,
             Collection::ToolServiceRegistry => decode::<ToolServiceRegistry>(value)?.validate()?,
             Collection::RepositoryPlacement => decode::<RepositoryPlacement>(value)?.validate()?,
+            // Check names resolve against the builtin registry at run time, not
+            // against configuration documents; there are no outgoing references.
+            Collection::EvalDefinition => decode::<EvalDefinition>(value)?.validate()?,
             // Skill tool_refs name tools, not config documents. Schema names,
             // ACP policy IDs, hook commands and tags keep their existing owners.
             Collection::Skill | Collection::CallbackModule | Collection::GraphDefinition => {}
