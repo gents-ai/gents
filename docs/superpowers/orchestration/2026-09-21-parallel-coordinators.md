@@ -186,3 +186,13 @@ each PR targeting its parent; M3 stays a side branch off the runner.
    `cargo check --workspace --all-targets` run at a PR's gate and at the final gate only. Per task:
    the pertinent tests plus `cargo check -p <crate> --tests`.
 5. **Final review stays**, with one read-only re-review of its fix wave and one gate.
+- `m4` complete 2026-09-23: 77 commits over `feat/optimization-promote` @ `6164d34d6`. Branches renamed:
+  `feat/eval-report` `65700ca35`, `feat/eval-cli` `f82565639`, `feat/optimization-cli` `457507edc`,
+  `feat/eval-watch-gc` `0b81d7818`, `feat/eval-compare-breakdowns` `ec44e41f6` (tip holds the final
+  fix wave, 14 commits tagged by PR). Final gate: `cargo test -p gents` 3336/0; `-p gents-cli` 1107
+  passed / 20 known-environmental; workspace check clean; no trailers. 57 rulings in
+  `.superpowers/sdd/2026-09-22-eval-report-and-cli/`; `pr-descriptions.md` has the five PR texts, the
+  layer map and follow-ups. Temp worktree `eval/54b-compare-cli` removed. Pre-push: replace the
+  user-visible "(M5)"/"M7" strings and plan-id doc comments; then linearize the MVP chain.
+  Ruling: fix-wave commits stay at each stack's tip PR (a scratch trial of redistributing M4's
+  found hand conflicts); PR descriptions carry the layer maps.
