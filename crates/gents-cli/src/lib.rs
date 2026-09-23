@@ -54,9 +54,17 @@ const DEFAULT_P2P_MAX_CONCURRENT_PUSH_TASKS: usize = p2p::sync::DEFAULT_MAX_CONC
 const DEFAULT_P2P_RATE_LIMIT_BURST: u32 = p2p::sync::DEFAULT_RATE_LIMIT_BURST;
 const DEFAULT_P2P_RATE_LIMIT_RATE: f64 = p2p::sync::DEFAULT_RATE_LIMIT_RATE;
 const DEFAULT_P2P_MAX_PENDING_DAGS: usize = p2p::sync::DEFAULT_MAX_PENDING_DAGS;
-// Agent-loop lifecycle targets stay at `warn` unless RUST_LOG raises them; only
-// the server's startup banner is `info` by default.
-const DEFAULT_LOG_FILTER: &str = concat!("warn,", "gents_server::commands::serve=info");
+const DEFAULT_LOG_FILTER: &str = concat!(
+    "warn,",
+    "gents_server::commands::serve=info,",
+    "gents::agent::runtime=info,",
+    "gents::agent::daemon=info,",
+    "gents::agent::reconcile=info,",
+    "gents::hook=info,",
+    "gents::session::sessions=info,",
+    "gents::streaming=info,",
+    "gents::trigger_engine=info"
+);
 const INIT_CONFIG_FILE_NAME: &str = "init.json";
 const RUNTIME_STATE_FILE_NAME: &str = "runtime.json";
 const CLI_AFTER_HELP: &str = "\

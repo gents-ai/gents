@@ -156,18 +156,29 @@ fn dim(text: &str, colors: bool) -> String {
 }
 
 /// A best-effort "working…" indicator on stderr while a turn is in flight
-/// and nothing has streamed yet (#1622). Only appears when stdout is a
-/// terminal, so piped/non-interactive output stays completely clean. It is
-/// cleared — and never shown again for the rest of this turn — the moment
-/// any tool activity or answer text is about to print.
+/// and nothing has streamed yet (#1622). Only appears when both stdout and
+/// stderr are terminals (see [`spinner_enabled`]), so piped/non-interactive
+/// output stays completely clean. It is cleared — and never shown again for
+/// the rest of this turn — the moment any tool activity or answer text is
+/// about to print.
 struct WorkingIndicator {
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<()>>,
 }
 
+/// Whether the working indicator should run at all. It writes to stderr, so
+/// stderr must be a terminal for the spinner itself to be interactive rather
+/// than junk in a redirected file; and it's always cleared immediately
+/// before the first stdout print, so stdout must be a terminal too — a
+/// piped/non-interactive stdout is exactly the case that must stay clean,
+/// regardless of what stderr is attached to.
+fn spinner_enabled(stdout_tty: bool, stderr_tty: bool) -> bool {
+    stdout_tty && stderr_tty
+}
+
 impl WorkingIndicator {
     fn start_if_tty() -> Option<Self> {
-        if !io::stdout().is_terminal() {
+        if !spinner_enabled(io::stdout().is_terminal(), io::stderr().is_terminal()) {
             return None;
         }
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
@@ -694,6 +705,47 @@ fn bounded_chars(text: &str, limit: usize) -> String {
     format!("{}...", text.chars().take(limit).collect::<String>())
 }
 
+/// The longest a tool's key argument or failure status may be in the short
+/// summary line before eliding the rest — long enough to show a real
+/// command or path, short enough that even a giant one stays one line.
+const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
+
+/// Makes tool-provided text safe to print as a single line of a terminal
+/// summary. Tool arguments and output are not trusted terminal input: a
+/// multiline command or an embedded control character (ESC, CR, BEL, ...)
+/// would otherwise either break the one-line summary or become a live
+/// terminal control sequence when printed. This collapses every run of
+/// whitespace (including newlines) to a single space, drops every other
+/// control character outright, and bounds the result to `max_chars`
+/// *characters* — never splitting a UTF-8 code point. Returns `None` when
+/// nothing printable remains.
+fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
+    let mut normalized = String::with_capacity(text.len());
+    let mut last_was_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                normalized.push(' ');
+                last_was_space = true;
+            }
+        } else if ch.is_control() {
+            // ESC, BEL, backspace, and friends: printed verbatim these are
+            // live terminal controls, not text, so they are dropped rather
+            // than escaped — there is no safe visible rendering for them in
+            // a plain one-line summary.
+            continue;
+        } else {
+            normalized.push(ch);
+            last_was_space = false;
+        }
+    }
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(bounded_chars(trimmed, max_chars))
+}
+
 /// The single most useful argument for a one-line tool summary: the command
 /// (with its args) for a command-execution tool, the path for a file tool,
 /// and best-effort otherwise. `None` when `arguments` isn't recognized JSON,
@@ -788,9 +840,7 @@ fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
             },
         ),
         "error" => Some(ToolOutcome::Failed(
-            result
-                .and_then(preview_compact_text)
-                .map(|preview| bounded_chars(&preview, 60)),
+            result.and_then(|value| sanitize_summary_text(value, SUMMARY_ARGUMENT_MAX_CHARS)),
         )),
         _ => None,
     }
@@ -801,7 +851,9 @@ fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
 /// available with `--verbose` via [`format_tool_progress_line`].
 pub(super) fn format_tool_summary_line(tool: &ToolCallProgress, colors: bool) -> String {
     let mut line = tool.tool_name.clone();
-    let argument = key_argument(&tool.arguments).or_else(|| preview_compact_text(&tool.arguments));
+    let argument = key_argument(&tool.arguments)
+        .or_else(|| preview_compact_text(&tool.arguments))
+        .and_then(|argument| sanitize_summary_text(&argument, SUMMARY_ARGUMENT_MAX_CHARS));
     if let Some(argument) = argument {
         line.push(' ');
         line.push_str(&argument);
@@ -1103,5 +1155,104 @@ mod tests {
             format_tool_progress_line(&tool)
         );
         assert!(render_tool_line(&tool, true, false).contains("exit_nonzero"));
+    }
+
+    #[test]
+    fn sanitize_summary_text_collapses_a_multiline_command_to_one_line() {
+        assert_eq!(
+            sanitize_summary_text("echo line1\nline2\r\nline3", 100),
+            Some("echo line1 line2 line3".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_summary_text_strips_esc_and_neutralizes_cr() {
+        // A raw ESC would otherwise be interpreted as a live terminal
+        // control sequence when printed; a bare CR would overwrite the
+        // start of the line. Neither may survive into the summary.
+        let input = "ls \u{1b}[31mHACKED\u{1b}[0m\rdone";
+        let sanitized = sanitize_summary_text(input, 100).expect("nonempty");
+        assert!(!sanitized.contains('\u{1b}'), "ESC leaked: {sanitized:?}");
+        assert!(!sanitized.contains('\r'), "CR leaked: {sanitized:?}");
+        assert_eq!(sanitized, "ls [31mHACKED[0m done");
+    }
+
+    #[test]
+    fn sanitize_summary_text_drops_other_control_characters() {
+        // BEL and backspace: neither is whitespace, both are control
+        // characters, and printed verbatim both are terminal noise, not text.
+        assert_eq!(
+            sanitize_summary_text("a\u{7}b\u{8}c", 100),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_summary_text_bounds_a_very_long_input() {
+        let long = "x".repeat(500);
+        let sanitized = sanitize_summary_text(&long, 100).expect("nonempty");
+        assert_eq!(sanitized.chars().count(), 103); // 100 + "..."
+        assert!(sanitized.ends_with("..."));
+        assert!(sanitized.starts_with(&"x".repeat(100)));
+    }
+
+    #[test]
+    fn sanitize_summary_text_cuts_on_a_char_boundary_near_non_ascii() {
+        // Multi-byte characters straddling the cut point must not panic and
+        // must not be split mid-codepoint.
+        let mut input = "a".repeat(99);
+        input.push_str("考考考考考");
+        let sanitized = sanitize_summary_text(&input, 100).expect("nonempty");
+        assert_eq!(sanitized.chars().count(), 103); // 100 chars + "..."
+        assert!(sanitized.ends_with("..."));
+        assert!(sanitized.is_char_boundary(sanitized.len()));
+    }
+
+    #[test]
+    fn sanitize_summary_text_is_none_for_only_whitespace_and_controls() {
+        assert_eq!(sanitize_summary_text("  \n\t \u{1b} ", 100), None);
+        assert_eq!(sanitize_summary_text("", 100), None);
+    }
+
+    #[test]
+    fn tool_summary_line_collapses_a_multiline_bash_command_to_one_line() {
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "bash".into(),
+            status: "running".into(),
+            arguments: r#"{"command":"printf 'line1\nline2\u001b[31mline3'"}"#.into(),
+            result: None,
+        };
+        let line = format_tool_summary_line(&tool, false);
+        assert_eq!(line.lines().count(), 1, "summary must stay one line: {line:?}");
+        assert!(!line.contains('\u{1b}'), "ESC leaked into summary: {line:?}");
+        assert_eq!(line, "  [tool] bash printf 'line1 line2[31mline3'");
+    }
+
+    #[test]
+    fn tool_summary_line_bounds_a_very_long_argument() {
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "bash".into(),
+            status: "running".into(),
+            arguments: format!(r#"{{"command":"{}"}}"#, "x".repeat(500)),
+            result: None,
+        };
+        let line = format_tool_summary_line(&tool, false);
+        assert!(line.contains("..."), "expected an elided argument: {line}");
+        assert!(
+            line.chars().count() < 150,
+            "summary line should stay short even for a huge argument: {line}"
+        );
+    }
+
+    #[test]
+    fn spinner_enabled_requires_both_stdout_and_stderr_to_be_terminals() {
+        assert!(spinner_enabled(true, true));
+        assert!(!spinner_enabled(true, false));
+        assert!(!spinner_enabled(false, true));
+        assert!(!spinner_enabled(false, false));
     }
 }
