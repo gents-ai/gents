@@ -203,6 +203,45 @@ fn non_json_stdout_is_bad_output() {
     );
 }
 
+/// A non-zero exit is a failure even when stdout is valid JSON: the exit
+/// code is the plugin's own verdict on the call.
+#[test]
+fn a_non_zero_exit_is_a_failure_even_with_json_stdout() {
+    let wat_source = r#"
+          (module
+            (import "wasi_snapshot_preview1" "fd_write"
+              (func $fd_write (param i32 i32 i32 i32) (result i32)))
+            (import "wasi_snapshot_preview1" "proc_exit"
+              (func $proc_exit (param i32)))
+            (memory (export "memory") 1)
+            (data (i32.const 0) "{}")
+            (func (export "_start")
+              i32.const 16  i32.const 0  i32.store
+              i32.const 20  i32.const 2  i32.store
+              i32.const 1
+              i32.const 16
+              i32.const 1
+              i32.const 24
+              call $fd_write
+              drop
+              i32.const 3
+              call $proc_exit))
+        "#;
+    let (plugin, afb) = build_plugin_pack("failing_pack", wat_source, None);
+    let runner = PluginRunner::compile(&afb, &plugin).expect("compiles");
+
+    let outcome = runner
+        .call(&serde_json::json!({}), &PluginBudget::default())
+        .expect("call succeeds at the VM level");
+    assert_eq!(outcome.verdict, PluginVerdict::Failed);
+    assert_eq!(outcome.output, serde_json::Value::Null);
+    assert!(
+        outcome.diagnostics.contains("exited with code 3"),
+        "diagnostics: {}",
+        outcome.diagnostics
+    );
+}
+
 /// Rule 5: a plugin that loops forever is bounded by fuel, and the
 /// exhaustion is its own verdict, not a generic failure.
 #[test]

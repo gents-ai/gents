@@ -108,6 +108,7 @@ fn run_plugin(
             "{coordinate} did not return a single JSON value: {}",
             outcome.diagnostics
         ),
+        PluginVerdict::Failed => anyhow::bail!("{coordinate} failed: {}", outcome.diagnostics),
     }
 }
 

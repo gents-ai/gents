@@ -188,6 +188,10 @@ pub enum PluginVerdict {
     /// parseable, more than one value, or truncated past the output
     /// bound).
     BadOutput,
+    /// The plugin exited with a non-zero code. Its stdout is not taken as
+    /// a result even when it parses: the exit code is the plugin's own
+    /// statement that the call failed.
+    Failed,
 }
 
 /// What came back from one plugin call.
@@ -447,6 +451,13 @@ fn outcome_from_exit(
     let diagnostics_base = String::from_utf8_lossy(stderr).into_owned();
     if code != 0 {
         notes.push(format!("plugin exited with code {code}"));
+        return PluginOutcome {
+            verdict: PluginVerdict::Failed,
+            output: serde_json::Value::Null,
+            diagnostics: append_notes(diagnostics_base, &notes),
+            fuel_used: output.fuel_used,
+            wall_ms,
+        };
     }
 
     if output.stdout.len() > MAX_STDOUT_BYTES {
