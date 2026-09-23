@@ -20,7 +20,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
 use super::enrollment_reconcile::{EnrollmentAuthorityHandle, EnrollmentAuthorizationFence};
-use super::graphql_helpers::{ensure_no_errors, rows};
+use super::graphql_helpers::rows;
 use super::session_hydration::{
     apply_hydration_delivery, decide_hydration, hydration_collection_name, AppliedPairingRoute,
     HydrationApplyOutcome, HydrationCatalog, HydrationDeliveryResult, HydrationDocument,
@@ -31,7 +31,7 @@ use super::session_hydration_closure::{
     build_canonical_closure, CanonicalClosureInput, ScopedDocument,
 };
 use super::templates::{conjunctive_string_eq, decode_pairing_filters};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::AgentIdentity;
 use crate::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
@@ -428,8 +428,12 @@ impl HydrationRequestStore for GraphqlHydrationStore {
             }}
         }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query SessionHydrationRequest pending rows")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query SessionHydrationRequest pending rows",
+        )
+        .await?;
         Ok(rows::<PendingRow>(&response, "SessionHydrationRequest")?
             .into_iter()
             .filter_map(|row| {
@@ -456,8 +460,9 @@ impl HydrationRequestStore for GraphqlHydrationStore {
         let agent_did = escape_graphql_string(&request.agent_did);
         let requester_did = escape_graphql_string(&request.requester_did);
         let query = hydration_catalog_query(&session_id, &peer_id, &agent_did, &requester_did);
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query session hydration catalog")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query session hydration catalog")
+                .await?;
 
         let desired_agents = rows::<DesiredPairingRow>(&response, "PeerPairingDesired")?
             .into_iter()
@@ -737,10 +742,9 @@ async fn load_origin_headers(
         let id = escape_graphql_string(&doc_id);
         let agent = escape_graphql_string(agent_did);
         let requester = escape_graphql_string(requester_did);
-        let response = node.execute(&format!(
+        let response = graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentMessage(filter: {{ _docID: {{ _eq: "{id}" }}, agent_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#
-        )).await;
-        ensure_no_errors(&response, "query exact authorized hydration origin")?;
+        ), "query exact authorized hydration origin").await?;
         let decoded = rows::<serde_json::Value>(&response, "AgentMessage")?
             .iter()
             .map(decode_transcript_message_row)
@@ -780,10 +784,9 @@ async fn load_referenced_segments(
     let requester = escape_graphql_string(requester_did);
     for request_id in request_ids {
         let request_id = escape_graphql_string(&request_id);
-        let response = node.execute(&format!(
+        let response = graphql_with_transaction_retry(node, &format!(
             r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_id}" }}, agent_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
-        )).await;
-        ensure_no_errors(&response, "query authorized hydration output extent")?;
+        ), "query authorized hydration output extent").await?;
         for row in rows::<serde_json::Value>(&response, "AgentOutputSegment")?
             .iter()
             .map(decode_output_segment_row)
@@ -852,10 +855,9 @@ async fn load_referenced_bases(
         }
         let name = hydration_collection_name(collection);
         let id = escape_graphql_string(&doc_id);
-        let response = node.execute(&format!(
+        let response = graphql_with_transaction_retry(node, &format!(
             r#"{{ {name}(filter: {{ _docID: {{ _eq: "{id}" }}, agent_did: {{ _eq: "{agent}" }}, requester_did: {{ _eq: "{requester}" }} }}) {{ _docID requester_did agent_did session_id }} }}"#
-        )).await;
-        ensure_no_errors(&response, "query exact authorized hydration provenance")?;
+        ), "query exact authorized hydration provenance").await?;
         let found = rows::<TranscriptRow>(&response, name)?;
         anyhow::ensure!(
             found.len() == 1,
@@ -1005,6 +1007,7 @@ fn terminal_mutation(
 mod tests {
     use super::*;
     use crate::agent::p2p_reconcile::templates::{combine_filters, equality_filter};
+    use crate::graphql::ensure_no_errors;
 
     struct MemoryStore {
         pending: Vec<HydrationRequestRow>,
