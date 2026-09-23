@@ -751,10 +751,10 @@ def caseCoverage : List CoverageEntry :=
       "EvalOutcomeCases"
       "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
       "eval" [Surface.operatorCli]
-  , tagged (followUpCoverage
+  , tagged (consumerCoverage
       "optimization_cases"
       "OptimizationCases"
-      "Consumed by optimization::policy::tests once PolicyV2 lands in the next stacked PR.")
+      "optimization::policy::tests::gates_costs_and_decisions_match_lean")
       "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"

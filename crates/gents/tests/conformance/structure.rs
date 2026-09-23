@@ -74,14 +74,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "Migration",
             WorkspaceTest("crates/gents-migration/tests/phase_b_steps.rs"),
         ),
-        (
-            "Optimization",
-            Gap(
-                "#1455 Lean model of the promotion policy: the consumer is \
-                 optimization::policy::tests::gates_costs_and_decisions_match_lean, landing in \
-                 the policy PR of this stack",
-            ),
-        ),
+        ("Optimization", WorkspaceTest("crates/gents/src/optimization/policy.rs")),
         (
             "PairingReconcile",
             Module("conformance/pairing_reconcile.rs"),

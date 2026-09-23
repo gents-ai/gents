@@ -217,6 +217,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "rust_eval_outcome_vocabulary_and_projection_match_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "optimization::policy::tests::gates_costs_and_decisions_match_lean",
+            package: "gents",
+            source_path: "crates/gents/src/optimization/policy.rs",
+            module_path: "optimization::policy::tests",
+            function: "gates_costs_and_decisions_match_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "background_tools::tests::generated_child_failure_projections_match_bridge_owner",
             package: "gents",
             source_path: "crates/gents/src/background_tools.rs",

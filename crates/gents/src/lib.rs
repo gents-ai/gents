@@ -219,6 +219,7 @@ pub mod meta_tools;
 pub mod migration;
 pub mod native_executor_status;
 pub mod oneshot;
+pub mod optimization;
 pub mod periodic_recovery;
 pub mod prompt;
 pub mod provider_context_reduction;
