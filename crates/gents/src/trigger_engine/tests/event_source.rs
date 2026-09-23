@@ -369,6 +369,73 @@ async fn event_source_next_fire_emits_intent_on_matching_real_event() {
     );
 }
 
+/// The workspace packs chain stages off `CallbackResult`, a `@branchable`
+/// collection, selecting one binding's results (gents#1592). A result
+/// written by the callback owner fires once, with its real document.
+#[tokio::test]
+async fn a_callback_result_fires_its_bindings_event_source_once() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+
+    let task = ResolvedTask {
+        task_id: "task-after-callback".to_string(),
+        ..resolved_task("continue after the callback")
+    };
+    let trigger = resolved_event_trigger_with_filter(
+        "trigger-after-callback",
+        "CallbackResult",
+        task,
+        r#"{ binding_id: { _eq: "maintenance-execute-workspace" } }"#,
+    );
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([("trigger-after-callback".to_string(), trigger)]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new());
+    source.reconcile_subscriptions(snapshot.as_ref()).await;
+
+    let node_for_write = node.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        for (invocation_id, binding_id) in [
+            ("inv-other", "another-binding"),
+            ("inv-wanted", "maintenance-execute-workspace"),
+        ] {
+            crate::callback::create_callback_result(
+                node_for_write.as_ref(),
+                &crate::callback::CallbackResultDoc {
+                    result_id: format!("res-{invocation_id}"),
+                    invocation_id: invocation_id.to_string(),
+                    binding_id: Some(binding_id.to_string()),
+                    owner_agent_did: "did:key:zWriter".to_string(),
+                    workspace_id: None,
+                    work_unit_id: None,
+                    caused_by_correlation: None,
+                    created_at: None,
+                },
+            )
+            .await
+            .expect("CallbackResult written");
+        }
+    });
+
+    let intent = tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        .await
+        .expect("next_fire timed out waiting for CallbackResult")
+        .expect("next_fire returned None");
+    assert_eq!(intent.trigger_id.as_deref(), Some("trigger-after-callback"));
+    let doc_vars = intent.doc_vars.as_ref().expect("hydrated result");
+    assert_eq!(doc_vars["invocation_id"].as_str(), Some("inv-wanted"));
+
+    let extra = tokio::time::timeout(Duration::from_millis(500), source.next_fire()).await;
+    assert!(
+        extra.is_err(),
+        "fired more than once: {:?}",
+        extra.ok().flatten().map(|intent| intent.event_vars)
+    );
+}
+
 #[tokio::test]
 async fn per_group_startup_recovery_uses_filtered_membership_and_deterministic_scope() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());

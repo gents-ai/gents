@@ -1861,6 +1861,12 @@ impl TriggerSource for EventSource {
                     continue;
                 };
 
+                // A `@branchable` collection publishes a second, collection-level
+                // update per write with an empty doc id. The document-level update
+                // of the same write carries the document; this one names none.
+                if update.doc_id.is_empty() {
+                    continue;
+                }
                 let collection_id = update.collection_id.clone();
                 let doc_id = update.doc_id.clone();
                 let Some(collection_name) = self.resolve_collection_name(&collection_id).await
