@@ -41,6 +41,7 @@ pub mod descendant_graph;
 pub mod document_config;
 pub mod error;
 pub mod eth;
+pub mod eval;
 pub mod event_delivery_contract;
 pub mod external_adapter_capture;
 pub mod goal;

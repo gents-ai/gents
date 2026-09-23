@@ -210,6 +210,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_slot_accounting_cases_pin_inference_and_fleet_contracts",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "rust_eval_outcome_vocabulary_and_projection_match_lean",
+        },
+        ConformanceConsumer::RustTest {
             id: "background_tools::tests::generated_child_failure_projections_match_bridge_owner",
             package: "gents",
             source_path: "crates/gents/src/background_tools.rs",
