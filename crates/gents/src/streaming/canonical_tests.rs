@@ -415,6 +415,219 @@ async fn first_publication_rejects_native_message_that_differs_from_reconstructi
     let _ = std::fs::remove_dir_all(path);
 }
 
+async fn publish_tool_turn_for_rollback_test(
+    node: &EmbeddedNode,
+    lifecycle: &RequestLifecycle,
+    message: &gents_protocol::message::Message,
+) -> anyhow::Result<super::canonical::PublishedProviderTurn> {
+    let (segment, encoded) =
+        provider_segment_for_message(lifecycle, message, chrono::Utc::now().to_rfc3339());
+    let plan = super::canonical::ProviderPublicationPlan {
+        final_flush: Some(segment),
+        message_key: "provider:mutation-rollback".into(),
+        encoded,
+        expected: Arc::new(message.clone()),
+        tool_deadline_at: lifecycle.claimed_deadline_at().unwrap().to_rfc3339(),
+        spawn_admissions: Vec::new(),
+    };
+    // Exercise the canonical publication owner, not a test-side write script.
+    super::canonical::publish_provider_turn(node, lifecycle.execution_generation().unwrap(), plan)
+        .await
+}
+
+#[tokio::test]
+async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fails() {
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+
+    let message = Message::Assistant {
+        id: Some("provider-message".into()),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "tool-1".into(),
+            call_id: Some("provider-call".into()),
+            function: ToolFunction::new("read".into(), serde_json::json!({"path":"note.txt"})),
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    let (baseline_node, baseline_path, baseline_lifecycle, _writer) =
+        fixture("mutation-rollback-baseline").await;
+    let (baseline, writes) =
+        crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            None,
+            publish_tool_turn_for_rollback_test(&baseline_node, &baseline_lifecycle, &message),
+        )
+        .await;
+    baseline.expect("baseline tool-bearing publication");
+    assert!(
+        writes >= 3,
+        "tool-bearing publication must have multiple writes"
+    );
+    baseline_node.shutdown().await;
+    let _ = std::fs::remove_dir_all(baseline_path);
+
+    let (node, path, lifecycle, _writer) = fixture("mutation-rollback").await;
+    let request_doc_id = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let rows = || async {
+        let response = node.execute(&format!(
+            r#"{{
+                AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
+                AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
+                AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }}
+                AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
+                    {}
+                }}
+            }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        )).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        response.data.unwrap()
+    };
+    let before = rows().await;
+    for index in 1..=writes {
+        let (result, observed) =
+            crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+                Some(index),
+                publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+            )
+            .await;
+        let error = result.expect_err("injected publication mutation must roll back");
+        assert!(
+            format!("{error:#}").contains(&format!(
+                "injected failure after successful transaction mutation {index}"
+            )),
+            "unexpected error at write {index}: {error:#}"
+        );
+        assert_eq!(observed, index, "injection must fire exactly once");
+        assert_eq!(
+            rows().await,
+            before,
+            "write {index} leaked a publication fact"
+        );
+    }
+    let (published, actual_writes) =
+        crate::config_client::ConfigApplyTxn::with_successful_mutation_failure_at(
+            None,
+            publish_tool_turn_for_rollback_test(&node, &lifecycle, &message),
+        )
+        .await;
+    published.expect("publication must succeed after every injected rollback");
+    assert_eq!(
+        actual_writes, writes,
+        "every mutation position must have been faulted"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
+}
+
+#[tokio::test]
+async fn recovery_mutations_are_atomic_and_lost_ack_replay_is_read_only() {
+    use crate::config_client::ConfigApplyTxn;
+    use crate::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+
+    // Discover the mutation count from the owner, then fault every position in
+    // a fresh recovery of the same shape. No test-side recovery write script.
+    let mut mutation_count = 0;
+    for baseline in [true, false] {
+        let (node, path, lifecycle, writer) = fixture("recovery-mutation-rollback").await;
+        let doc_id = &lifecycle.request().doc_id;
+        writer
+            .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
+            .await;
+        writer
+            .flush_native_partial(
+                &lifecycle,
+                &gents_protocol::message::Message::assistant("retained recovery prefix"),
+            )
+            .await
+            .unwrap();
+        let escaped = crate::graphql::escape_graphql_string(doc_id);
+        let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        let expire = node.execute(&format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&expiry),
+        )).await;
+        assert!(!expire.has_errors(), "{:?}", expire.errors);
+        let snapshot = || async {
+            let response = node.execute(&format!(
+                r#"{{
+                    AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
+                    AgentMessage(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
+                    AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
+                    AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }}
+                }}"#,
+                crate::watcher::AGENT_REQUEST_FIELDS,
+            )).await;
+            assert!(!response.has_errors(), "{:?}", response.errors);
+            response
+        };
+        let before = snapshot().await;
+        let observed: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&before, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        let generation = observed.execution_generation.as_deref().unwrap();
+        let now = chrono::Utc::now();
+        let recover = || {
+            recover_expired_generation_with_facts(
+                &node,
+                &observed,
+                generation,
+                &expiry,
+                "recovery-atomicity-generation".into(),
+                now,
+                None,
+                None,
+            )
+        };
+        if baseline {
+            let (result, count) =
+                ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
+            assert_eq!(result.unwrap(), RecoveryResult::Won { published: 1 });
+            assert!(
+                count >= 3,
+                "recovery must close, publish and swap generation"
+            );
+            mutation_count = count;
+        } else {
+            for index in 1..=mutation_count {
+                let (result, count) =
+                    ConfigApplyTxn::with_successful_mutation_failure_at(Some(index), recover())
+                        .await;
+                let error = result.expect_err("recovery must propagate injected failure");
+                assert!(
+                    format!("{error:#}").contains(&format!(
+                        "injected failure after successful transaction mutation {index}"
+                    )),
+                    "unexpected recovery error: {error:#}"
+                );
+                assert_eq!(count, index);
+                assert_eq!(
+                    snapshot().await.data,
+                    before.data,
+                    "recovery write {index} leaked"
+                );
+            }
+            let (recovered, actual_writes) =
+                ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
+            assert_eq!(recovered.unwrap(), RecoveryResult::Won { published: 1 });
+            assert_eq!(
+                actual_writes, mutation_count,
+                "every recovery mutation must have been faulted"
+            );
+            let committed = snapshot().await.data;
+            // Discard the first acknowledgement and resend the exact recovery
+            // identity. Replay must confirm the facts without another write.
+            let (replay, writes) =
+                ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
+            assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
+            assert_eq!(writes, 0);
+            assert_eq!(snapshot().await.data, committed);
+        }
+        node.shutdown().await;
+        let _ = std::fs::remove_dir_all(path);
+    }
+}
+
 #[tokio::test]
 async fn provider_closure_cannot_precede_committed_source_timestamp() {
     let (node, path, lifecycle, _writer) = fixture("close-time-regression").await;

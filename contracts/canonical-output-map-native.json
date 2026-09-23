@@ -121,7 +121,8 @@
       "consumer_paths": [
         "crates/gents/src/provider_input/tests.rs",
         "crates/gents/src/compaction/tests.rs",
-        "crates/gents/tests/conformance/compaction_gate.rs"
+        "crates/gents/tests/conformance/compaction_gate.rs",
+        "crates/gents/tests/e2e_runtime/rendered_request_capture.rs"
       ],
       "native_status": "pending",
       "required_cases": [
@@ -130,7 +131,8 @@
         "Construct and measure complete requests at effective budget and one estimated token above it. Assert equality is NotNeeded and only a strictly greater estimate is reduction-eligible. Raw payload byte counts cannot stand in for these measured boundaries.",
         "Exercise literal-expanded and head/tail presentations and missing dependencies; incomplete reconstruction must not become a smaller dispatchable request.",
         "After reduction, rebuild and reproject the complete request and reject dispatch if its new estimate still exceeds the effective budget.",
-        "The formal join now binds canonical reconstruction, fallible projection/estimation, reduction and rebuilt admission. Its callbacks remain native premises: controlled conformance observations and payload fixtures do not establish that real provider serialization produced the estimate."
+        "The formal join now binds canonical reconstruction, fallible projection/estimation, reduction and rebuilt admission. Its callbacks remain native premises: controlled conformance observations and payload fixtures do not establish that real provider serialization produced the estimate.",
+        "Native HTTP capture tests compare persisted input accounting with the production estimator applied to the actual received request body, including every dispatched turn of a three-turn compaction scenario. All dispatched estimates fit the effective budget. Exact equality/one-over boundary construction, literal/window coverage, and incomplete-dependency rejection remain required experiments."
       ],
       "retired_bindings": []
     },
@@ -147,12 +149,14 @@
       ],
       "consumer_paths": [
         "crates/gents/src/config_client/txn_owner_tests.rs",
-        "crates/gents/src/defra_write/tests.rs"
+        "crates/gents/src/defra_write/tests.rs",
+        "crates/gents/src/streaming/canonical_tests.rs"
       ],
       "native_status": "pending",
       "required_cases": [
         "inject failure at every write in closure, header, tool-intent and recovery generation-swap/accounting batches and observe all-or-none facts",
-        "lose commit acknowledgement and replay exact identities without duplicate dispatch, continuation, token charge or terminal effects"
+        "lose commit acknowledgement and replay exact identities without duplicate dispatch, continuation, token charge or terminal effects",
+        "Native publication and partial-text recovery tests inject a task-local failure after every successful ConfigApplyTxn mutation and compare persisted facts; successful second-fixture mutation counts pin complete fault coverage. Recovery exact-identity replay performs zero writes. Running-tool recovery accounting and downstream dispatch/continuation/token-charge replay effects remain separate obligations."
       ],
       "retired_bindings": []
     },
@@ -190,7 +194,8 @@
         "block provider and tool reads while an independent bounded-cadence timer renews",
         "reject early, stale-deadline and expired renewal attempts",
         "suspend past expiry and resume with the old owner fenced from publication and dispatch",
-        "exercise forward and backward native clock changes and document the mapping to Lean nondecreasing abstract time"
+        "exercise forward and backward native clock changes and document the mapping to Lean nondecreasing abstract time",
+        "Native renewal tests run the actual renewal task while two read stand-ins block, and stop polling past the stored deadline before rejecting renewal and recovering the request. These establish independent timer operation and expired-owner fencing, not actual provider/tool integration, OS suspend, or system-clock discontinuity."
       ],
       "retired_bindings": ["PersistProgress renewal", "socket traffic renewal", "response progress sequence"]
     },
@@ -213,7 +218,8 @@
         "concurrent identical creates resolve to one immutable identity",
         "changed genesis content cannot overwrite the existing identity",
         "distinct documents at one source ordinal or closure project as conflict rather than first-writer-wins",
-        "use pinned DefraDB behavior rather than a synthetic ID map"
+        "use pinned DefraDB behavior rather than a synthetic ID map",
+        "The native genesis test races identical creates, verifies duplicate-create and changed-content identity behavior, then feeds both persisted closing records to canonical reconstruction in both arrival orders and under either closure reference: each reports ConflictingClosures, never a selected winner. Open-flush ordinal twins and cross-process replication remain separate coverage."
       ],
       "retired_bindings": ["synthetic global ID map"]
     },
