@@ -97,6 +97,26 @@ decoders and native adapters translate representations, not redefine policy.
   with an agent-scoped `OAuthCredential` written by `gents claude-login` and
   refreshed by gents; the `claude` binary is not a dependency.
 
+## Documentation and comments
+
+Sources of truth are the Lean model (`crates/gents/proofs`), the code, and the
+tests that bind them. Do not add prose documentation, design notes, status
+reports or working documents to this repository; derive them with agents when
+needed. User documentation belongs in the docs repository.
+
+Record decisions, external premises and safety reasons that cannot be derived
+from code or proofs as docstrings on the Lean definitions and theorems they
+justify. For constraints on native interfaces the model does not cover, use a
+docstring on the owning Rust or TypeScript item instead. Other code comments
+state only constraints the code and proofs cannot express (safety, ordering,
+external-system behavior); do not narrate code, restate names or record history.
+
+Keep agent instructions (this file), CHANGELOG, license, generated references,
+machine-read manifests and maps, runtime-loaded prompt and pack markdown, and
+minimal install steps. Before deleting prose, move any non-derivable obligation
+it holds to its owner, and never remove a file a build, test or coverage check
+reads.
+
 ## Repository rules
 
 - Escape every interpolated GraphQL string with
