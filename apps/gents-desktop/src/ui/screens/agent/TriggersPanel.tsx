@@ -3,7 +3,11 @@
    this is the desktop's own tab. */
 import { useState } from "react";
 import { Timer, Zap } from "lucide-react";
-import type { DeploymentView, TriggerView } from "@source-inc/gents-desktop-client";
+import type {
+  DeploymentView,
+  Trigger,
+  TriggerView,
+} from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import {
   AreaRow,
@@ -26,6 +30,7 @@ import {
   triggerReadiness,
 } from "./automation";
 import { NewAutomationDialog } from "./NewAutomationDialog";
+import { NewReferenceDialog, type NewReference } from "./NewReferenceDialog";
 import { EditorSheet } from "./EditorSheet";
 import { TaskEditor } from "./TasksPanel";
 import { ScheduleEditor } from "./SchedulesPanel";
@@ -67,32 +72,67 @@ export function TriggerEditor({
         : cfg.source.event_source_id,
     tags: cfg.tags ?? [],
   };
+  /* documents drafted from the reference fields, written with the trigger */
+  const [pending, setPending] = useState<{
+    task?: Extract<NewReference, { kind: "task" }>["document"];
+    schedule?: Extract<NewReference, { kind: "schedule" }>["document"];
+    event?: Extract<NewReference, { kind: "event" }>["document"];
+  }>({});
+  const [drafting, setDrafting] = useState<{
+    kind: NewReference["kind"];
+    resolve: (id: string | null) => void;
+  } | null>(null);
+  const draftNew = (kind: NewReference["kind"]) =>
+    new Promise<string | null>((resolve) => setDrafting({ kind, resolve }));
   const d = useDraft(saved, async (next) => {
-    if (!deployment.tasks.some((task) => task.taskId === next.taskId))
+    const newTask = pending.task?.task_id === next.taskId ? pending.task : undefined;
+    const newSchedule =
+      next.sourceKind === "schedule" && pending.schedule?.schedule_id === next.sourceId
+        ? pending.schedule
+        : undefined;
+    const newEvent =
+      next.sourceKind === "event" && pending.event?.event_source_id === next.sourceId
+        ? pending.event
+        : undefined;
+    if (!newTask && !deployment.tasks.some((task) => task.taskId === next.taskId))
       throw new Error("Choose an existing task");
     const sourceExists =
       next.sourceKind === "schedule"
-        ? deployment.schedules.some((row) => row.schedule_id === next.sourceId)
-        : deployment.eventSources.some((row) => row.event_source_id === next.sourceId);
+        ? Boolean(newSchedule) ||
+          deployment.schedules.some((row) => row.schedule_id === next.sourceId)
+        : Boolean(newEvent) ||
+          deployment.eventSources.some((row) => row.event_source_id === next.sourceId);
     if (!sourceExists) throw new Error("Choose an existing source");
+    const document: Trigger = {
+      ...cfg,
+      display_name: next.displayName.trim() || null,
+      description: next.description.trim() || null,
+      task_id: next.taskId,
+      enabled: next.enabled,
+      concurrency: (next.concurrency || null) as
+        "parallel" | "serial" | "latest_only" | null,
+      source:
+        next.sourceKind === "schedule"
+          ? { kind: "schedule", schedule_id: next.sourceId }
+          : { kind: "event", event_source_id: next.sourceId },
+      tags: next.tags.length ? next.tags : null,
+    };
     await shell.applyConfig((api) =>
-      api.saveTriggerConfig({
-        document: {
-          ...cfg,
-          display_name: next.displayName.trim() || null,
-          description: next.description.trim() || null,
-          task_id: next.taskId,
-          enabled: next.enabled,
-          concurrency: (next.concurrency || null) as
-            "parallel" | "serial" | "latest_only" | null,
-          source:
-            next.sourceKind === "schedule"
-              ? { kind: "schedule", schedule_id: next.sourceId }
-              : { kind: "event", event_source_id: next.sourceId },
-          tags: next.tags.length ? next.tags : null,
-        },
-      }),
+      /* anything drafted from the fields lands with the trigger, in one
+         transaction, or not at all */
+      newTask || newSchedule || newEvent
+        ? api.applyConfigComponents({
+            document: {
+              agent_principal: { agent_did: deployment.agentDid },
+              ...(newTask ? { tasks: [newTask] } : {}),
+              ...(newSchedule ? { schedules: [newSchedule] } : {}),
+              ...(newEvent ? { event_sources: [newEvent] } : {}),
+              triggers: [document],
+            },
+          })
+        : api.saveTriggerConfig({ document }),
     );
+    setPending({});
   });
   const id = (f: string) => `${cfg.trigger_id}-${f}`;
   const readiness = triggerReadiness(deployment, trigger);
@@ -217,34 +257,22 @@ export function TriggerEditor({
           description="The prompt that runs, and the behavior that runs it."
           value={d.draft.taskId}
           onChange={(v) => d.choose("taskId", v)}
-          items={deployment.tasks.map((t) => ({
-            value: t.taskId,
-            label: t.name ?? t.taskId,
-          }))}
+          items={[
+            ...deployment.tasks.map((t) => ({
+              value: t.taskId,
+              label: t.name ?? t.taskId,
+            })),
+            ...(pending.task
+              ? [
+                  {
+                    value: pending.task.task_id,
+                    label: `${pending.task.display_name} · new, saved with the trigger`,
+                  },
+                ]
+              : []),
+          ]}
           createLabel="New task…"
-          onCreate={async () => {
-            const task_id = newId("task");
-            await shell.applyConfig((api) =>
-              api.saveTaskConfig({
-                document: {
-                  agent_did: deployment.agentDid,
-                  task_id,
-                  display_name: `${cfg.display_name ?? "Automation"} task`,
-                  description: null,
-                  behavior_id:
-                    deployment.behaviors.find((b) => b.isDefault)?.behaviorId ??
-                    deployment.behaviors[0]?.behaviorId ??
-                    "",
-                  prompt_template: "Describe what this task should do.",
-                  goal_objective_template: null,
-                  goal_token_budget: null,
-                  enabled: true,
-                  output_schema_ref: null,
-                },
-              }),
-            );
-            return task_id;
-          }}
+          onCreate={() => draftNew("task")}
           onOpen={(taskId) => setBeside({ kind: "task", id: taskId })}
         />
         <ChoiceRow
@@ -272,31 +300,22 @@ export function TriggerEditor({
             label="Schedule"
             value={d.draft.sourceId}
             onChange={(v) => d.choose("sourceId", v)}
-            items={deployment.schedules.map((s) => ({
-              value: s.schedule_id,
-              label: s.display_name ?? cadenceInWords(s),
-            }))}
+            items={[
+              ...deployment.schedules.map((s) => ({
+                value: s.schedule_id,
+                label: s.display_name ?? cadenceInWords(s),
+              })),
+              ...(pending.schedule
+                ? [
+                    {
+                      value: pending.schedule.schedule_id,
+                      label: `${pending.schedule.display_name} · new, saved with the trigger`,
+                    },
+                  ]
+                : []),
+            ]}
             createLabel="New schedule…"
-            onCreate={async () => {
-              const schedule_id = newId("sched");
-              const cadence = {
-                kind: "cron" as const,
-                expression: "0 9 * * *",
-                timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-                missed_run_policy: "latest_only" as const,
-              };
-              await shell.applyConfig((api) =>
-                api.saveScheduleConfig({
-                  document: {
-                    agent_did: deployment.agentDid,
-                    schedule_id,
-                    display_name: "Every day at 09:00",
-                    cadence,
-                  },
-                }),
-              );
-              return schedule_id;
-            }}
+            onCreate={() => draftNew("schedule")}
             onOpen={(scheduleId) => setBeside({ kind: "schedule", id: scheduleId })}
           />
         ) : (
@@ -305,26 +324,22 @@ export function TriggerEditor({
             label="Event source"
             value={d.draft.sourceId}
             onChange={(v) => d.choose("sourceId", v)}
-            items={deployment.eventSources.map((s) => ({
-              value: s.event_source_id,
-              label: s.display_name ?? eventInWords(s),
-            }))}
+            items={[
+              ...deployment.eventSources.map((s) => ({
+                value: s.event_source_id,
+                label: s.display_name ?? eventInWords(s),
+              })),
+              ...(pending.event
+                ? [
+                    {
+                      value: pending.event.event_source_id,
+                      label: `${pending.event.display_name} · new, saved with the trigger`,
+                    },
+                  ]
+                : []),
+            ]}
             createLabel="New event source…"
-            onCreate={async () => {
-              const event_source_id = newId("evsrc");
-              await shell.applyConfig((api) =>
-                api.saveEventSourceConfig({
-                  document: {
-                    agent_did: deployment.agentDid,
-                    event_source_id,
-                    display_name: "When an AgentRequest is created",
-                    source_collection: "AgentRequest",
-                    event_kind: "created",
-                  },
-                }),
-              );
-              return event_source_id;
-            }}
+            onCreate={() => draftNew("event")}
             onOpen={(sourceId) => setBeside({ kind: "source", id: sourceId })}
           />
         )}
@@ -367,7 +382,32 @@ export function TriggerEditor({
         saving={d.saving}
         error={d.error}
         onSave={d.save}
-        onCancel={d.reset}
+        onCancel={() => {
+          d.reset();
+          setPending({});
+        }}
+      />
+      <NewReferenceDialog
+        deployment={deployment}
+        kind={drafting?.kind ?? null}
+        onClose={(drafted) => {
+          if (drafted?.kind === "task")
+            setPending((p) => ({ ...p, task: drafted.document }));
+          if (drafted?.kind === "schedule")
+            setPending((p) => ({ ...p, schedule: drafted.document }));
+          if (drafted?.kind === "event")
+            setPending((p) => ({ ...p, event: drafted.document }));
+          drafting?.resolve(
+            drafted?.kind === "task"
+              ? drafted.document.task_id
+              : drafted?.kind === "schedule"
+                ? drafted.document.schedule_id
+                : drafted?.kind === "event"
+                  ? drafted.document.event_source_id
+                  : null,
+          );
+          setDrafting(null);
+        }}
       />
       {!embedded && (
         <DeleteButton

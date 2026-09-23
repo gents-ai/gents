@@ -14,7 +14,9 @@ import type {
   Trigger,
 } from "@source-inc/gents-desktop-client";
 
-type Task = NonNullable<ConfigComponentsApplyRequest["document"]["tasks"]>[number];
+export type Task = NonNullable<
+  ConfigComponentsApplyRequest["document"]["tasks"]
+>[number];
 type TriggerSource = Trigger["source"];
 import { Button } from "@gents/ui/components/button";
 import { Checkbox } from "@gents/ui/components/checkbox";
@@ -48,10 +50,10 @@ import { cadenceInWords, eventInWords } from "./automation";
 import { newId, validateCronSchedule } from "./draft";
 
 const NEW = "new:";
-const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+export const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 /* the cadences people ask for; Custom takes a cron expression */
-const PRESETS = [
+export const PRESETS = [
   { id: "daily", label: "Every day at 09:00", cron: "0 9 * * *" },
   { id: "weekdays", label: "Every weekday at 09:00", cron: "0 9 * * 1-5" },
   { id: "weekly", label: "Every Monday at 09:00", cron: "0 9 * * 1" },
