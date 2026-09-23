@@ -4720,6 +4720,8 @@ dependencies = [
  "include_dir",
  "iroh",
  "jsonschema",
+ "objc2",
+ "objc2-foundation",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",

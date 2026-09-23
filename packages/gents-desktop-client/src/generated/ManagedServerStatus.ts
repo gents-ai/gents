@@ -2,4 +2,4 @@
 import type { ManagedServerState } from "./ManagedServerState.js";
 import type { ManagedServerToolCeiling } from "./ManagedServerToolCeiling.js";
 
-export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolean, agentName: string | null, agentDid: string | null, graphql: string | null, effectiveToolCeiling: ManagedServerToolCeiling | null, effectiveToolRoot: string | null, suggestedToolRoot: string | null, pairingReady: boolean, error: string | null, };
+export type ManagedServerStatus = { state: ManagedServerState, autoStart: boolean, agentName: string | null, agentDid: string | null, graphql: string | null, effectiveToolCeiling: ManagedServerToolCeiling | null, effectiveToolRoot: string | null, suggestedToolRoot: string | null, pairingReady: boolean, approvalRequired: boolean, error: string | null, };

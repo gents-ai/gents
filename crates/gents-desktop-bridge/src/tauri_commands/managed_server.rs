@@ -200,6 +200,7 @@ fn project_external_status(
     native: &gents_server::native_service::NativeServiceStatus,
 ) -> ManagedServerStatus {
     external.auto_start = native.enabled;
+    external.approval_required = false;
     if native.job_loaded {
         external.state = ManagedServerState::Running;
     }
@@ -267,7 +268,22 @@ async fn start_managed_server_locked<R: Runtime>(
         },
     };
 
-    if let Some(external) = matching_external_server(&agent_home).await? {
+    let (ready, initial_enabled) = match matching_external_server(&agent_home).await? {
+        Some(external) => (Some(external), false),
+        None => {
+            let initial_native =
+                run_native(native_service(app, state)?, |service| service.status()).await?;
+            if initial_native.is_active_or_transitioning() {
+                (
+                    Some(wait_for_booting_managed_server(app, state, &agent_home).await?),
+                    false,
+                )
+            } else {
+                (None, initial_native.enabled)
+            }
+        }
+    };
+    if let Some(external) = ready {
         let native = run_native(native_service(app, state)?, |service| service.status()).await?;
         let mut external = project_external_status(external, &native);
         if external.effective_tool_ceiling != Some(authority.tool_ceiling)
@@ -292,16 +308,6 @@ async fn start_managed_server_locked<R: Runtime>(
         external.pairing_ready = pairing_is_ready(state, external.agent_did.as_deref()).await;
         return Ok(external);
     }
-
-    let initial_native =
-        run_native(native_service(app, state)?, |service| service.status()).await?;
-    if initial_native.is_active_or_transitioning() {
-        return Err(BridgeError::new(
-            BridgeErrorCode::EndpointUnreachable,
-            "The native agent service is running or transitioning but has not published runtime readiness. Wait and try again, or use Restart Agent if it does not become ready.",
-        ));
-    }
-    let initial_enabled = initial_native.enabled;
 
     {
         let mut managed = state.managed_server.lock().await;
@@ -340,14 +346,25 @@ async fn start_managed_server_locked<R: Runtime>(
             service.install()
         })
         .await?;
+        await_managed_server_approval(app, state).await?;
         // A start can launch the process and then fail restoring login state.
         // Roll back the owned attempt even when that final native step fails.
         attempted_native_start = true;
-        run_native(launchable_native_service(app, state)?, |service| {
+        if let Err(error) = run_native(launchable_native_service(app, state)?, |service| {
             service.start(false)
         })
-        .await?;
-        let ready = wait_for_managed_server(&agent_home).await?;
+        .await
+        {
+            if !native_requires_approval(app, state).await? {
+                return Err(error.into());
+            }
+            await_managed_server_approval(app, state).await?;
+            run_native(launchable_native_service(app, state)?, |service| {
+                service.start(false)
+            })
+            .await?;
+        }
+        let ready = wait_for_managed_server(app, state, &agent_home).await?;
         validate_ready_runtime(&ready, &authority, &agent_home)?;
         if current_core(state).is_none() {
             init_standard_local_runtime(DesktopInitOptions {
@@ -667,12 +684,45 @@ impl From<ManagedServerToolCeiling> for gents_server::server_host::ManagedToolCe
     }
 }
 
-const MANAGED_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(120);
+const MANAGED_SERVER_READY_TIMEOUT: Duration = Duration::from_secs(300);
+const BACKGROUND_APPROVAL_TIMEOUT: Duration = Duration::from_secs(600);
+const MANAGED_SERVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-async fn wait_for_managed_server(agent_home: &Path) -> anyhow::Result<ManagedServerStatus> {
-    let deadline = tokio::time::Instant::now() + MANAGED_SERVER_READY_TIMEOUT;
+async fn wait_for_managed_server<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+    agent_home: &Path,
+) -> anyhow::Result<ManagedServerStatus> {
+    await_runtime_readiness(
+        MANAGED_SERVER_READY_TIMEOUT,
+        MANAGED_SERVER_POLL_INTERVAL,
+        || observe_port_readiness(agent_home),
+        || async move {
+            Ok(
+                run_native(native_service(app, state)?, |service| service.status())
+                    .await?
+                    .job_loaded,
+            )
+        },
+    )
+    .await
+}
+
+async fn await_runtime_readiness<P, PF, N, NF>(
+    timeout: Duration,
+    interval: Duration,
+    mut probe: P,
+    mut job_loaded: N,
+) -> anyhow::Result<ManagedServerStatus>
+where
+    P: FnMut() -> PF,
+    PF: Future<Output = Result<PortReadiness, BridgeError>>,
+    N: FnMut() -> NF,
+    NF: Future<Output = Result<bool, BridgeError>>,
+{
+    let started = tokio::time::Instant::now();
     loop {
-        match observe_port_readiness(agent_home).await? {
+        match probe().await? {
             PortReadiness::Ready(status) => return Ok(status),
             PortReadiness::Foreign { port, live_did } => {
                 let who = if live_did.trim().is_empty() {
@@ -686,14 +736,125 @@ async fn wait_for_managed_server(agent_home: &Path) -> anyhow::Result<ManagedSer
             }
             PortReadiness::NotListening => {}
         }
-        if tokio::time::Instant::now() >= deadline {
+        if !job_loaded().await? {
             anyhow::bail!(
-                "native Gents service started, but it did not publish runtime readiness within {} seconds",
-                MANAGED_SERVER_READY_TIMEOUT.as_secs()
+                "the native Gents service stopped after {} seconds, before it published runtime readiness",
+                started.elapsed().as_secs()
             );
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        if started.elapsed() >= timeout {
+            anyhow::bail!(
+                "the native Gents service is running but did not publish runtime readiness within {} seconds",
+                timeout.as_secs()
+            );
+        }
+        tokio::time::sleep(interval).await;
     }
+}
+
+async fn wait_for_booting_managed_server<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+    agent_home: &Path,
+) -> Result<ManagedServerStatus, BridgeError> {
+    {
+        let mut managed = state.managed_server.lock().await;
+        managed.starting = true;
+        managed.last_error = None;
+    }
+    emit_status(app, state).await;
+    tracing::info!(
+        target: "gents_desktop::managed_server",
+        "waiting for the running native service to publish runtime readiness"
+    );
+    let waited = wait_for_managed_server(app, state, agent_home).await;
+    let mut managed = state.managed_server.lock().await;
+    managed.starting = false;
+    let result = waited.map_err(|error| {
+        let message = format!("{error:#}");
+        tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
+        managed.last_error = Some(message.clone());
+        BridgeError::new(BridgeErrorCode::EndpointUnreachable, message)
+    });
+    drop(managed);
+    emit_status(app, state).await;
+    result
+}
+
+async fn native_requires_approval<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<bool, BridgeError> {
+    Ok(
+        run_native(native_service(app, state)?, |service| service.status())
+            .await?
+            .requires_approval,
+    )
+}
+
+async fn await_managed_server_approval<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> anyhow::Result<()> {
+    await_background_approval(
+        BACKGROUND_APPROVAL_TIMEOUT,
+        MANAGED_SERVER_POLL_INTERVAL,
+        || native_requires_approval(app, state),
+        || emit_status(app, state),
+    )
+    .await
+}
+
+async fn await_background_approval<O, OF, W, WF>(
+    timeout: Duration,
+    interval: Duration,
+    mut requires_approval: O,
+    mut on_waiting: W,
+) -> anyhow::Result<()>
+where
+    O: FnMut() -> OF,
+    OF: Future<Output = Result<bool, BridgeError>>,
+    W: FnMut() -> WF,
+    WF: Future<Output = ()>,
+{
+    let started = tokio::time::Instant::now();
+    let mut announced = false;
+    while requires_approval().await? {
+        if !announced {
+            tracing::info!(
+                target: "gents_desktop::managed_server",
+                "waiting for macOS to allow the Gents background item"
+            );
+            announced = true;
+        }
+        on_waiting().await;
+        if started.elapsed() >= timeout {
+            anyhow::bail!(
+                "{} Gents waited {} minutes for approval.",
+                gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED,
+                timeout.as_secs() / 60
+            );
+        }
+        tokio::time::sleep(interval).await;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn desktop_managed_server_open_login_items<R: Runtime>(
+    app: AppHandle<R>,
+    state: State<'_, DesktopAppState>,
+) -> Result<(), BridgeError> {
+    ensure_allowed(&state)?;
+    let (opened, result) = tokio::sync::oneshot::channel();
+    app.run_on_main_thread(move || {
+        let _ = opened.send(gents_server::native_service::open_background_approval_settings());
+    })
+    .map_err(|error| BridgeError::untyped(format!("opening Login Items settings: {error}")))?;
+    result
+        .await
+        .map_err(|error| BridgeError::untyped(format!("opening Login Items settings: {error}")))?
+        .map_err(native_error)
 }
 
 enum PortReadiness {
@@ -1106,6 +1267,7 @@ fn managed_status_from_payload(payload: serde_json::Value, live_did: &str) -> Ma
             .map(str::to_string),
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
+        approval_required: false,
         error: None,
     }
 }
@@ -1322,7 +1484,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         return Err(BridgeError::new(error.code, message));
     }
     let readiness = async {
-        let ready = wait_for_managed_server(&agent_home)
+        let ready = wait_for_managed_server(&app, &state, &agent_home)
             .await
             .map_err(|error| BridgeError::untyped(error.to_string()))?;
         validate_ready_runtime(&ready, &authority, &agent_home)
@@ -1408,6 +1570,7 @@ fn status_from(
         effective_tool_root: stored.and_then(|value| value.tool_root.clone()),
         suggested_tool_root: suggested_tool_root(),
         pairing_ready: false,
+        approval_required: native.is_some_and(|status| status.requires_approval),
         error: managed.last_error.clone(),
     }
 }
@@ -1666,6 +1829,7 @@ mod tests {
             running: false,
             job_loaded: false,
             enabled: true,
+            requires_approval: false,
             detail: None,
         };
         assert_eq!(
@@ -1699,6 +1863,7 @@ mod tests {
                 effective_tool_root: Some("/Users/test".to_string()),
                 suggested_tool_root: Some("/Users/test".to_string()),
                 pairing_ready: false,
+                approval_required: false,
                 error: None,
             },
             &gents_server::native_service::NativeServiceStatus {
@@ -1706,6 +1871,7 @@ mod tests {
                 running: false,
                 job_loaded: false,
                 enabled: true,
+                requires_approval: false,
                 detail: None,
             },
         );
@@ -1723,6 +1889,7 @@ mod tests {
             running: true,
             job_loaded: true,
             enabled: true,
+            requires_approval: false,
             detail: None,
         };
         let status = status_from(&ManagedServerRuntimeState::default(), None, Some(&native));
@@ -1740,6 +1907,7 @@ mod tests {
                 effective_tool_root: None,
                 suggested_tool_root: None,
                 pairing_ready: false,
+                approval_required: false,
                 error: None,
             },
             &native,
@@ -1754,6 +1922,7 @@ mod tests {
             running: false,
             job_loaded: true,
             enabled: false,
+            requires_approval: false,
             detail: None,
         };
         let observed = project_external_status(
@@ -1767,6 +1936,7 @@ mod tests {
                 effective_tool_root: None,
                 suggested_tool_root: None,
                 pairing_ready: false,
+                approval_required: false,
                 error: None,
             },
             &native,
@@ -1921,6 +2091,7 @@ mod tests {
             effective_tool_root: None,
             suggested_tool_root: None,
             pairing_ready: false,
+            approval_required: false,
             error: None,
         };
         let error = validate_ready_runtime(&missing_authority, &authority, temp.path())
@@ -2056,5 +2227,130 @@ mod tests {
                 tool_root: None,
             }
         );
+    }
+
+    fn ready_status(agent_did: &str) -> ManagedServerStatus {
+        ManagedServerStatus {
+            state: ManagedServerState::External,
+            auto_start: false,
+            agent_name: Some("local".to_string()),
+            agent_did: Some(agent_did.to_string()),
+            graphql: Some("http://127.0.0.1:9191/graphql".to_string()),
+            effective_tool_ceiling: Some(ManagedServerToolCeiling::MetaOnly),
+            effective_tool_root: None,
+            suggested_tool_root: None,
+            pairing_ready: false,
+            approval_required: false,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_slow_booting_runtime_is_waited_on_until_it_publishes_readiness() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let probes = AtomicUsize::new(0);
+        let ready = await_runtime_readiness(
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            || {
+                let attempt = probes.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(if attempt < 5 {
+                        PortReadiness::NotListening
+                    } else {
+                        PortReadiness::Ready(ready_status("did:key:slow"))
+                    })
+                }
+            },
+            || async { Ok(true) },
+        )
+        .await
+        .expect("a loaded job that is still booting is waited on");
+
+        assert_eq!(ready.agent_did.as_deref(), Some("did:key:slow"));
+        assert_eq!(probes.load(Ordering::SeqCst), 6);
+    }
+
+    #[tokio::test]
+    async fn readiness_wait_fails_as_soon_as_the_service_stops() {
+        let error = await_runtime_readiness(
+            Duration::from_secs(60),
+            Duration::from_millis(5),
+            || async { Ok(PortReadiness::NotListening) },
+            || async { Ok(false) },
+        )
+        .await
+        .expect_err("an exited service must not be waited on");
+        assert!(error.to_string().contains("stopped"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn readiness_wait_is_bounded() {
+        let error = await_runtime_readiness(
+            Duration::from_millis(20),
+            Duration::from_millis(5),
+            || async { Ok(PortReadiness::NotListening) },
+            || async { Ok(true) },
+        )
+        .await
+        .expect_err("a runtime that never becomes ready must time out");
+        assert!(error
+            .to_string()
+            .contains("did not publish runtime readiness"));
+    }
+
+    #[tokio::test]
+    async fn pending_background_approval_is_published_then_startup_continues() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let checks = AtomicUsize::new(0);
+        let published = AtomicUsize::new(0);
+        await_background_approval(
+            Duration::from_secs(5),
+            Duration::from_millis(5),
+            || {
+                let attempt = checks.fetch_add(1, Ordering::SeqCst);
+                async move { Ok(attempt < 3) }
+            },
+            || {
+                published.fetch_add(1, Ordering::SeqCst);
+                async {}
+            },
+        )
+        .await
+        .expect("startup continues once approval is granted");
+
+        assert_eq!(checks.load(Ordering::SeqCst), 4);
+        assert_eq!(published.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn background_approval_wait_is_bounded_and_names_login_items() {
+        let error = await_background_approval(
+            Duration::from_millis(20),
+            Duration::from_millis(5),
+            || async { Ok(true) },
+            || async {},
+        )
+        .await
+        .expect_err("approval that never arrives must time out");
+        assert!(error.to_string().contains("Login Items"), "{error}");
+    }
+
+    #[test]
+    fn native_approval_state_is_part_of_the_managed_status() {
+        let native = gents_server::native_service::NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: false,
+            enabled: true,
+            requires_approval: true,
+            detail: None,
+        };
+        let status = status_from(&ManagedServerRuntimeState::default(), None, Some(&native));
+        assert!(status.approval_required);
+        let observed = project_external_status(ready_status("did:key:ready"), &native);
+        assert!(!observed.approval_required);
     }
 }

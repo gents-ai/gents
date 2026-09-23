@@ -42,8 +42,12 @@ import { ScrollArea } from "@gents/ui/components/scroll-area";
 import {
   projectStartupLoadingStatus,
   type DesktopStartupPhase,
-  type LoadingStepState,
 } from "../../../lib/loadingStatus";
+import {
+  observeManagedServerOperation,
+  type ManagedServerWait,
+} from "../../../lib/managedServerStartup";
+import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
 import type { Shell } from "@/hooks/useShell";
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
@@ -291,14 +295,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-const stepIcon = (state: LoadingStepState | null) =>
-  state === "complete" ? (
-    <CircleCheck className="size-4 text-muted-foreground" />
-  ) : state === "active" ? (
-    <Spinner className="text-foreground" />
-  ) : (
-    <span className="size-1.5 rounded-full bg-border" />
-  );
+function shortDid(did: string | null) {
+  if (!did) return "a new agent identity";
+  return did.length > 24 ? `${did.slice(0, 14)}…${did.slice(-6)}` : did;
+}
 
 export function ceilingFromInit(
   value?: string | null,
@@ -392,6 +392,19 @@ export function SetupScreen({
   const [phase, setPhase] = useState<Exclude<DesktopStartupPhase, "ready">>(
     "checking-managed-server",
   );
+  const [startupDetails, setStartupDetails] = useState<
+    Partial<Record<"managedServer" | "configuration" | "client", string>>
+  >({});
+  const [managedWait, setManagedWait] = useState<ManagedServerWait | null>(null);
+  const [provisionedAt, setProvisionedAt] = useState<number | null>(null);
+  useEffect(() => {
+    if (provisionedAt === null) return;
+    const timer = window.setTimeout(
+      () => setStep("inference"),
+      Math.max(0, provisionedAt + SETUP_COMPLETE_DWELL_MS - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [provisionedAt]);
   const [catalog, setCatalog] = useState<InferenceSetupCatalog | null>(null);
   const [provider, setProvider] = useState<ProviderId>(fixedProvider ?? "openai");
   const [connections, setConnections] = useState<
@@ -516,7 +529,13 @@ export function SetupScreen({
     } else {
       await shell.refreshSnapshot();
     }
-    setStep("inference");
+    setStartupDetails((current) => ({
+      ...current,
+      client: nextDeployment
+        ? `Connected securely to ${nextDeployment.label}`
+        : "Secure client started",
+    }));
+    setProvisionedAt(Date.now());
   };
 
   useEffect(() => {
@@ -556,9 +575,16 @@ export function SetupScreen({
     setError(null);
     setStep("starting");
     setPhase("checking-managed-server");
+    setStartupDetails({});
+    setProvisionedAt(null);
     try {
       if (api.startManagedServer) {
-        const status = await api.startManagedServer(agentName, authority);
+        const startManagedServer = api.startManagedServer;
+        const status = await observeManagedServerOperation(
+          api,
+          () => startManagedServer(agentName, authority),
+          setManagedWait,
+        );
         const confirmed: ManagedServerAuthorityInput | null =
           status.effectiveToolCeiling
             ? {
@@ -571,9 +597,16 @@ export function SetupScreen({
             "The managed runtime started with different authority than the reviewed settings.",
           );
         }
+        setStartupDetails({
+          managedServer: `${status.agentName ?? agentName} is running as ${shortDid(status.agentDid)}, with its identity and data in ${root}`,
+        });
       }
       setPhase("loading-configuration");
       await shell.onInitLocalRuntime(agentName);
+      setStartupDetails((current) => ({
+        ...current,
+        configuration: `Saved the local connection to ${agentName}`,
+      }));
       setPhase("starting-client");
       if (api.commitManagedServerAutoStart) {
         await api.commitManagedServerAutoStart(agentName);
@@ -592,6 +625,8 @@ export function SetupScreen({
     setError(null);
     setStep("starting");
     setPhase("starting-client");
+    setStartupDetails({});
+    setProvisionedAt(null);
     try {
       await api.requestStatusEnrollment(address.trim());
       await finishProvisioning();
@@ -1000,14 +1035,7 @@ export function SetupScreen({
   }
   if (step === "starting") {
     const status = projectStartupLoadingStatus(phase, true);
-    const steps: [string, LoadingStepState | null][] = [
-      [
-        where === "local" ? "Start local agent" : "Connect to server",
-        status.managedServerState,
-      ],
-      ["Load configuration", status.connectionState],
-      ["Start secure client", status.clientState],
-    ];
+    const done = provisionedAt !== null;
     const saying: Record<string, string> = {
       "checking-managed-server": "Starting your local agent…",
       "loading-configuration": "Loading agent configuration…",
@@ -1015,43 +1043,37 @@ export function SetupScreen({
     };
     return (
       <Frame>
-        <h1 className="font-heading text-2xl font-medium text-heading">
-          {status.failed ? status.title : "Starting"}
-        </h1>
-        <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-          {status.failed ? null : <Spinner className="text-foreground" />}
-          {saying[phase] ?? status.currentLabel}
-        </p>
-        <ol className="mt-6 grid gap-2">
-          {steps.map(([label, state], i) =>
-            state === "pending" ? null : (
-              <li
-                key={label}
-                className="flex items-center gap-3 rounded-2xl border border-border/60 bg-raised px-4 py-3 text-sm animate-in fade-in-0 slide-in-from-bottom-1 duration-300 fill-mode-both"
-              >
-                <span className="font-mono text-[11px] text-muted-foreground">
-                  0{i + 1}.
-                </span>
-                <span className="flex-1">{label}</span>
-                {stepIcon(state)}
-              </li>
-            ),
-          )}
-        </ol>
-        {error && (
-          <div className="mt-4 grid gap-3">
-            <p className="text-sm text-destructive">{error}</p>
-            <Button
-              variant="brand"
-              onClick={() => {
-                setError(null);
-                setStep("welcome");
-              }}
-            >
-              Try again
-            </Button>
-          </div>
-        )}
+        <SetupProgress
+          title={status.failed ? status.title : done ? "Ready" : "Starting"}
+          label={done ? "Everything started." : (saying[phase] ?? status.currentLabel)}
+          failed={status.failed}
+          done={done}
+          steps={[
+            {
+              label: where === "local" ? "Start local agent" : "Connect to server",
+              state: done ? "complete" : status.managedServerState,
+              detail: startupDetails.managedServer ?? null,
+            },
+            {
+              label: "Load configuration",
+              state: done ? "complete" : status.connectionState,
+              detail: startupDetails.configuration ?? null,
+            },
+            {
+              label: "Start secure client",
+              state: done ? "complete" : status.clientState,
+              detail: startupDetails.client ?? null,
+            },
+          ]}
+          wait={managedWait}
+          error={error}
+          onRetry={() => {
+            setError(null);
+            setStep("welcome");
+          }}
+          onContinue={() => setStep("inference")}
+          onOpenLoginItems={api.openManagedServerLoginItems}
+        />
       </Frame>
     );
   }

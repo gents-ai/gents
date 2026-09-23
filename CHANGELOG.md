@@ -13,6 +13,17 @@ source consistency checks, not a separate runtime compatibility version.
   packages stay off the release page. The container image takes the Linux
   CLI from the release workflow's artifacts.
 
+### Fixed
+
+- Desktop startup waits for a background agent that is still booting instead
+  of failing, and shows how long it has waited. It fails only when the service
+  stops or after five minutes.
+- On macOS, desktop startup detects that Gents still needs approval under
+  Login Items & Extensions, explains what to allow, offers a button that opens
+  that settings pane, and continues once Gents is allowed.
+- First-run setup keeps each finished step visible with a one-line result and
+  pauses on the completed list before moving on.
+
 ## 0.18.5 - 2026-09-22
 
 ### Added

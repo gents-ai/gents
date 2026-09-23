@@ -15,6 +15,7 @@ use anyhow::{bail, Context, Result};
 
 pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
+pub const BACKGROUND_APPROVAL_REQUIRED: &str = "macOS has not allowed Gents to run in the background. Approve Gents in System Settings > General > Login Items & Extensions, then start it again.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeServicePlatform {
@@ -170,6 +171,9 @@ pub struct NativeServiceStatus {
     /// macOS this includes loaded jobs that exited and are awaiting respawn.
     pub job_loaded: bool,
     pub enabled: bool,
+    /// macOS Background Task Management blocks the job until the user allows
+    /// it under Login Items.
+    pub requires_approval: bool,
     pub detail: Option<String>,
 }
 
@@ -180,8 +184,8 @@ impl NativeServiceStatus {
 
     pub fn summary(&self) -> String {
         format!(
-            "installed={} running={} job_loaded={} enabled={} (native service state only; runtime health is not checked)",
-            self.installed, self.running, self.job_loaded, self.enabled
+            "installed={} running={} job_loaded={} enabled={} requires_approval={} (native service state only; runtime health is not checked)",
+            self.installed, self.running, self.job_loaded, self.enabled, self.requires_approval
         )
     }
 }
@@ -195,6 +199,10 @@ pub struct CommandOutput {
 
 pub trait CommandRunner {
     fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput>;
+
+    fn background_approval_required(&self, _definition: &Path) -> bool {
+        false
+    }
 }
 
 pub struct ProcessCommandRunner;
@@ -255,6 +263,77 @@ impl CommandRunner for ProcessCommandRunner {
             stdout: read_capture(&mut stdout)?,
             stderr: read_capture(&mut stderr)?,
         })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn background_approval_required(&self, definition: &Path) -> bool {
+        macos_background::requires_approval(definition)
+    }
+}
+
+/// Opens the Login Items pane where macOS lists background items awaiting
+/// approval.
+pub fn open_background_approval_settings() -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        if macos_background::open_login_items() {
+            return Ok(());
+        }
+        bail!("this version of macOS cannot open Login Items settings directly")
+    }
+    #[cfg(not(target_os = "macos"))]
+    bail!("background item approval exists only on macOS")
+}
+
+#[cfg(target_os = "macos")]
+mod macos_background {
+    use std::path::Path;
+
+    use objc2::rc::autoreleasepool;
+    use objc2::runtime::{AnyClass, Bool};
+    use objc2::{msg_send, sel};
+    use objc2_foundation::{NSString, NSURL};
+
+    #[link(name = "ServiceManagement", kind = "framework")]
+    extern "C" {}
+
+    const SM_APP_SERVICE_STATUS_REQUIRES_APPROVAL: isize = 2;
+
+    fn service_class() -> Option<&'static AnyClass> {
+        AnyClass::get(c"SMAppService")
+    }
+
+    fn responds(class: &AnyClass, selector: objc2::runtime::Sel) -> bool {
+        let responds: Bool = unsafe { msg_send![class, respondsToSelector: selector] };
+        responds.as_bool()
+    }
+
+    pub(super) fn requires_approval(definition: &Path) -> bool {
+        let Some(class) = service_class() else {
+            return false;
+        };
+        if !responds(class, sel!(statusForLegacyURL:)) {
+            return false;
+        }
+        autoreleasepool(|_| {
+            let path = NSString::from_str(&definition.to_string_lossy());
+            let url = NSURL::fileURLWithPath(&path);
+            let status: isize = unsafe { msg_send![class, statusForLegacyURL: &*url] };
+            status == SM_APP_SERVICE_STATUS_REQUIRES_APPROVAL
+        })
+    }
+
+    pub(super) fn open_login_items() -> bool {
+        let Some(class) = service_class() else {
+            return false;
+        };
+        if !responds(class, sel!(openSystemSettingsLoginItems)) {
+            return false;
+        }
+        autoreleasepool(|_| {
+            let _: () = unsafe { msg_send![class, openSystemSettingsLoginItems] };
+        });
+        true
     }
 }
 
@@ -367,6 +446,13 @@ impl<R: CommandRunner> NativeServiceManager<R> {
 
     pub fn start(&self, enable_at_login: bool) -> Result<()> {
         self.require_installed()?;
+        if self.platform == NativeServicePlatform::Macos
+            && self
+                .runner
+                .background_approval_required(&self.config.definition_path(self.platform))
+        {
+            bail!(BACKGROUND_APPROVAL_REQUIRED);
+        }
         let was_enabled = self.status()?.enabled;
         if enable_at_login {
             self.set_enabled(true)?;
@@ -486,6 +572,7 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                 running: false,
                 job_loaded: false,
                 enabled: false,
+                requires_approval: false,
                 detail: None,
             });
         }
@@ -515,6 +602,10 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     running: print.success && launchd_is_running(&print.stdout),
                     job_loaded: print.success,
                     enabled: !explicitly_disabled,
+                    requires_approval: !print.success
+                        && self.runner.background_approval_required(
+                            &self.config.definition_path(self.platform),
+                        ),
                     detail: Some(output_detail(&print)),
                 })
             }
@@ -561,6 +652,7 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                         "active" | "activating" | "deactivating" | "reloading"
                     ),
                     enabled: enabled.success && enabled.stdout == "enabled",
+                    requires_approval: false,
                     detail: Some(output_detail(&active)),
                 })
             }
@@ -1486,6 +1578,53 @@ mod tests {
         );
         assert!(manager.install().is_err());
         assert!(!definition.exists());
+    }
+
+    struct PendingApprovalRunner(Mutex<Vec<CommandOutput>>);
+
+    impl CommandRunner for PendingApprovalRunner {
+        fn run(&self, _: &OsStr, args: &[OsString]) -> Result<CommandOutput> {
+            assert_ne!(
+                args.first().map(OsString::as_os_str),
+                Some(OsStr::new("bootstrap")),
+                "a job awaiting approval must not be bootstrapped"
+            );
+            Ok(self.0.lock().unwrap().remove(0))
+        }
+
+        fn background_approval_required(&self, _: &Path) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn macos_background_approval_is_observed_and_blocks_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Macos),
+            render_launchd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Macos,
+            PendingApprovalRunner(Mutex::new(vec![
+                command_output(true, "501", ""),
+                command_output(false, "", "Could not find service"),
+                command_output(true, "501", ""),
+                command_output(true, "", ""),
+            ])),
+        );
+        let status = manager.status().unwrap();
+        assert!(status.requires_approval);
+        assert!(!status.job_loaded);
+
+        let error = manager.start(false).unwrap_err().to_string();
+        assert_eq!(error, BACKGROUND_APPROVAL_REQUIRED);
+        assert!(manager.runner.0.lock().unwrap().is_empty());
     }
 
     #[test]
