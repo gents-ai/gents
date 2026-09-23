@@ -85,9 +85,11 @@ pub use tools::{
     LspTools, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools, SubagentTools,
     Tools,
 };
+pub(crate) use write_tool::reject_protected_collection_name;
 pub use write_tool::{
     is_reserved_builtin_tool_name, OutputObligationDecision, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+    PROTECTED_DATASTORE_COLLECTIONS,
 };
 
 pub use subagent_target::SubagentTargetDocument;

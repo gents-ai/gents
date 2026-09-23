@@ -294,6 +294,7 @@ impl WriteToolDecl {
         crate::graphql::validate_collection_identifier(&self.collection).map_err(|error| {
             anyhow::anyhow!("invalid collection {:?}: {error}", self.collection)
         })?;
+        reject_protected_collection_name(&self.collection)?;
         for (index, field) in self.fields.iter().enumerate() {
             if field.name.trim().is_empty() {
                 anyhow::bail!("invalid field[{index}] name: empty name");
@@ -452,6 +453,34 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
         || crate::graph_pipeline::GRAPH_PIPELINE_TOOL_NAMES.contains(&name)
 }
 
+/// Collections no datastore tool may read or write. They hold protected eval
+/// material and promotion evidence; an agent in the launching home, including
+/// the live version of a behavior under optimization, must not reach them.
+///
+/// `"OptimizationJob"` is a literal because that collection lands with the
+/// optimization stack; replace it with the schema constant there.
+pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
+    gents_protocol::schemas::EVAL_DEFINITION_NAME,
+    gents_protocol::schemas::EVAL_RUN_NAME,
+    gents_protocol::schemas::EVAL_TRIAL_NAME,
+    gents_protocol::schemas::EVAL_VERDICT_NAME,
+    "OptimizationJob",
+];
+
+/// Reject a collection a datastore create/query tool may never name.
+///
+/// Sits beside the [`crate::graphql::validate_collection_identifier`] calls in
+/// the datastore surface validators rather than inside them: that identifier
+/// check lives in `gents-protocol` and is shared far beyond datastore surfaces.
+pub(crate) fn reject_protected_collection_name(collection: &str) -> Result<()> {
+    if PROTECTED_DATASTORE_COLLECTIONS.contains(&collection) {
+        anyhow::bail!(
+            "collection {collection:?} is protected and cannot be exposed through a datastore tool"
+        );
+    }
+    Ok(())
+}
+
 /// Reject a declared write/query tool name that collides with a built-in,
 /// a `cli_tool_names` entry, or another runtime-provided tool.
 pub(crate) fn reject_tool_name_surface_collisions(
@@ -479,4 +508,28 @@ pub(crate) fn reject_tool_name_surface_collisions(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn eval_and_optimization_collections_are_never_exposed() {
+        for name in super::PROTECTED_DATASTORE_COLLECTIONS {
+            let error = super::reject_protected_collection_name(name).unwrap_err();
+            assert!(format!("{error:#}").contains("protected"), "{error:#}");
+        }
+        for name in [
+            "EvalDefinition",
+            "EvalRun",
+            "EvalTrial",
+            "EvalVerdict",
+            "OptimizationJob",
+        ] {
+            assert!(
+                super::PROTECTED_DATASTORE_COLLECTIONS.contains(&name),
+                "{name}"
+            );
+        }
+        assert!(super::reject_protected_collection_name("Notes").is_ok());
+    }
 }

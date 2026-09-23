@@ -122,3 +122,55 @@ pub(crate) async fn query(args: QueryArgs) -> Result<()> {
     print_json(&output)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use gents_protocol::schemas::EVAL_VERDICT_NAME;
+
+    use super::*;
+
+    /// `gents query` with no `--allow-collection` is the widest scope the CLI
+    /// offers, and it is the one an operator reaches for by default. A protected
+    /// collection must still be refused there, before any request leaves the
+    /// process — the endpoint below is never listening, so a refusal that named a
+    /// transport failure would not name the collection.
+    fn protected_args(fields: Vec<String>) -> QueryArgs {
+        QueryArgs {
+            home: None,
+            graphql: Some("http://127.0.0.1:1/api/v0/graphql".into()),
+            collection: EVAL_VERDICT_NAME.into(),
+            fields,
+            filter: None,
+            limit: None,
+            allow_collections: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_a_protected_collection_under_the_default_scope() {
+        let args = protected_args(vec!["verdict_id".into()]);
+        let (params, scope) = params_from_args(&args).expect("args parse");
+        assert!(scope.is_unrestricted(), "no --allow-collection means all");
+
+        let error = run_defra_query("http://127.0.0.1:1/api/v0/graphql", &params, &scope)
+            .await
+            .expect_err("EvalVerdict must never be readable through `gents query`");
+        let message = format!("{error:#}");
+        assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
+        assert!(message.contains("protected"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn refuses_discovery_of_a_protected_collection() {
+        let args = protected_args(vec!["*".into()]);
+        let (params, scope) = params_from_args(&args).expect("args parse");
+        assert!(params.is_discovery(), "a lone `*` is the discovery request");
+
+        let error = run_defra_query("http://127.0.0.1:1/api/v0/graphql", &params, &scope)
+            .await
+            .expect_err("a protected collection's field inventory must stay unlisted");
+        let message = format!("{error:#}");
+        assert!(message.contains(EVAL_VERDICT_NAME), "{message}");
+        assert!(message.contains("protected"), "{message}");
+    }
+}
