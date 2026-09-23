@@ -477,13 +477,17 @@ fn select_cases(request: &RunRequest, definition: &EvalDefinition) -> Result<Vec
 
 /// A cell's subject pack, whichever source it came from: what it declares, what
 /// it digests to, and the files a trial home needs.
-struct LoadedPack {
-    digest: String,
-    config: PackConfig,
-    files: BTreeMap<String, Vec<u8>>,
+pub(crate) struct LoadedPack {
+    pub(crate) digest: String,
+    pub(crate) config: PackConfig,
+    pub(crate) manifest: PackManifest,
+    /// Every declared asset, keyed by its path relative to the pack root.
+    pub(crate) files: BTreeMap<String, Vec<u8>>,
 }
 
-fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
+/// Load a subject pack and digest its declared assets. This is the one owner
+/// of a pack's digest: the runner freezes it and the optimizer records it.
+pub(crate) fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
     let options = PackInstallOptions {
         agent_did: owner.to_owned(),
     };
@@ -500,6 +504,7 @@ fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
             Ok(LoadedPack {
                 digest: resolved.digest.clone(),
                 config: resolved.load_config(&options)?,
+                manifest: resolved.manifest.clone(),
                 files,
             })
         }
@@ -537,6 +542,7 @@ fn load_pack(source: &CellSource, owner: &str) -> Result<LoadedPack> {
             Ok(LoadedPack {
                 digest,
                 config,
+                manifest,
                 files,
             })
         }
@@ -777,15 +783,7 @@ fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<()> {
         }
     }
     std::fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
-    for (path, bytes) in &pack.files {
-        let destination = staging.join(path);
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
-        }
-        std::fs::write(&destination, bytes)
-            .with_context(|| format!("writing {}", destination.display()))?;
-    }
+    write_pack_files(&staging, &pack.files)?;
     std::fs::rename(&staging, &cell.pack_dir).with_context(|| {
         format!(
             "renaming {} to {}",
@@ -793,6 +791,20 @@ fn materialize_pack(cell: &FrozenCell, pack: &LoadedPack) -> Result<()> {
             cell.pack_dir.display()
         )
     })
+}
+
+/// Write `files`, keyed by their path relative to `dir`, under `dir`.
+pub(crate) fn write_pack_files(dir: &Path, files: &BTreeMap<String, Vec<u8>>) -> Result<()> {
+    for (path, bytes) in files {
+        let destination = dir.join(path);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
+        }
+        std::fs::write(&destination, bytes)
+            .with_context(|| format!("writing {}", destination.display()))?;
+    }
+    Ok(())
 }
 
 fn sidecar_path(run_dir: &Path) -> PathBuf {
@@ -1046,14 +1058,17 @@ pub(crate) mod tests {
         })
     }
 
+    /// The monitor behavior's system prompt in [`write_fixture_pack`].
+    pub(crate) const FIXTURE_PROMPT: &str = "Watch the mailbox.\n";
+
     /// The shape of `packs/pipeline`: a manifest, a README, the canonical
-    /// config bundle and one behavior sidecar.
-    fn write_fixture_pack(root: &Path, bash_mode: &str) {
+    /// config bundle and one behavior sidecar holding [`FIXTURE_PROMPT`].
+    pub(crate) fn write_fixture_pack(root: &Path, bash_mode: &str) {
         std::fs::create_dir_all(root.join("agent_behaviors/monitor")).unwrap();
         std::fs::write(root.join("README.md"), "# monitor fixture\n").unwrap();
         std::fs::write(
             root.join("agent_behaviors/monitor/system_prompt.md"),
-            "Watch the mailbox.\n",
+            FIXTURE_PROMPT,
         )
         .unwrap();
         let manifest = json!({
