@@ -378,4 +378,4 @@ side branch (held) → I4, I7 · dropped: I1.
 Issues: I2 #1640 · I3 #1641 · I4 #1642 · I5 #1643 · I6 #1644 · I7 #1645 · I8 #1646 · I9 #1647 ·
 I10 #1648 · I11 #1649 · I12 #1650 · I13 #1651 · I14 #1652. I1 dropped.
 PRs: 1 #1653 `feat/guarded-publication` → main · 2 #1654 → #1653 · 3 #1655 → #1654 · 4 #1656 → #1655 ·
-5 #1657 → #1656 · 6 #1658? (see the PR list on GitHub) → #1657. Side branch held, no PR.
+5 #1657 → #1656 · 6 #1658 → #1657. Side branch held, no PR.
