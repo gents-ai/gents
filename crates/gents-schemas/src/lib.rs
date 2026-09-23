@@ -107,6 +107,8 @@ pub const EVAL_TRIAL_NAME: &str = "EvalTrial";
 pub const EVAL_TRIAL: &str = include_str!("../schemas/agent/eval_trial.graphql");
 pub const EVAL_VERDICT_NAME: &str = "EvalVerdict";
 pub const EVAL_VERDICT: &str = include_str!("../schemas/agent/eval_verdict.graphql");
+pub const OPTIMIZATION_JOB_NAME: &str = "OptimizationJob";
+pub const OPTIMIZATION_JOB: &str = include_str!("../schemas/agent/optimization_job.graphql");
 pub const GRAPH_REVISION_NAME: &str = "GraphRevision";
 pub const GRAPH_REVISION: &str = include_str!("../schemas/agent/graph_revision.graphql");
 pub const GRAPH_RUN_NAME: &str = "GraphRun";
@@ -216,6 +218,7 @@ pub const ALL: &[&str] = &[
     EVAL_RUN,
     EVAL_TRIAL,
     EVAL_VERDICT,
+    OPTIMIZATION_JOB,
 ];
 
 /// Collection names matching [`ALL`] order.
@@ -284,6 +287,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     EVAL_RUN_NAME,
     EVAL_TRIAL_NAME,
     EVAL_VERDICT_NAME,
+    OPTIMIZATION_JOB_NAME,
 ];
 
 /// Agent-domain collections the desktop bulk-syncs after pairing.
@@ -328,6 +332,7 @@ pub const LOCAL_AUDIT_COLLECTION_NAMES: &[&str] = &[
     ETH_SUBMISSION_NAME,
     EVAL_DEFINITION_NAME,
     EVAL_VERDICT_NAME,
+    OPTIMIZATION_JOB_NAME,
 ];
 
 /// Local trust state that must never be subscribed or learned from peers.
@@ -617,6 +622,27 @@ mod tests {
                 "{name} is not bulk-synced"
             );
         }
+    }
+
+    #[test]
+    fn the_optimization_job_is_local_audit_and_never_bulk_synced() {
+        assert!(ALL_COLLECTION_NAMES.contains(&OPTIMIZATION_JOB_NAME));
+        assert!(
+            is_local_audit_collection(OPTIMIZATION_JOB_NAME),
+            "the job journal holds candidate prompts"
+        );
+        assert!(
+            !BRANCHABLE_COLLECTION_NAMES.contains(&OPTIMIZATION_JOB_NAME),
+            "a job is the driver's local notebook and is never bulk-synced"
+        );
+        // The guard field the append transaction filters on, and the derived
+        // state that is deliberately not called `lifecycle_state`.
+        assert!(OPTIMIZATION_JOB.contains("journal_len: Int"));
+        assert!(OPTIMIZATION_JOB.contains("state: String @index"));
+        assert!(
+            !OPTIMIZATION_JOB.contains("lifecycle_state"),
+            "a job is not a request and never grows a second request lifecycle"
+        );
     }
 
     fn type_declaration(name: &str) -> &'static str {

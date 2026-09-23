@@ -597,6 +597,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::EVAL_VERDICT,
         "bafyreihws7qjvg343nfbbsdyublcowmk3f5lqieruniy3gze7wykbtsjfy"
     ),
+    baseline_entry!(
+        gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
+        gents_protocol::schemas::OPTIMIZATION_JOB,
+        "bafyreihfbmbtuxfvnlweo224iwnkr4s2kn5zyjmu7o5jfuoqylnxtupgra"
+    ),
 ];
 
 /// Future schema evolution starts here, after the canonical baseline lands.

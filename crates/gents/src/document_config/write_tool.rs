@@ -456,15 +456,12 @@ pub fn is_reserved_builtin_tool_name(name: &str) -> bool {
 /// Collections no datastore tool may read or write. They hold protected eval
 /// material and promotion evidence; an agent in the launching home, including
 /// the live version of a behavior under optimization, must not reach them.
-///
-/// `"OptimizationJob"` is a literal because that collection lands with the
-/// optimization stack; replace it with the schema constant there.
 pub const PROTECTED_DATASTORE_COLLECTIONS: &[&str] = &[
     gents_protocol::schemas::EVAL_DEFINITION_NAME,
     gents_protocol::schemas::EVAL_RUN_NAME,
     gents_protocol::schemas::EVAL_TRIAL_NAME,
     gents_protocol::schemas::EVAL_VERDICT_NAME,
-    "OptimizationJob",
+    gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
 ];
 
 /// Reject a collection a datastore create/query tool may never name.
@@ -519,11 +516,11 @@ mod tests {
             assert!(format!("{error:#}").contains("protected"), "{error:#}");
         }
         for name in [
-            "EvalDefinition",
-            "EvalRun",
-            "EvalTrial",
-            "EvalVerdict",
-            "OptimizationJob",
+            gents_protocol::schemas::EVAL_DEFINITION_NAME,
+            gents_protocol::schemas::EVAL_RUN_NAME,
+            gents_protocol::schemas::EVAL_TRIAL_NAME,
+            gents_protocol::schemas::EVAL_VERDICT_NAME,
+            gents_protocol::schemas::OPTIMIZATION_JOB_NAME,
         ] {
             assert!(
                 super::PROTECTED_DATASTORE_COLLECTIONS.contains(&name),
@@ -531,5 +528,13 @@ mod tests {
             );
         }
         assert!(super::reject_protected_collection_name("Notes").is_ok());
+        // The list is now entirely schema constants: a literal here would drift
+        // from the catalog the moment a collection is renamed.
+        assert!(
+            super::PROTECTED_DATASTORE_COLLECTIONS
+                .iter()
+                .all(|name| gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(name)),
+            "every protected name must be a registered collection"
+        );
     }
 }
