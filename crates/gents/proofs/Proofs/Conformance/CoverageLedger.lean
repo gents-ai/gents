@@ -718,6 +718,11 @@ def caseCoverage : List CoverageEntry :=
       "ApplyReconcileCases"
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
+  , tagged (followUpCoverage
+      "publish_if_cases"
+      "PublishIfCases"
+      "Consumed by config_client::desired_state::tests once the Rust expected-digest precondition lands in the next stacked PR.")
+      "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"

@@ -108,6 +108,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) startup_readiness_cases: Vec<LeanStartupReadinessCase>,
     pub(crate) readiness_publication_cases: Vec<LeanReadinessPublicationCase>,
     pub(crate) apply_reconcile_cases: Vec<LeanApplyReconcileCase>,
+    pub(crate) publish_if_cases: Vec<LeanPublishIfCase>,
     pub(crate) tool_policy_cases: Vec<LeanToolPolicyCase>,
     pub(crate) write_input_cases: Vec<serde_json::Value>,
     pub(crate) invocation_correlation_cases: Vec<serde_json::Value>,
@@ -972,6 +973,8 @@ mod durable_reduction;
 mod event_delivery;
 #[path = "prompt_assembly.rs"]
 mod prompt_assembly;
+#[path = "publish_if.rs"]
+mod publish_if;
 #[path = "reduction_engine.rs"]
 mod reduction_engine;
 #[path = "rendered_capture.rs"]
@@ -1005,6 +1008,7 @@ pub(crate) use descendant_graph::*;
 pub(crate) use durable_reduction::*;
 pub(crate) use event_delivery::*;
 pub(crate) use prompt_assembly::*;
+pub(crate) use publish_if::*;
 pub(crate) use reduction_engine::*;
 pub(crate) use rendered_capture::*;
 pub(crate) use request_execution_lease::*;
@@ -1124,6 +1128,10 @@ pub(crate) fn lean_apply_reconcile_case(name: &str) -> &'static LeanApplyReconci
         .iter()
         .find(|case| case.name == name)
         .unwrap_or_else(|| panic!("Lean apply-reconcile case {name:?} was not emitted"))
+}
+
+pub(crate) fn lean_publish_if_cases() -> &'static [LeanPublishIfCase] {
+    &lean_contract_snapshot().publish_if_cases
 }
 
 pub(crate) fn lean_tool_policy_cases() -> &'static [LeanToolPolicyCase] {
