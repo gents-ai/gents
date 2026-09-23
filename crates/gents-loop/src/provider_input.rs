@@ -344,7 +344,6 @@ fn projected_accounting(
     estimator: &'static str,
 ) -> Result<ProviderInputProjection> {
     remove_output_limits(&mut body);
-    let estimated_input_tokens = estimate_json(&body)?;
 
     let provider_messages =
         field_estimate(&body, &["messages", "system", "input", "instructions"])?;
@@ -362,6 +361,7 @@ fn projected_accounting(
     let messages = documentless_messages;
     let tool_schemas = field_estimate(&body, &["tools", "tool_choice"])?;
     let output_schema = field_estimate(&body, &["response_format", "text"])?;
+    let estimated_input_tokens = estimate_input_body(body)?;
     let classified = messages
         .checked_add(documents)
         .and_then(|total| total.checked_add(tool_schemas))

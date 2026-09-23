@@ -520,7 +520,7 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
 }
 
 #[tokio::test]
-async fn recovery_mutations_are_atomic_and_lost_ack_replay_is_read_only() {
+async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
     use crate::config_client::ConfigApplyTxn;
     use crate::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
 
@@ -529,6 +529,58 @@ async fn recovery_mutations_are_atomic_and_lost_ack_replay_is_read_only() {
     let mut mutation_count = 0;
     for baseline in [true, false] {
         let (node, path, lifecycle, writer) = fixture("recovery-mutation-rollback").await;
+        let request = lifecycle.request();
+        crate::config_client::ConfigAccess::transact_local(
+            &node,
+            None,
+            "test.recovery_session_observation",
+            |txn| {
+                Box::pin(async move {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    crate::session::ensure_session_in_txn(
+                        &txn,
+                        &request.session_id,
+                        &request.agent_did,
+                        &request.behavior_id,
+                        request.requester_did.as_deref(),
+                        None,
+                        None,
+                        &now,
+                    )
+                    .await?;
+                    let session = crate::session::load_agent_session_row_in_txn(
+                        &txn,
+                        &request.agent_did,
+                        &request.session_id,
+                        request.requester_did.as_deref(),
+                    )
+                    .await?
+                    .expect("recovery session");
+                    let facts = crate::session::load_scoped_request_facts_in_txn(
+                        &txn,
+                        &session.session,
+                        false,
+                    )
+                    .await?;
+                    let fact = facts
+                        .iter()
+                        .find(|fact| fact.observed.request_doc_id == request.doc_id)
+                        .expect("recovery request fact");
+                    assert!(
+                        crate::session::advance_session_request_observation_in_txn(
+                            &txn,
+                            fact,
+                            &request.content,
+                            &now,
+                        )
+                        .await?
+                    );
+                    Ok(())
+                })
+            },
+        )
+        .await
+        .unwrap();
         let doc_id = &lifecycle.request().doc_id;
         writer
             .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
@@ -553,6 +605,7 @@ async fn recovery_mutations_are_atomic_and_lost_ack_replay_is_read_only() {
                     AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
                     AgentMessage(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
                     AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{escaped}" }} }}) {{ _docID }}
+                    AgentSession {{ _docID observation }}
                     AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }}
                 }}"#,
                 crate::watcher::AGENT_REQUEST_FIELDS,
@@ -584,8 +637,8 @@ async fn recovery_mutations_are_atomic_and_lost_ack_replay_is_read_only() {
                 ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
             assert_eq!(result.unwrap(), RecoveryResult::Won { published: 1 });
             assert!(
-                count >= 3,
-                "recovery must close, publish and swap generation"
+                count >= 4,
+                "recovery must close, publish, swap generation and refresh the session"
             );
             mutation_count = count;
         } else {
@@ -615,8 +668,15 @@ async fn recovery_mutations_are_atomic_and_lost_ack_replay_is_read_only() {
                 "every recovery mutation must have been faulted"
             );
             let committed = snapshot().await.data;
+            assert_ne!(
+                committed.as_ref().unwrap()["AgentSession"],
+                before.data.as_ref().unwrap()["AgentSession"],
+                "successful recovery must update the session observation"
+            );
             // Discard the first acknowledgement and resend the exact recovery
-            // identity. Replay must confirm the facts without another write.
+            // identity at the caller boundary. This does not inject an
+            // acknowledgement loss inside the transaction owner. The hook
+            // counts transactional mutations, not arbitrary auto-commit writes.
             let (replay, writes) =
                 ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
             assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });

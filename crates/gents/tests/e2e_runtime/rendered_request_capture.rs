@@ -1145,7 +1145,8 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     // The premise: turn 0 starts under budget, so the compaction observed at
     // turn 1 is caused by the tool result and not by a preamble that has since
     // outgrown the window.
-    let turn_zero_tokens = gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap();
+    let turn_zero_tokens =
+        gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap();
     assert!(
         turn_zero_tokens < input_budget,
         "turn 0 must start under the compaction budget; it was {turn_zero_tokens} \

@@ -156,7 +156,7 @@
       "required_cases": [
         "inject failure at every write in closure, header, tool-intent and recovery generation-swap/accounting batches and observe all-or-none facts",
         "lose commit acknowledgement and replay exact identities without duplicate dispatch, continuation, token charge or terminal effects",
-        "Native publication and partial-text recovery tests inject a task-local failure after every successful ConfigApplyTxn mutation and compare persisted facts; successful second-fixture mutation counts pin complete fault coverage. Recovery exact-identity replay performs zero writes. Running-tool recovery accounting and downstream dispatch/continuation/token-charge replay effects remain separate obligations."
+        "Native publication and partial-text recovery tests inject a task-local failure after every successful ConfigApplyTxn mutation and compare persisted facts; successful second-fixture mutation counts pin complete fault coverage. Recovery includes the session observation. Exact-identity caller replay after an acknowledged commit performs zero transactional mutations; this does not simulate acknowledgement loss within the transaction owner or count arbitrary auto-commit writes. Running-tool recovery accounting and downstream dispatch/continuation/token-charge replay effects remain separate obligations."
       ],
       "retired_bindings": []
     },
@@ -195,7 +195,7 @@
         "reject early, stale-deadline and expired renewal attempts",
         "suspend past expiry and resume with the old owner fenced from publication and dispatch",
         "exercise forward and backward native clock changes and document the mapping to Lean nondecreasing abstract time",
-        "Native renewal tests run the actual renewal task while two read stand-ins block, and stop polling past the stored deadline before rejecting renewal and recovering the request. These establish independent timer operation and expired-owner fencing, not actual provider/tool integration, OS suspend, or system-clock discontinuity."
+        "Native renewal tests run the actual renewal task while two read stand-ins block, and stop polling past the stored deadline before rejecting renewal and recovering the request. These establish independent timer operation, renewal rejection and recovery takeover, not stale-owner publication/dispatch rejection, actual provider/tool integration, OS suspend, or system-clock discontinuity."
       ],
       "retired_bindings": ["PersistProgress renewal", "socket traffic renewal", "response progress sequence"]
     },
