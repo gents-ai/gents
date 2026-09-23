@@ -227,6 +227,8 @@ def snapshotJson : String :=
       ++ jsonArray (clientBehaviorReadinessCases.map clientBehaviorReadinessCaseJson) ++ ","
     ++ "\"apply_reconcile_cases\":"
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
+    ++ "\"publish_if_cases\":"
+      ++ ApplyReconcile.ContractCases.publishIfCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
       ++ toolPolicyCasesJson ++ ","
     ++ "\"write_input_cases\":" ++ writeInputCasesJson ++ ","
