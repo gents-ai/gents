@@ -26,8 +26,6 @@ const READ_OWNER_FILES: &[&str] = &[
 /// `config_client`/`graphql` owners; never raise.
 #[rustfmt::skip]
 const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
-    ("apps/gents-desktop/src-tauri/src/bin/bridge_runner/http/routes.rs", 1),
-    ("apps/gents-desktop/src-tauri/src/runner/live_fixture/agent.rs", 1),
     ("crates/gents-migration/src/materialize.rs", 1),
     ("crates/gents/src/backend_registry.rs", 1),
     ("crates/gents/src/background_completion/datetime_fields.rs", 1),
