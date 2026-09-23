@@ -476,12 +476,24 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
             Some(slot_runner),
         ),
     );
+    // This fixture configures one active worker. A slot also owns one
+    // retained continuation worker per supported subagent depth.
+    let slot_worker_count =
+        1 + usize::try_from(crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH).unwrap();
     assert_eq!(
         tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
             .await
             .expect("generation-one slot must start"),
         Some(1)
     );
+    for _ in 1..slot_worker_count {
+        assert_eq!(
+            tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_started_rx.recv())
+                .await
+                .expect("retained slot worker must start"),
+            Some(1)
+        );
+    }
     tokio::time::timeout(STARTUP_DEADLOCK_GUARD, writer.source_exhausted.notified())
         .await
         .expect("startup source must exhaust all persistence attempts");
@@ -491,19 +503,29 @@ async fn startup_source_persistence_exhaustion_fails_closed_and_is_the_exact_run
             .expect("slot runner must observe owned startup shutdown"),
         Some(1)
     );
+    for _ in 1..slot_worker_count {
+        assert_eq!(
+            tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_shutdown_rx.recv())
+                .await
+                .expect("retained slot worker must observe shutdown"),
+            Some(1)
+        );
+    }
     assert!(
         tokio::time::timeout(Duration::from_millis(100), &mut run)
             .await
             .is_err(),
         "run_agent returned while its generation-one slot was still gated"
     );
-    slot_exit_gate.add_permits(1);
-    assert_eq!(
-        tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
-            .await
-            .expect("generation-one slot must report exit"),
-        Some(1)
-    );
+    slot_exit_gate.add_permits(slot_worker_count);
+    for _ in 0..slot_worker_count {
+        assert_eq!(
+            tokio::time::timeout(STARTUP_DEADLOCK_GUARD, slot_exited_rx.recv())
+                .await
+                .expect("generation-one worker must report exit"),
+            Some(1)
+        );
+    }
     let error = tokio::time::timeout(STARTUP_DEADLOCK_GUARD, run)
         .await
         .expect("startup source exhaustion must terminate run_agent boundedly")
@@ -877,19 +899,25 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     wait_for_request_state(node.as_ref(), &queued_request_doc_id, "failed").await;
     for request_doc_id in [&first_request_doc_id, &queued_request_doc_id] {
         let response = node.execute(&format!(
-            r#"{{ AgentResponse(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ status completed_at }} }}"#,
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ request_id lifecycle_state terminalized_at terminal_output }} }}"#,
             crate::graphql::escape_graphql_string(request_doc_id),
         )).await;
         assert!(!response.has_errors(), "{:?}", response.errors);
-        let rows = response.data.as_ref().unwrap()["AgentResponse"]
+        let rows = response.data.as_ref().unwrap()["AgentRequest"]
             .as_array()
             .unwrap();
         assert_eq!(
             rows.len(),
             1,
-            "shutdown must commit one response per owned request"
+            "shutdown must resolve each exact owned request"
         );
-        assert_eq!(rows[0]["status"], "error");
-        assert!(rows[0]["completed_at"].as_str().is_some());
+        assert_eq!(rows[0]["lifecycle_state"], "failed");
+        assert!(rows[0]["terminalized_at"].as_str().is_some());
+        let terminal: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(rows[0].clone()).unwrap();
+        assert_eq!(
+            terminal.terminal_output,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        );
     }
 }

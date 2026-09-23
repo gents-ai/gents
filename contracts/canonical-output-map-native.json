@@ -21,6 +21,7 @@
         "RequestExecutionLease.Action.finalize",
         "RequestExecutionLease.Action.policyRevoke",
         "RequestExecutionLease.Action.recoverExpiredAndFail",
+        "RequestExecutionLease.Action.recoverExpiredTerminal",
         "RequestExecutionLease.Action.recoverDroppedAndFail"
       ],
       "generated_groups": ["request_execution_lease_cases", "request_execution_lease_trace_cases"],
@@ -203,7 +204,10 @@
         "crates/gents/src/config_client/txn.rs",
         "crates/gents/src/defra_write/mod.rs"
       ],
-      "consumer_paths": ["crates/gents/src/identity/tests.rs"],
+      "consumer_paths": [
+        "crates/gents/src/identity/tests.rs",
+        "crates/gents/tests/defradb_genesis_identity.rs"
+      ],
       "native_status": "pending",
       "required_cases": [
         "concurrent identical creates resolve to one immutable identity",
@@ -230,6 +234,8 @@
       ],
       "native_status": "pending",
       "required_cases": [
+        "DEFERRED BY PRODUCT SCOPE: canonical document-policy binding and per-dependency ACP enforcement are future work, not a desktop acceptance gate for this refactor. Existing ownership, enrollment and requester/agent scoping must remain intact; do not claim ACP-backed hydration is implemented.",
+        "NATIVE GAP: canonical hydration collections are installed without DefraDB schema @policy metadata, and the hydration owner does not select a ProjectionAcpBinding policy/resource mapping. Explicit per-dependency denial evidence is therefore unavailable; absence remains unresolved/loading and must not be inferred as denial.",
         "supply real allowed, denied and missing observations for message roots and segment dependencies",
         "follow an authorized fork reference across sessions without relaxing requester or agent scope",
         "prevent foreign and denied dependencies from leaking payload",

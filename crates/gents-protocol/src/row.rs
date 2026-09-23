@@ -299,11 +299,22 @@ pub struct GoalRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolCallRow {
+    /// Physical read-envelope identity. Canonical message blocks bind this,
+    /// never the human-readable tool_call_key or provider-local call ID.
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub request_doc_id: Option<String>,
     pub tool_call_key: String,
     /// Present only for remotely addressed calls; immutable admission input,
     /// not the transcript payload or a general-purpose args fallback.
     #[serde(default)]
     pub delegated_input: Option<crate::output::DelegatedToolInput>,
+    /// Exact parent workspace capability for remote child attenuation.
+    #[serde(default)]
+    pub delegated_workspace: Option<crate::output::DelegatedWorkspace>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -326,6 +337,13 @@ pub struct AgentToolCallRow {
     /// execution. Not a provider call ID; absent for directly requested tools.
     #[serde(default)]
     pub spawned_by_tool_call_doc_id: Option<String>,
+    /// Immutable remote subagent principal selected at accepted publication.
+    #[serde(default)]
+    pub spawn_target_did: Option<String>,
+    /// Immutable behavior selected from the target alias in the same accepted
+    /// publication. Never reconstructed from provider argument bytes.
+    #[serde(default)]
+    pub spawn_behavior_id: Option<String>,
     #[serde(default)]
     pub await_mode: Option<String>,
     #[serde(default)]

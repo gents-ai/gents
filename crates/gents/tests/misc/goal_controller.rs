@@ -17,12 +17,198 @@ use tokio_util::sync::CancellationToken;
 
 use crate::support::mock_subscription::MockUpdateSubscriptionSource;
 use crate::support::{
-    create_request_for_agent_with_signed_fields, create_response_with_content_and_status,
-    set_request_lifecycle_state, test_db, TestDb,
+    create_request_for_agent_with_signed_fields, set_request_lifecycle_state, test_db, TestDb,
 };
 
 const SESSION: &str = "goal-session";
 const RESCAN: Duration = Duration::from_millis(20);
+
+/// Seed an already-committed canonical terminal observation for GoalSource.
+///
+/// This fixture deliberately bypasses provider publication and therefore
+/// proves neither acceptance nor transaction/lease behavior; those guarantees
+/// belong to owned-loop tests. It supplies a physical generation explicitly so
+/// canonical output never relies on an invented fallback during observation.
+async fn publish_canonical_terminal_activity(db: &TestDb, request_doc_id: &str, content: &str) {
+    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let escaped = gents::graphql::escape_graphql_string(request_doc_id);
+    let response = db.node.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 1) {{ agent_did requester_did session_id execution_generation }} }}"#
+    )).await;
+    let row = response
+        .data
+        .as_ref()
+        .and_then(|data| data["AgentRequest"].as_array())
+        .and_then(|rows| rows.first())
+        .expect("canonical request row");
+    let agent_did = row["agent_did"].as_str().expect("request agent");
+    let requester_did = row["requester_did"].as_str();
+    let session_id = row["session_id"].as_str().expect("request session");
+    let generation = match row["execution_generation"].as_str() {
+        Some(generation) => generation.to_owned(),
+        None => {
+            let generation = format!("goal-observation-{request_doc_id}");
+            let escaped_generation = gents::graphql::escape_graphql_string(&generation);
+            let response = db.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_generation: "{escaped_generation}" }}) {{ _docID }} }}"#)).await;
+            assert!(
+                !response.has_errors(),
+                "seed goal observation generation: {:?}",
+                response.errors
+            );
+            generation
+        }
+    };
+    let sequence_response = db.node.execute(&format!(
+        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }} }}, order: {{ sequence: DESC }}, limit: 1) {{ sequence }} }}"#,
+        gents::graphql::escape_graphql_string(session_id), gents::graphql::escape_graphql_string(agent_did)
+    )).await;
+    let sequence = sequence_response
+        .data
+        .as_ref()
+        .and_then(|data| data["AgentMessage"].as_array())
+        .and_then(|rows| rows.first())
+        .and_then(|row| row["sequence"].as_u64())
+        .unwrap_or(0) as u32
+        + 1;
+    let source = OutputSource::ProviderTurn {
+        scope: CaptureScope {
+            kind: CaptureScopeKind::Inference,
+            seq: u64::from(sequence),
+        },
+        turn_index: 0,
+        attempt: 0,
+    };
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: requester_did.map(Into::into),
+        session_id: session_id.into(),
+        request_doc_id: request_doc_id.into(),
+        source,
+        writer: OutputWriter::RequestExecution {
+            execution_generation: generation.clone(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: content.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: content.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![content.len() as u64],
+        }),
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let created = db
+        .node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                .with_variables(output_segment_create_variables(&segment).unwrap()),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(
+        !created.has_errors(),
+        "publish goal output: {:?}",
+        created.errors
+    );
+    let close_doc_id =
+        gents::graphql::single_mutation_document(&created, "create_AgentOutputSegment")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    let message = TranscriptMessage {
+        message_key: gents::session::sequence_message_key(
+            agent_did,
+            session_id,
+            requester_did,
+            sequence,
+        ),
+        session_id: session_id.into(),
+        agent_did: agent_did.into(),
+        requester_did: requester_did.map(Into::into),
+        request_doc_id: Some(request_doc_id.into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: generation,
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role: MessageRole::Assistant,
+        native_id: Some(format!("goal-terminal-{sequence}")),
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id,
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let created = db
+        .node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&message).unwrap()),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(
+        !created.has_errors(),
+        "publish goal message: {:?}",
+        created.errors
+    );
+    let message_doc_id = gents::graphql::single_mutation_document(&created, "create_AgentMessage")
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let terminal = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::to_value(TerminalOutput::Message { message_doc_id }).unwrap(),
+    )
+    .unwrap();
+    let response = db.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ terminal_output: {terminal} }}) {{ _docID }} }}"#)).await;
+    assert!(
+        !response.has_errors(),
+        "select goal terminal output: {:?}",
+        response.errors
+    );
+}
+
+async fn select_no_terminal_message(db: &TestDb, request_doc_id: &str) {
+    let escaped = gents::graphql::escape_graphql_string(request_doc_id);
+    let terminal = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap(),
+    )
+    .unwrap();
+    let response = db.node.execute(&format!(r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ terminal_output: {terminal} }}) {{ _docID }} }}"#)).await;
+    assert!(
+        !response.has_errors(),
+        "select no terminal output: {:?}",
+        response.errors
+    );
+}
 
 fn snapshot(local_did: &str) -> Arc<ActiveRuntimeSnapshot> {
     Arc::new(ActiveRuntimeSnapshot {
@@ -75,15 +261,7 @@ async fn seed_completed_request(db: &TestDb, request_id: &str) -> String {
         None,
     )
     .await;
-    create_response_with_content_and_status(
-        db.node.as_ref(),
-        &format!("response-{request_id}"),
-        request_id,
-        SESSION,
-        "durable progress",
-        "complete",
-    )
-    .await;
+    publish_canonical_terminal_activity(db, &doc_id, "durable progress").await;
     doc_id
 }
 
@@ -103,35 +281,102 @@ async fn seed_failed_request(db: &TestDb, request_id: &str) -> String {
     .await
 }
 
-async fn seed_canonical_terminal_request(
+async fn boot_goal_background_handoff(
     db: &TestDb,
     request_id: &str,
-    lifecycle_state: &str,
-) -> String {
+    entered_path: &std::path::Path,
+    release_path: &std::path::Path,
+) -> (crate::support::accepted_turn::AcceptedTurnRuntime, String) {
     let did = db.node_identity.did();
-    let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
-        request_id,
+    let behavior = "goal-background-handoff";
+    let prompt = "start late background handoff";
+    let prepared = crate::support::accepted_turn::prepare_accepted_turn(
+        db,
+        crate::support::accepted_turn::AcceptedTurnSpec {
+            backend_id: "goal-background-backend",
+            model: "test-model",
+            parent_behavior_id: behavior,
+            configured_behavior_ids: &[behavior],
+            request_id,
+            session_id: SESSION,
+            prompt,
+            accepted_chunks: vec![crate::support::streaming_backend::StreamChunk::tool_call(
+                "goal-background-spawn",
+                "spawn_process",
+                serde_json::json!({
+                    "tool_name": "bash",
+                    "args": {
+                        "command": "sh",
+                        "args": [
+                            "-c",
+                            ": > \"$1\"; while [ ! -f \"$2\" ]; do sleep 0.02; done; printf 'late result required for final wrapup'",
+                            "goal-background-handoff",
+                            entered_path.to_string_lossy(),
+                            release_path.to_string_lossy(),
+                        ]
+                    }
+                })
+                .to_string(),
+            )],
+            child_plans: Vec::new(),
+            valid_until: None,
+            subagent_depth: None,
+            request_setup: None,
+        },
+    )
+    .await;
+    prepared.backend.enable_dynamic_followups(prompt);
+    crate::support::fixtures::configure_behavior_tools(
+        db.node.as_ref(),
         did,
-        did,
-        crate::support::AGENT_NAME,
-        SESSION,
-        "hello",
-        "interactive",
-        "2026-07-15T00:00:00Z",
-        gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did),
-    );
-    gents::sign_agent_request_create(db.node_identity.as_ref(), &mut request)
-        .await
-        .expect("sign canonical terminal request");
-    let response = db.node.execute(&request.graphql_mutation().unwrap()).await;
-    assert!(
-        !response.has_errors(),
-        "create canonical terminal request: {:?}",
-        response.errors
-    );
-    let doc_id = crate::support::exact_request_doc_id(db.node.as_ref(), request_id).await;
-    set_request_lifecycle_state(db.node.as_ref(), &doc_id, lifecycle_state).await;
-    doc_id
+        behavior,
+        None,
+        gents::document_config::Tools {
+            tools_id: format!("{behavior}:tools"),
+            agent_did: did.to_string(),
+            host: Some(gents::document_config::HostTools {
+                bash: Some(gents::document_config::BashTools {
+                    mode: gents::BashMode::ReadOnly,
+                    read_only_commands: Some(vec!["sh".into()]),
+                    background_enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        Vec::new(),
+    )
+    .await;
+    let identity: Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_behavior_documents(
+        db.node.clone(),
+        identity,
+        gents::DocumentRuntimeOptions {
+            tool_ceiling: gents::ToolCeiling::readonly(),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let runtime =
+        crate::support::accepted_turn::boot_prepared_accepted_turn(db, prepared, agent).await;
+    let parent_doc = crate::support::exact_request_doc_id(db.node.as_ref(), request_id).await;
+    for _ in 0..200 {
+        let response = db.node.execute(&format!(r#"{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}, limit: 1) {{ _docID }} }}"#, gents::graphql::escape_graphql_string(&parent_doc))).await;
+        if response
+            .data
+            .as_ref()
+            .and_then(|data| data["AgentToolCall"].as_array())
+            .is_some_and(|rows| !rows.is_empty())
+        {
+            if entered_path.exists() {
+                return (runtime, parent_doc);
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("accepted goal background handoff did not start")
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,15 +482,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
         .expect("parent doc id")
         .to_string();
     set_request_lifecycle_state(db.node.as_ref(), &parent_doc_id, "completed").await;
-    create_response_with_content_and_status(
-        db.node.as_ref(),
-        "response-nested-workspace",
-        "parent-nested-workspace",
-        SESSION,
-        "durable progress",
-        "complete",
-    )
-    .await;
+    publish_canonical_terminal_activity(&db, &parent_doc_id, "durable progress").await;
     set_goal(
         db.node.as_ref(),
         did,
@@ -338,15 +575,7 @@ async fn delimiter_ambiguous_goal_parent_pairs_get_distinct_retry_keys() {
             None,
         )
         .await;
-        create_response_with_content_and_status(
-            db.node.as_ref(),
-            &format!("response-{session}"),
-            parent,
-            session,
-            "progress",
-            "complete",
-        )
-        .await;
+        publish_canonical_terminal_activity(&db, &doc_id, "progress").await;
         assert!(!doc_id.is_empty());
         set_goal(
             db.node.as_ref(),
@@ -1235,7 +1464,18 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
     for terminal in ["failed", "dead"] {
         let db = test_db(&format!("goal-budget-after-{terminal}")).await;
         let parent = "parent-over-budget";
-        let parent_doc = seed_canonical_terminal_request(&db, parent, terminal).await;
+        let barrier = tempfile::tempdir().unwrap();
+        let entered_path = barrier.path().join("entered");
+        let release_path = barrier.path().join("release");
+        let (runtime, parent_doc) =
+            boot_goal_background_handoff(&db, parent, &entered_path, &release_path).await;
+        set_request_lifecycle_state(db.node.as_ref(), &parent_doc, terminal).await;
+        // The accepted spawn has real provider usage before the failed call
+        // below. Retain that usage instead of assuming an empty call history.
+        let prior_usage = session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .await
+            .unwrap();
+        let expected_usage = prior_usage + 105;
         let usage = format!(
             r#"mutation {{ add_InferenceCall(input: {{
                 call_id: "over-budget-failed-call",
@@ -1256,7 +1496,7 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
             session_token_usage(db.node.as_ref(), db.node_identity.did(), SESSION)
                 .await
                 .unwrap(),
-            105,
+            expected_usage,
         );
         set_goal(
             db.node.as_ref(),
@@ -1269,70 +1509,101 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
         .await
         .unwrap();
 
-        let mut background = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
-            db.node.clone(),
-            parent.into(),
-            SESSION.into(),
-            db.node_identity.did().into(),
-            "budget-handoff-tool".into(),
-            1,
-            "bash".into(),
-            "{}".into(),
-            chrono::Utc::now() + chrono::Duration::minutes(5),
-        );
-        background.start_running().await.unwrap();
-        assert!(background
-            .bridge_complete("late result required for final wrapup".into())
-            .await
-            .unwrap());
-        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(
-            &db.node, db.node_identity.did(),
-        ).await.unwrap();
+        std::fs::write(&release_path, b"release").unwrap();
+        for _ in 0..200 {
+            let delivery = db.node.execute(
+                "{ AgentToolCall(filter: { tool_name: { _eq: \"bash\" } }, limit: 1) { completion_notification_delivered_at } }",
+            ).await;
+            if goal_children(&db).await.len() == 1
+                && delivery
+                    .data
+                    .as_ref()
+                    .and_then(|data| data["AgentToolCall"].as_array())
+                    .and_then(|rows| rows.first())
+                    .is_some_and(|row| row["completion_notification_delivered_at"].is_string())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_background_completion_side_effects(&db.node, db.node_identity.did()).await.unwrap();
         let observed = db.node.execute(
-            "{ AgentRequest { _docID request_id } AgentMessage { request_id request_doc_id content } AgentToolCall { completion_notification_delivered_at } }",
+            "{ AgentRequest { _docID request_id lifecycle_state execution_origin caused_by_trigger_kind caused_by_parent_request_id } AgentMessage { _docID agent_did requester_did request_doc_id } AgentToolCall { _docID tool_name lifecycle_state completion_notification_delivered_at } }",
         ).await;
         assert!(!observed.has_errors(), "{:?}", observed.errors);
         let data = observed.data.unwrap();
         assert_eq!(
             data["AgentRequest"].as_array().unwrap().len(),
-            1,
-            "a completion wake would keep the session busy and bypass Goal wrapup"
+            2,
+            "the sole extra request must be the runtime-owned Goal wrapup, never a completion wake; observed={data}"
         );
-        let messages = data["AgentMessage"].as_array().unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["request_id"], parent);
-        assert_eq!(messages[0]["request_doc_id"], parent_doc);
-        assert!(messages[0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("late result required for final wrapup"));
-        assert!(data["AgentToolCall"][0]["completion_notification_delivered_at"].is_string());
-        let before_handoff = load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
-            .await
-            .unwrap()
-            .unwrap();
+        let requests = data["AgentRequest"].as_array().unwrap();
+        let goal_requests = requests
+            .iter()
+            .filter(|row| row["caused_by_trigger_kind"].as_str() == Some("goal"))
+            .collect::<Vec<_>>();
         assert_eq!(
-            before_handoff.parsed_status(),
-            Some(GoalStatus::Active),
-            "notification delivery must leave budget decisions to GoalSource"
+            goal_requests.len(),
+            1,
+            "expected exactly one Goal wrapup: {requests:?}"
         );
-        assert_eq!(before_handoff.continuation_sequence.unwrap_or_default(), 0);
-
-        let (mut source, _snapshot_tx) = source(&db);
-        tokio::time::timeout(Duration::from_secs(2), source.next_fire())
+        assert_eq!(goal_requests[0]["caused_by_parent_request_id"], parent);
+        assert!(
+            requests
+                .iter()
+                .all(|row| row["request_id"] == parent
+                    || row["_docID"] == goal_requests[0]["_docID"]),
+            "only the parent and exact Goal wrapup may exist; no background wake: {requests:?}"
+        );
+        // Goal continuations are themselves scheduled work. Origin alone
+        // cannot distinguish them from an unwanted background-completion wake.
+        assert_eq!(goal_requests[0]["execution_origin"], "scheduled");
+        let messages = data["AgentMessage"].as_array().unwrap();
+        let mut completions = Vec::new();
+        for header in messages {
+            let (_, message) = gents::session::load_canonical_message_from_node(
+                db.node.as_ref(),
+                header["_docID"].as_str().unwrap(),
+                header["agent_did"].as_str().unwrap(),
+                header["requester_did"].as_str(),
+            )
             .await
-            .expect("goal source timed out")
-            .expect("wrapup intent");
-        let goal = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
+            .unwrap();
+            let rendered = format!("{message:?}");
+            if rendered.contains("tool-completion") {
+                completions.push((header, rendered));
+            }
+        }
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0].0["request_doc_id"], parent_doc);
+        let background_rows = data["AgentToolCall"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["tool_name"] == "bash")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            background_rows.len(),
+            1,
+            "the real background execution must have one physical lifecycle row: {}",
+            data["AgentToolCall"]
+        );
+        assert!(
+            background_rows[0]["completion_notification_delivered_at"].is_string(),
+            "the physical background row must durably account its notification delivery: {}",
+            data["AgentToolCall"]
+        );
+        let goal = load_canonical_goal(&db.node, db.node_identity.did(), SESSION)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(
             goal.parsed_status(),
             Some(GoalStatus::BudgetLimited),
-            "{terminal}"
+            "the runtime's sole GoalSource owns the budget decision after {terminal}"
         );
-        assert_eq!(goal.tokens_used, Some(105), "{terminal}");
+        runtime.shutdown().await;
+        assert_eq!(goal.tokens_used, Some(expected_usage), "{terminal}");
         assert_eq!(goal.wrapup_requested, Some(true), "{terminal}");
         assert!(!goal.wrapup_completed.unwrap_or(false), "{terminal}");
         assert_eq!(
@@ -1365,20 +1636,22 @@ async fn exhausted_budget_after_failed_or_dead_request_materializes_wrapup_not_r
 
         // A restart while this wrapup is pending must not publish another child
         // or charge an ordinary infrastructure retry for the failed parent.
-        drop(source);
         let (mut restarted, _restart_tx) = self::source(&db);
+        let restarted_fire =
+            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire()).await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(200), restarted.next_fire())
-                .await
-                .is_err(),
-            "{terminal}: duplicate continuation"
+            restarted_fire.is_err(),
+            "{terminal}: unexpected restart result; existing children={children:?}, emitted={:?}",
+            restarted_fire.as_ref().ok().map(|result| result
+                .as_ref()
+                .map(|intent| &intent.pre_materialized_request_id))
         );
         let current = load_canonical_goal(db.node.as_ref(), db.node_identity.did(), SESSION)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(current.parsed_status(), Some(GoalStatus::BudgetLimited));
-        assert_eq!(current.tokens_used, Some(105));
+        assert_eq!(current.tokens_used, Some(expected_usage));
         assert_eq!(current.continuation_sequence, goal.continuation_sequence);
         assert_eq!(current.infrastructure_retry_count.unwrap_or_default(), 0);
         let persisted = goal_children(&db).await;
@@ -1468,15 +1741,7 @@ async fn token_budget_materializes_one_wrapup_and_never_repeats_it() {
     );
 
     set_request_lifecycle_state(db.node.as_ref(), &children[0].doc_id, "completed").await;
-    create_response_with_content_and_status(
-        db.node.as_ref(),
-        "budget-wrapup-response",
-        &children[0].request_id,
-        SESSION,
-        "final durable wrapup",
-        "complete",
-    )
-    .await;
+    publish_canonical_terminal_activity(&db, &children[0].doc_id, "final durable wrapup").await;
     assert!(
         tokio::time::timeout(Duration::from_millis(200), source.next_fire())
             .await
@@ -2686,15 +2951,16 @@ async fn seed_same_second_canonical_goal_child(
         if paused { "interrupted" } else { "completed" },
     )
     .await;
-    create_response_with_content_and_status(
-        db.node.as_ref(),
-        "same-second-child-response",
-        &child_id,
-        SESSION,
-        "canonical child produced durable activity",
-        if paused { "interrupted" } else { "complete" },
-    )
-    .await;
+    if paused {
+        select_no_terminal_message(db, &child_doc).await;
+    } else {
+        publish_canonical_terminal_activity(
+            db,
+            &child_doc,
+            "canonical child produced durable activity",
+        )
+        .await;
+    }
     seed_goal_fields(
         db.node.as_ref(),
         &goal,

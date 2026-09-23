@@ -7,7 +7,7 @@ const PROJECTION_ACP_RUNTIME_COLLECTIONS: &[&str] = &[
     "AgentMessage",
     "AgentToolCall",
     "Goal",
-    "AgentResponse",
+    "AgentOutputSegment",
     "InferenceCall",
     "CompactionEntry",
     "AgentSession",

@@ -85,6 +85,7 @@ pub(super) fn project(
     row: &ToolCallRow,
     id: &str,
     result: &str,
+    args_json: &str,
 ) -> Option<(BackgroundTaskUpdate, Option<BackgroundTaskUpdate>)> {
     if row.await_mode.as_deref() != Some("background")
         || !matches!(
@@ -94,7 +95,7 @@ pub(super) fn project(
     {
         return None;
     }
-    let args: Value = serde_json::from_str(row.args.as_deref().unwrap_or("")).ok()?;
+    let args: Value = serde_json::from_str(args_json).ok()?;
     let command = args["command"].as_str()?;
     // Without a durable start, retain the standard ACP lifecycle instead
     // of creating a native task that cannot later be completed faithfully.
@@ -181,7 +182,8 @@ mod tests {
     fn native_background_lifecycle_and_output_are_durable() {
         let row = row("completed");
         let result = "gents_exec: {\"exit_code\":0}\nstdout:\nhello\nstderr:\n(empty)";
-        let (started, done) = project(&row, "call", result).unwrap();
+        let (started, done) =
+            project(&row, "call", result, r#"{"command":"false","cwd":"/tmp"}"#).unwrap();
         assert_eq!(started.payload["task_id"], "call");
         let done = done.unwrap();
         assert_eq!(done.payload["task_snapshot"]["output"], "hello");
@@ -196,9 +198,21 @@ mod tests {
     fn foreground_is_not_a_background_task_and_failure_is_not_green() {
         let mut foreground = row("completed");
         foreground.await_mode = None;
-        assert!(project(&foreground, "call", "").is_none());
+        assert!(project(
+            &foreground,
+            "call",
+            "",
+            r#"{"command":"false","cwd":"/tmp"}"#
+        )
+        .is_none());
         for state in ["failed", "cancelled"] {
-            let (_, done) = project(&row(state), "call", r#"{"exit_code":0}"#).unwrap();
+            let (_, done) = project(
+                &row(state),
+                "call",
+                r#"{"exit_code":0}"#,
+                r#"{"command":"false","cwd":"/tmp"}"#,
+            )
+            .unwrap();
             let snapshot = &done.unwrap().payload["task_snapshot"];
             assert!(snapshot["exit_code"].is_null());
             assert!(snapshot["signal"].as_str().is_some());
@@ -209,9 +223,21 @@ mod tests {
     fn missing_end_completes_but_missing_start_stays_on_acp() {
         let mut missing = row("completed");
         missing.completed_at = None;
-        let (_, done) = project(&missing, "call", "done").unwrap();
+        let (_, done) = project(
+            &missing,
+            "call",
+            "done",
+            r#"{"command":"false","cwd":"/tmp"}"#,
+        )
+        .unwrap();
         assert!(done.unwrap().payload["task_snapshot"]["end_time"].is_null());
         missing.started_at = None;
-        assert!(project(&missing, "call", "done").is_none());
+        assert!(project(
+            &missing,
+            "call",
+            "done",
+            r#"{"command":"false","cwd":"/tmp"}"#
+        )
+        .is_none());
     }
 }

@@ -113,7 +113,7 @@ fn subagent_host_template_filters_return_projection_to_requester() {
         desired.replicator_collections,
         set(&[
             "AgentRequest",
-            "AgentResponse",
+            "AgentOutputSegment",
             "AgentMessage",
             "AgentToolCall"
         ])

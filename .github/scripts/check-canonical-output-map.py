@@ -208,8 +208,13 @@ def check_execution_export(payload):
         if case.get("kind") == "trace_summary":
             if case.get("completed") is not True:
                 raise ValueError(f"{name}: execution summary witness did not succeed")
-        elif case.get("kind") == "native_execution":
-            native_count += 1
+        elif case.get("kind") in {"native_execution", "model_execution"}:
+            if case["kind"] == "native_execution":
+                native_count += 1
+                if case.get("native_gap") is not None:
+                    raise ValueError(f"{name}: native script cannot declare a model-only gap")
+            elif not isinstance(case.get("native_gap"), str) or not case["native_gap"].strip():
+                raise ValueError(f"{name}: model-only script needs a precise native gap")
             operations, observations = case.get("operations"), case.get("expected_observations")
             if (not isinstance(operations, list) or not operations or
                     not isinstance(observations, list) or len(operations) != len(observations)):

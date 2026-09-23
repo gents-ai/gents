@@ -142,6 +142,50 @@ theorem recoverExpiredBatchCore_preserves_request_identity
           transcript := prepared.transcript }
         expected true
 
+theorem recoverExpiredTerminalCore_preserves_request_identity
+    (world after : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (items : List RecoveryItem)
+    (h : recoverExpiredTerminalCore world expected fresh outcome selection items = .ok after) :
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  unfold recoverExpiredTerminalCore at h
+  split at h
+  · cases h; exact ⟨rfl, rfl⟩
+  · split at h
+    · contradiction
+    · cases hp : prepareRecoveryBatch world expected fresh items with
+      | error error => simp [hp] at h
+      | ok prepared =>
+          simp only [hp] at h
+          split at h
+          · contradiction
+          · cases hl : RequestExecutionLease.step?
+                (preparedRecoveryWorld world prepared expected).lease
+                (.recoverExpiredTerminal .mutationWriteGate expected fresh outcome) with
+            | none => simp [hl] at h
+            | some lease =>
+                simp only [hl] at h
+                cases h
+                simpa only [preparedRecoveryWorld] using
+                  accountOwnedTools_preserves_request_identity
+                    { world with
+                      segments := prepared.segments
+                      messages := prepared.messages
+                      transcript := prepared.transcript }
+                    expected true
+
+theorem closePartialAndPublishCore_preserves_request_identity
+    (world after : World) (generation : Generation) (item : RecoveryItem)
+    (h : closePartialAndPublishCore world generation item = .ok after) :
+    after.requestId = world.requestId ∧ after.sessionId = world.sessionId := by
+  unfold closePartialAndPublishCore at h
+  split at h
+  · cases h; exact ⟨rfl, rfl⟩
+  · split at h <;> try contradiction
+    split at h <;> try contradiction
+    cases h
+    exact ⟨rfl, rfl⟩
+
 theorem terminalizeCore_preserves_request_identity
     (world after : World) (generation : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
@@ -222,6 +266,49 @@ theorem recoverExpiredBatch_nextSeq_monotone
       · cases hcore
         simp only [preparedRecoveryWorld, accountOwnedTools_preserves_nextSeq]
         exact prepareRecoveryBatch_nextSeq_monotone world expected fresh items prepared hprepare
+
+theorem recoverExpiredTerminal_nextSeq_monotone
+    (world after : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (items : List RecoveryItem)
+    (h : recoverExpiredTerminal world expected fresh outcome selection items = .ok after) :
+    world.transcript.nextSeq ≤ after.transcript.nextSeq := by
+  have hcore := checked_core_success _ _ _ h
+  unfold recoverExpiredTerminalCore at hcore
+  split at hcore
+  · cases hcore; exact Nat.le_refl _
+  · split at hcore
+    · contradiction
+    · cases hp : prepareRecoveryBatch world expected fresh items with
+      | error error => simp [hp] at hcore
+      | ok prepared =>
+          simp only [hp] at hcore
+          split at hcore
+          · contradiction
+          · cases hl : RequestExecutionLease.step?
+                (preparedRecoveryWorld world prepared expected).lease
+                (.recoverExpiredTerminal .mutationWriteGate expected fresh outcome) with
+            | none => simp [hl] at hcore
+            | some lease =>
+                simp only [hl] at hcore
+                cases hcore
+                simp only [preparedRecoveryWorld, accountOwnedTools_preserves_nextSeq]
+                exact prepareRecoveryBatch_nextSeq_monotone world expected fresh items prepared hp
+
+theorem closePartialAndPublish_nextSeq_monotone
+    (world after : World) (generation : Generation) (item : RecoveryItem)
+    (h : closePartialAndPublish world generation item = .ok after) :
+    world.transcript.nextSeq ≤ after.transcript.nextSeq := by
+  have hcore := checked_core_success _ _ _ h
+  unfold closePartialAndPublishCore at hcore
+  split at hcore
+  · cases hcore; exact Nat.le_refl _
+  · split at hcore <;> try contradiction
+    rename_i prepared hprepare
+    split at hcore <;> try contradiction
+    cases hcore
+    exact prepareRecoveryItems_nextSeq_monotone world generation generation [item]
+      ⟨world.segments, world.messages, world.transcript⟩ prepared hprepare
 
 theorem terminalize_preserves_nextSeq
     (world after : World) (generation : Generation)

@@ -27,6 +27,12 @@ pub(super) struct ScriptedModel {
     /// When set, every turn's stream yields its scripted chunks then hangs
     /// (never reaches EOF), simulating a provider that stalls mid-turn.
     stall_after_chunks: bool,
+    /// When true (the default), every request is claimed through
+    /// `capture_scripted_provider_request` like the real capturing transport.
+    /// When false, the model answers without ever claiming the pending
+    /// capture — a stand-in for a mis-wired provider stack that lacks
+    /// `RenderedRequestCapturingHttpClient`.
+    capture_requests: bool,
 }
 
 impl ScriptedModel {
@@ -46,7 +52,16 @@ impl ScriptedModel {
             seen_max_tokens: Arc::new(Mutex::new(Vec::new())),
             seen_requests: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
+            capture_requests: true,
         }
+    }
+
+    /// Model a mis-wired transport: the provider streams without claiming the
+    /// pending rendered-request capture. Test-only opt-out; the default path
+    /// keeps every normal test on the actual capture boundary.
+    pub(super) fn without_capture(mut self) -> Self {
+        self.capture_requests = false;
+        self
     }
 
     /// A single turn that emits `chunks` then stalls forever instead of ending.
@@ -96,6 +111,9 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        if self.capture_requests {
+            crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
+        }
         self.seen_requests.lock().await.push(request.clone());
         self.seen_histories.lock().await.push(
             request
@@ -206,6 +224,7 @@ impl CompletionModel for UsageScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
         self.seen_dispatches.lock().await.push((
             u64::try_from(
                 completion_request_input_components(
@@ -414,6 +433,14 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
     }
 }
 
+pub(super) fn owned_config(max_turns: usize) -> LoopConfig {
+    let mut config = config(max_turns);
+    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+        crate::rendered_request::scope::CaptureScopeKind::Inference,
+    ));
+    config
+}
+
 #[derive(Debug)]
 pub(super) struct AttemptEvent {
     pub(super) turn: usize,
@@ -491,6 +518,161 @@ where
     collected
 }
 
+/// Drive the generator through the same acceptance boundary as the owned
+/// daemon loop. Each yielded operation is durably folded before the generator
+/// is polled again, so `ProviderTurnReady` grants dispatch authority before a
+/// following tool call can run.
+pub(super) async fn collect_owned_scripted_stream<S, R>(
+    stream: S,
+    hook: &DefraSessionHook,
+    writer: &crate::streaming::DefraStreamWriter,
+    lifecycle: &mut crate::lifecycle::RequestLifecycle,
+) -> CollectedScriptedStream
+where
+    S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
+{
+    let context = crate::rendered_request::RenderedRequestContext::for_request(
+        lifecycle.request(),
+        "test-model".into(),
+    );
+    let scope = crate::rendered_request::scope::test_scope(
+        context,
+        Arc::new(|_| Box::pin(async { Ok(()) })),
+    );
+    crate::rendered_request::scope::scope_request(scope, async move {
+        futures::pin_mut!(stream);
+        let doc_id = lifecycle.request().doc_id.clone();
+        let mut processor =
+            crate::agent::stream_processor::StreamProcessor::new(hook, writer, lifecycle, &doc_id);
+        let mut collected = CollectedScriptedStream::default();
+        while let Some(item) = stream.next().await {
+            match &item {
+                Ok(LoopStreamItem::AttemptFailed {
+                    turn,
+                    attempt,
+                    will_retry,
+                    backoff,
+                    ..
+                }) => collected.attempts.push(AttemptEvent {
+                    turn: *turn,
+                    attempt: *attempt,
+                    will_retry: *will_retry,
+                    backoff: *backoff,
+                }),
+                Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }) => {
+                    collected.retractions.push((*turn, *attempt));
+                }
+                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
+                    StreamedAssistantContent::Text(text),
+                ))) => collected.text_chunks.push(text.text.clone()),
+                Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
+                    StreamedUserContent::ToolResult { tool_result, .. },
+                ))) => collected.tool_results.push(
+                    tool_result_text(&crate::llm::rig_compat::from_rig_tool_result_content(
+                        &tool_result.content.first(),
+                    ))
+                    .to_string(),
+                ),
+                Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(response))) => {
+                    collected.final_text = Some(response.response().to_string());
+                }
+                Err(error) => collected.error = Some(error.to_string()),
+                _ => {}
+            }
+            if let Err(error) = processor.process_item(item).await {
+                collected.error = Some(error.to_string());
+                break;
+            }
+        }
+        collected
+    })
+    .await
+}
+
+pub(super) async fn owned_test_hook() -> (
+    Arc<defra_node::EmbeddedNode>,
+    DefraSessionHook,
+    crate::streaming::DefraStreamWriter,
+    crate::lifecycle::RequestLifecycle,
+) {
+    let data_path = std::env::temp_dir().join(format!("agent-owned-loop-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    crate::session::create_session_with_behavior_id(
+        &node,
+        &session_id,
+        "general",
+        "did:test:test",
+        "general",
+    )
+    .await
+    .unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    let response = node
+        .execute(&format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&request_id),
+            crate::graphql::escape_graphql_string(&session_id),
+            crate::graphql::escape_graphql_string(&request_id),
+            now,
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "create request: {:?}",
+        response.errors
+    );
+    let loaded = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&request_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&loaded, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let hook = DefraSessionHook::resume_with_identity_policy(
+        node.clone(),
+        &session_id,
+        "general",
+        "did:test:test",
+        None,
+        FailurePolicy::default(),
+    )
+    .await
+    .unwrap();
+    hook.set_active_request_lineage(Some(request_id), None)
+        .await
+        .unwrap();
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        "did:test:test",
+        row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    let writer =
+        crate::streaming::DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    (node, hook, writer, lifecycle)
+}
+
 pub(super) fn transient_provider_error(label: &str) -> CompletionError {
     CompletionError::ProviderError(format!("status code 503: {label}"))
 }
@@ -560,72 +742,4 @@ pub(super) fn json_value_has_control_char(value: &serde_json::Value) -> bool {
         serde_json::Value::Object(map) => map.values().any(json_value_has_control_char),
         _ => false,
     }
-}
-
-pub(super) async fn test_hook() -> (Arc<defra_node::EmbeddedNode>, DefraSessionHook) {
-    let data_path =
-        std::env::temp_dir().join(format!("agent-loop-stream-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Utc::now();
-    let deadline_at = now + chrono::Duration::seconds(60);
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentSession(input: {{
-                session_id: "{session_id}",
-                agent_did: "did:test:test",
-                behavior_id: "general",
-                created_at: "{now}"
-            }}) {{ _docID }}
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "did:test:test",
-                behavior_id: "general",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "loop test request",
-                lifecycle_state: "processing",
-                backend_id: "",
-                execution_origin: "user",
-                created_at: "{now}",
-                valid_until: "{deadline_at}",
-                retry_count: 0,
-                max_retries: {max_retries}
-            }}) {{ _docID }}
-        }}"#,
-        now = now.to_rfc3339(),
-        deadline_at = deadline_at.to_rfc3339(),
-        max_retries = crate::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create loop test request context failed: {:?}",
-        response.errors
-    );
-    let hook = DefraSessionHook::resume_with_identity_policy(
-        node.clone(),
-        &session_id,
-        "general",
-        "did:test:test",
-        None,
-        FailurePolicy::default(),
-    )
-    .await
-    .expect("resume loop test session");
-    hook.set_active_request_lineage(Some(request_id), None)
-        .await
-        .expect("bind persisted loop test request");
-    hook.set_request_deadline_at(Some(deadline_at)).await;
-    (node, hook)
 }

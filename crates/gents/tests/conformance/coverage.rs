@@ -1,5 +1,7 @@
 use super::*;
 use crate::lean_vocab_test::{
+    lean_canonical_execution_gate_cases, lean_canonical_output_projection_cases,
+    lean_canonical_payload_presentation_cases, lean_canonical_worker_capacity_cases,
     lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_submission_cases,
     lean_goal_transition_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
@@ -177,11 +179,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().command_sandbox_cases.len(), 6);
     assert_eq!(lean_contract_snapshot().command_env_cases.len(), 14);
     assert_eq!(lean_queue_deadline_cases().len(), 5);
-    assert_eq!(lean_recovery_sweep_cases().len(), 34);
+    assert_eq!(lean_recovery_sweep_cases().len(), 33);
     // The synthetic RecoveryEquivalence contract was deleted from Lean; the
     // recovery sweep cases above are the actual recovery guarantee.
-    assert_eq!(lean_transcript_cases().len(), 7);
-    assert_eq!(lean_response_interrupt_flow_cases().len(), 1);
+    assert_eq!(lean_transcript_cases().len(), 11);
     assert_eq!(lean_subagent_delegation_graph_cases().len(), 3);
     assert_eq!(lean_composed_invariant_witnesses().len(), 4);
     assert_eq!(lean_cancel_propagation_cases().len(), 1);
@@ -241,7 +242,6 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.inference-slots.running-row-derived",
         "boundary.fleet-slot-accounting.derived-view",
         "boundary.command-policy.host-execution-assumptions",
-        "boundary.compaction.safe-to-reduce-session-scope",
         "boundary.compaction.unique-call-ids-checked",
         "boundary.trigger.dispatch-source-delivery",
         "boundary.persistence.abstract-lifecycle",
@@ -253,7 +253,6 @@ fn lean_boundary_metadata_is_typed_and_reviewable() {
         "boundary.coverage-ledger.review-discipline",
         "boundary.event-delivery.fair-substrate",
         "boundary.event-delivery.rescan-doc-cap",
-        "boundary.streaming-response.idle-timeout-deadline",
         "boundary.prompt-assembly.provider-input-sanitization",
         "boundary.model.nat-typed-ids-time",
         "boundary.p2p-backpressure.obligation-model",
@@ -905,6 +904,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "CanonicalExecutionGateCases".to_string(),
         ));
     }
+    if !lean_canonical_worker_capacity_cases().is_empty() {
+        emitted.insert((
+            "canonical_worker_capacity_cases".to_string(),
+            "CanonicalWorkerCapacityCases".to_string(),
+        ));
+    }
     if !lean_canonical_payload_presentation_cases().is_empty() {
         emitted.insert((
             "canonical_payload_presentation_cases".to_string(),
@@ -921,6 +926,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "compaction_cursor_cases".to_string(),
             "CompactionCursorCases".to_string(),
+        ));
+    }
+    if !snapshot.current_input_cases.is_empty() {
+        emitted.insert((
+            "current_input_cases".to_string(),
+            "CurrentInputCases".to_string(),
         ));
     }
     if !snapshot.prompt_assembly_sanitize_cases.is_empty() {
@@ -1515,3 +1526,4 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         unreferenced_consumers
     );
 }
+use crate::lean_vocab_test::lean_composed_invariant_witnesses;

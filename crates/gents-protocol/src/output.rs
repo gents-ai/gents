@@ -39,6 +39,7 @@ use crate::rendered_request::CaptureScope;
 
 /// Strict reconstruction of an unsealed source for recovery/closure planning.
 pub mod extent;
+pub mod live;
 /// Shared immutable fork-origin validation for runtime and replica readers.
 pub mod origin;
 /// Shared closed-source reconstruction; header and live-view owners build on it.
@@ -329,6 +330,24 @@ pub struct DelegatedToolInput {
     pub source: PayloadRef,
     /// Exact emitted JSON argument text; no normalization or reconstructed JSON.
     pub arguments: String,
+    /// Immutable depth of the coordinator request that accepted this remote
+    /// spawn. The host derives the child depth as `parent_subagent_depth + 1`
+    /// without receiving the private parent request document.
+    pub parent_subagent_depth: u32,
+}
+
+/// Authenticated parent workspace capability copied into an accepted remote
+/// subagent tool row. The receiver may only materialize a child with the same
+/// identity/owner/seal and no greater authority. This is provenance under the
+/// existing document ACP, not a workspace grant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedWorkspace {
+    pub workspace_id: String,
+    pub workspace_owner_agent_did: String,
+    pub workspace_authority: String,
+    #[serde(default)]
+    pub workspace_seal_hash: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -458,6 +477,11 @@ pub struct TranscriptMessage {
     pub role: MessageRole,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "crate::row::deserialize_null_default",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub blocks: Vec<MessageBlock>,
     pub created_at: String,
 }

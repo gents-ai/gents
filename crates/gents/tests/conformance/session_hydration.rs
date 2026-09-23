@@ -6,13 +6,13 @@ use gents::agent::p2p_reconcile::session_hydration::{
     apply_hydration_delivery, begin_hydration_request, can_retry_hydration, decide_hydration,
     observe_hydration_progress, AppliedPairingRoute, ClientHydrationPhase, ClientHydrationProgress,
     HydrationApplyOutcome, HydrationCatalog, HydrationDeliveryResult, HydrationDocument,
-    HydrationRequest, HydrationTerminalWriteResult, HydrationVerdict, SessionHydrationDocumentKey,
-    SessionOwner, VerifiedActiveMembership,
+    HydrationRequest, HydrationTerminalWriteResult, HydrationVerdict, SessionHydrationCollection,
+    SessionHydrationDocumentKey, SessionOwner, VerifiedActiveMembership,
 };
 
 use crate::lean_vocab_test::{
-    lean_session_hydration_apply_cases, lean_session_hydration_decision_cases,
-    lean_session_hydration_durable_cases, lean_session_hydration_progress_cases,
+    lean_session_hydration_apply_cases, lean_session_hydration_durable_cases,
+    lean_session_hydration_progress_cases,
 };
 
 fn request() -> HydrationRequest {
@@ -29,7 +29,7 @@ fn hydration_keys(count: usize, exact: bool) -> BTreeSet<SessionHydrationDocumen
     let stem = if exact { "doc-" } else { "foreign-" };
     (0..count)
         .map(|index| SessionHydrationDocumentKey {
-            collection: "AgentMessage".into(),
+            collection: SessionHydrationCollection::AgentMessage,
             doc_id: format!("{stem}{index}"),
         })
         .collect()
@@ -79,25 +79,15 @@ fn generated_session_hydration_durable_cases_match_storage_projection() {
     }
 }
 
-fn document(id: &str, requester: &str, agent: &str, session: &str) -> HydrationDocument {
-    HydrationDocument {
-        collection: "AgentMessage".into(),
-        doc_id: id.into(),
-        requester_did: requester.into(),
-        agent_did: agent.into(),
-        session_id: session.into(),
-    }
-}
-
-fn document_in_collection(
-    collection: &str,
+fn document(
+    collection: SessionHydrationCollection,
     id: &str,
     requester: &str,
     agent: &str,
     session: &str,
 ) -> HydrationDocument {
     HydrationDocument {
-        collection: collection.into(),
+        collection,
         doc_id: id.into(),
         requester_did: requester.into(),
         agent_did: agent.into(),
@@ -122,87 +112,40 @@ fn admitted_catalog() -> HydrationCatalog {
             requester_did: "did:key:requester-1".into(),
             agent_did: "did:key:agent-1".into(),
         }]),
+        // Cross-session dependencies are never inferred from an origin scan:
+        // the base catalog grants no reference closure, so only the request's
+        // own session documents are admitted.
+        authorized_reference_closure: BTreeSet::new(),
         documents: BTreeSet::from([
             document(
+                SessionHydrationCollection::AgentMessage,
                 "owned",
                 "did:key:requester-1",
                 "did:key:agent-1",
                 "session-1",
             ),
             document(
+                SessionHydrationCollection::AgentMessage,
                 "foreign-requester",
                 "did:key:requester-2",
                 "did:key:agent-1",
                 "session-1",
             ),
             document(
+                SessionHydrationCollection::AgentMessage,
                 "foreign-session",
                 "did:key:requester-1",
                 "did:key:agent-1",
                 "session-2",
             ),
-            document_in_collection(
-                "AgentSession",
-                "wrong-collection",
+            document(
+                SessionHydrationCollection::AgentMessage,
+                "foreign-agent",
                 "did:key:requester-1",
-                "did:key:agent-1",
+                "did:key:agent-2",
                 "session-1",
             ),
         ]),
-    }
-}
-
-#[test]
-fn generated_session_hydration_cases_match_decision_core() {
-    let req = request();
-    let base = admitted_catalog();
-    let cases = lean_session_hydration_decision_cases();
-    assert_eq!(cases.len(), 7);
-
-    for case in cases {
-        let mut catalog = base.clone();
-        if !case.paired {
-            catalog.applied_pairing_routes.clear();
-        } else if !case.pairing_requester_matches || !case.pairing_agent_matches {
-            catalog.applied_pairing_routes = BTreeSet::from([AppliedPairingRoute {
-                peer_id: req.peer_id.clone(),
-                requester_did: if case.pairing_requester_matches {
-                    req.requester_did.clone()
-                } else {
-                    "did:key:requester-2".into()
-                },
-                agent_did: if case.pairing_agent_matches {
-                    req.agent_did.clone()
-                } else {
-                    "did:key:agent-2".into()
-                },
-            }]);
-        }
-        if !case.active_member {
-            catalog.verified_active_memberships.clear();
-        } else if !case.membership_network_matches {
-            catalog.verified_active_memberships = BTreeSet::from([VerifiedActiveMembership {
-                network_id: "network-2".into(),
-                member_did: req.requester_did.clone(),
-            }]);
-        }
-        if !case.owns_session {
-            catalog.sessions.clear();
-        }
-        match decide_hydration(&req, &catalog) {
-            HydrationVerdict::Admit(documents) => {
-                assert!(case.expected_admit, "{} unexpectedly admitted", case.name);
-                assert_eq!(
-                    documents.len(),
-                    case.expected_selected_count,
-                    "{}",
-                    case.name
-                );
-            }
-            HydrationVerdict::Reject(_) => {
-                assert!(!case.expected_admit, "{} unexpectedly rejected", case.name);
-            }
-        }
     }
 }
 
@@ -211,11 +154,34 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
     let cases = lean_session_hydration_apply_cases();
     assert_eq!(cases.len(), 6);
     for case in cases {
-        let mut catalog = admitted_catalog();
-        if !case.admitted {
-            catalog.applied_pairing_routes.clear();
-        }
-        let verdict = decide_hydration(&request(), &catalog);
+        // This group starts at the delivery owner's verdict boundary. Its
+        // exact input set comes from the modeled admission/closure owner;
+        // closure-to-admission itself is exercised by the native closure tests.
+        let verdict = match (case.admitted, &case.input_documents) {
+            (true, Some(documents)) => HydrationVerdict::Admit(
+                documents
+                    .iter()
+                    .map(|key| {
+                        let collection = match key.collection.as_str() {
+                            "AgentRequest" => SessionHydrationCollection::AgentRequest,
+                            "AgentMessage" => SessionHydrationCollection::AgentMessage,
+                            "AgentToolCall" => SessionHydrationCollection::AgentToolCall,
+                            "AgentOutputSegment" => SessionHydrationCollection::AgentOutputSegment,
+                            "CompactionEntry" => SessionHydrationCollection::CompactionEntry,
+                            other => panic!("unknown modeled hydration collection {other}"),
+                        };
+                        document(
+                            collection,
+                            &key.id.to_string(),
+                            &case.request.requester,
+                            &case.request.agent,
+                            &case.request.session,
+                        )
+                    })
+                    .collect(),
+            ),
+            _ => HydrationVerdict::Reject("modeled admission rejected"),
+        };
         let delivery = if case.delivery_confirmed {
             HydrationDeliveryResult::Confirmed
         } else {
@@ -227,7 +193,30 @@ fn generated_session_hydration_apply_cases_match_terminal_delivery_core() {
             "not_attempted" => HydrationTerminalWriteResult::NotAttempted,
             value => panic!("unknown terminal write result {value:?}"),
         };
+        let input_documents = match &verdict {
+            HydrationVerdict::Admit(documents) => documents.clone(),
+            HydrationVerdict::Reject(_) => BTreeSet::new(),
+        };
         let outcome = apply_hydration_delivery(verdict, delivery, terminal_write);
+        let attempted = match &outcome {
+            HydrationApplyOutcome::Served(documents) => documents,
+            HydrationApplyOutcome::Rejected {
+                attempted_documents,
+                ..
+            }
+            | HydrationApplyOutcome::PendingAfterTerminalWriteFailure {
+                attempted_documents,
+                ..
+            }
+            | HydrationApplyOutcome::PendingAfterIndeterminateDelivery {
+                attempted_documents,
+            } => attempted_documents,
+        };
+        assert_eq!(
+            attempted, &input_documents,
+            "{} exact delivery input",
+            case.name
+        );
         let (served, rejected, attempted_count, confirmed_count) = match outcome {
             HydrationApplyOutcome::Served(documents) => {
                 (true, false, documents.len(), documents.len())
@@ -274,6 +263,7 @@ fn admitted_selection_is_exactly_requester_agent_session_scoped() {
     assert_eq!(
         documents,
         BTreeSet::from([document(
+            SessionHydrationCollection::AgentMessage,
             "owned",
             "did:key:requester-1",
             "did:key:agent-1",
@@ -385,18 +375,18 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     // Lean document references are interned (collection, _docID) pairs. Matching
     // an ID from another collection must not satisfy the served manifest.
     let message = SessionHydrationDocumentKey {
-        collection: "AgentMessage".into(),
+        collection: SessionHydrationCollection::AgentMessage,
         doc_id: "shared-id".into(),
     };
-    let response = SessionHydrationDocumentKey {
-        collection: "AgentResponse".into(),
+    let segment = SessionHydrationDocumentKey {
+        collection: SessionHydrationCollection::AgentOutputSegment,
         doc_id: "shared-id".into(),
     };
     let served = BTreeSet::from([message.clone()]);
     let incomplete = project_durable_hydration_progress(
         "session",
         "agent",
-        BTreeSet::from([response.clone()]),
+        BTreeSet::from([segment.clone()]),
         ClientHydrationRequestState::Served(served.clone()),
     );
     assert_eq!(incomplete.phase, ClientHydrationPhase::Serving);
@@ -404,10 +394,27 @@ fn hydration_coverage_distinguishes_same_doc_id_in_different_collections() {
     let complete = project_durable_hydration_progress(
         "session",
         "agent",
-        BTreeSet::from([response, message]),
+        BTreeSet::from([segment, message]),
         ClientHydrationRequestState::Served(served),
     );
     assert_eq!(complete.phase, ClientHydrationPhase::Complete);
     assert_eq!(complete.covered_count, 1);
     assert_eq!(complete.merged_count, 2);
+}
+
+/// The hydration manifest has a closed collection vocabulary. Neither a session
+/// control document nor the retired response collection is a transcript dependency.
+#[test]
+fn retired_collection_names_are_rejected_by_serde() {
+    use gents_protocol::session_hydration::SessionHydrationDocumentKey as ProtocolKey;
+
+    for retired in ["AgentSession", "AgentResponse"] {
+        let raw = format!(r#"{{"collection": "{retired}", "doc_id": "doc-1"}}"#);
+        let error = serde_json::from_str::<ProtocolKey>(&raw)
+            .expect_err("retired collection must not deserialize");
+        assert!(
+            error.to_string().contains("unknown variant"),
+            "{retired} must be rejected as an unknown collection variant: {error}"
+        );
+    }
 }

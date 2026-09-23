@@ -9,6 +9,7 @@ describe("transcript message times", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "userMessage",
+        reconstruction: { state: "ready" },
         itemKey: "m1",
         sequence: 1,
         content: "hello",
@@ -16,6 +17,7 @@ describe("transcript message times", () => {
       },
       {
         kind: "assistantMessage",
+        reconstruction: { state: "ready" },
         itemKey: "m2",
         sequence: 2,
         content: "hi",
@@ -33,9 +35,16 @@ describe("transcript message times", () => {
 
   it("omits the label when the timestamp is missing or unparsable", () => {
     const items: RenderedTimelineItem[] = [
-      { kind: "userMessage", itemKey: "m1", sequence: 1, content: "hello" },
+      {
+        kind: "userMessage",
+        reconstruction: { state: "ready" },
+        itemKey: "m1",
+        sequence: 1,
+        content: "hello",
+      },
       {
         kind: "assistantMessage",
+        reconstruction: { state: "ready" },
         itemKey: "m2",
         sequence: 2,
         content: "hi",

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use crate::llm::message::{Message, Text, ToolResult, ToolResultContent, UserContent};
+use crate::llm::message::Message;
 use crate::llm::{HookAction, ToolCallHookAction};
 use serde::Deserialize;
 use serde_json::json;
@@ -24,10 +24,9 @@ use crate::background_tools::{
 };
 use crate::descendant_graph::DescendantGraphAccess;
 use crate::document_config::{load_agent_behavior, SubagentTargetDocument};
-use crate::session;
 use crate::tool_call_lifecycle::query::load_tool_call_result;
 use crate::tool_call_lifecycle::subagent_workspace::{
-    merge_workspace_lineage, resolve_spawn_workspace, ParentWorkspaceStamp, SpawnWorkspaceError,
+    resolve_spawn_workspace, ParentWorkspaceStamp, SpawnWorkspaceError,
 };
 use crate::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ChildTerminal, FailureClass,
@@ -39,9 +38,9 @@ use crate::toolset::{
     SPAWN_PROCESS_TOOL_NAME, SPAWN_SUBAGENT_TOOL_NAME, STEER_SUBAGENT_TOOL_NAME,
     WAIT_PROCESS_TOOL_NAME, WAIT_SUBAGENT_TOOL_NAME,
 };
-use crate::truncation::{truncate_text, DefraSpillTruncator, TruncationMode, Truncator};
+use crate::truncation::{truncate_text, TruncationMode};
 
-use super::{non_empty, DefraSessionHook, TranscriptTurnState};
+use super::DefraSessionHook;
 
 pub(crate) const MAX_BACKGROUNDED_TOOLS_PER_PARENT: usize = 8;
 
@@ -60,6 +59,10 @@ mod subagent_bridge;
 mod subagent_tools;
 
 use helpers::*;
+#[cfg(test)]
+pub(super) fn test_model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
+    model_observation_for_tool_result(tool_name, raw_result)
+}
 
 impl DefraSessionHook {
     pub(super) fn skip_tool_result(

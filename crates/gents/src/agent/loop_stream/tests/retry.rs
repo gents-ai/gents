@@ -44,6 +44,55 @@ async fn pre_stream_transport_failure_retries_and_succeeds() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn pre_stream_rate_limit_server_and_connect_failures_share_retry_budget() {
+    let model = ScriptedModel::new_calls(vec![
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            "status code 429: overloaded".into(),
+        )),
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            "connection refused before response".into(),
+        )),
+        ScriptedCall::FailStream(CompletionError::ProviderError(
+            "status code 503: unavailable".into(),
+        )),
+        ScriptedCall::Turn(vec![
+            RawStreamingChoice::Message("recovered".to_string()),
+            RawStreamingChoice::FinalResponse(()),
+        ]),
+    ]);
+
+    let stream = run_loop_stream(
+        model.clone(),
+        None,
+        Message::user("hi"),
+        Vec::new(),
+        Arc::new(Vec::new()),
+        config(0),
+    );
+    let collected = collect_scripted_stream(stream).await;
+
+    assert_eq!(collected.final_text.as_deref(), Some("recovered"));
+    assert_eq!(collected.error, None);
+    assert_eq!(collected.attempts.len(), 3);
+    assert!(collected.attempts.iter().all(|attempt| attempt.will_retry));
+    assert_eq!(
+        collected
+            .attempts
+            .iter()
+            .map(|attempt| attempt.attempt)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "429, connection, and 5xx failures consume the existing transport ladder once each"
+    );
+    let histories = model.seen_histories().await;
+    assert_eq!(histories.len(), 4);
+    assert!(
+        histories.windows(2).all(|pair| pair[0] == pair[1]),
+        "pre-stream retries must reissue the identical provider input"
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn transport_ladder_exhaustion_fails_with_last_error() {
     let model = ScriptedModel::new_calls(vec![
         ScriptedCall::FailStream(transient_provider_error("still down 1")),
@@ -381,7 +430,7 @@ async fn reasoning_only_completion_retracts_and_resamples() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn mid_stream_failure_after_tool_ran_closes_turn_and_continues() {
+async fn mid_stream_failure_after_tool_intent_retracts_without_dispatch() {
     let calls = Arc::new(AtomicUsize::new(0));
     let model = ScriptedModel::new_calls(vec![
         ScriptedCall::TurnWithMidStreamError(
@@ -413,30 +462,29 @@ async fn mid_stream_failure_after_tool_ran_closes_turn_and_continues() {
     );
     let collected = collect_scripted_stream(stream).await;
 
-    assert_eq!(collected.tool_results, vec!["ECHOED".to_string()]);
+    assert!(collected.tool_results.is_empty());
     assert_eq!(collected.final_text.as_deref(), Some("done"));
     assert_eq!(collected.error, None);
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(collected.attempts.len(), 1);
-    assert_eq!(collected.attempts[0].turn, 0);
-    assert_eq!(collected.attempts[0].attempt, 0);
-    assert!(collected.attempts[0].will_retry);
-    assert_duration_in_range(collected.attempts[0].backoff, 3_750, 6_250);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(collected.retractions, vec![(0, 0)]);
+    // The no-effect retry path emits the retraction above, not the
+    // post-effect continuation's AttemptFailed/backoff observation.
+    assert!(collected.attempts.is_empty());
 
     let histories = model.seen_histories().await;
     assert_eq!(
         histories.len(),
         2,
-        "effectful mid-stream failure should close the turn then continue"
+        "unaccepted tool intent must retract before retrying the provider turn"
     );
     assert!(
-        history_has_tool_call(&histories[1], "echo"),
-        "continued request must include the assistant tool call: {:?}",
+        !history_has_tool_call(&histories[1], "echo"),
+        "retried request must not include abandoned tool intent: {:?}",
         histories[1]
     );
     assert!(
-        history_has_tool_result_text(&histories[1], "ECHOED"),
-        "continued request must include the tool result: {:?}",
+        !history_has_tool_result_text(&histories[1], "ECHOED"),
+        "retried request must not invent a result for an undispatched tool: {:?}",
         histories[1]
     );
 }

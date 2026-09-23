@@ -25,6 +25,7 @@ use gents_desktop_bridge::commands::{
     save_tool_service_config, save_tools_config, save_trigger_config, send_chat_message,
     test_tool_service_config,
 };
+use gents_desktop_bridge::snapshot::build_session_live_delta;
 use gents_desktop_bridge::snapshot::operations_snapshot::{
     project_backgrounded_tools, stuck_diagnostics_from_tool_calls, ToolCallRow,
 };
@@ -52,6 +53,20 @@ struct SessionSnapshotRequest {
     request_id: Option<String>,
     timeline_limit: Option<usize>,
     timeline_before_item_key: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionLiveDeltaRequest {
+    #[serde(default)]
+    agent_did: Option<String>,
+    session_id: String,
+    request_id: String,
+    base_reconcile_version: u64,
+    base_content_byte_len: usize,
+    base_content_hash: String,
+    base_reasoning_byte_len: usize,
+    base_reasoning_hash: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -264,6 +279,22 @@ pub(super) fn handle_request(
                 request.timeline_before_item_key.as_deref(),
             ));
             Ok(HttpResponse::json_ok(serde_json::to_string(&snapshot)?))
+        }
+        ("POST", "/desktop/session/live-delta") => {
+            let request = serde_json::from_str::<SessionLiveDeltaRequest>(&request.body)
+                .context("decoding session live delta request")?;
+            let delta = build_session_live_delta(
+                fixture.desktop_core().as_ref(),
+                &request.session_id,
+                request.agent_did.as_deref(),
+                &request.request_id,
+                request.base_reconcile_version,
+                request.base_content_byte_len,
+                &request.base_content_hash,
+                request.base_reasoning_byte_len,
+                &request.base_reasoning_hash,
+            );
+            Ok(HttpResponse::json_ok(serde_json::to_string(&delta)?))
         }
         ("POST", "/desktop/session/hydration/retry") => {
             let request = serde_json::from_str::<SessionSnapshotRequest>(&request.body)

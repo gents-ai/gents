@@ -315,7 +315,6 @@ fn map_fork_error(error: ForkError) -> anyhow::Error {
         ForkError::ForkSourceNotFound(_)
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
         | ForkError::ForkBehaviorNotFound(_)
-        | ForkError::ForkBehaviorNotOwnedByPrincipal(_, _)
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy => anyhow::anyhow!("{error}"),
         ForkError::ForkCopyFailed(inner) => inner.context("fork copy step failed"),

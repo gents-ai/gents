@@ -327,10 +327,8 @@ mod tests {
         ];
 
         for (runtime_state, expected_type, expected_flag) in cases {
-            let head = gents_protocol::client_protocol::project_persisted_attempt(
-                runtime_state,
-                false,
-            );
+            let head =
+                gents_protocol::client_protocol::project_persisted_attempt(runtime_state, false);
             let encoded =
                 serde_json::to_value(projected_thread_status(head)).expect("encode thread status");
             assert_eq!(

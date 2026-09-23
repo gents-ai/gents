@@ -1192,6 +1192,33 @@ mod tests {
     }
 
     #[test]
+    fn interleaved_exact_close_replays_are_idempotent_but_physical_twins_conflict() {
+        let source = hello_source();
+        let mut records = vec![
+            source[1].clone(),
+            source[0].clone(),
+            source[1].clone(),
+            source[0].clone(),
+        ];
+        let expected = reconstruct(&source, &reference("close-1", 0));
+        assert!(expected.is_ok());
+        for _ in 0..records.len() {
+            assert_eq!(reconstruct(&records, &reference("close-1", 0)), expected);
+            records.rotate_left(1);
+        }
+        let mut twin = source[1].clone();
+        twin.0 = "distinct-physical-close".into();
+        records.push(twin);
+        for _ in 0..records.len() {
+            assert!(matches!(
+                reconstruct(&records, &reference("close-1", 0)),
+                Err(ReconstructionError::ConflictingClosures { .. })
+            ));
+            records.rotate_left(1);
+        }
+    }
+
+    #[test]
     fn order_independent_across_shuffled_records() {
         let mut records = hello_source();
         records.reverse();

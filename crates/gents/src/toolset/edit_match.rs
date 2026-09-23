@@ -187,7 +187,7 @@ fn decide_regex(
         Err(error) => {
             return EditOutcome::InvalidRegex {
                 error: error.to_string(),
-            }
+            };
         }
     };
     let count = regex.find_iter(content).count();

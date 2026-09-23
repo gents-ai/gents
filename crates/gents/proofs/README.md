@@ -12,6 +12,17 @@ joins and their limits, not a universal application-correctness theorem.
 Retention and existing-install upgrade behavior remain product boundaries; no
 garbage collector, migration conversion or data wipe is introduced here.
 
+The waiting-parent scheduler repair now composes `Execution/WorkerCapacity`
+with `SessionComposition.Trace`. It proves bounded/disjoint active and parked
+tickets, exact-generation reacquisition, and authorized fresh-child and
+earlier-request existing-child waits, with a capacity-one yield/child/resume
+witness and model-derived conformance cases. The native local worker retains
+parked continuations while children run; capacity-one slot and database-backed
+owner-resume tests exercise the integration. The resource-case adapter does not
+exercise every semantic refusal, and neither the model nor these tests prove
+fair scheduling, bounded progress, or continuation survival across host-process
+loss.
+
 Branch `feat/1571-canonical-transcript-lean` targets
 `feat/1571-canonical-transcript` (original baseline `3eaff8f16`). Foundational
 protocol/SDL corrections belong on that spec parent; this layer changes Lean
@@ -254,12 +265,13 @@ the immutable records and checks full reconstructed native messages;
 The actual serialized-request/threshold experiment
 remains `native.external-projected-request-threshold` in the implementation layer.
 
-The new canonical output layer has no native conformance consumer yet. Regenerate
-fixtures and replace the retired response cases in `tests/conformance/coverage.rs`,
-`tests/conformance/structure.rs`, `tests/conformance/streaming_compaction.rs`,
-`tests/conformance/completion_retry.rs` and `src/lean_vocab_test/support.rs`, then
-update the consumer registry. In particular, old `streaming_response_cases` and
-response-row fixtures are not evidence for the new `canonical_output_projection_cases`.
+The canonical output groups are registered in `tests/conformance/coverage.rs`.
+Native projection consumers live in `src/lean_vocab_test/canonical_presentation.rs`,
+and `src/lean_vocab_test/canonical_execution/native_adapter.rs` binds selected
+execution scripts to native owners, including live partial publication and replay.
+The retired `streaming_response_cases` generator is no longer a runtime/test
+dependency. This is partial native coverage, not completion of every mapped seam;
+the canonical-output handoff maps record the remaining adapter and experiment work.
 Bindings marked follow-up in the coverage ledger remain implementation debt, not
 completed native coverage. Do not restore deleted generators as compatibility code.
 
@@ -589,6 +601,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/AgentSession.lean` | Canonical session identity, provenance, presentation and authoritative request selection |
 | `Proofs/SessionFork.lean` | Transcript-prefix copying, reference remapping and compaction cursor validation |
 | `Proofs/Enrollment/RequestInput.lean` | Typed signed invocation input and context-bound activation |
+| `Proofs/Enrollment/RequestAdmission.lean` | Signed request provenance and final claim: cross-principal children keep the target runtime as signer/issuer but bind `requesterDid` to the authenticated, fresh bridge author; local runtime sources retain requester=target. Generated enrollment cases fence the branch distinction. |
 | `Proofs/SessionRecovery.lean` | Retry/reissue using authoritative scoped request rows |
 | `Proofs/SessionHydration/` | Exact applied peer/requester/agent route admission plus selected-network verified membership; exact requester/agent/session document selection; bounded delivery outcomes separated from terminal-write success or failure; explicit attempted versus confirmed-complete delivery for ambiguous transport failures; idempotent crash re-drive; and resettable session-scoped receiver progress (#1142). Fence: `tests/conformance/session_hydration.rs`. The reconciler consumes the selected set through DefraDB's bounded peer-targeted document pusher. Pairing transition invariants remain owned by `Proofs/PairingReconcile.lean`. |
 | `Proofs/CompletionRetry.lean` | Barrel for per-completion retry state, transitions, executable semantics, and budget/deadline/effects properties |
@@ -608,6 +621,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/GraphPipeline/FailureAttribution.lean` | Existing GraphRun transaction refinement: capture the first durable failure before interrupting siblings, preserve it through drain/restart, reject stale generation writes, and retain explicit cancellation precedence. “First” means the first committed fail-fast decision; evidence discovery and logical continuation eligibility remain separate inputs. |
 | `Proofs/GraphPipeline/LogicalInvocation.lean` | Derived authenticated physical ancestry, conservative committed Goal obligations, logical tip outcome and physical limits; existing GraphRun publication generation fence. Projection cases and publication traces target signed-row and transaction tests; new cases require consumer migration in the conformance layer. |
 | `Proofs/PromptAssembly/` | Provider-view sanitation and prompt assembly, per-turn context budgeting, and the request-wide aggregate token ledger. Fences: generated cases consumed by `agent::loop_stream::tests`. |
+| `Proofs/PromptAssembly/CurrentInput.lean` | Request membership alone never identifies admission input. `current_input_cases` derives retained header indices from the model; `session::output::tests::current_input_selection_matches_lean_owner` binds the canonical prompt/context key classification. Current-request tool results, notifications and assistant output remain history. The separate database regression exercises actual reconstruction; neither test claims reachability of arbitrary imported facts. |
 | `Proofs/PromptAssembly/ClaudeMap.lean` | Claude tool-name map and Messages provider-input assembly: advertised reasoning metadata gates `selectedEffort` (unknown/unsupported efforts are omitted), plus `splitSystem_partition`, `systemBlocks_head`, `systemBlocks_tail_verbatim`, `toolsField_empty`, `accumulate_ignores_start_when_streamed`, `runStream_*`. Fences: `tests/conformance/prompt_assembly.rs::generated_claude_{map,stream,body}_cases_*`; the identity pin lives in `claude_messages::tests`. |
 | `Proofs/P2PBackpressure.lean` | Obligation model (no conformance bridge): success-ack backing, pending-DAG capacity, strict push-slot release on timeout |
 | `Proofs/PeerRegistryDiscovery/DirectoryProjection.lean` | Agent directory projection (machine index v1): source-owned membership, foreign-row preservation, idempotent convergence, write-free settled fixpoint, retraction soundness. Fence: `tests/conformance/directory_projection.rs`. |

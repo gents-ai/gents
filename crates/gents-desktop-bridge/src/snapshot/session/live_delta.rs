@@ -1,5 +1,103 @@
 use super::*;
 
+fn select_canonical_live_target(
+    store: &gents_desktop_core::client::ClientStore,
+    request_doc_id: &str,
+    execution_generation: &str,
+) -> gents_protocol::output::live::LiveTargetSelection {
+    let records = store
+        .output_segments
+        .iter()
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: row.doc_id.as_str(),
+                segment: &row.segment,
+            },
+        )
+        .collect::<Vec<_>>();
+    let messages = store
+        .transcript_messages
+        .iter()
+        .map(|row| (row.doc_id.as_str(), &row.message))
+        .collect::<Vec<_>>();
+    gents_protocol::output::live::select_live_target(
+        request_doc_id,
+        execution_generation,
+        &records,
+        &messages,
+    )
+}
+
+pub(super) fn canonical_live_text(
+    request_store: &gents_desktop_core::client::ClientStore,
+    canonical_store: &gents_desktop_core::client::ClientStore,
+    session_id: &str,
+    agent_did: Option<&str>,
+    request_id: &str,
+) -> Option<(String, String)> {
+    use gents_protocol::output::live::{LiveView, OwnerLiveness};
+    use gents_protocol::output::StreamPayload;
+
+    let request = request_store.requests.iter().find(|request| {
+        request.request_id == request_id
+            && request.session_id.as_deref() == Some(session_id)
+            && agent_did.is_none_or(|agent_did| request.agent_did.as_deref() == Some(agent_did))
+    })?;
+    let request_doc_id = request.doc_id.as_deref()?;
+    let execution_generation = request.execution_generation.as_deref()?;
+    let request_agent_did = request.agent_did.as_deref()?;
+    let gents_protocol::output::live::LiveTargetSelection::Selected {
+        source,
+        writer,
+        message_id,
+    } = select_canonical_live_target(canonical_store, request_doc_id, execution_generation)
+    else {
+        return None;
+    };
+    let request_terminal = request
+        .lifecycle_state
+        .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
+    let view = gents_desktop_core::client::canonical_output::project_canonical_live(
+        request_doc_id,
+        session_id,
+        request_doc_id,
+        &source,
+        &writer,
+        message_id.as_deref(),
+        request_agent_did,
+        request.requester_did.as_deref(),
+        &canonical_store.transcript_messages,
+        &canonical_store.output_segments,
+        &[],
+        &[],
+        &[],
+        OwnerLiveness {
+            current_request: gents_protocol::output::live::observed_request_execution_owner(
+                request,
+            ),
+            live_tools: Vec::new(),
+        },
+        request_terminal,
+        request.terminal_output.clone(),
+    );
+    let streams = match view {
+        LiveView::Live { streams } | LiveView::Settling { streams } => streams,
+        _ => return None,
+    };
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    for stream in streams {
+        match stream.declaration.payload {
+            StreamPayload::Text => content.push_str(&stream.text),
+            StreamPayload::Reasoning | StreamPayload::ReasoningSummary => {
+                reasoning.push_str(&stream.text);
+            }
+            _ => {}
+        }
+    }
+    Some((content, reasoning))
+}
+
 fn live_text_hash(value: &str) -> String {
     // FNV-1a is used only as a compact projection continuity checksum, never as
     // a security primitive. Length plus checksum cheaply checks that an append
@@ -118,51 +216,95 @@ pub(crate) fn build_session_live_delta_from_store(
         return snapshot_required(turn_state_label, None);
     }
 
-    let response = agent_did.map_or_else(
-        || store.latest_response_for_request(request_id),
-        |agent_did| store.latest_response_for_request_for_agent(request_id, agent_did),
-    );
-    let Some(response) = response else {
+    let request = request.expect("request presence checked above");
+    let Some(request_doc_id) = request.doc_id.as_deref() else {
         return snapshot_required(turn_state_label, None);
     };
-    let status = normalize_optional(response.status.as_deref());
-    let terminal_response = status.as_deref().is_some_and(|status| {
-        matches!(
-            status.to_ascii_lowercase().as_str(),
-            "complete" | "completed" | "error" | "failed" | "interrupted"
-        )
-    });
-    if terminal_response
-        || response.materialized_message_sequence.is_some()
-        || response.materialized_at.is_some()
-        || response.interrupted_at.is_some()
+    let Some(execution_generation) = request.execution_generation.as_deref() else {
+        return snapshot_required(turn_state_label, None);
+    };
+    let Some(request_agent_did) = request.agent_did.as_deref() else {
+        return snapshot_required(turn_state_label, None);
+    };
+    if let gents_protocol::output::live::LiveTargetSelection::Selected {
+        source,
+        writer,
+        message_id,
+    } = select_canonical_live_target(store, request_doc_id, execution_generation)
     {
-        return snapshot_required(turn_state_label, status);
+        use gents_protocol::output::live::{LiveView, OwnerLiveness};
+        use gents_protocol::output::StreamPayload;
+
+        let request_terminal = request
+            .lifecycle_state
+            .is_some_and(gents_protocol::request_lifecycle::RequestLifecycleState::is_terminal);
+        let view = gents_desktop_core::client::canonical_output::project_canonical_live(
+            request_doc_id,
+            session_id,
+            request_doc_id,
+            &source,
+            &writer,
+            message_id.as_deref(),
+            request_agent_did,
+            request.requester_did.as_deref(),
+            &store.transcript_messages,
+            &store.output_segments,
+            &[],
+            &[],
+            &[],
+            OwnerLiveness {
+                current_request: gents_protocol::output::live::observed_request_execution_owner(
+                    request,
+                ),
+                live_tools: Vec::new(),
+            },
+            request_terminal,
+            request.terminal_output.clone(),
+        );
+        let streams = match view {
+            LiveView::Live { streams } | LiveView::Settling { streams } => streams,
+            _ => return snapshot_required(turn_state_label, None),
+        };
+        let mut content = String::new();
+        let mut reasoning = String::new();
+        for stream in streams {
+            match stream.declaration.payload {
+                StreamPayload::Text => content.push_str(&stream.text),
+                StreamPayload::Reasoning | StreamPayload::ReasoningSummary => {
+                    reasoning.push_str(&stream.text);
+                }
+                _ => {}
+            }
+        }
+        let content_patch =
+            live_text_patch(Some(&content), base_content_byte_len, base_content_hash);
+        let reasoning_patch = live_text_patch(
+            Some(&reasoning),
+            base_reasoning_byte_len,
+            base_reasoning_hash,
+        );
+        let unchanged = content_patch.mode == "unchanged" && reasoning_patch.mode == "unchanged";
+        return SessionLiveDeltaView {
+            outcome: if unchanged { "unchanged" } else { "delta" }.to_owned(),
+            revision: revision_view,
+            request_id: request_id.to_owned(),
+            progress_seq: None,
+            turn_state: turn_state_label,
+            status: None,
+            content: Some(content_patch),
+            reasoning: Some(reasoning_patch),
+        };
     }
 
-    let content = live_text_patch(
-        response.content.as_deref(),
+    // Canonical output has no mutable response tail. The shared live
+    // projector owns contiguous-prefix reconstruction; until that projection
+    // is supplied, force a bounded snapshot rather than repairing text in the
+    // desktop bridge.
+    let _ = (
         base_content_byte_len,
         base_content_hash,
-    );
-    let reasoning = live_text_patch(
-        response.reasoning.as_deref(),
         base_reasoning_byte_len,
         base_reasoning_hash,
     );
-    let outcome = if content.mode == "unchanged" && reasoning.mode == "unchanged" {
-        "unchanged"
-    } else {
-        "delta"
-    };
-    SessionLiveDeltaView {
-        outcome: outcome.to_string(),
-        revision: revision_view,
-        request_id: request_id.to_string(),
-        progress_seq: response.progress_seq,
-        turn_state: turn_state_label,
-        status,
-        content: Some(content),
-        reasoning: Some(reasoning),
-    }
+    snapshot_required(turn_state_label, None)
 }

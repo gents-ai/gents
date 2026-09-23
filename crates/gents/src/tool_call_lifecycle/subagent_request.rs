@@ -11,6 +11,7 @@ use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use serde::Deserialize;
 
+use crate::config_client::{ConfigAccess, IdempotentTransactionRetry};
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::materialize::{
     build_signed_request, ParentLink, RequestIdentity, RequestSigner, RequestSpec,
@@ -19,17 +20,29 @@ use crate::lifecycle::{ExecutionOrigin, TriggerLineage, WorkspaceLineage};
 
 use super::IllegalToolCallTransition;
 
-async fn execute_mutation_with_retry(
-    node: &EmbeddedNode,
-    mutation: &str,
-    operation: &'static str,
-) -> Result<defra_node::QueryResponse> {
-    crate::config_client::ConfigAccess::write_local_response(node, operation, mutation).await
-}
-
 enum SubagentAdmissionSource {
     LocalChild,
     CrossDeploymentChild { bridge_author_did: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ReservedChildDecision {
+    Create,
+    Replay,
+    Conflict,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum ReservedChildEnsureError {
+    #[error("reserved child request {request_id} conflicts with the accepted bridge lineage")]
+    BindingConflict { request_id: String },
+    #[error(
+        "reserved child request {request_id} is ambiguous across {physical_documents} physical documents"
+    )]
+    Ambiguous {
+        request_id: String,
+        physical_documents: usize,
+    },
 }
 
 /// The configured cap on subagent recursion depth. Matches Lean's
@@ -300,10 +313,7 @@ async fn create_subagent_request_inner(
         SubagentAdmissionSource::CrossDeploymentChild { .. } => {}
     }
 
-    // 4. Generate fresh session identifier (mirror materialize.rs pattern).
-    let new_session_id = uuid::Uuid::new_v4().to_string();
     let new_subagent_depth = parent_subagent_depth + 1;
-    let now = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
 
     let prompt_selection = crate::skills::prompt_slash_skill_selection(&prompt);
     let prompt = prompt_selection.prompt;
@@ -347,44 +357,210 @@ async fn create_subagent_request_inner(
             )
         }
     };
-    let identity = RequestIdentity {
-        requester_did: None,
-        request_id: request_id.clone(),
-        agent_did: agent_did.clone(),
-        behavior_id,
-        session_id: new_session_id,
-        content: prompt,
-        execution_origin: ExecutionOrigin::Interactive,
-        created_at: now,
+    // The host signs and executes the child, but its immutable requester route
+    // remains the authenticated coordinator that authored the parent bridge.
+    let requester_did = match &admission_source {
+        SubagentAdmissionSource::LocalChild => None,
+        SubagentAdmissionSource::CrossDeploymentChild { bridge_author_did } => {
+            Some(bridge_author_did.clone())
+        }
     };
-    let spec = RequestSpec {
-        trigger_lineage: TriggerLineage {
-            trigger_id: Some(parent_tool_call_id.clone()),
-            trigger_kind: Some("subagent".to_string()),
-            correlation: runtime_context
-                .as_ref()
-                .and_then(|context| context.correlation.clone()),
-            trigger_context: inherited_context_json,
-            ..Default::default()
+    let deadline = deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    let request_id_for_txn = request_id.clone();
+    ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        IdempotentTransactionRetry::Standard,
+        "create_subagent_request",
+        move |txn| {
+            let request_id = request_id_for_txn.clone();
+            let parent_request_id = parent_request_id.clone();
+            let parent_tool_call_id = parent_tool_call_id.clone();
+            let parent_doc_ids = parent_doc_ids.clone();
+            let agent_did = agent_did.clone();
+            let behavior_id = behavior_id.clone();
+            let prompt = prompt.clone();
+            let input = input.clone();
+            let workspace = workspace.clone();
+            let admission = admission.clone();
+            let requester_did = requester_did.clone();
+            let runtime_context = runtime_context.clone();
+            let inherited_context_json = inherited_context_json.clone();
+            let deadline = deadline.clone();
+            Box::pin(async move {
+                let escaped = escape_graphql_string(&request_id);
+                let existing = txn
+                    .execute(&format!(
+                        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
+                            _docID request_id agent_did requester_did behavior_id content input subagent_depth
+                            admission_kind runtime_issuer_did runtime_source_request_id runtime_source_kind runtime_bridge_author_did
+                            caused_by_parent_request_id caused_by_parent_request_doc_id
+                            caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id
+                            workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash
+                        }} }}"#
+                    ))
+                    .await?;
+                let rows: Vec<gents_protocol::row::AgentRequestRow> = serde_json::from_value(
+                    existing["data"]["AgentRequest"].clone(),
+                )
+                .context("decode reserved child requests")?;
+                match reserved_child_decision(
+                    &rows,
+                    &agent_did,
+                    &behavior_id,
+                    &prompt,
+                    &input,
+                    new_subagent_depth,
+                    &parent_request_id,
+                    &parent_doc_ids.0,
+                    &parent_tool_call_id,
+                    &parent_doc_ids.1,
+                    workspace.as_ref(),
+                    &admission,
+                ) {
+                    ReservedChildDecision::Replay => {
+                        return Ok(request_id);
+                    }
+                    ReservedChildDecision::Create => {}
+                    ReservedChildDecision::Conflict if rows.len() > 1 => {
+                        return Err(ReservedChildEnsureError::Ambiguous {
+                            request_id,
+                            physical_documents: rows.len(),
+                        }
+                        .into());
+                    }
+                    ReservedChildDecision::Conflict => {
+                        return Err(ReservedChildEnsureError::BindingConflict { request_id }.into());
+                    }
+                }
+
+                let identity = RequestIdentity {
+                    requester_did,
+                    request_id: request_id.clone(),
+                    agent_did: agent_did.clone(),
+                    behavior_id,
+                    session_id: uuid::Uuid::new_v4().to_string(),
+                    content: prompt,
+                    execution_origin: ExecutionOrigin::Interactive,
+                    created_at: Utc::now()
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                };
+                let spec = RequestSpec {
+                    trigger_lineage: TriggerLineage {
+                        trigger_id: Some(parent_tool_call_id.clone()),
+                        trigger_kind: Some("subagent".to_string()),
+                        correlation: runtime_context
+                            .as_ref()
+                            .and_then(|context| context.correlation.clone()),
+                        trigger_context: inherited_context_json,
+                        ..Default::default()
+                    },
+                    workspace,
+                    subagent: Some(ParentLink {
+                        depth: new_subagent_depth,
+                        parent_request_id,
+                        parent_request_doc_id: parent_doc_ids.0,
+                        parent_tool_call_id: Some(parent_tool_call_id),
+                        parent_tool_call_doc_id: Some(parent_doc_ids.1),
+                    }),
+                    input,
+                    valid_until: deadline,
+                    ..RequestSpec::new(identity, admission)
+                };
+                let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
+                let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+                let response = txn.execute(&mutation).await?;
+                crate::graphql::created_doc_id(&response, "AgentRequest")
+                    .context("reserved child request create did not commit exactly one document")?;
+                Ok(request_id)
+            })
         },
-        workspace,
-        subagent: Some(ParentLink {
-            depth: new_subagent_depth,
-            parent_request_id: parent_request_id.clone(),
-            parent_request_doc_id: parent_doc_ids.0.clone(),
-            parent_tool_call_id: Some(parent_tool_call_id.clone()),
-            parent_tool_call_doc_id: Some(parent_doc_ids.1.clone()),
-        }),
-        input,
-        valid_until: deadline.map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-        ..RequestSpec::new(identity, admission)
-    };
-    let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
-    let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
+    )
+    .await
+}
 
-    execute_mutation_with_retry(node, &mutation, "create_subagent_request").await?;
+#[allow(clippy::too_many_arguments)]
+pub(super) fn reserved_child_decision(
+    rows: &[gents_protocol::row::AgentRequestRow],
+    agent_did: &str,
+    behavior_id: &str,
+    prompt: &str,
+    input: &gents_protocol::request_input::RequestInput,
+    subagent_depth: u32,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_tool_call_id: &str,
+    parent_tool_call_doc_id: &str,
+    workspace: Option<&WorkspaceLineage>,
+    admission: &gents_protocol::request_admission::AgentRequestAdmissionRecord,
+) -> ReservedChildDecision {
+    match rows {
+        [] => ReservedChildDecision::Create,
+        [row]
+            if reserved_child_matches(
+                row,
+                agent_did,
+                behavior_id,
+                prompt,
+                input,
+                subagent_depth,
+                parent_request_id,
+                parent_request_doc_id,
+                parent_tool_call_id,
+                parent_tool_call_doc_id,
+                workspace,
+                admission,
+            ) =>
+        {
+            ReservedChildDecision::Replay
+        }
+        _ => ReservedChildDecision::Conflict,
+    }
+}
 
-    Ok(request_id)
+#[allow(clippy::too_many_arguments)]
+fn reserved_child_matches(
+    row: &gents_protocol::row::AgentRequestRow,
+    agent_did: &str,
+    behavior_id: &str,
+    prompt: &str,
+    input: &gents_protocol::request_input::RequestInput,
+    subagent_depth: u32,
+    parent_request_id: &str,
+    parent_request_doc_id: &str,
+    parent_tool_call_id: &str,
+    parent_tool_call_doc_id: &str,
+    workspace: Option<&WorkspaceLineage>,
+    admission: &gents_protocol::request_admission::AgentRequestAdmissionRecord,
+) -> bool {
+    let workspace = workspace.cloned().unwrap_or_default();
+    let requester_did = admission
+        .runtime_bridge_author_did
+        .as_deref()
+        .unwrap_or(agent_did);
+    row.agent_did.as_deref() == Some(agent_did)
+        && row.requester_did.as_deref() == Some(requester_did)
+        && row.behavior_id.as_deref() == Some(behavior_id)
+        && row.content.as_deref() == Some(prompt)
+        // The canonical request serializer omits a semantically empty input;
+        // Defra therefore reads it back as absent. Non-empty inputs remain
+        // exact signed semantics and must match byte-for-value.
+        && row.input.clone().unwrap_or_default() == *input
+        && row.subagent_depth == Some(i64::from(subagent_depth))
+        && row.caused_by_parent_request_id.as_deref() == Some(parent_request_id)
+        && row.caused_by_parent_request_doc_id.as_deref() == Some(parent_request_doc_id)
+        && row.caused_by_parent_tool_call_id.as_deref() == Some(parent_tool_call_id)
+        && row.caused_by_parent_tool_call_doc_id.as_deref() == Some(parent_tool_call_doc_id)
+        && row.workspace_id == workspace.workspace_id
+        && row.workspace_owner_agent_did == workspace.workspace_owner_agent_did
+        && row.workspace_authority == workspace.workspace_authority
+        && row.workspace_seal_hash == workspace.workspace_seal_hash
+        && row.admission_kind.as_deref() == Some(admission.kind.as_str())
+        && row.runtime_issuer_did == admission.runtime_issuer_did
+        && row.runtime_source_request_id == admission.runtime_source_request_id
+        && row.runtime_source_kind.as_deref()
+            == admission.runtime_source_kind.map(|kind| kind.as_str())
+        && row.runtime_bridge_author_did == admission.runtime_bridge_author_did
 }
 
 async fn load_parent_request_by_doc_id(
@@ -487,6 +663,153 @@ mod tests {
         assert!(err
             .to_string()
             .contains("decode exact parent AgentRequest rows"));
+    }
+
+    #[test]
+    fn reserved_child_binding_rejects_payload_workspace_admission_and_lineage_drift() {
+        let agent = "did:key:child";
+        let admission =
+            gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_child(
+                agent, "parent",
+            );
+        let input = gents_protocol::request_input::RequestInput::default();
+        let workspace = WorkspaceLineage {
+            workspace_id: Some("workspace".into()),
+            workspace_owner_agent_did: Some(agent.into()),
+            workspace_authority: Some("readWrite".into()),
+            workspace_seal_hash: Some("seal".into()),
+        };
+        let base = serde_json::json!({
+            "request_id":"child", "agent_did":agent, "requester_did":agent,
+            "behavior_id":"behavior", "content":"payload", "input":{}, "subagent_depth":1,
+            "caused_by_parent_request_id":"parent", "caused_by_parent_request_doc_id":"parent-doc",
+            "caused_by_parent_tool_call_id":"tool", "caused_by_parent_tool_call_doc_id":"tool-doc",
+            "workspace_id":"workspace", "workspace_owner_agent_did":agent,
+            "workspace_authority":"readWrite", "workspace_seal_hash":"seal",
+            "admission_kind":"runtime-internal", "runtime_issuer_did":agent,
+            "runtime_source_request_id":"parent", "runtime_source_kind":"local-child"
+        });
+        let matches = |value: serde_json::Value| {
+            let row: gents_protocol::row::AgentRequestRow =
+                serde_json::from_value(value).expect("binding row");
+            reserved_child_matches(
+                &row,
+                agent,
+                "behavior",
+                "payload",
+                &input,
+                1,
+                "parent",
+                "parent-doc",
+                "tool",
+                "tool-doc",
+                Some(&workspace),
+                &admission,
+            )
+        };
+        assert!(matches(base.clone()));
+        for (field, value) in [
+            ("content", serde_json::json!("other")),
+            ("workspace_seal_hash", serde_json::json!("other")),
+            ("runtime_source_request_id", serde_json::json!("other")),
+            (
+                "caused_by_parent_tool_call_doc_id",
+                serde_json::json!("other"),
+            ),
+        ] {
+            let mut changed = base.clone();
+            changed[field] = value;
+            assert!(!matches(changed), "{field} drift must fail closed");
+        }
+    }
+
+    #[test]
+    fn generated_reserved_child_cases_drive_native_owner_decision() {
+        use crate::lean_vocab_test::{
+            lean_reserved_child_materialization_cases, LeanReservedChildBinding,
+        };
+
+        fn token(prefix: &str, value: usize) -> String {
+            format!("{prefix}-{value}")
+        }
+        fn admission(
+            binding: &LeanReservedChildBinding,
+        ) -> gents_protocol::request_admission::AgentRequestAdmissionRecord {
+            if binding.admission == 7 {
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_child(
+                    token("agent", binding.agent),
+                    token("request", binding.parent_request),
+                )
+            } else {
+                gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_cross_principal_child(
+                    token("agent", binding.agent),
+                    token("request", binding.parent_request),
+                    token("bridge-author", binding.admission),
+                )
+            }
+        }
+        fn workspace(binding: &LeanReservedChildBinding) -> Option<WorkspaceLineage> {
+            binding.workspace.map(|value| WorkspaceLineage {
+                workspace_id: Some(token("workspace", value)),
+                workspace_owner_agent_did: Some(token("agent", binding.agent)),
+                workspace_authority: Some("readWrite".into()),
+                workspace_seal_hash: Some(token("seal", value)),
+            })
+        }
+        fn row(binding: &LeanReservedChildBinding) -> gents_protocol::row::AgentRequestRow {
+            let admission = admission(binding);
+            serde_json::from_value(serde_json::json!({
+                "request_id": token("child", binding.child),
+                "agent_did": token("agent", binding.agent),
+                "requester_did": token("agent", binding.agent),
+                "behavior_id": token("behavior", binding.behavior),
+                "content": token("payload", binding.payload),
+                "input": {},
+                "subagent_depth": 1,
+                "caused_by_parent_request_id": token("request", binding.parent_request),
+                "caused_by_parent_request_doc_id": token("request-doc", binding.parent_request_doc),
+                "caused_by_parent_tool_call_id": token("tool", binding.parent_tool),
+                "caused_by_parent_tool_call_doc_id": token("tool-doc", binding.parent_tool_doc),
+                "workspace_id": workspace(binding).as_ref().and_then(|value| value.workspace_id.clone()),
+                "workspace_owner_agent_did": workspace(binding).as_ref().and_then(|value| value.workspace_owner_agent_did.clone()),
+                "workspace_authority": workspace(binding).as_ref().and_then(|value| value.workspace_authority.clone()),
+                "workspace_seal_hash": workspace(binding).as_ref().and_then(|value| value.workspace_seal_hash.clone()),
+                "admission_kind": admission.kind.as_str(),
+                "runtime_issuer_did": admission.runtime_issuer_did,
+                "runtime_source_request_id": admission.runtime_source_request_id,
+                "runtime_source_kind": admission.runtime_source_kind.map(|value| value.as_str()),
+                "runtime_bridge_author_did": admission.runtime_bridge_author_did,
+            }))
+            .expect("modeled reserved-child binding maps to native row")
+        }
+
+        for case in lean_reserved_child_materialization_cases() {
+            let candidate = &case.candidate;
+            let candidate_workspace = workspace(candidate);
+            let candidate_admission = admission(candidate);
+            let rows = case.stored.iter().map(row).collect::<Vec<_>>();
+            let decision = reserved_child_decision(
+                &rows,
+                &token("agent", candidate.agent),
+                &token("behavior", candidate.behavior),
+                &token("payload", candidate.payload),
+                &gents_protocol::request_input::RequestInput::default(),
+                1,
+                &token("request", candidate.parent_request),
+                &token("request-doc", candidate.parent_request_doc),
+                &token("tool", candidate.parent_tool),
+                &token("tool-doc", candidate.parent_tool_doc),
+                candidate_workspace.as_ref(),
+                &candidate_admission,
+            );
+            let (actual_decision, actual_count) = match decision {
+                ReservedChildDecision::Create => ("created", rows.len() + 1),
+                ReservedChildDecision::Replay => ("replayed", rows.len()),
+                ReservedChildDecision::Conflict => ("conflict", rows.len()),
+            };
+            assert_eq!(actual_decision, case.expected_decision, "{}", case.name);
+            assert_eq!(actual_count, case.expected_count, "{}", case.name);
+        }
     }
 }
 

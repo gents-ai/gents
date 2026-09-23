@@ -4704,6 +4704,7 @@ dependencies = [
  "defra-node",
  "defra-p2p-adapter",
  "flate2",
+ "futures",
  "futures-util",
  "gents",
  "gents-chatgpt-login",
@@ -4891,9 +4892,13 @@ name = "gents-lean-contract"
 version = "0.18.5"
 dependencies = [
  "anyhow",
+ "chrono",
+ "defra-node",
  "gents-protocol",
+ "gents-schemas",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

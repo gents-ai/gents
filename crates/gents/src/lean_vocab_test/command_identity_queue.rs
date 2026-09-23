@@ -87,6 +87,29 @@ pub(crate) struct LeanPendingUserTurnCase {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanQueuedSteeringTraceCase {
+    pub(crate) name: String,
+    #[serde(rename = "requestId")]
+    pub(crate) request_id: u64,
+    #[serde(rename = "requestDocId")]
+    pub(crate) request_doc_id: u64,
+    #[serde(rename = "contentToken")]
+    pub(crate) content_token: u64,
+    #[serde(rename = "lifecycleState")]
+    pub(crate) lifecycle_state: String,
+    #[serde(rename = "admissionVisible")]
+    pub(crate) admission_visible: bool,
+    #[serde(rename = "canonicalAuthoredCount")]
+    pub(crate) canonical_authored_count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanQueuedSteeringGuardCase {
+    pub(crate) name: String,
+    pub(crate) admitted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanIdentityPrincipal {
     pub(crate) did: String,
     pub(crate) enabled: bool,
@@ -189,6 +212,29 @@ pub(crate) struct LeanRecoverySweepCase {
     pub(crate) recovery_cause: Option<String>,
     pub(crate) notification_reason: Option<String>,
     pub(crate) deadline_audit_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanReservedChildBinding {
+    pub(crate) child: usize,
+    pub(crate) agent: usize,
+    pub(crate) behavior: usize,
+    pub(crate) parent_request: usize,
+    pub(crate) parent_request_doc: usize,
+    pub(crate) parent_tool: usize,
+    pub(crate) parent_tool_doc: usize,
+    pub(crate) payload: usize,
+    pub(crate) workspace: Option<usize>,
+    pub(crate) admission: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanReservedChildMaterializationCase {
+    pub(crate) name: String,
+    pub(crate) stored: Vec<LeanReservedChildBinding>,
+    pub(crate) candidate: LeanReservedChildBinding,
+    pub(crate) expected_decision: String,
+    pub(crate) expected_count: usize,
 }
 
 /// Startup restart-disposition witness (#937): the shape of one running

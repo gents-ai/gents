@@ -36,7 +36,7 @@ const DEFAULT_AGENT_NAME: &str = "fleet-e2e-agent";
 
 pub(crate) struct LiveBridgeFixture {
     runtime: Arc<Runtime>,
-    _tempdir: tempfile::TempDir,
+    tempdir: Mutex<Option<tempfile::TempDir>>,
     desktop_paths: DesktopPaths,
     agent_home: PathBuf,
     desktop_core: Arc<ClientCore>,
@@ -81,6 +81,40 @@ impl LiveBridgeFixture {
         &self.tool_root
     }
 
+    pub(crate) fn requester_scope(
+        &self,
+        agent_did: Option<&str>,
+        session_id: &str,
+        request_id: Option<&str>,
+    ) -> Option<String> {
+        let agent_did = agent_did?;
+        let store = self.desktop_core.store().snapshot();
+        request_id
+            .and_then(|request_id| {
+                store.requests.iter().find(|request| {
+                    request.request_id == request_id
+                        && request.agent_did.as_deref() == Some(agent_did)
+                        && request.session_id.as_deref() == Some(session_id)
+                })
+            })
+            .and_then(|request| request.requester_did.clone())
+            .or_else(|| {
+                store
+                    .sessions
+                    .iter()
+                    .find(|session| {
+                        session.session_id == session_id && session.agent_did == agent_did
+                    })
+                    .and_then(|session| session.requester_did.clone())
+            })
+    }
+
+    pub(crate) fn data_root(&self) -> &Path {
+        self.agent_home
+            .parent()
+            .expect("live fixture agent home has a parent")
+    }
+
     pub(crate) fn update_version(&self) -> u64 {
         self.update_version.load(Ordering::SeqCst)
     }
@@ -101,6 +135,12 @@ impl LiveBridgeFixture {
 
         self.remote_core.shutdown().await?;
         self.desktop_core.shutdown().await?;
+        if std::env::var_os("GENTS_TAURI_LIVE_RETAIN_DATA").is_some() {
+            if let Some(tempdir) = self.tempdir.lock().await.take() {
+                let retained = tempdir.keep();
+                tracing::info!(path = %retained.display(), "retained live bridge fixture data");
+            }
+        }
         Ok(())
     }
 
@@ -232,10 +272,12 @@ impl LiveBridgeFixture {
         let update_version = Arc::new(AtomicU64::new(1));
         let update_task = {
             let desktop_core = Arc::clone(&desktop_core);
+            let remote_core = Arc::clone(&remote_core);
             let update_version = Arc::clone(&update_version);
             runtime.spawn(async move {
                 let mut store_updates = desktop_core.store_updates();
                 let mut sync_updates = desktop_core.sync_state_updates();
+                let mut remote_store_updates = remote_core.store_updates();
                 loop {
                     tokio::select! {
                         changed = store_updates.changed() => {
@@ -250,6 +292,12 @@ impl LiveBridgeFixture {
                             }
                             update_version.fetch_add(1, Ordering::SeqCst);
                         }
+                        changed = remote_store_updates.changed() => {
+                            if changed.is_err() {
+                                break;
+                            }
+                            update_version.fetch_add(1, Ordering::SeqCst);
+                        }
                     }
                 }
             })
@@ -257,7 +305,7 @@ impl LiveBridgeFixture {
 
         Ok(Arc::new(Self {
             runtime,
-            _tempdir: tempdir,
+            tempdir: Mutex::new(Some(tempdir)),
             desktop_paths,
             agent_home,
             desktop_core,
@@ -345,7 +393,7 @@ impl LiveBridgeFixture {
 
         Ok(Arc::new(Self {
             runtime,
-            _tempdir: tempdir,
+            tempdir: Mutex::new(Some(tempdir)),
             desktop_paths,
             agent_home,
             desktop_core,
@@ -564,11 +612,18 @@ mod tests {
         )
         .await?;
 
+        let requester_scope = fixture
+            .requester_scope(
+                Some(&agent_did),
+                &submitted.session_id,
+                Some(&submitted.request_id),
+            )
+            .context("live fixture did not resolve its desktop requester scope")?;
         let transcript_page = gents_desktop_core::client::load_session_transcript_page(
             fixture.desktop_core().node(),
             &submitted.session_id,
             Some(&agent_did),
-            None,
+            Some(&requester_scope),
             None,
             None,
         )
@@ -577,7 +632,7 @@ mod tests {
             fixture.desktop_core().node(),
             &submitted.session_id,
             Some(&agent_did),
-            None,
+            Some(&requester_scope),
         )
         .await?;
         let session = build_session_snapshot_for_agent_with_transcript(
@@ -586,6 +641,7 @@ mod tests {
             &submitted.session_id,
             Some(&submitted.request_id),
             Some(&transcript_page.store),
+            Some(&transcript_page.canonical_dependencies),
             Some(&context_store),
             true,
             true,
@@ -600,6 +656,10 @@ mod tests {
 
         let request =
             wait_for_remote_request(fixture.remote_core().as_ref(), &submitted.request_id).await?;
+        assert_eq!(
+            request.requester_did.as_deref(),
+            Some(requester_scope.as_str())
+        );
         assert_eq!(request.content.as_deref(), Some(task));
         let input = request
             .input

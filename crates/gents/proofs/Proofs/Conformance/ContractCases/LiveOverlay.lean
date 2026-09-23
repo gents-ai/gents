@@ -6,6 +6,9 @@ namespace Conformance.ContractCases
 structure LiveOverlayCase where
   name                : String
   liveOutputAvailable : Bool
+  /-- A published assistant owner for the exact target output source. An
+  authored prompt or an earlier provider turn in the same request is not an
+  owner of the current live prefix. -/
   hasDurableOwner     : Bool
   precedingToolCalls  : Nat
   turnTerminal        : Bool

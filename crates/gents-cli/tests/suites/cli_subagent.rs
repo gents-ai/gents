@@ -436,7 +436,6 @@ async fn seed_spawn_bridge(
                     agent_did: "{agent_did}",
                     tool_name: "task",
                     tool_call_id: "{tool_call_id}",
-                    args: "{{}}",
                     status: "pending",
                     lifecycle_state: "pending",
                     started_at: "{started_at}",

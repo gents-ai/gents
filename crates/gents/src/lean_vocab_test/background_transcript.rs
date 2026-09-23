@@ -1,6 +1,16 @@
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanToolOutputProjectionCase {
+    pub(crate) name: String,
+    pub(crate) document: u64,
+    pub(crate) segments: Vec<LeanCanonicalSegment>,
+    pub(crate) expected_state: Option<String>,
+    pub(crate) expected_payload: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "witness", deny_unknown_fields)]
 pub(crate) enum LeanR4cBackgroundWorkCase {
     #[serde(rename = "r4c.list_subagents.lineage_rejects")]
@@ -31,14 +41,7 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
     ReadToolOutputCanonicalSourceReconstruction {
         tool_call_id: String,
         canonical_source: String,
-        open_payload: String,
-        closed_payload: String,
-        next_offset: u64,
-        total_bytes: u64,
-        has_more: bool,
-        missing_rejected: bool,
-        conflict_rejected: bool,
-        late_suffix_ignored: bool,
+        cases: Vec<LeanToolOutputProjectionCase>,
     },
     #[serde(rename = "r4c.steer_subagent.append_preserves_lineage")]
     SteerAppendPreservesLineage {
@@ -53,8 +56,6 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         lineage_admissible: bool,
         depth_zero_lineage_admissible: bool,
         background_completion_depth_zero_admissible: bool,
-        request_visible_before_message_allowed: bool,
-        message_then_request_allowed: bool,
         queue_source: String,
         queue_policy: String,
     },
@@ -300,6 +301,9 @@ pub(crate) struct LeanTranscriptCase {
     pub(crate) name: String,
     pub(crate) group: String,
     pub(crate) action: String,
+    pub(crate) action_call_ids: Vec<usize>,
+    pub(crate) action_logical_result_ids: Vec<usize>,
+    pub(crate) action_payload_hashes: Vec<usize>,
     pub(crate) legal: bool,
     pub(crate) pre_message_count: usize,
     pub(crate) post_message_count: usize,

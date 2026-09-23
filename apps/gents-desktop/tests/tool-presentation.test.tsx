@@ -29,6 +29,7 @@ function baseTool(
     status: "completed",
     statusKind: "success",
     presentation,
+    reconstruction: { state: "ready" },
     ...overrides,
   };
 }

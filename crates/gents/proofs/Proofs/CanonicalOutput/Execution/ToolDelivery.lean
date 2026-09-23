@@ -564,6 +564,28 @@ def publishToolDelivery (world : World) (document : DocId)
     (message : MessageEnvelope) : Except Error World :=
   ToolWrite.lift world (publishToolDeliveryWrite world document message)
 
+/-- Native completion closes the physical tool source, terminalizes its tool
+row, and publishes the paired ToolResult in one storage transaction. Neither
+the closed-but-undelivered intermediate world nor a result-only world is
+externally observable. -/
+def completeAndDeliver (world : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment)
+    (message : MessageEnvelope) : Except Error World :=
+  match closeToolOutput world document authority record with
+  | .error error => .error error
+  | .ok closed => publishToolDelivery closed document message
+
+theorem completeAndDeliver_success (world after : World) (document : DocId)
+    (authority : CloseAuthority) (record : Segment) (message : MessageEnvelope)
+    (h : completeAndDeliver world document authority record message = .ok after) :
+    ∃ closed, closeToolOutput world document authority record = .ok closed ∧
+      publishToolDelivery closed document message = .ok after := by
+  cases hc : closeToolOutput world document authority record with
+  | error error => simp [completeAndDeliver, hc] at h
+  | ok closed =>
+      simp only [completeAndDeliver, hc] at h
+      exact ⟨closed, rfl, h⟩
+
 private def publishBackgroundNotificationWriteWith
     (headerValid : World → OwnedTool → MessageEnvelope → Bool)
     (world : World) (document : DocId) (message : MessageEnvelope) : Except Error ToolWrite :=

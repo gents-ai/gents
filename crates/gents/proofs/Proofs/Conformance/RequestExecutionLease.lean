@@ -236,6 +236,23 @@ def leaseCases : List LeaseCase :=
     , expected := some
         (world .failed (.terminal 202 .failed) [202, 101] 11 true true 1 1)
     }
+  , { name := "expired_terminal_recovery_preserves_failure_contract"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredTerminal .mutationWriteGate 101 202 .failed
+    , expected := some
+        (world .failed (.terminal 202 .failed) [202, 101] 11 true true 1 1)
+    }
+  , { name := "expired_terminal_recovery_preserves_interrupt_contract"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredTerminal .mutationWriteGate 101 202 .interrupted
+    , expected := some
+        (world .interrupted (.terminal 202 .interrupted) [202, 101] 11 true true 1 1)
+    }
+  , { name := "expired_terminal_recovery_rejects_completed_outcome"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredTerminal .mutationWriteGate 101 202 .completed
+    , expected := none
+    }
   , { name := "dropped_recovery_failure_atomically_elects_terminal_winner"
     , pre := recoverable 101 5 10 11
     , action := .recoverDroppedAndFail .mutationWriteGate 101 202
@@ -282,7 +299,7 @@ def leaseCases : List LeaseCase :=
     }
   ]
 
-theorem leaseCases_count : leaseCases.length = 45 := by native_decide
+theorem leaseCases_count : leaseCases.length = 48 := by native_decide
 
 theorem leaseCases_hold :
     leaseCases.all (fun testCase =>
@@ -487,6 +504,11 @@ def actionJson : Action Generation → String
       "{\"kind\":\"recover_expired_and_fail\",\"boundary\":" ++
         jsonString (boundaryName boundary) ++ ",\"expected_generation\":" ++
         toString expected ++ ",\"fresh_generation\":" ++ toString fresh ++ "}"
+  | .recoverExpiredTerminal boundary expected fresh outcome =>
+      "{\"kind\":\"recover_expired_terminal\",\"boundary\":" ++
+        jsonString (boundaryName boundary) ++ ",\"expected_generation\":" ++
+        toString expected ++ ",\"fresh_generation\":" ++ toString fresh ++
+        ",\"outcome\":" ++ jsonString (outcomeName outcome) ++ "}"
   | .recoverDroppedAndFail boundary expected fresh =>
       "{\"kind\":\"recover_dropped_and_fail\",\"boundary\":" ++
         jsonString (boundaryName boundary) ++ ",\"expected_generation\":" ++

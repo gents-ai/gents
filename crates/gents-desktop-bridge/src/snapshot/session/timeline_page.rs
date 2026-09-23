@@ -118,9 +118,9 @@ pub fn apply_session_timeline_page_with_query(
                 }
                 query_page
                     .store
-                    .messages
+                    .transcript_messages
                     .iter()
-                    .filter_map(|row| row.sequence)
+                    .map(|row| i64::from(row.message.sequence))
                     .chain(
                         query_page
                             .store

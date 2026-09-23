@@ -216,6 +216,66 @@ theorem recoverExpiredBatch_preserves_sequenceBound
     · exact accountOwnedTools_preserves_sessionId raw expected true
     · rw [accountOwnedTools_preserves_nextSeq]
 
+theorem recoverExpiredTerminal_preserves_sequenceBound
+    (before after : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (items : List RecoveryItem) (hbound : SequenceBound before)
+    (h : recoverExpiredTerminal before expected fresh outcome selection items = .ok after) :
+    SequenceBound after := by
+  have hcore := checked_core_success _ _ _ h
+  unfold recoverExpiredTerminalCore at hcore
+  split at hcore
+  · cases hcore; exact hbound
+  · split at hcore
+    · contradiction
+    · cases hp : prepareRecoveryBatch before expected fresh items with
+      | error error => simp [hp] at hcore
+      | ok prepared =>
+          simp only [hp] at hcore
+          split at hcore
+          · contradiction
+          · cases hl : RequestExecutionLease.step?
+                (preparedRecoveryWorld before prepared expected).lease
+                (.recoverExpiredTerminal .mutationWriteGate expected fresh outcome) with
+            | none => simp [hl] at hcore
+            | some lease =>
+                simp only [hl] at hcore
+                cases hcore
+                have hinitial : RecoverySequenceBound before.sessionId
+                    ⟨before.segments, before.messages, before.transcript⟩ := hbound
+                unfold prepareRecoveryBatch at hp
+                split at hp <;> try contradiction
+                have hpreparedBound := prepareRecoveryItems_preserves_sequenceBound
+                  before expected fresh items _ prepared hinitial hp
+                let raw : World := { before with
+                  segments := prepared.segments
+                  messages := prepared.messages
+                  transcript := prepared.transcript }
+                change SequenceBound (accountOwnedTools raw expected true)
+                apply SequenceBound.of_messages_eq
+                  (before := raw) (after := accountOwnedTools raw expected true)
+                · simpa [SequenceBound, RecoverySequenceBound, raw] using hpreparedBound
+                · exact accountOwnedTools_preserves_messages raw expected true
+                · exact accountOwnedTools_preserves_sessionId raw expected true
+                · rw [accountOwnedTools_preserves_nextSeq]
+
+theorem closePartialAndPublish_preserves_sequenceBound
+    (before after : World) (generation : Generation) (item : RecoveryItem)
+    (hbound : SequenceBound before)
+    (h : closePartialAndPublish before generation item = .ok after) : SequenceBound after := by
+  have hcore := checked_core_success _ _ _ h
+  unfold closePartialAndPublishCore at hcore
+  split at hcore
+  · cases hcore; exact hbound
+  · split at hcore <;> try contradiction
+    rename_i prepared hprepared
+    split at hcore <;> try contradiction
+    cases hcore
+    have hinitial : RecoverySequenceBound before.sessionId
+        ⟨before.segments, before.messages, before.transcript⟩ := hbound
+    exact prepareRecoveryItems_preserves_sequenceBound before generation generation [item]
+      _ prepared hinitial hprepared
+
 theorem SequenceBound.of_publicationEffect {before after : World}
     {message : MessageEnvelope} (hbound : SequenceBound before)
     (heffect : ToolDelivery.PublicationEffect before after message) :
@@ -396,6 +456,16 @@ theorem Gate.evaluate_preserves_sequenceBound
       rcases ToolDelivery.close_preserves_publications before after document authority record hop with
         ⟨hsession, hmessages, hnext⟩
       exact hbound.of_messages_eq hmessages hsession (Nat.le_of_eq hnext.symm)
+  | toolComplete document authority record message =>
+      obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
+        before after document authority record message
+        (mapError_success Error.delivery _ _ h)
+      rcases ToolDelivery.close_preserves_publications before closed document authority record
+        hclose with ⟨hsession, hmessages, hnext⟩
+      have hclosed : SequenceBound closed :=
+        hbound.of_messages_eq hmessages hsession (Nat.le_of_eq hnext.symm)
+      exact ToolDelivery.publishToolDelivery_preserves_sequenceBound closed after document message
+        hclosed hdeliver
   | toolDeliver document message =>
       exact ToolDelivery.publishToolDelivery_preserves_sequenceBound before after document message
         hbound (mapError_success Error.delivery _ _ h)
@@ -412,9 +482,15 @@ theorem Gate.evaluate_preserves_sequenceBound
           simp [hc] at h
           subst after
           exact Compaction.advanceCursor_preserves_sequenceBound before post cursor hbound hc
+  | closePartial generation item =>
+      exact closePartialAndPublish_preserves_sequenceBound before after generation item hbound
+        (mapError_success Error.execution _ _ h)
   | recover expected fresh duration deadline items =>
       exact recoverExpiredBatch_preserves_sequenceBound before after expected fresh duration deadline
         items hbound (mapError_success Error.execution _ _ h)
+  | recoverTerminal expected fresh outcome selection items =>
+      exact recoverExpiredTerminal_preserves_sequenceBound before after expected fresh outcome
+        selection items hbound (mapError_success Error.execution _ _ h)
   | revoke expected fresh outcome selection =>
       exact revokeCorrupt_preserves_sequenceBound before after expected fresh outcome selection
         hbound (mapError_success Error.execution _ _ h)

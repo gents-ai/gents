@@ -10,7 +10,7 @@ pub fn normalize_optional(value: Option<&str>) -> Option<String> {
 pub fn turn_state_label(state: ClientTurnState) -> &'static str {
     match state {
         ClientTurnState::WaitingForClaim => "waitingForClaim",
-        ClientTurnState::Streaming => "streaming",
+        ClientTurnState::Running => "running",
         ClientTurnState::Completed => "completed",
         ClientTurnState::Failed => "failed",
         ClientTurnState::Superseded => "superseded",
@@ -19,8 +19,8 @@ pub fn turn_state_label(state: ClientTurnState) -> &'static str {
 }
 
 /// True for the two non-terminal turn states (`WaitingForClaim`,
-/// `Streaming`) that still have a live tail worth overlaying onto a
-/// snapshot. Single owner for the `Some(WaitingForClaim) | Some(Streaming)`
+/// `Running`) that still have a live tail worth overlaying onto a
+/// snapshot. Single owner for the `Some(WaitingForClaim) | Some(Running)`
 /// check shared by `snapshot::session::projection` and
 /// `snapshot::session::live_delta`.
 pub(crate) fn is_live_turn_state(state: Option<ClientTurnState>) -> bool {

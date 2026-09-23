@@ -1,14 +1,8 @@
 use gents::lifecycle::ClaimOutcome;
 use gents::lifecycle::RequestTerminalOutcome;
 use gents::RequestLifecycle;
-use serde::Deserialize;
 
 use crate::support::{build_request, create_request, first_row, test_db, AGENT_DID, AGENT_NAME};
-
-#[derive(Debug, Clone, Deserialize)]
-struct ProgressRow {
-    progress_seq: i64,
-}
 
 #[tokio::test]
 async fn missing_session_observation_does_not_block_terminal_request() {
@@ -48,7 +42,11 @@ async fn missing_session_observation_does_not_block_terminal_request() {
         .await
         .unwrap();
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -113,7 +111,11 @@ async fn complete_does_not_overwrite_session_observation_for_newer_request() {
         .await
         .unwrap();
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -129,48 +131,5 @@ async fn complete_does_not_overwrite_session_observation_for_newer_request() {
     assert_eq!(
         latest.lifecycle_state,
         gents_protocol::request_lifecycle::RequestLifecycleState::Processing
-    );
-}
-
-#[tokio::test]
-async fn advance_increments_progress_seq() {
-    let db = test_db("lifecycle-advance").await;
-    let request_doc_id = create_request(
-        &db.node,
-        "req-1",
-        "session-1",
-        "pending",
-        "2026-03-23T00:00:00Z",
-    )
-    .await;
-    let request = crate::support::build_request(
-        request_doc_id,
-        "req-1".into(),
-        "session-1".into(),
-        "2026-03-23T00:00:00Z".into(),
-    );
-
-    let mut lifecycle =
-        RequestLifecycle::new_with_agent_did(db.node.clone(), AGENT_NAME, AGENT_DID, request, 300);
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let response_doc_id = crate::support::begin_owned_execution(&mut lifecycle, &db.node)
-        .await
-        .unwrap();
-    lifecycle.advance().await.unwrap();
-    lifecycle.advance().await.unwrap();
-    lifecycle.advance().await.unwrap();
-
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ _docID: {{ _eq: "{response_doc_id}" }} }},
-                limit: 1
-            ) {{ progress_seq }}
-        }}"#
-    );
-    let resp = db.node.execute(&query).await;
-    assert_eq!(
-        first_row::<ProgressRow>(&resp, "AgentResponse").progress_seq,
-        3
     );
 }

@@ -17,7 +17,7 @@ def nextAdmission (requester : Option Nat := none) : PhysicalRequestAdmission :=
 
 def nextActivation (requester : Option Nat := none) : Activation :=
   { request := nextAdmission requester, evidence := .ordinary
-  , configuredRoutes := [(44, 2)], routesAuthenticated := true
+  , configuredRoutes := [(44, 2, 9)], routesAuthenticated := true
   , generation := 8, duration := 5, deadline := 11 }
 
 def reacquire (state : World) : Option World := do
@@ -43,7 +43,7 @@ def claimedNext : Option World := do
 
 def actualHandoverLateToolAndFinish : Option Bool := do
   let claimed ← claimedNext
-  if claimed.remoteRoutes != [(44, 2)] then none
+  if claimed.remoteRoutes != [(44, 2, 9)] then none
   let held ← reacquire claimed
   let begun ← beginProcessing held 1 6 8
   let toolHeld ← reacquire begun

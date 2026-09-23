@@ -72,7 +72,7 @@ impl PeriodicRecoverySweepRun {
 }
 
 type PeriodicRecoverySweepFn = for<'a> fn(
-    &'a EmbeddedNode,
+    &'a std::sync::Arc<EmbeddedNode>,
     &'a str,
     &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>>;
@@ -143,7 +143,7 @@ pub fn periodic_recovery_sweep_metadata() -> &'static [PeriodicRecoverySweepMeta
 }
 
 pub async fn run_periodic_recovery_sweeps(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     background_executions: &crate::hook::BackgroundExecutionRegistry,
 ) -> Result<Vec<PeriodicRecoverySweepRun>> {
@@ -166,7 +166,7 @@ pub async fn run_periodic_recovery_sweeps(
 }
 
 fn reconcile_subagent_liveness<'a>(
-    node: &'a EmbeddedNode,
+    node: &'a std::sync::Arc<EmbeddedNode>,
     agent_did: &'a str,
     _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
@@ -178,7 +178,7 @@ fn reconcile_subagent_liveness<'a>(
 }
 
 fn reconcile_terminal_parent_owned_tools<'a>(
-    node: &'a EmbeddedNode,
+    node: &'a std::sync::Arc<EmbeddedNode>,
     agent_did: &'a str,
     _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
@@ -190,7 +190,7 @@ fn reconcile_terminal_parent_owned_tools<'a>(
 }
 
 fn reconcile_orphaned_background_tools<'a>(
-    node: &'a EmbeddedNode,
+    node: &'a std::sync::Arc<EmbeddedNode>,
     agent_did: &'a str,
     background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
@@ -206,7 +206,7 @@ fn reconcile_orphaned_background_tools<'a>(
 }
 
 fn reconcile_background_completion_side_effects<'a>(
-    node: &'a EmbeddedNode,
+    node: &'a std::sync::Arc<EmbeddedNode>,
     agent_did: &'a str,
     _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
@@ -218,7 +218,7 @@ fn reconcile_background_completion_side_effects<'a>(
 }
 
 fn repair_terminal_requests<'a>(
-    node: &'a EmbeddedNode,
+    node: &'a std::sync::Arc<EmbeddedNode>,
     agent_did: &'a str,
     _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {
@@ -230,7 +230,7 @@ fn repair_terminal_requests<'a>(
 }
 
 fn recover_inference_calls<'a>(
-    node: &'a EmbeddedNode,
+    node: &'a std::sync::Arc<EmbeddedNode>,
     agent_did: &'a str,
     _background_executions: &'a crate::hook::BackgroundExecutionRegistry,
 ) -> BoxFuture<'a, Result<PeriodicRecoverySweepOutcome>> {

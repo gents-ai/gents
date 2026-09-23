@@ -66,6 +66,7 @@ pub(super) fn build_pending_turn(
         .lifecycle_state
         .map(|state| state.as_str().to_string());
     let content = normalize_optional(request.content.as_deref())?;
+    let request_doc_id = request.doc_id.as_deref();
     // Pending ownership is session state, not visible-page state. A materialized
     // user row outside the current window must still suppress the request-owned
     // placeholder at the tip.
@@ -73,55 +74,20 @@ pub(super) fn build_pending_turn(
         || transcript_store.transcript(session_id),
         |agent_did| transcript_store.transcript_for_agent(session_id, agent_did),
     );
-    let requests_by_id = store
-        .requests
-        .iter()
-        .map(|request| (request.request_id.as_str(), request))
-        .collect::<HashMap<_, _>>();
-    let keyed_steering_request_ids = keyed_steering_request_ids(&transcript.messages);
-    let messages = transcript
-        .messages
-        .into_iter()
-        .map(|row| {
-            let role = normalize_optional(row.role.as_deref());
-            let body = normalize_optional(row.content.as_deref());
-            let presentation = role
-                .as_deref()
-                .zip(body.as_deref())
-                .map(|(role, content)| present_persisted_message(role, content));
-
-            MessageView {
-                message_key: row.message_key.clone(),
-                request_id: row.request_id.clone(),
-                sequence: row.sequence,
-                role,
-                content: body,
-                display_role: presentation
-                    .as_ref()
-                    .map(|presentation| presentation.role.label().to_ascii_lowercase()),
-                display_content: presentation.as_ref().and_then(|presentation| {
-                    normalize_optional(Some(presentation.body_markdown.as_str()))
-                }),
-                reasoning: None,
-                has_tool_calls: false,
-                has_tool_results: false,
-                runtime_control: message_is_runtime_control(
-                    row,
-                    &requests_by_id,
-                    &keyed_steering_request_ids,
-                ),
-                timestamp: normalize_optional(row.timestamp.as_deref()),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    let exact_owner = has_materialized_user_owner(&messages, request_id);
+    let prompt_message_key = request_doc_id.map(|doc_id| format!("authored:{doc_id}:prompt"));
+    let exact_owner = transcript.messages.iter().any(|row| {
+        request_doc_id.is_some()
+            && row.message.request_doc_id.as_deref() == request_doc_id
+            && row.message.role == gents_protocol::output::MessageRole::User
+            && prompt_message_key.as_deref() == Some(row.message.message_key.as_str())
+    });
     if exact_owner {
         return None;
     }
 
     Some(PendingTurnView {
         request_id: request.request_id.clone(),
+        request_doc_id: request.doc_id.clone(),
         content: content.to_string(),
         selected_skill_ids: request_input.selected_skill_ids,
         lifecycle_state,

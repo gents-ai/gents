@@ -1,5 +1,6 @@
 use super::*;
 use crate::lifecycle::RequestTerminalOutcome;
+use crate::session;
 
 /// Model-driven witnesses for AgentSession.preserveControlSession: an enrolled
 /// desktop parent and runtime-signed controls share the existing session, while
@@ -71,7 +72,11 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
             .await
             .unwrap();
         parent_lifecycle
-            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
             .await
             .unwrap();
         session::ensure_session_with_behavior_id_and_requester_did(
@@ -152,7 +157,11 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
         );
         lifecycle.begin_owned_execution(&writer).await.unwrap();
         lifecycle
-            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
             .await
             .unwrap();
 
@@ -193,7 +202,11 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
             .await
             .unwrap();
         second_lifecycle
-            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
             .await
             .unwrap();
 
@@ -234,12 +247,12 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
             .reject_admission(&error.to_string())
             .await
             .unwrap();
-        let failed = db.node.execute("{ AgentRequest(filter: { request_id: { _eq: \"forged-control\" } }) { lifecycle_state failure_reason } AgentResponse(filter: { request_id: { _eq: \"forged-control\" } }) { status error_message } }").await;
+        let failed = db.node.execute("{ AgentRequest(filter: { request_id: { _eq: \"forged-control\" } }) { lifecycle_state failure_reason } }").await;
+        assert!(!failed.has_errors(), "{:?}", failed.errors);
         let failed = failed.data.unwrap();
         assert_eq!(failed["AgentRequest"][0]["lifecycle_state"], "failed");
-        assert_eq!(failed["AgentResponse"][0]["status"], "error");
         assert_eq!(
-            failed["AgentResponse"][0]["error_message"],
+            failed["AgentRequest"][0]["failure_reason"],
             error.to_string()
         );
 
@@ -461,7 +474,7 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ request_id request_doc_id }}
+            ) {{ request_doc_id }}
         }}"#,
         escape_graphql_string(&parent.session_id)
     );
@@ -476,17 +489,6 @@ async fn notification_is_atomically_bound_to_coalesced_wake() {
         .unwrap();
     assert_eq!(rows.len(), 2);
     for row in rows {
-        assert_eq!(
-            row["request_id"].as_str(),
-            Some(
-                first
-                    .request
-                    .as_ref()
-                    .expect("non-Goal wake")
-                    .request_id
-                    .as_str()
-            )
-        );
         assert_eq!(
             row["request_doc_id"].as_str(),
             Some(
@@ -560,7 +562,7 @@ async fn duplicate_notification_key_recovers_its_original_wake_binding() {
     assert!(
         conflict
             .to_string()
-            .contains("conflicts with its persisted scope or content"),
+            .contains("replay conflicts with authority, scope, or content"),
         "unexpected conflict: {conflict:#}"
     );
 }
@@ -659,7 +661,11 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
     );
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -675,7 +681,7 @@ async fn restart_before_claim_preserves_pending_input_until_the_wake_completes()
 }
 
 #[tokio::test]
-async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
+async fn canonical_terminal_commit_makes_acknowledgement_restart_atomic() {
     let db = test_db("background-response-repair-ack").await;
     let node = db.node.clone();
     let parent = root_parent(db.agent_did(), "background-response-repair-ack-session");
@@ -715,36 +721,71 @@ async fn persisted_response_repair_makes_acknowledgement_restart_atomic() {
         db.agent_did(),
         std::time::Duration::ZERO,
     );
-    let response_doc_id = lifecycle.begin_owned_execution(&writer).await.unwrap();
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    writer
+        .start_provider_attempt(
+            &lifecycle.request().doc_id,
+            0,
+            0,
+            gents_protocol::rendered_request::CaptureScope {
+                kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                seq: 0,
+            },
+        )
+        .await;
+    let published = writer
+        .publish_native_turn(
+            &lifecycle,
+            0,
+            0,
+            &Message::assistant("integrated notification"),
+        )
+        .await
+        .unwrap();
+    // Publication alone does not acknowledge the wake. The terminal commit
+    // selects the exact header and acknowledges the claimed notification set
+    // atomically; startup must not infer completion from published bytes.
+    let unpublished_terminal = crate::load_background_completion_diagnostics(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        db.agent_did(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(unpublished_terminal.pending_notifications, 1);
+    assert_eq!(unpublished_terminal.acknowledged_notifications, 0);
+    lifecycle
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::Message {
+                message_doc_id: published.message_doc_id.clone(),
+            },
+            None,
+        )
+        .await
+        .unwrap();
 
-    // Simulate an interrupted older terminal write: the response committed,
-    // while the owning request remains processing with an expired lease.
-    let response = node
+    let terminal = node
         .execute(&format!(
-            r#"mutation {{
-        update_AgentResponse(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
-            content: "integrated notification", status: "complete", token_count: 1,
-            progress_seq: 1, completed_at: "2026-08-12T00:00:01Z"
-        }}) {{ _docID }}
-        update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{
-            execution_lease_expires_at: "2000-01-01T00:00:00Z"
-        }}) {{ _docID }}
-    }}"#,
-            escape_graphql_string(&response_doc_id),
-            escape_graphql_string(&enqueued.request.as_ref().expect("non-Goal wake").doc_id)
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state terminal_output }} }}"#,
+            escape_graphql_string(&lifecycle.request().doc_id),
         ))
         .await;
-    assert!(
-        !response.has_errors(),
-        "persist interrupted terminal write: {:?}",
-        response.errors
+    assert!(!terminal.has_errors(), "{:?}", terminal.errors);
+    let terminal_row = &terminal.data.as_ref().unwrap()["AgentRequest"][0];
+    assert_eq!(terminal_row["lifecycle_state"], "completed");
+    assert_eq!(
+        terminal_row["terminal_output"],
+        serde_json::to_value(gents_protocol::output::TerminalOutput::Message {
+            message_doc_id: published.message_doc_id,
+        })
+        .unwrap()
     );
 
     let first_repair =
         crate::RequestLifecycle::repair_terminal_requests(node.as_ref(), db.agent_did())
             .await
             .unwrap();
-    assert_eq!(first_repair.repaired, 1);
+    assert_eq!(first_repair.repaired, 0);
     let first = crate::load_background_completion_diagnostics(
         &crate::config_client::ConfigAccess::Local(node.clone()),
         db.agent_did(),
@@ -808,19 +849,18 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         first_lifecycle.claim_with_identity().await.unwrap(),
         crate::lifecycle::ClaimOutcome::Claimed
     );
-    crate::session::append_message_with_requester_did(
-        node.as_ref(),
+    crate::session::import_history_observation(
+        &node,
+        "unrelated-foreground-request-doc",
         &parent.session_id,
         &parent.agent_did,
         parent.requester_did.as_deref(),
-        "user",
         "unrelated foreground input",
-        None,
-        None,
+        "unrelated-foreground-input",
+        first.message_sequence + 1,
         None,
     )
-    .await
-    .unwrap();
+    .await;
 
     let second = persist_background_completion_with_message(
         node.as_ref(),
@@ -867,8 +907,9 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         "unrelated transcript writes must not advance the queue-local generation"
     );
     first_lifecycle
-        .terminalize_owned_without_stream(
+        .terminalize_owned(
             RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
             Some("injected provider failure"),
         )
         .await
@@ -903,7 +944,11 @@ async fn successor_acknowledges_input_left_by_a_failed_active_wake() {
         .await
         .unwrap();
     second_lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -942,11 +987,18 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     let db = test_db("sequence-owner-scope").await;
     let session = "same-session-label";
     for (owner, sequence) in [(db.agent_did(), 4), ("did:key:foreign", 700)] {
-        let mutation = crate::session::create_message_mutation(
-            session, owner, None, sequence, "user", "input", None, None, None, None,
-        );
-        let response = db.node.execute(&mutation).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        crate::session::import_history_observation(
+            &db.node,
+            &format!("observed-request-{sequence}"),
+            session,
+            owner,
+            None,
+            "input",
+            &format!("observed-input-{sequence}"),
+            sequence,
+            None,
+        )
+        .await;
     }
     for (id, owner, sequence) in [
         ("own-reservation", db.agent_did(), 5),
@@ -964,5 +1016,8 @@ async fn append_sequence_excludes_foreign_session_messages_and_reservations() {
     .await
     .unwrap();
     txn.discard().await.unwrap();
-    assert_eq!(next, 7, "own background reservation remains ahead of own message; foreign rows cannot move this session's cursor");
+    assert_eq!(
+        next, 7,
+        "own background reservation remains ahead of own message; foreign rows cannot move this session's cursor"
+    );
 }

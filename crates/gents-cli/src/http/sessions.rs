@@ -52,7 +52,7 @@ struct MessageRow {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
-    timestamp: Option<String>,
+    created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,7 +161,7 @@ fn session_details_query(agent_did: &str, session_ids: &[String]) -> String {
                 {{ session_id: {{ _in: [{sessions}] }} }}
             ] }}) {{
                 session_id
-                timestamp
+                created_at
             }}
             CompactionEntry(filter: {{ _and: [
                 {{ agent_did: {{ _eq: "{agent_did}" }} }},
@@ -217,7 +217,7 @@ fn build_session_history_snapshot(
         .collect::<BTreeMap<_, _>>();
     let requests = group_requests(details.requests);
     let messages = count_latest_by_session(details.messages.into_iter().filter_map(|row| {
-        clean(row.session_id.as_deref()).map(|session_id| (session_id, row.timestamp))
+        clean(row.session_id.as_deref()).map(|session_id| (session_id, row.created_at))
     }));
     let compactions = count_latest_by_session(details.compactions.into_iter().filter_map(|row| {
         clean(row.session_id.as_deref()).map(|session_id| (session_id, row.created_at))
@@ -373,9 +373,9 @@ mod tests {
                 ],
                 "AgentRequest": recent,
                 "AgentMessage": [
-                    { "session_id": "session-a", "timestamp": "2026-06-05T10:01:00Z" },
-                    { "session_id": "session-a", "timestamp": "2026-06-05T10:02:00Z" },
-                    { "session_id": "session-b", "timestamp": "2026-06-05T09:01:00Z" }
+                    { "session_id": "session-a", "created_at": "2026-06-05T10:01:00Z" },
+                    { "session_id": "session-a", "created_at": "2026-06-05T10:02:00Z" },
+                    { "session_id": "session-b", "created_at": "2026-06-05T09:01:00Z" }
                 ],
                 "CompactionEntry": [
                     { "session_id": "session-a", "created_at": "2026-06-05T10:03:00Z" }

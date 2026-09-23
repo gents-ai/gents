@@ -30,6 +30,7 @@ function deniedToolView(denial?: CommandDenialView): RenderedToolCallView {
       input: null,
       output: "sed in-place edits are not allowed",
     },
+    reconstruction: { state: "ready" },
     denial,
   };
 }

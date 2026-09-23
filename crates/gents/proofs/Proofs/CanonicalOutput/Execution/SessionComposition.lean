@@ -116,7 +116,7 @@ def GoalPublication (result : GoalContinuation.Result) : Prop :=
 
 def activateGoal (state : World) (actor : Gate.Actor) (now : Time)
     (result : GoalContinuation.Result) (_published : GoalPublication result)
-    (routes : List (DocId × Nat)) (routesAuthenticated : Bool)
+    (routes : List (DocId × Nat × Nat)) (routesAuthenticated : Bool)
     (generation : Generation) (duration leaseDeadline : Time) (scope : Nat)
     (budget : CompletionRetry.Budget) (deadline : Option Time) : Option World := do
   let activation := GoalContinuation.childActivation result routes routesAuthenticated
@@ -181,7 +181,7 @@ inductive Trace : World → World → Prop where
       (h : finish before actor = some (after, acknowledged)) : Trace before after
   | activateGoal {before after : World} (actor : Gate.Actor) (now : Time)
       (result : GoalContinuation.Result) (published : GoalPublication result)
-      (routes : List (DocId × Nat)) (authenticated : Bool)
+      (routes : List (DocId × Nat × Nat)) (authenticated : Bool)
       (generation : Generation) (duration leaseDeadline : Time) (scope : Nat)
       (budget : CompletionRetry.Budget) (deadline : Option Time)
       (h : activateGoal before actor now result published routes authenticated generation

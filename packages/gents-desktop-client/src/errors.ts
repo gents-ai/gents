@@ -14,6 +14,7 @@ const BRIDGE_ERROR_CODES = new Set<BridgeErrorCode>([
   "cascadeDepthExceeded",
   "pathEscapesRoot",
   "backend",
+  "incompatibleLocalStore",
   "pairing",
   "unknown",
 ]);

@@ -15,8 +15,7 @@ describe("durable goal transcript card", () => {
       status: "active",
       turnState: "completed",
       latestRequestId: "request-1",
-      latestResponse: null,
-      activeResponseOverlay: null,
+      latestRequestOutcome: null,
       pendingTurn: null,
       timelineItems: [],
       goal: {
@@ -61,8 +60,7 @@ describe("durable goal transcript card", () => {
       status: "active",
       turnState: "completed",
       latestRequestId: "request-1",
-      latestResponse: null,
-      activeResponseOverlay: null,
+      latestRequestOutcome: null,
       pendingTurn: null,
       timelineItems: [],
       goal: {

@@ -145,8 +145,11 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) live_overlay_cases: Vec<LeanLiveOverlayCase>,
     pub(crate) request_progress_cases: Vec<LeanRequestProgressCase>,
     pub(crate) pending_user_turn_cases: Vec<LeanPendingUserTurnCase>,
+    pub(crate) queued_steering_trace_cases: Vec<LeanQueuedSteeringTraceCase>,
+    pub(crate) queued_steering_guard_cases: Vec<LeanQueuedSteeringGuardCase>,
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
+    pub(crate) reserved_child_materialization_cases: Vec<LeanReservedChildMaterializationCase>,
     // `recovery_equivalence_cases` was deleted from the generated contract:
     // the synthetic recovery-equivalence fixtures are gone and the actual
     // recovery sweep (`recovery_sweep_cases`) is the remaining owner.
@@ -172,6 +175,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
     pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
+    pub(crate) r5_scenario_cases: Vec<serde_json::Value>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
     pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
@@ -179,10 +183,12 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
+    pub(crate) canonical_worker_capacity_cases: Vec<LeanWorkerCapacityCase>,
     pub(crate) canonical_payload_presentation_cases: Vec<LeanPayloadPresentationCase>,
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
+    pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
     pub(crate) prompt_assembly_budget_cases: Vec<LeanPromptAssemblyBudgetCase>,
@@ -588,6 +594,83 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
     pub(crate) owns_session: bool,
     pub(crate) expected_admit: bool,
     pub(crate) expected_selected_count: usize,
+    pub(crate) closure_input: LeanSessionHydrationClosureInput,
+    pub(crate) expected_selected_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationDocumentKey {
+    pub(crate) collection: String,
+    pub(crate) id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationPayloadRef {
+    pub(crate) close_id: u64,
+    pub(crate) stream: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationMessage {
+    pub(crate) id: u64,
+    pub(crate) session: u64,
+    pub(crate) request: Option<u64>,
+    pub(crate) origin: Option<u64>,
+    pub(crate) refs: Vec<LeanSessionHydrationPayloadRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationOwner {
+    pub(crate) kind: String,
+    #[serde(default)]
+    pub(crate) owner: Option<u64>,
+    #[serde(default)]
+    pub(crate) scope: Option<u64>,
+    #[serde(default)]
+    pub(crate) turn: Option<u64>,
+    #[serde(default)]
+    pub(crate) attempt: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationSegment {
+    pub(crate) id: u64,
+    pub(crate) request: u64,
+    pub(crate) source: LeanSessionHydrationOwner,
+    pub(crate) writer: LeanSessionHydrationOwner,
+    pub(crate) payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationAccess {
+    pub(crate) key: LeanSessionHydrationDocumentKey,
+    pub(crate) state: String,
+    pub(crate) peer: String,
+    pub(crate) requester: String,
+    pub(crate) agent: String,
+    pub(crate) session: String,
+    pub(crate) native_session: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationRequest {
+    pub(crate) key: String,
+    pub(crate) peer: String,
+    pub(crate) requester: String,
+    pub(crate) agent: String,
+    pub(crate) session: String,
+    pub(crate) native_session: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct LeanSessionHydrationClosureInput {
+    pub(crate) request: LeanSessionHydrationRequest,
+    pub(crate) roots: Vec<u64>,
+    pub(crate) messages: Vec<LeanSessionHydrationMessage>,
+    pub(crate) segments: Vec<LeanSessionHydrationSegment>,
+    pub(crate) access: Vec<LeanSessionHydrationAccess>,
+    pub(crate) denied_headers: Vec<u64>,
+    pub(crate) denied_segments: Vec<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -595,12 +678,18 @@ pub(crate) struct LeanSessionHydrationDecisionCase {
 pub(crate) struct LeanSessionHydrationClosureCase {
     pub(crate) name: String,
     pub(crate) expected_selected: bool,
+    pub(crate) selection_request: LeanSessionHydrationRequest,
+    pub(crate) closure_input: LeanSessionHydrationClosureInput,
+    pub(crate) expected_closure_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
+    pub(crate) expected_selected_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct LeanSessionHydrationApplyCase {
     pub(crate) name: String,
     pub(crate) admitted: bool,
+    pub(crate) request: LeanSessionHydrationRequest,
+    pub(crate) input_documents: Option<Vec<LeanSessionHydrationDocumentKey>>,
     pub(crate) delivery_confirmed: bool,
     pub(crate) terminal_write: String,
     pub(crate) expected_served: bool,
@@ -795,6 +884,7 @@ pub(crate) struct LeanAgentRequestAdmissionCase {
     pub(crate) signer_matches_target: bool,
     pub(crate) signer_matches_issuer: bool,
     pub(crate) requester_matches_issuer: bool,
+    pub(crate) requester_matches_bridge_author: bool,
     pub(crate) current_approval: bool,
     pub(crate) exact_generation: bool,
     pub(crate) authorization_fresh: bool,
@@ -1155,6 +1245,11 @@ pub(crate) fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
     &lean_contract_snapshot().recovery_sweep_cases
 }
 
+pub(crate) fn lean_reserved_child_materialization_cases(
+) -> &'static [LeanReservedChildMaterializationCase] {
+    &lean_contract_snapshot().reserved_child_materialization_cases
+}
+
 pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {
     lean_contract_snapshot()
         .recovery_sweep_cases
@@ -1285,6 +1380,10 @@ pub(crate) fn lean_r5_cross_principal_cases() -> &'static [LeanR5CrossPrincipalC
     &lean_contract_snapshot().r5_cross_principal_cases
 }
 
+pub(crate) fn lean_r5_scenario_cases() -> &'static [serde_json::Value] {
+    &lean_contract_snapshot().r5_scenario_cases
+}
+
 pub(crate) fn lean_composed_invariant_witnesses() -> &'static [LeanComposedInvariantWitness] {
     &lean_contract_snapshot().composed_invariant_witnesses
 }
@@ -1363,6 +1462,163 @@ pub(crate) fn lean_canonical_output_projection_cases(
 
 pub(crate) fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecutionCase] {
     &lean_contract_snapshot().canonical_execution_gate_cases
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityCase {
+    pub(crate) name: String,
+    pub(crate) world_fixture: String,
+    pub(crate) world: LeanWorkerCapacityWorld,
+    pub(crate) pre: LeanWorkerCapacityState,
+    pub(crate) operation: LeanWorkerCapacityOperation,
+    pub(crate) expected: Option<LeanWorkerCapacityState>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityWorld {
+    pub(crate) request_id: u64,
+    pub(crate) session_id: u64,
+    pub(crate) lease: LeanRequestExecutionWorld,
+    pub(crate) claim: Option<LeanWorkerCapacityClaim>,
+    pub(crate) queue_active: Option<u64>,
+    pub(crate) retry_request: u64,
+    pub(crate) current_claim: bool,
+    pub(crate) accepted_messages: Vec<LeanCanonicalMessage<LeanPayloadSpec>>,
+    pub(crate) selected_tool: Option<LeanWorkerCapacityTool>,
+    pub(crate) control_tool: Option<LeanWorkerCapacityControlTool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityClaim {
+    pub(crate) physical_request: u64,
+    pub(crate) logical_request: u64,
+    pub(crate) session: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityTool {
+    pub(crate) document: u64,
+    pub(crate) request_doc: u64,
+    pub(crate) session: u64,
+    pub(crate) accepted_sequence: u64,
+    pub(crate) state: String,
+    pub(crate) await_mode: String,
+    pub(crate) canonical_tool_delivered: bool,
+    pub(crate) child_request_id: Option<u64>,
+    pub(crate) accepted_header_binds_generation: bool,
+    pub(crate) accepted_header_binds_tool: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityControlTool {
+    pub(crate) document: u64,
+    pub(crate) state: String,
+    pub(crate) current_wait_control: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacitySessionOwner {
+    pub(crate) session_id: String,
+    pub(crate) agent_did: String,
+    pub(crate) requester_did: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityViewer {
+    pub(crate) root_request_id: u64,
+    pub(crate) root_principal: u64,
+    pub(crate) root_session_id: u64,
+    pub(crate) lineage_id: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityEdge {
+    pub(crate) root_request_id: u64,
+    pub(crate) root_session_id: u64,
+    pub(crate) parent_request_id: u64,
+    pub(crate) parent_tool_call_id: u64,
+    pub(crate) child_request_id: u64,
+    pub(crate) child_session_id: Option<u64>,
+    pub(crate) owner_principal: u64,
+    pub(crate) control_principal: u64,
+    pub(crate) child_principal: u64,
+    pub(crate) behavior_id: u64,
+    pub(crate) lineage_id: u64,
+    pub(crate) await_mode: String,
+    pub(crate) materialization: String,
+    pub(crate) lifecycle: String,
+    pub(crate) bridge_durable: bool,
+    pub(crate) physical_corroborated: bool,
+    pub(crate) direct_from_root: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacitySelection {
+    pub(crate) viewer: LeanWorkerCapacityViewer,
+    pub(crate) caller_owner: LeanWorkerCapacitySessionOwner,
+    pub(crate) bridge_owner: LeanWorkerCapacitySessionOwner,
+    pub(crate) edge: LeanWorkerCapacityEdge,
+    pub(crate) bridge_document: u64,
+    pub(crate) control_document: u64,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityState {
+    pub(crate) active_limit: usize,
+    pub(crate) parked_limit: usize,
+    pub(crate) active: Vec<[u64; 2]>,
+    pub(crate) parked: Vec<[u64; 2]>,
+    pub(crate) dependencies: Vec<LeanWorkerCapacityDependency>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanWorkerCapacityDependency {
+    pub(crate) ticket: [u64; 2],
+    pub(crate) document: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanWorkerCapacityOperation {
+    AdmitFresh {
+        ticket: [u64; 2],
+    },
+    WaitForChild {
+        generation: u64,
+        document: u64,
+    },
+    ResumeAfterChild {
+        generation: u64,
+        cancellation_allows: bool,
+    },
+    WaitForExistingChild {
+        generation: u64,
+        document: u64,
+        selection: LeanWorkerCapacitySelection,
+    },
+    ResumeAfterExistingChild {
+        generation: u64,
+        selection: LeanWorkerCapacitySelection,
+        cancellation_allows: bool,
+    },
+    Release {
+        ticket: [u64; 2],
+    },
+}
+
+pub(crate) fn lean_canonical_worker_capacity_cases() -> &'static [LeanWorkerCapacityCase] {
+    &lean_contract_snapshot().canonical_worker_capacity_cases
 }
 
 pub(crate) fn lean_canonical_payload_presentation_cases() -> &'static [LeanPayloadPresentationCase]
@@ -1565,6 +1821,14 @@ pub(crate) fn lean_pending_user_turn_cases() -> &'static [LeanPendingUserTurnCas
     &lean_contract_snapshot().pending_user_turn_cases
 }
 
+pub(crate) fn lean_queued_steering_trace_cases() -> &'static [LeanQueuedSteeringTraceCase] {
+    &lean_contract_snapshot().queued_steering_trace_cases
+}
+
+pub(crate) fn lean_queued_steering_guard_cases() -> &'static [LeanQueuedSteeringGuardCase] {
+    &lean_contract_snapshot().queued_steering_guard_cases
+}
+
 pub(crate) fn lean_vocabulary_values(domain: &str) -> Vec<&'static str> {
     lean_vocabulary_contract(domain)
         .values
@@ -1609,6 +1873,10 @@ pub(crate) fn lean_goal_continuation_materialization_cases(
 pub(crate) fn lean_session_hydration_decision_cases() -> &'static [LeanSessionHydrationDecisionCase]
 {
     &lean_contract_snapshot().session_hydration_decision_cases
+}
+
+pub(crate) fn lean_session_hydration_closure_cases() -> &'static [LeanSessionHydrationClosureCase] {
+    &lean_contract_snapshot().session_hydration_closure_cases
 }
 
 pub(crate) fn lean_session_hydration_apply_cases() -> &'static [LeanSessionHydrationApplyCase] {
@@ -1897,7 +2165,36 @@ pub(crate) fn assert_lean_to_defradb_vocabulary_matches(spec: LeanVocabulary<'_>
 }
 
 fn load_lean_contract_snapshot() -> LeanContractSnapshot {
-    gents_lean_contract::load_contract_snapshot().unwrap_or_else(|error| panic!("{error:#}"))
+    let json = gents_lean_contract::load_contract_json()
+        .unwrap_or_else(|error| panic!("failed to load Lean conformance contract JSON: {error:#}"));
+
+    serde_json::from_str(&json).unwrap_or_else(|error| {
+        let excerpt = json_excerpt_at(&json, error.line(), error.column(), 512);
+        panic!(
+            "failed to parse Lean conformance contract JSON ({} bytes) at line {}, column {}: {error}\nnear error: {excerpt}",
+            json.len(),
+            error.line(),
+            error.column(),
+        )
+    })
+}
+
+fn json_excerpt_at(json: &str, line: usize, column: usize, max_chars: usize) -> String {
+    let source_line = json.lines().nth(line.saturating_sub(1)).unwrap_or_default();
+    let error_char = column.saturating_sub(1);
+    let start = error_char.saturating_sub(max_chars / 2);
+    let excerpt = source_line
+        .chars()
+        .skip(start)
+        .take(max_chars)
+        .collect::<String>();
+    let prefix = if start > 0 { "…" } else { "" };
+    let suffix = if source_line.chars().count() > start + excerpt.chars().count() {
+        "…"
+    } else {
+        ""
+    };
+    format!("{prefix}{excerpt}{suffix}")
 }
 
 pub(crate) fn lean_to_defradb_values<'a>(

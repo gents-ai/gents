@@ -43,6 +43,14 @@ def jsonOptionalPhase : Option Phase → String
   | none => "null"
   | some phase => jsonString (phaseName phase)
 
+def phaseScheduledWake : Phase → Option Time
+  | .retractRequired _ _ wake | .retracted _ _ wake | .backingOff wake => some wake
+  | _ => none
+
+def jsonOptionalNat : Option Nat → String
+  | none => "null"
+  | some value => toString value
+
 def RetryCase.toJson (c : RetryCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
@@ -50,6 +58,9 @@ def RetryCase.toJson (c : RetryCase) : String :=
     ++ "\"action\":" ++ jsonString (actionName c.action) ++ ","
     ++ "\"legal\":" ++ boolJson c.post.isSome ++ ","
     ++ "\"pre_phase\":" ++ jsonString (phaseName c.pre.phase) ++ ","
+    ++ "\"pre_now\":" ++ toString c.pre.now ++ ","
+    ++ "\"pre_deadline\":" ++ jsonOptionalNat c.pre.deadline ++ ","
+    ++ "\"pre_scheduled_wake\":" ++ jsonOptionalNat (phaseScheduledWake c.pre.phase) ++ ","
     ++ "\"expected_phase\":" ++ jsonOptionalPhase (c.post.map (·.phase)) ++ ","
     ++ "\"expected_transport_used\":" ++
       (c.post.map (fun state => toString state.transportUsed)).getD "null" ++ ","

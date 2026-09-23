@@ -153,6 +153,8 @@ export function useShell(
       refreshSession: d.refreshSession,
       onInitLocalRuntime: d.onInitLocalRuntime,
       startupPhase: d.startupPhase,
+      onResetManagedServer: d.onResetManagedServer,
+      managedServerReset: d.managedServerReset,
     };
   }, [api, applyConfig, behaviorColors, d, sendMessage]);
 }

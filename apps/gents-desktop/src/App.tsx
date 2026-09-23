@@ -165,6 +165,8 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           error={shell.error}
           managedServerSupported={bridge.supportsManagedServer === true}
           onRetry={shell.reconnect}
+          onResetManagedServer={shell.onResetManagedServer}
+          managedServerReset={shell.managedServerReset}
           phase={shell.startupPhase}
         />
       </>

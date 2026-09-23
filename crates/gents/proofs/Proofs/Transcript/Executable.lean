@@ -7,6 +7,9 @@ structure TranscriptCase where
   name : String
   group : String
   action : String
+  actionCallIds : List ToolExecution.ToolCallId
+  actionLogicalResultIds : List LogicalResultId
+  actionPayloadHashes : List PayloadHash
   legal : Bool
   preMessageCount : Nat
   postMessageCount : Nat
@@ -57,9 +60,12 @@ private instance (s : TranscriptState) : Decidable s.OrderedBySequence := by
 private instance (s : TranscriptState) : Decidable s.StrongDrain := by
   unfold TranscriptState.StrongDrain; infer_instance
 
-private def observedCase (name group action : String) (pre post : TranscriptState)
+private def observedCase (name group action : String)
+    (actionCallIds : List ToolExecution.ToolCallId)
+    (actionLogicalResultIds : List LogicalResultId) (actionPayloadHashes : List PayloadHash)
+    (pre post : TranscriptState)
     (key : ToolResultKey) (_trace : Trace pre post) : TranscriptCase :=
-  { name, group, action
+  { name, group, action, actionCallIds, actionLogicalResultIds, actionPayloadHashes
   , legal := true -- backed by the required transition trace, not a fixture assertion
   , preMessageCount := pre.messages.length
   , postMessageCount := post.messages.length
@@ -96,16 +102,19 @@ private theorem ordinaryTrace : Trace empty completed := by
 
 def acceptedPublicationAtomicBeforeDispatchCase : TranscriptCase :=
   observedCase "accepted_publication_atomic_before_dispatch" "publication"
-    "publish_complete_header_and_pending_rows" user published key
+    "publish_complete_header_and_pending_rows" [1] [] [] user published key
     (Trace.step (Transition.publish_accepted (messageId := 2)
       (turn := acceptedTurn) (by native_decide) rfl rfl) Trace.refl)
 
 def orderingUserAssistantToolResultCase : TranscriptCase :=
   observedCase "ordering_user_assistant_tool_result" "ordering"
-    "append_user_publish_assistant_dispatch_complete_result" empty completed key ordinaryTrace
+    "append_user_publish_assistant_dispatch_complete_result" acceptedTurn.callIds
+    [key.logicalResultId] [key.payloadHash]
+    empty completed key ordinaryTrace
 
 def dedupeDuplicateReusesSequenceCase : TranscriptCase :=
   observedCase "dedupe_duplicate_reuses_sequence" "dedupe" "observe_duplicate_tool_result"
+    acceptedTurn.callIds [key.logicalResultId] [key.payloadHash]
     completed (completed.completeToolWithResult 1 4 key) key
     (Trace.step (Transition.observe_duplicate_tool_result (key := key) (by native_decide)
       (duplicate_tool_result_observation_noops completed 1 4 key (by native_decide))) Trace.refl)
@@ -118,7 +127,7 @@ private def secondResult := firstResult.appendUserMessage 2 (.toolResult 2 other
 and provider sanitation is responsible for narrowing them before inference. -/
 def distinctResultIdsAppendDistinctRowsCase : TranscriptCase :=
   observedCase "distinct_result_ids_append_distinct_rows" "dedupe"
-    "append_distinct_tool_result" firstResult secondResult otherKey
+    "append_distinct_tool_result" [2] [11] [20] firstResult secondResult otherKey
     (Trace.step (Transition.append_distinct_tool_result (by native_decide) rfl) Trace.refl)
 
 private def parallelTurn : AssistantTurn := ⟨0, 2, [1, 2, 3], .complete⟩
@@ -126,9 +135,12 @@ private def parallelPublished := user.publishAcceptedAssistant 2 parallelTurn
 private def parallelDispatched :=
   ((parallelPublished.dispatchToolCall 1).dispatchToolCall 2).dispatchToolCall 3
 private def parallelKey : ToolResultKey := ⟨0, 30, 40⟩
+private def parallelKeyTwo : ToolResultKey := ⟨0, 31, 40⟩
+private def parallelKeyThree : ToolResultKey := ⟨0, 32, 40⟩
+private def parallelKeys : List ToolResultKey := [parallelKey, parallelKeyTwo, parallelKeyThree]
 private def parallelCompleted :=
   ((parallelDispatched.completeToolWithResult 1 3 parallelKey).completeToolWithResult
-    2 4 ⟨0, 31, 40⟩).completeToolWithResult 3 5 ⟨0, 32, 40⟩
+    2 4 parallelKeyTwo).completeToolWithResult 3 5 parallelKeyThree
 
 private theorem parallelTrace : Trace empty parallelCompleted := by
   apply Trace.step (Transition.append_user (messageId := 1) rfl)
@@ -140,13 +152,15 @@ private theorem parallelTrace : Trace empty parallelCompleted := by
   apply Trace.step (Transition.complete_tool_with_result (callId := 1) (messageId := 3)
     (key := parallelKey) (by native_decide) rfl (by native_decide) rfl)
   apply Trace.step (Transition.complete_tool_with_result (callId := 2) (messageId := 4)
-    (key := ⟨0, 31, 40⟩) (by native_decide) rfl (by native_decide) rfl)
+    (key := parallelKeyTwo) (by native_decide) rfl (by native_decide) rfl)
   exact Trace.step (Transition.complete_tool_with_result (callId := 3) (messageId := 5)
-    (key := ⟨0, 32, 40⟩) (by native_decide) rfl (by native_decide) rfl) Trace.refl
+    (key := parallelKeyThree) (by native_decide) rfl (by native_decide) rfl) Trace.refl
 
 def parallelResultsShareAssistantTurnCase : TranscriptCase :=
   observedCase "parallel_results_share_assistant_turn" "ordering"
     "publish_once_dispatch_in_order_then_complete_each_parallel_result"
+    parallelTurn.callIds (parallelKeys.map ToolResultKey.logicalResultId)
+    (parallelKeys.map ToolResultKey.payloadHash)
     empty parallelCompleted parallelKey parallelTrace
 
 def completedToolPairClosedCase : TranscriptCase :=
@@ -160,33 +174,33 @@ private def partialPublished := empty.publishPartialAssistant 10 partialTurn
 
 def partialPublicationNeverDispatchesCase : TranscriptCase :=
   observedCase "partial_publication_never_dispatches" "publication"
-    "publish_partial_header_with_terminal_rows" empty partialPublished key
+    "publish_partial_header_with_terminal_rows" [7, 8] [] [] empty partialPublished key
     (Trace.step (Transition.publish_partial (messageId := 10)
       (turn := partialTurn) (by native_decide) rfl rfl) Trace.refl)
 
 def unacceptedProviderFailureNoopsCase : TranscriptCase :=
   observedCase "unaccepted_provider_failure_noops" "publication"
-    "reject_before_acceptance" empty empty key
+    "reject_before_acceptance" [] [] [] empty empty key
     (Trace.step (Transition.reject_unaccepted rfl) Trace.refl)
 
 private def cancelledBeforeDispatch := published.terminalizeToolCall 1 .cancelled
 
 def cancellationAfterPublicationTerminalizesPendingCase : TranscriptCase :=
   observedCase "cancellation_after_publication_terminalizes_pending" "publication"
-    "cancel_published_before_dispatch" published cancelledBeforeDispatch key
+    "cancel_published_before_dispatch" [1] [] [] published cancelledBeforeDispatch key
     (Trace.step (Transition.cancel_published (callId := 1) (by native_decide) rfl) Trace.refl)
 
 private def failedAfterDispatch := dispatched.terminalizeToolCall 1 .failed
 
 def dispatchFailureRetainsAcceptedHeaderCase : TranscriptCase :=
   observedCase "dispatch_failure_retains_accepted_header" "publication"
-    "fail_dispatched_call_without_retracting_header" published failedAfterDispatch key
+    "fail_dispatched_call_without_retracting_header" [1] [] [] published failedAfterDispatch key
     (Trace.step (Transition.dispatch_tool_call (callId := 1) (by native_decide) rfl)
       (Trace.step (Transition.fail_published (callId := 1) (by native_decide) rfl) Trace.refl))
 
 def dropAbandonNotStrongDrainCase : TranscriptCase :=
   observedCase "drop_abandon_not_strong_drain" "hook_boundary" "abandon_hook_ownership"
-    abandonWitnessPre abandonWitnessPost ⟨0, 0, 0⟩
+    [7] [] [] abandonWitnessPre abandonWitnessPost ⟨0, 0, 0⟩
     (Trace.step (Transition.abandon_hook_ownership rfl) Trace.refl)
 
 def transcriptConformanceCases : List TranscriptCase :=

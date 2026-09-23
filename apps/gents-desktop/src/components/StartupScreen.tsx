@@ -6,6 +6,7 @@ import {
   type LoadingStepState,
 } from "../lib/loadingStatus";
 import { Mark } from "../ui/app/Mark";
+import type { ManagedServerResetResult } from "@source-inc/gents-desktop-client";
 
 const STARTUP_ASIDES = [
   "Catalyzing dilithium converters.",
@@ -21,6 +22,8 @@ type StartupScreenProps = {
   managedServerSupported?: boolean;
   onRetry: () => Promise<void>;
   phase: Exclude<DesktopStartupPhase, "ready">;
+  managedServerReset?: ManagedServerResetResult | null;
+  onResetManagedServer?: () => Promise<void>;
 };
 
 export function StartupScreen({
@@ -28,8 +31,11 @@ export function StartupScreen({
   managedServerSupported = false,
   onRetry,
   phase,
+  managedServerReset = null,
+  onResetManagedServer,
 }: StartupScreenProps) {
   const [asideIndex, setAsideIndex] = useState(0);
+  const [resetConfirmed, setResetConfirmed] = useState(false);
   const status = projectStartupLoadingStatus(phase, managedServerSupported);
 
   useEffect(() => {
@@ -88,6 +94,36 @@ export function StartupScreen({
             <p className="text-sm text-destructive">
               {error ?? "Gents could not finish starting."}
             </p>
+            {phase === "managed-server-error" && managedServerReset ? (
+              <div className="grid gap-3 rounded-lg border border-destructive/40 p-3 text-sm">
+                <p>
+                  This installation contains an incompatible local database at{" "}
+                  <code className="break-all">{managedServerReset.dataPath}</code>.
+                </p>
+                <p>{managedServerReset.consequence}</p>
+                <label className="flex items-start gap-2">
+                  <input
+                    checked={resetConfirmed}
+                    data-testid="managed-server-reset-confirmation"
+                    onChange={(event) => setResetConfirmed(event.currentTarget.checked)}
+                    type="checkbox"
+                  />
+                  <span>
+                    Archive this exact managed home and initialize a new local database:
+                    <code className="block break-all">{managedServerReset.managedHome}</code>
+                  </span>
+                </label>
+                <button
+                  className="inline-flex h-8 w-fit items-center rounded-lg bg-destructive px-3 text-sm font-medium text-destructive-foreground disabled:opacity-50"
+                  data-testid="managed-server-reset"
+                  disabled={!resetConfirmed || !onResetManagedServer}
+                  onClick={() => void onResetManagedServer?.()}
+                  type="button"
+                >
+                  Archive old data and start fresh
+                </button>
+              </div>
+            ) : null}
             <button
               className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
               data-testid="startup-retry"

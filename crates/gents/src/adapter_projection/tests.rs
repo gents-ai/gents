@@ -4,11 +4,52 @@ use std::collections::BTreeSet;
 use crate::run_timeline::{
     build_run_timeline, RunTimelineRows, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineRenderedRequestRef, TimelineRenderedRequestRow, TimelineRequestRow,
-    TimelineResponseRow, TimelineToolCallRow,
+    TimelineToolCallRow,
 };
+use gents_protocol::message::Message;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 const BODY_SENTINEL: &str = "SENTINEL_RENDERED_BODY_9f3a";
+
+fn message_row(
+    session_id: &str,
+    request_doc_id: Option<&str>,
+    sequence: i64,
+    message: Message,
+    timestamp: &str,
+) -> TimelineMessageRow {
+    let role = match &message {
+        Message::System { .. } => gents_protocol::output::MessageRole::System,
+        Message::User { .. } => gents_protocol::output::MessageRole::User,
+        Message::Assistant { .. } => gents_protocol::output::MessageRole::Assistant,
+    };
+    let header = gents_protocol::output::TranscriptMessage {
+        message_key: format!("{session_id}:{sequence}"),
+        session_id: session_id.to_string(),
+        agent_did: "did:test:projection".to_string(),
+        requester_did: None,
+        request_doc_id: request_doc_id.map(ToOwned::to_owned),
+        publication: gents_protocol::output::MessagePublication::RequestExecution {
+            execution_generation: "test".to_string(),
+        },
+        outcome: gents_protocol::output::OutputOutcome::Complete,
+        sequence: sequence as u32,
+        role,
+        native_id: None,
+        blocks: Vec::new(),
+        created_at: timestamp.to_string(),
+    };
+    TimelineMessageRow {
+        doc_id: Some(format!("message:{session_id}:{sequence}")),
+        session_id: session_id.to_string(),
+        request_doc_id: header.request_doc_id.clone(),
+        sequence,
+        timestamp: Some(timestamp.to_string()),
+        agent_did: Some(header.agent_did.clone()),
+        header,
+        message,
+    }
+}
 
 /// A timeline whose capture rows carry the sentinel in the one place a body
 /// realistically travels — `assembly_trace.effective_messages` inside
@@ -415,28 +456,50 @@ fn delegated_coherence_timeline() -> RunTimeline {
             ..TimelineRequestRow::default()
         }],
         messages: vec![
-            TimelineMessageRow {
-                doc_id: None,
-                session_id: "session-root".to_string(),
-                request_id: Some("req-root".to_string()),
-                request_doc_id: None,
-                sequence: 1,
-                role: "assistant".to_string(),
-                content: "root private assistant note".to_string(),
-                reasoning: None,
-                timestamp: Some("2026-06-05T00:00:01Z".to_string()),
-            },
-            TimelineMessageRow {
-                doc_id: None,
-                session_id: "session-review".to_string(),
-                request_id: Some("req-review".to_string()),
-                request_doc_id: None,
-                sequence: 1,
-                role: "assistant".to_string(),
-                content: "child private assistant note".to_string(),
-                reasoning: None,
-                timestamp: Some("2026-06-05T00:00:03.100Z".to_string()),
-            },
+            message_row(
+                "session-root",
+                Some("doc-req-root"),
+                1,
+                Message::assistant("root private assistant note"),
+                "2026-06-05T00:00:01Z",
+            ),
+            message_row(
+                "session-review",
+                Some("doc-req-review"),
+                1,
+                Message::assistant("child private assistant note"),
+                "2026-06-05T00:00:03.100Z",
+            ),
+            message_row(
+                "session-review",
+                Some("doc-req-review"),
+                2,
+                Message::Assistant {
+                    id: None,
+                    content: vec![
+                        gents_protocol::message::AssistantContent::Reasoning(
+                            gents_protocol::message::Reasoning::new("child private reasoning"),
+                        ),
+                        gents_protocol::message::AssistantContent::text("child private final"),
+                    ],
+                },
+                "2026-06-05T00:00:04Z",
+            ),
+            message_row(
+                "session-root",
+                Some("doc-req-root"),
+                2,
+                Message::Assistant {
+                    id: None,
+                    content: vec![
+                        gents_protocol::message::AssistantContent::Reasoning(
+                            gents_protocol::message::Reasoning::new("root private reasoning"),
+                        ),
+                        gents_protocol::message::AssistantContent::text("root private final"),
+                    ],
+                },
+                "2026-06-05T00:00:05Z",
+            ),
         ],
         tool_calls: vec![
             TimelineToolCallRow {
@@ -448,7 +511,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 tool_name: "delegate".to_string(),
                 tool_call_id: "call-delegate".to_string(),
                 args: r#"{"prompt":"delegate private args"}"#.to_string(),
-                result: r#"{"summary":"delegate private result"}"#.to_string(),
+                result: Some(r#"{"summary":"delegate private result"}"#.to_string()),
                 status: "completed".to_string(),
                 child_request_id: Some("req-review".to_string()),
                 started_at: Some("2026-06-05T00:00:02Z".to_string()),
@@ -462,7 +525,7 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 tool_name: "bash".to_string(),
                 tool_call_id: "call-review-check".to_string(),
                 args: r#"{"cmd":"child private args"}"#.to_string(),
-                result: "child private result".to_string(),
+                result: Some("child private result".to_string()),
                 status: "denied".to_string(),
                 denial_reason: Some("child private denial reason".to_string()),
                 selected_service_id: Some("native-shell".to_string()),
@@ -470,26 +533,6 @@ fn delegated_coherence_timeline() -> RunTimeline {
                 started_at: Some("2026-06-05T00:00:03.200Z".to_string()),
                 completed_at: Some("2026-06-05T00:00:03.300Z".to_string()),
                 ..TimelineToolCallRow::default()
-            },
-        ],
-        responses: vec![
-            TimelineResponseRow {
-                request_id: "req-review".to_string(),
-                session_id: Some("session-review".to_string()),
-                content: Some("child private final".to_string()),
-                reasoning: Some("child private reasoning".to_string()),
-                status: Some("completed".to_string()),
-                completed_at: Some("2026-06-05T00:00:03.500Z".to_string()),
-                ..TimelineResponseRow::default()
-            },
-            TimelineResponseRow {
-                request_id: "req-root".to_string(),
-                session_id: Some("session-root".to_string()),
-                content: Some("root private final".to_string()),
-                reasoning: Some("root private reasoning".to_string()),
-                status: Some("completed".to_string()),
-                completed_at: Some("2026-06-05T00:00:04Z".to_string()),
-                ..TimelineResponseRow::default()
             },
         ],
         ..RunTimelineRows::default()
@@ -581,7 +624,7 @@ fn participant(
 }
 
 #[test]
-fn blank_response_falls_back_to_materialized_assistant_message_across_adapters() {
+fn canonical_assistant_message_drives_final_output_across_adapters() {
     let timeline = build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
             doc_id: Some("doc-root".to_string()),
@@ -597,30 +640,13 @@ fn blank_response_falls_back_to_materialized_assistant_message_across_adapters()
             session_id: Some("session-root".to_string()),
             ..Default::default()
         }],
-        messages: vec![TimelineMessageRow {
-            doc_id: Some("doc-message".to_string()),
-            session_id: "session-root".to_string(),
-            request_id: Some("req-root".to_string()),
-            request_doc_id: Some("doc-root".to_string()),
-            sequence: 2,
-            role: "assistant".to_string(),
-            content: "final durable answer".to_string(),
-            reasoning: None,
-            timestamp: Some("2026-06-05T00:00:02Z".to_string()),
-        }],
-        responses: vec![TimelineResponseRow {
-            doc_id: Some("doc-response".to_string()),
-            request_id: "req-root".to_string(),
-            request_doc_id: Some("doc-root".to_string()),
-            session_id: Some("session-root".to_string()),
-            content: Some("  ".to_string()),
-            reasoning: Some(String::new()),
-            error_message: Some(String::new()),
-            status: Some("complete".to_string()),
-            materialized_message_sequence: Some(2),
-            completed_at: Some("2026-06-05T00:00:03Z".to_string()),
-            ..Default::default()
-        }],
+        messages: vec![message_row(
+            "session-root",
+            Some("doc-root"),
+            2,
+            Message::assistant("final durable answer"),
+            "2026-06-05T00:00:02Z",
+        )],
         ..Default::default()
     });
 
@@ -644,7 +670,7 @@ fn blank_response_falls_back_to_materialized_assistant_message_across_adapters()
         panic!("Codex projection");
     };
     assert!(codex.items.iter().any(|item| {
-        matches!(item, OpenAiCodexTraceItem::Response { output: Some(output), .. } if output == "final durable answer")
+        matches!(item, OpenAiCodexTraceItem::Message { content, .. } if content == "final durable answer")
     }));
 
     let langgraph = build_adapter_projection(
@@ -677,7 +703,7 @@ fn provenance_without_source_version_status_is_rejected() {
 }
 
 #[test]
-fn empty_response_without_materialized_message_does_not_substitute_older_assistant_output() {
+fn canonical_message_output_has_no_synthetic_response_item() {
     let timeline = build_run_timeline(RunTimelineRows {
         request: TimelineRequestRow {
             doc_id: Some("doc-root".to_string()),
@@ -687,28 +713,13 @@ fn empty_response_without_materialized_message_does_not_substitute_older_assista
             created_at: Some("2026-06-05T00:00:00Z".to_string()),
             ..Default::default()
         },
-        messages: vec![TimelineMessageRow {
-            doc_id: Some("doc-older-message".to_string()),
-            session_id: "session-root".to_string(),
-            request_id: Some("req-root".to_string()),
-            request_doc_id: Some("doc-root".to_string()),
-            sequence: 1,
-            role: "assistant".to_string(),
-            content: "older assistant output".to_string(),
-            reasoning: None,
-            timestamp: Some("2026-06-05T00:00:01Z".to_string()),
-        }],
-        responses: vec![TimelineResponseRow {
-            doc_id: Some("doc-response".to_string()),
-            request_id: "req-root".to_string(),
-            request_doc_id: Some("doc-root".to_string()),
-            session_id: Some("session-root".to_string()),
-            content: Some(String::new()),
-            status: Some("complete".to_string()),
-            materialized_message_sequence: None,
-            completed_at: Some("2026-06-05T00:00:02Z".to_string()),
-            ..Default::default()
-        }],
+        messages: vec![message_row(
+            "session-root",
+            Some("doc-root"),
+            1,
+            Message::assistant("older assistant output"),
+            "2026-06-05T00:00:01Z",
+        )],
         ..Default::default()
     });
 
@@ -720,10 +731,9 @@ fn empty_response_without_materialized_message_does_not_substitute_older_assista
     let AdapterProjection::OpenAiCodexRunTrace(codex) = codex.output else {
         panic!("Codex projection");
     };
-    assert!(codex
-        .items
-        .iter()
-        .any(|item| { matches!(item, OpenAiCodexTraceItem::Response { output: None, .. }) }));
+    assert!(codex.items.iter().any(|item| {
+        matches!(item, OpenAiCodexTraceItem::Message { content, .. } if content == "older assistant output")
+    }));
 
     let langgraph = build_adapter_projection(
         AdapterProjectionKind::LangGraphStateHistory,
@@ -733,7 +743,10 @@ fn empty_response_without_materialized_message_does_not_substitute_older_assista
     let AdapterProjection::LangGraphStateHistory(langgraph) = langgraph.output else {
         panic!("LangGraph projection");
     };
-    assert!(!langgraph.values.contains_key("final_output"));
+    assert_eq!(
+        langgraph.values.get("final_output"),
+        Some(&json!("older assistant output"))
+    );
 }
 
 #[test]
@@ -1165,17 +1178,13 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             created_at: Some("2026-06-05T00:00:03Z".to_string()),
             ..TimelineRequestRow::default()
         }],
-        messages: vec![TimelineMessageRow {
-            doc_id: None,
-            session_id: "session-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: None,
-            sequence: 1,
-            role: "assistant".to_string(),
-            content: "sensitive assistant text".to_string(),
-            reasoning: None,
-            timestamp: Some("2026-06-05T00:00:01Z".to_string()),
-        }],
+        messages: vec![message_row(
+            "session-1",
+            Some("doc-req-1"),
+            1,
+            Message::assistant("sensitive assistant text"),
+            "2026-06-05T00:00:01Z",
+        )],
         tool_calls: vec![TimelineToolCallRow {
             doc_id: Some("doc-call-child".to_string()),
             request_id: Some("req-1".to_string()),
@@ -1185,20 +1194,12 @@ fn builds_three_adapter_shapes_from_one_timeline_with_redaction() {
             tool_name: "delegate".to_string(),
             tool_call_id: "call-child".to_string(),
             args: "{\"prompt\":\"secret\"}".to_string(),
-            result: "{\"ok\":true}".to_string(),
+            result: Some("{\"ok\":true}".to_string()),
             status: "completed".to_string(),
             child_request_id: Some("child-1".to_string()),
             started_at: Some("2026-06-05T00:00:02Z".to_string()),
             completed_at: Some("2026-06-05T00:00:03Z".to_string()),
             ..TimelineToolCallRow::default()
-        }],
-        responses: vec![TimelineResponseRow {
-            request_id: "req-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            content: Some("sensitive final".to_string()),
-            status: Some("completed".to_string()),
-            completed_at: Some("2026-06-05T00:00:04Z".to_string()),
-            ..TimelineResponseRow::default()
         }],
         ..RunTimelineRows::default()
     });

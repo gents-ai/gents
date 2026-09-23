@@ -1,5 +1,5 @@
 use gents_desktop_core::client::{ClientStore, TaskRecentRuns};
-use gents_protocol::row::{AgentRequestRow, AgentResponseRow};
+use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::AgentSession;
 
 use super::super::types::{
@@ -87,7 +87,6 @@ pub(super) fn recent_runs_for_task_views(
 pub(super) fn session_summaries(
     sessions: &[AgentSession],
     requests: &[AgentRequestRow],
-    responses: &[AgentResponseRow],
     agent_did: &str,
     tasks: &[TaskView],
     triggers: &[TriggerView],
@@ -109,21 +108,6 @@ pub(super) fn session_summaries(
             let candidate = exact_requests.next();
             let request = if exact_requests.next().is_none() {
                 candidate
-            } else {
-                None
-            };
-            let mut exact_responses = responses.iter().filter(|response| {
-                request.is_some_and(|request| {
-                    response.request_doc_id == request.doc_id
-                        && response.request_id.as_deref() == Some(request.request_id.as_str())
-                        && response.agent_did == request.agent_did
-                        && response.session_id == request.session_id
-                        && response.requester_did == request.requester_did
-                })
-            });
-            let response_candidate = exact_responses.next();
-            let response = if exact_responses.next().is_none() {
-                response_candidate
             } else {
                 None
             };
@@ -174,7 +158,6 @@ pub(super) fn session_summaries(
                         gents_protocol::client_protocol::derive_persisted_attempt(
                             state.as_str(),
                             request.is_some_and(|request| request.superseded_by_request.is_some()),
-                            response.and_then(|response| response.status.as_deref()),
                         )
                     })
                     .map(turn_state_label)

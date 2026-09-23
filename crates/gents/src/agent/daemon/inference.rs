@@ -225,25 +225,13 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             &compaction_request.messages,
                             compaction_request.admission,
                         )?;
-                        if crate::session::session_has_other_live_response(
-                            node.as_ref(),
-                            &request.agent_did,
-                            &request.session_id,
-                            request.requester_did.as_deref(),
-                            Some(&request.doc_id),
-                        )
-                        .await?
-                        {
-                            anyhow::bail!(
-                                "per-turn compaction refused while another response in the \
-                                 session is streaming"
-                            );
-                        }
-                        if !crate::compaction::has_unique_call_ids(&compaction_request.messages) {
-                            anyhow::bail!(
-                                "per-turn compaction refused because tool-call ids are not unique"
-                            );
-                        }
+                        // This is a request-local sticky projection, not a
+                        // session-prefix cursor. DurableReduction permits a
+                        // closed tool pair before an ordinary assistant turn;
+                        // persist_exact checks the actual reduction split's
+                        // pair closure before the loop can activate it. The
+                        // stronger safe_to_reduce gate belongs to session
+                        // compaction, whose prefix must survive later appends.
                         let source_boundary =
                             crate::provider_context_reduction::capture_source_boundary(
                                 node.as_ref(),
@@ -443,17 +431,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to persist interrupted assistant turn before terminal transition"
                                         );
                                     }
-                                    if let Err(error) = persistence_hook
-                                        .backfill_completed_tool_results()
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            request_id = %request_id,
-                                            session_id = %session_id,
-                                            error = %error,
-                                            "failed to backfill completed tool-result messages on interrupt"
-                                        );
-                                    }
+                                    // Tool terminalization publishes its result atomically;
+                                    // abort cannot recreate results from mutable legacy rows.
                                     return Err(anyhow!("request interrupted during inference"));
                                 }
                                 _ = lease_poll.tick() => {
@@ -464,19 +443,11 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             reason.clone(),
                                         );
                                         drop(stream);
-                                        if let Err(tool_error) = persistence_hook
-                                            .fail_in_flight_tool_calls(
-                                                &reason,
-                                                crate::tool_call_lifecycle::FailureClass::External,
-                                            )
-                                            .await
-                                        {
-                                            tracing::warn!(
-                                                %request_id,
-                                                error = %tool_error,
-                                                "failed to close in-flight tool calls after losing execution lease"
-                                            );
-                                        }
+                                        // This execution no longer owns durable
+                                        // tool transitions. Expired-generation
+                                        // recovery accounts pending intents and
+                                        // hands running tools to recovery without
+                                        // falsely declaring their effects failed.
                                         return Err(error);
                                     }
                                     lease_poll.reset();
@@ -532,7 +503,34 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 Some(item) => item,
                                 None => break,
                             };
-                            match processor.process_item(item).await {
+                            let processed = match await_with_request_deadline(
+                                request_deadline,
+                                processor.process_item(item),
+                                "processing inference stream item",
+                            )
+                            .await
+                            {
+                                Ok(processed) => processed,
+                                Err(error) => {
+                                    admission::set_terminal_failure_reason(
+                                        &terminal_failure_reason,
+                                        error.to_string(),
+                                    );
+                                    drop(stream);
+                                    if let Err(sweep_error) =
+                                        persistence_hook.timeout_expired_tool_calls().await
+                                    {
+                                        tracing::warn!(
+                                            request_id = %request_id,
+                                            session_id = %session_id,
+                                            error = %sweep_error,
+                                            "failed to sweep expired in-flight tool calls after request deadline"
+                                        );
+                                    }
+                                    return Err(error);
+                                }
+                            };
+                            match processed {
                                 Ok(crate::agent::stream_processor::StreamAction::Continue) => {}
                                 Ok(crate::agent::stream_processor::StreamAction::Done) => break,
                                 Ok(crate::agent::stream_processor::StreamAction::Error(error)) => {
@@ -548,18 +546,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let _ = processor
                                 .persist_partial_turn("persist errored assistant turn")
                                 .await?;
-                            if let Err(error) = persistence_hook
-                                .backfill_completed_tool_results()
-                                .await
-                            {
-                                tracing::warn!(
-                                    request_id = %request_id,
-                                    session_id = %session_id,
-                                    error = %error,
-                                    "failed to backfill completed tool-result messages after stream error"
-                                );
-                            }
-
                             let error_reason = format!("agent stream failed: {}", error);
                             return Ok(HandleRequestOutcome::FailedAfterResponse(anyhow!(
                                 error_reason
@@ -706,8 +692,9 @@ mod tests {
 
         async fn stream(
             &self,
-            _request: CompletionRequest,
+            request: CompletionRequest,
         ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
             let items = vec![
                 Ok(RawStreamingChoice::Message("routed reply".to_string())),
                 Ok(RawStreamingChoice::FinalResponse(())),
@@ -1028,7 +1015,7 @@ mod tests {
             loop_tools,
             prompt_builder,
             FailurePolicy::default(),
-            None,
+            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
             BackgroundToolRegistry::default(),
             BackgroundExecutionRegistry::default(),
             Arc::new(StartupBarrier::ready_for_test()),
@@ -1051,8 +1038,8 @@ mod tests {
                 AgentMessage(
                     filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
                 ) {{
+                    _docID
                     role
-                    content
                     requester_did
                 }}
             }}"#
@@ -1069,17 +1056,38 @@ mod tests {
             .and_then(|data| data.get("AgentMessage"))
             .and_then(serde_json::Value::as_array)
             .expect("AgentMessage rows");
+        let access = crate::config_client::ConfigAccess::Local(node.clone());
+        let mut found_reply = false;
+        for row in rows {
+            assert_eq!(
+                row.get("requester_did").and_then(serde_json::Value::as_str),
+                Some(requester_did.as_str()),
+                "every published header must preserve requester lineage"
+            );
+            let doc_id = row
+                .get("_docID")
+                .and_then(serde_json::Value::as_str)
+                .unwrap();
+            let (_, message) = crate::session::load_canonical_message(
+                &access,
+                doc_id,
+                &requester_did,
+                Some(&requester_did),
+            )
+            .await
+            .expect("exact published header must reconstruct under its requester");
+            found_reply |= row.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
+                && serde_json::to_string(&message)
+                    .unwrap()
+                    .contains("routed reply");
+        }
         assert!(
-            rows.iter().any(|row| {
-                row.get("role").and_then(serde_json::Value::as_str) == Some("assistant")
-                    && row
-                        .get("content")
-                        .and_then(serde_json::Value::as_str)
-                        .is_some_and(|content| content.contains("routed reply"))
-                    && row.get("requester_did").and_then(serde_json::Value::as_str)
-                        == Some(requester_did.as_str())
-            }),
-            "daemon-persisted assistant message must carry requester lineage; rows={rows:?}"
+            found_reply,
+            "daemon-persisted assistant message must carry requester lineage; rows={rows:?}; request={:?}",
+            node.execute(&format!(
+                "{{ AgentRequest(filter: {{ _docID: {{ _eq: \"{}\" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}",
+                crate::graphql::escape_graphql_string(&request.doc_id)
+            )).await
         );
 
         node.shutdown().await;

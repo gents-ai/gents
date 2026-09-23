@@ -16,8 +16,9 @@ use crate::error::{BridgeError, BridgeErrorCode};
 use crate::state::{current_core, DesktopAppState};
 use crate::tauri_commands::service_executable::resolve_service_executable;
 use crate::types::{
-    ManagedServerRestartRequest, ManagedServerRootValidation, ManagedServerRootValidationRequest,
-    ManagedServerStartRequest, ManagedServerState, ManagedServerStatus, ManagedServerToolCeiling,
+    ManagedServerResetRequest, ManagedServerResetResult, ManagedServerRestartRequest,
+    ManagedServerRootValidation, ManagedServerRootValidationRequest, ManagedServerStartRequest,
+    ManagedServerState, ManagedServerStatus, ManagedServerToolCeiling,
 };
 
 const MANAGED_SERVER_CONFIG: &str = "managed-server.json";
@@ -386,6 +387,15 @@ async fn start_managed_server_locked<R: Runtime>(
             managed.last_error = Some(message.clone());
             drop(managed);
             emit_status(app, state).await;
+            if matches!(
+                gents::storage_backend::incompatible_store_kind(&agent_home.join("data")),
+                Ok(Some(_))
+            ) {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::IncompatibleLocalStore,
+                    message,
+                ));
+            }
             return Err(match typed_error {
                 Some(mut error) => {
                     error.message = message;
@@ -410,6 +420,237 @@ async fn start_managed_server_locked<R: Runtime>(
     };
     status.pairing_ready = pairing_is_ready(state, status.agent_did.as_deref()).await;
     Ok(status)
+}
+
+const RESET_CONSEQUENCE: &str = "Existing local conversations and configuration will be archived in a timestamped backup and will not be imported into the new store.";
+
+#[tauri::command]
+pub async fn desktop_managed_server_reset(
+    request: ManagedServerResetRequest,
+    state: State<'_, DesktopAppState>,
+) -> Result<ManagedServerResetResult, BridgeError> {
+    ensure_allowed(&state)?;
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    let agent_home = state.policy.agent_home.as_deref().ok_or_else(|| {
+        BridgeError::new(
+            BridgeErrorCode::Unsupported,
+            "managed server requires a local agent home",
+        )
+    })?;
+    reset_incompatible_managed_store(&state, agent_home, request.confirmation.as_deref()).await
+}
+
+async fn reset_incompatible_managed_store(
+    state: &DesktopAppState,
+    configured_home: &Path,
+    confirmation: Option<&str>,
+) -> Result<ManagedServerResetResult, BridgeError> {
+    ensure_managed_runtime_stopped(state.managed_server.lock().await.server.is_some())?;
+    reject_symlink(configured_home, "managed home")?;
+    let home = std::fs::canonicalize(configured_home).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!(
+                "Cannot resolve managed home {}: {error}",
+                configured_home.display()
+            ),
+        )
+    })?;
+    if home.parent().is_none() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "The managed home is too broad to reset.",
+        ));
+    }
+    // Fail closed when the standard managed endpoint is occupied. A matching
+    // server is definitely live; an unknown responder is equally unsafe to
+    // overwrite because its data ownership cannot be established.
+    let config = gents_server::server_host::ServerConfig::standard(home.clone());
+    let managed_address = std::net::SocketAddr::new(config.http_addr, config.http_port);
+    let endpoint_state =
+        std::net::TcpStream::connect_timeout(&managed_address, Duration::from_millis(150));
+    if matching_external_server(&home).await?.is_some() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "A managed server is still listening. Stop it before resetting its store.",
+        ));
+    }
+    ensure_managed_endpoint_stopped(managed_address, endpoint_state.map(|_| ()))?;
+
+    archive_incompatible_managed_store(&home, confirmation)
+}
+
+fn ensure_managed_runtime_stopped(running: bool) -> Result<(), BridgeError> {
+    if running {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "Stop the managed server before resetting its local store.",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_managed_endpoint_stopped(
+    address: std::net::SocketAddr,
+    observation: std::io::Result<()>,
+) -> Result<(), BridgeError> {
+    match observation {
+        Ok(()) => Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "A managed server is still listening. Stop it before resetting its store.",
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::ConnectionRefused => Ok(()),
+        Err(error) => Err(BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Could not prove the managed endpoint {address} is stopped: {error}"),
+        )),
+    }
+}
+
+fn archive_incompatible_managed_store(
+    home: &Path,
+    confirmation: Option<&str>,
+) -> Result<ManagedServerResetResult, BridgeError> {
+    let data = home.join("data");
+    let init = home.join("init.json");
+    reject_symlink_if_present(&data, "managed data")?;
+    reject_symlink_if_present(&init, "managed init marker")?;
+    let kind = gents::storage_backend::incompatible_store_kind(&data).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Inspecting {}: {error}", data.display()),
+        )
+    })?;
+    if kind.is_none() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "The managed store is not marked as a legacy or incompatible store; reset was refused.",
+        ));
+    }
+    let confirmation_text = format!("RESET {} AND ARCHIVE LOCAL HISTORY", home.to_string_lossy());
+    let base = ManagedServerResetResult {
+        managed_home: home.to_string_lossy().into_owned(),
+        data_path: data.to_string_lossy().into_owned(),
+        confirmation: confirmation_text.clone(),
+        consequence: RESET_CONSEQUENCE.into(),
+        completed: false,
+        backup_path: None,
+        archived_paths: Vec::new(),
+    };
+    let Some(supplied) = confirmation else {
+        return Ok(base);
+    };
+    if supplied != confirmation_text {
+        return Err(BridgeError::new(
+            BridgeErrorCode::InvalidArgument,
+            "Reset confirmation did not match the exact managed home.",
+        ));
+    }
+
+    let backups = home.join("backups");
+    reject_symlink_if_present(&backups, "managed backup directory")?;
+    std::fs::create_dir_all(&backups).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Creating {}: {error}", backups.display()),
+        )
+    })?;
+    let backups = std::fs::canonicalize(&backups).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Resolving backups: {error}"),
+        )
+    })?;
+    if backups.parent() != Some(home) {
+        return Err(BridgeError::new(
+            BridgeErrorCode::PathEscapesRoot,
+            "Managed backup directory escaped the configured home.",
+        ));
+    }
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    let mut backup = backups.join(format!("legacy-store-{stamp}-{}", std::process::id()));
+    for suffix in 0..100_u8 {
+        if !backup.exists() {
+            break;
+        }
+        backup = backups.join(format!(
+            "legacy-store-{stamp}-{}-{suffix}",
+            std::process::id()
+        ));
+    }
+    std::fs::create_dir(&backup).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Creating backup {}: {error}", backup.display()),
+        )
+    })?;
+    let backup_data = backup.join("data");
+    std::fs::rename(&data, &backup_data).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Archiving {}: {error}", data.display()),
+        )
+    })?;
+    let mut archived = vec![data.to_string_lossy().into_owned()];
+    if init.exists() {
+        if let Err(error) = std::fs::rename(&init, backup.join("init.json")) {
+            if let Err(rollback) = std::fs::rename(&backup_data, &data) {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::Backend,
+                    format!(
+                        "Archiving {} failed ({error}); rollback also failed ({rollback}). The data remains at {} and init.json was not moved.",
+                        init.display(),
+                        backup_data.display()
+                    ),
+                ));
+            }
+            return Err(BridgeError::new(
+                BridgeErrorCode::Backend,
+                format!(
+                    "Archiving {} failed ({error}); data was restored.",
+                    init.display()
+                ),
+            ));
+        }
+        archived.push(init.to_string_lossy().into_owned());
+    }
+    Ok(ManagedServerResetResult {
+        completed: true,
+        backup_path: Some(backup.to_string_lossy().into_owned()),
+        archived_paths: archived,
+        ..base
+    })
+}
+
+fn reject_symlink(path: &Path, label: &str) -> Result<(), BridgeError> {
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| {
+        BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Inspecting {label} {}: {error}", path.display()),
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::PathEscapesRoot,
+            format!("{label} must not be a symbolic link"),
+        ));
+    }
+    Ok(())
+}
+
+fn reject_symlink_if_present(path: &Path, label: &str) -> Result<(), BridgeError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(BridgeError::new(
+            BridgeErrorCode::PathEscapesRoot,
+            format!("{label} must not be a symbolic link"),
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(BridgeError::new(
+            BridgeErrorCode::Backend,
+            format!("Inspecting {label} {}: {error}", path.display()),
+        )),
+    }
 }
 
 impl From<ManagedServerToolCeiling> for gents_server::server_host::ManagedToolCeiling {
@@ -1268,6 +1509,131 @@ async fn save_preference(
 mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
+
+    #[test]
+    fn reset_archives_only_store_and_init_while_preserving_identity_and_config() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("managed-home");
+        let data = home.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        // The command canonicalizes the configured home before archiving.
+        // macOS temp paths may otherwise retain the /var -> /private/var alias.
+        let home = std::fs::canonicalize(&home).unwrap();
+        std::fs::write(data.join("data.lark"), "legacy").unwrap();
+        std::fs::write(home.join("init.json"), r#"{"agent_did":"did:key:old"}"#).unwrap();
+        std::fs::write(home.join("agent.key"), "identity").unwrap();
+        std::fs::write(home.join("p2p.key"), "p2p").unwrap();
+        std::fs::write(home.join("managed-server.json"), "preferences").unwrap();
+
+        let preview = archive_incompatible_managed_store(&home, None).unwrap();
+        assert!(!preview.completed);
+        assert!(data.exists(), "preview must not mutate the store");
+        let reset =
+            archive_incompatible_managed_store(&home, Some(preview.confirmation.as_str())).unwrap();
+        assert!(reset.completed);
+        let backup = PathBuf::from(reset.backup_path.unwrap());
+        assert_eq!(
+            std::fs::read_to_string(backup.join("data/data.lark")).unwrap(),
+            "legacy"
+        );
+        assert!(backup.join("init.json").is_file());
+        assert!(!data.exists());
+        assert!(!home.join("init.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(home.join("agent.key")).unwrap(),
+            "identity"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("p2p.key")).unwrap(),
+            "p2p"
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.join("managed-server.json")).unwrap(),
+            "preferences"
+        );
+    }
+
+    #[test]
+    fn reset_rejects_healthy_store_wrong_confirmation_and_unknown_endpoint() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path();
+        let data = home.join("data");
+        std::fs::create_dir(&data).unwrap();
+        std::fs::write(data.join("MANIFEST"), b"REGOMAN current").unwrap();
+        assert_eq!(
+            archive_incompatible_managed_store(home, None)
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::InvalidArgument
+        );
+        std::fs::remove_file(data.join("MANIFEST")).unwrap();
+        std::fs::write(data.join("data.lark"), "legacy").unwrap();
+        assert_eq!(
+            archive_incompatible_managed_store(home, Some("RESET SOME OTHER HOME"))
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::InvalidArgument
+        );
+        let address = "127.0.0.1:9191".parse().unwrap();
+        assert_eq!(
+            ensure_managed_endpoint_stopped(
+                address,
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "unknown")),
+            )
+            .unwrap_err()
+            .code,
+            BridgeErrorCode::Backend
+        );
+        assert_eq!(
+            ensure_managed_endpoint_stopped(address, Ok(()))
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::InvalidArgument
+        );
+        ensure_managed_endpoint_stopped(
+            address,
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "stopped",
+            )),
+        )
+        .unwrap();
+        assert_eq!(
+            ensure_managed_runtime_stopped(true).unwrap_err().code,
+            BridgeErrorCode::InvalidArgument
+        );
+        ensure_managed_runtime_stopped(false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reset_rejects_symlinked_store_and_backup_paths() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("data.lark"), "legacy").unwrap();
+        symlink(&outside, home.join("data")).unwrap();
+        assert_eq!(
+            archive_incompatible_managed_store(&home, None)
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::PathEscapesRoot
+        );
+        std::fs::remove_file(home.join("data")).unwrap();
+        std::fs::create_dir(home.join("data")).unwrap();
+        std::fs::write(home.join("data/data.lark"), "legacy").unwrap();
+        symlink(&outside, home.join("backups")).unwrap();
+        let preview = archive_incompatible_managed_store(&home, None).unwrap();
+        assert_eq!(
+            archive_incompatible_managed_store(&home, Some(&preview.confirmation))
+                .unwrap_err()
+                .code,
+            BridgeErrorCode::PathEscapesRoot
+        );
+    }
 
     #[test]
     fn status_priority_is_starting_then_failed_then_stopped_then_disabled() {

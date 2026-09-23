@@ -27,8 +27,6 @@ pub struct RunTimelineRows {
     #[serde(default)]
     pub provider_context_reductions: Vec<TimelineProviderContextReductionRow>,
     #[serde(default)]
-    pub responses: Vec<TimelineResponseRow>,
-    #[serde(default)]
     pub rendered_requests: Vec<TimelineRenderedRequestRow>,
     #[serde(default)]
     pub rendered_request_refs: Vec<TimelineRenderedRequestRef>,
@@ -206,64 +204,58 @@ impl RetrySummary {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// One timeline message row: the strict canonical `AgentMessage` header plus
+/// the reconstructed native message, resolved through the authorized session
+/// output reader (`session::load_canonical_message`). The physical document
+/// identity (`doc_id`) is retained as the only request/row reference; the
+/// logical `request_id` is not repeated (#1425) — request ownership lives on
+/// the physical request document via `request_doc_id`, which the header also
+/// carries. No role/content/reasoning string projection is stored: consumers
+/// read the typed native message or the header role/blocks directly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineMessageRow {
     #[serde(default, rename = "_docID", skip_serializing)]
     pub doc_id: Option<String>,
     #[serde(default)]
     pub session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
     #[serde(default, skip_serializing)]
     pub request_doc_id: Option<String>,
     #[serde(default)]
     pub sequence: i64,
-    #[serde(default)]
-    pub role: String,
-    #[serde(default)]
-    pub content: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimelineResponseRow {
-    #[serde(default, rename = "_docID", skip_serializing)]
-    pub doc_id: Option<String>,
-    #[serde(default)]
-    pub request_id: String,
-    #[serde(default, skip_serializing)]
-    pub request_doc_id: Option<String>,
+    /// The canonical session-scope owner of this header; the reader's
+    /// authorization scope it was resolved under.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavior_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub token_count: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub progress_seq: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub materialized_message_sequence: Option<i64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub materialized_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_at: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interrupted_at: Option<String>,
+    /// The canonical protocol header exactly as decoded from `AgentMessage`
+    /// (role, blocks, publication, outcome). Payload bytes are not inlined;
+    /// they are addressed by the header's block references.
+    pub header: gents_protocol::output::TranscriptMessage,
+    /// The native message reconstructed from the header's blocks through the
+    /// canonical reader — the typed `gents_protocol::message::Message`.
+    pub message: gents_protocol::message::Message,
+}
+
+impl TimelineMessageRow {
+    /// Rebuild one row from an authorized canonical header resolution. The
+    /// physical header doc ID stays the row's physical identity.
+    pub(crate) fn from_canonical(
+        doc_id: String,
+        header: gents_protocol::output::TranscriptMessage,
+        message: gents_protocol::message::Message,
+    ) -> Self {
+        Self {
+            doc_id: Some(doc_id),
+            session_id: header.session_id.clone(),
+            request_doc_id: header.request_doc_id.clone(),
+            sequence: header.sequence as i64,
+            timestamp: Some(header.created_at.clone()),
+            agent_did: Some(header.agent_did.clone()),
+            header,
+            message,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -433,8 +425,10 @@ pub struct TimelineToolCallRow {
     #[serde(default)]
     pub args: String,
     #[serde(default)]
-    pub result: String,
-    #[serde(default)]
+    pub result: Option<String>,
+    /// `status` is a nullable historical presentation mirror. The canonical
+    /// fetcher overwrites it from `lifecycle_state` before exposing a row.
+    #[serde(default, deserialize_with = "empty_string_if_null")]
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<String>,
@@ -547,7 +541,7 @@ pub struct TimelineSessionRow {
     pub session: gents_protocol::session::AgentSession,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RunTimelineEvent {
     Request(TimelineRequestEvent),
@@ -557,7 +551,6 @@ pub enum RunTimelineEvent {
     ProviderContextReduction(TimelineProviderContextReductionEvent),
     Message(TimelineMessageEvent),
     ToolCall(TimelineToolCallEvent),
-    Response(TimelineResponseEvent),
     GoalTransition(TimelineGoalTransitionEvent),
 }
 
@@ -769,18 +762,21 @@ pub struct TimelineGoalTransitionEvent {
     pub timestamp: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineMessageEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     pub session_id: String,
     pub sequence: i64,
-    pub role: String,
-    pub content: String,
+    /// The canonical `AgentMessage` header doc ID — the physical identity of
+    /// the message document this event was resolved from.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
+    pub doc_id: Option<String>,
+    /// The strict protocol header exactly as resolved through the authorized
+    /// canonical reader (`session::load_canonical_message`).
+    pub header: gents_protocol::output::TranscriptMessage,
+    /// The native message reconstructed from the header's blocks.
+    pub message: gents_protocol::message::Message,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -793,7 +789,7 @@ pub struct TimelineToolCallEvent {
     pub tool_name: String,
     pub tool_call_id: String,
     pub args: String,
-    pub result: String,
+    pub result: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lifecycle_state: Option<String>,
@@ -833,25 +829,6 @@ pub struct TimelineToolCallEvent {
     pub started_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TimelineResponseEvent {
-    pub request_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error_message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub materialized_message_sequence: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<String>,
 }
 
 pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
@@ -973,12 +950,17 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
     }
 
     for message in &rows.messages {
-        let request_id = nonempty(message.request_id.as_deref())
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                infer_request_id_for_message(message, &rows.responses, &rows.requests)
-                    .map(ToOwned::to_owned)
-            });
+        // #1425: the logical `request_id` of a message is resolved strictly
+        // through its canonical header's PHYSICAL request document reference
+        // (`header.request_doc_id`) against the root and loaded descendants. A message whose
+        // request_doc_id is missing or does not resolve to a request doc has
+        // NO synthetic request membership — it is simply not part of this
+        // timeline's request-scoped event stream.
+        let request_id = resolve_logical_request_id_for_doc(
+            message.header.request_doc_id.as_deref(),
+            std::iter::once(&rows.request).chain(rows.requests.iter()),
+        )
+        .map(ToOwned::to_owned);
         if should_include_event(
             request_id.as_deref(),
             Some(message.session_id.as_str()),
@@ -989,16 +971,15 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
                 request_id,
                 session_id: message.session_id.clone(),
                 sequence: message.sequence,
-                role: message.role.clone(),
-                content: message.content.clone(),
-                reasoning: message.reasoning.clone(),
-                timestamp: message.timestamp.clone(),
+                doc_id: message.doc_id.clone(),
+                header: message.header.clone(),
+                message: message.message.clone(),
             }));
         }
     }
 
     for tool_call in &rows.tool_calls {
-        let request_id = infer_request_id_for_tool_call(tool_call, &rows.requests, &rows.responses);
+        let request_id = infer_request_id_for_tool_call(tool_call, &rows.requests);
         if should_include_event(
             request_id.as_deref(),
             Some(tool_call.session_id.as_str()),
@@ -1044,26 +1025,6 @@ pub fn build_run_timeline(mut rows: RunTimelineRows) -> RunTimeline {
         &rows.goal_versions,
         session_id.as_deref(),
     ));
-
-    for response in &rows.responses {
-        if included_request_ids.contains(&response.request_id) {
-            events.push(RunTimelineEvent::Response(TimelineResponseEvent {
-                request_id: response.request_id.clone(),
-                session_id: response.session_id.clone(),
-                status: response.status.clone(),
-                content: nonempty(response.content.as_deref()).map(ToOwned::to_owned),
-                reasoning: nonempty(response.reasoning.as_deref()).map(ToOwned::to_owned),
-                error_message: nonempty(response.error_message.as_deref()).map(ToOwned::to_owned),
-                materialized_message_sequence: response.materialized_message_sequence,
-                timestamp: first_nonempty([
-                    response.completed_at.as_deref(),
-                    response.materialized_at.as_deref(),
-                    response.created_at.as_deref(),
-                ])
-                .map(ToOwned::to_owned),
-            }));
-        }
-    }
 
     events.sort_by_key(event_sort_key);
     let child_request_ids = child_request_ids(&included_request_ids, &root_request_id);
@@ -1396,57 +1357,30 @@ fn rendered_request_tiebreak(event: &TimelineRenderedRequestEvent) -> String {
     }
 }
 
-fn infer_request_id_for_message<'a>(
-    message: &TimelineMessageRow,
-    responses: &'a [TimelineResponseRow],
-    requests: &'a [TimelineRequestRow],
+/// Resolve a physical request document reference to its logical `request_id`
+/// through the request rows actually loaded for this timeline. This is the
+/// only request-membership rule for message lineage (#1425): a message whose
+/// `request_doc_id` is absent, or does not resolve to one of the timeline's
+/// request documents, has no logical request membership — no synthesis, no
+/// session fallback.
+fn resolve_logical_request_id_for_doc<'a>(
+    request_doc_id: Option<&str>,
+    requests: impl Iterator<Item = &'a TimelineRequestRow>,
 ) -> Option<&'a str> {
-    responses
-        .iter()
-        .filter(|response| response.session_id.as_deref() == Some(message.session_id.as_str()))
-        .filter_map(|response| {
-            let materialized = response.materialized_message_sequence?;
-            (materialized >= message.sequence)
-                .then_some((response.request_id.as_str(), materialized))
-        })
-        .min_by_key(|(_, materialized)| *materialized)
-        .map(|(request_id, _)| request_id)
-        .or_else(|| {
-            let mut session_requests = requests.iter().filter(|request| {
-                request.session_id.as_deref() == Some(message.session_id.as_str())
-            });
-            let request = session_requests.next()?;
-            session_requests
-                .next()
-                .is_none()
-                .then_some(request.request_id.as_str())
-        })
+    let request_doc_id = nonempty(request_doc_id)?;
+    let mut matching = requests.filter(|request| request.doc_id.as_deref() == Some(request_doc_id));
+    let first = matching.next()?;
+    matching
+        .all(|row| row.request_id == first.request_id)
+        .then_some(first.request_id.as_str())
 }
 
 fn infer_request_id_for_tool_call(
     tool_call: &TimelineToolCallRow,
     requests: &[TimelineRequestRow],
-    responses: &[TimelineResponseRow],
 ) -> Option<String> {
     if let Some(request_id) = nonempty(tool_call.request_id.as_deref()) {
         return Some(request_id.to_string());
-    }
-
-    if let Some(sequence) = tool_call.message_sequence {
-        if let Some(response) = responses
-            .iter()
-            .filter(|response| {
-                response.session_id.as_deref() == Some(tool_call.session_id.as_str())
-            })
-            .filter_map(|response| {
-                let materialized = response.materialized_message_sequence?;
-                (materialized >= sequence).then_some((response.request_id.as_str(), materialized))
-            })
-            .min_by_key(|(_, materialized)| *materialized)
-            .map(|(request_id, _)| request_id)
-        {
-            return Some(response.to_string());
-        }
     }
 
     if let Some(started_at) = tool_call.started_at.as_deref().and_then(timestamp_millis) {
@@ -1489,7 +1423,7 @@ fn should_include_event(
 /// unserialized internals and only break same-millisecond ties: request 0,
 /// provider_context_reduction 1, rendered_request 2 (both persistence fences
 /// precede the consuming send), inference_call 3, compaction/message 4,
-/// tool_call 5, response 7, goal transition 8.
+/// tool_call 5, goal transition 8.
 fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
     match event {
         RunTimelineEvent::Request(event) => (
@@ -1535,11 +1469,7 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             event.compaction_key.clone(),
         ),
         RunTimelineEvent::Message(event) => (
-            event
-                .timestamp
-                .as_deref()
-                .and_then(timestamp_millis)
-                .unwrap_or(i64::MIN),
+            timestamp_millis(&event.header.created_at).unwrap_or(i64::MIN),
             4,
             event.sequence,
             format!("{}:{}", event.session_id, event.sequence),
@@ -1553,16 +1483,6 @@ fn event_sort_key(event: &RunTimelineEvent) -> (i64, i64, i64, String) {
             5,
             event.message_sequence.unwrap_or(i64::MAX),
             event.tool_call_id.clone(),
-        ),
-        RunTimelineEvent::Response(event) => (
-            event
-                .timestamp
-                .as_deref()
-                .and_then(timestamp_millis)
-                .unwrap_or(i64::MIN),
-            7,
-            event.materialized_message_sequence.unwrap_or(i64::MAX),
-            event.request_id.clone(),
         ),
         RunTimelineEvent::ProviderContextReduction(event) => (
             event
@@ -1627,9 +1547,44 @@ where
     Ok(Option::<Vec<String>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
+fn empty_string_if_null<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_message_membership_includes_root_and_rejects_conflicting_aliases() {
+        let root = TimelineRequestRow {
+            doc_id: Some("physical-root".into()),
+            request_id: "logical-root".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_logical_request_id_for_doc(Some("physical-root"), std::iter::once(&root)),
+            Some("logical-root")
+        );
+        assert_eq!(
+            resolve_logical_request_id_for_doc(Some("logical-root"), std::iter::once(&root)),
+            None
+        );
+        let conflict = TimelineRequestRow {
+            doc_id: Some("physical-root".into()),
+            request_id: "different-logical-id".into(),
+            ..Default::default()
+        };
+        for rows in [[&root, &conflict], [&conflict, &root]] {
+            assert_eq!(
+                resolve_logical_request_id_for_doc(Some("physical-root"), rows.into_iter()),
+                None
+            );
+        }
+    }
 
     #[test]
     fn session_projection_cannot_supply_missing_request_identity() {
@@ -1835,13 +1790,27 @@ mod tests {
             messages: vec![TimelineMessageRow {
                 doc_id: None,
                 session_id: "session-1".to_string(),
-                request_id: Some("req-1".to_string()),
                 request_doc_id: None,
                 sequence: 2,
-                role: "assistant".to_string(),
-                content: "calling tool".to_string(),
-                reasoning: None,
                 timestamp: Some("2026-05-04T12:00:02Z".to_string()),
+                agent_did: None,
+                header: gents_protocol::output::TranscriptMessage {
+                    message_key: "session-1:2".to_string(),
+                    session_id: "session-1".to_string(),
+                    agent_did: "did:test:agent".to_string(),
+                    requester_did: None,
+                    request_doc_id: None,
+                    publication: gents_protocol::output::MessagePublication::RequestExecution {
+                        execution_generation: "gen-1".to_string(),
+                    },
+                    outcome: gents_protocol::output::OutputOutcome::Complete,
+                    sequence: 2,
+                    role: gents_protocol::output::MessageRole::Assistant,
+                    native_id: None,
+                    blocks: Vec::new(),
+                    created_at: "2026-05-04T12:00:02Z".to_string(),
+                },
+                message: gents_protocol::message::Message::assistant("calling tool"),
             }],
             tool_calls: vec![TimelineToolCallRow {
                 doc_id: Some("doc-call-delegate".to_string()),
@@ -1858,14 +1827,6 @@ mod tests {
                 completed_at: Some("2026-05-04T12:00:03.500Z".to_string()),
                 ..Default::default()
             }],
-            responses: vec![TimelineResponseRow {
-                request_id: "req-1".to_string(),
-                session_id: Some("session-1".to_string()),
-                status: Some("completed".to_string()),
-                materialized_message_sequence: Some(4),
-                completed_at: Some("2026-05-04T12:00:05Z".to_string()),
-                ..Default::default()
-            }],
             ..Default::default()
         };
 
@@ -1873,7 +1834,7 @@ mod tests {
 
         assert_eq!(timeline.request_id, "req-1");
         assert_eq!(timeline.child_request_ids, vec!["child-1"]);
-        assert_eq!(timeline.events.len(), 5);
+        assert_eq!(timeline.events.len(), 4);
         assert!(matches!(timeline.events[0], RunTimelineEvent::Request(_)));
         let RunTimelineEvent::Request(request) = &timeline.events[0] else {
             unreachable!();
@@ -1887,7 +1848,6 @@ mod tests {
         assert!(matches!(timeline.events[1], RunTimelineEvent::Message(_)));
         assert!(matches!(timeline.events[2], RunTimelineEvent::ToolCall(_)));
         assert!(matches!(timeline.events[3], RunTimelineEvent::Request(_)));
-        assert!(matches!(timeline.events[4], RunTimelineEvent::Response(_)));
         let RunTimelineEvent::ToolCall(tool) = &timeline.events[2] else {
             panic!("expected tool call");
         };

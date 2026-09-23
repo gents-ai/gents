@@ -8,12 +8,12 @@ use gents::adapter_projection::{
     build_external_adapter_projection,
 };
 use gents::defra_node::{EmbeddedNode, StorageBackend};
+use gents::external_adapter_capture::ExternalAdapterView;
 use gents::{
     adapter_projection_eval_jsonl_record_schema, adapter_projection_json_schema,
     adapter_projection_jsonl_record_schema, ensure_runtime_schemas,
-    import_external_adapter_capture_to_timeline_rows, validate_adapter_projection_contract,
+    import_external_adapter_capture_to_derived_view, validate_adapter_projection_contract,
     AdapterProjectionEnvelope, ExternalAdapterCapture, ProjectionContext, ProjectionRedactionMode,
-    RunTimelineRows,
 };
 use serde_json::{json, Value};
 
@@ -60,7 +60,7 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
             );
             continue;
         }
-        let import = match import_external_adapter_capture_to_timeline_rows(&capture) {
+        let import = match import_external_adapter_capture_to_derived_view(&capture) {
             Ok(import) => import,
             Err(error)
                 if error
@@ -89,7 +89,7 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
         let envelope = build_external_adapter_projection(&capture, &context)?;
         let json_output = serde_json::to_string_pretty(&envelope)?;
         let projection = serde_json::to_value(&envelope)?;
-        assert_projection_matches_import(&projection, &capture, &import.rows)
+        assert_projection_matches_import(&projection, &capture, &import.view)
             .with_context(|| format!("validating imported projection for {}", path.display()))?;
         let jsonl_output = serialize_jsonl(adapter_projection_jsonl_records(&envelope))?;
         let eval_jsonl_output = serialize_jsonl(adapter_projection_eval_jsonl_records(&envelope))?;
@@ -132,14 +132,23 @@ async fn external_adapter_native_captures_project_to_export_formats() -> Result<
 fn external_projection_preserves_mapped_children_without_forging_native_provenance() -> Result<()> {
     let capture: ExternalAdapterCapture =
         serde_json::from_value(valid_multi_agent_capture_value())?;
-    let imported = import_external_adapter_capture_to_timeline_rows(&capture)?;
-    assert!(imported.rows.requests.iter().all(
+    let imported = import_external_adapter_capture_to_derived_view(&capture)?;
+    assert!(imported.view.requests.iter().all(
         |request| request.doc_id.is_none() && request.caused_by_parent_request_doc_id.is_none()
     ));
     let envelope = build_external_adapter_projection(&capture, &ProjectionContext::default())?;
     validate_adapter_projection_contract(&envelope)?;
+    assert_eq!(
+        envelope.provenance.source_projection_id,
+        gents::adapter_projection::EXTERNAL_ADAPTER_CAPTURE_PROJECTION_ID
+    );
+    assert_eq!(
+        envelope.provenance.source_version_status,
+        gents::adapter_projection::ProjectionSourceVersionStatus::ExternalAdapterCapture
+    );
+    assert!(envelope.source_request_doc_id.is_none());
     let projection = serde_json::to_value(&envelope)?;
-    assert_projection_matches_import(&projection, &capture, &imported.rows)?;
+    assert_projection_matches_import(&projection, &capture, &imported.view)?;
     assert_eq!(
         projection
             .pointer("/output/projection/messages")
@@ -287,7 +296,7 @@ async fn negative_external_capture_imports_reject_bad_mappings_without_partial_r
 
         let capture = serde_json::from_value::<ExternalAdapterCapture>(value)
             .with_context(|| format!("parsing negative capture case {name}"))?;
-        let error = import_external_adapter_capture_to_timeline_rows(&capture)
+        let error = import_external_adapter_capture_to_derived_view(&capture)
             .expect_err("negative capture import unexpectedly succeeded");
         let error_text = format!("{error:#}");
         assert!(
@@ -474,7 +483,7 @@ async fn assert_no_timeline_rows(node: &EmbeddedNode) -> Result<()> {
         "AgentRequest",
         "AgentMessage",
         "AgentToolCall",
-        "AgentResponse",
+        "AgentOutputSegment",
     ] {
         let response = node
             .execute(&format!("{{ {collection} {{ _docID }} }}"))
@@ -566,11 +575,11 @@ fn validate_cli_exports(
 fn assert_projection_matches_import(
     projection: &Value,
     capture: &ExternalAdapterCapture,
-    rows: &RunTimelineRows,
+    view: &ExternalAdapterView,
 ) -> Result<()> {
     assert_eq!(
         projection.get("source_request_id").and_then(Value::as_str),
-        Some(rows.request.request_id.as_str())
+        Some(view.request.request_id.as_str())
     );
     assert_eq!(
         projection

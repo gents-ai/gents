@@ -18,7 +18,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function usePeerRoute(api: DesktopApiAdapter) {
+function usePeerRoute(
+  api: DesktopApiAdapter,
+  ensureDesktopClientStarted = async () =>
+    ({ client: {} }) as DesktopClientSnapshot,
+) {
   const [agent, setAgent] = useState<string | null>("agent-a");
   const [behavior, setBehavior] = useState<string | null>("behavior-a");
   const [sessionId, setSessionId] = useState<string | null>("session-a");
@@ -39,7 +43,7 @@ function usePeerRoute(api: DesktopApiAdapter) {
   });
   const actions = createDesktopShellPeerActions({
     api,
-    ensureDesktopClientStarted: async () => ({ client: {} }) as DesktopClientSnapshot,
+    ensureDesktopClientStarted,
     mutateSnapshot: async <T,>(operation: () => Promise<T>) => operation(),
     refreshSnapshot: async () => {},
     selectedAgentDidRef,
@@ -65,6 +69,22 @@ describe("peer action route ownership", () => {
     expect(result.current.agent).toBe("agent-local");
     expect(result.current.sessionId).toBeNull();
     expect(result.current.behavior).toBeNull();
+  });
+
+  it("preserves the exact client-start failure after local runtime init", async () => {
+    const api = {
+      initLocalStandardRuntime: vi.fn(async () => ({ agentDid: "agent-local" })),
+    } as unknown as DesktopApiAdapter;
+    const startError = new Error("opening desktop identity key: permission denied");
+    const { result } = renderHook(() =>
+      usePeerRoute(api, async () => {
+        throw startError;
+      }),
+    );
+
+    await expect(
+      act(async () => result.current.actions.onInitLocalRuntime("Local")),
+    ).rejects.toThrow("opening desktop identity key: permission denied");
   });
 
   it("does not clear newer navigation when removal completes late", async () => {

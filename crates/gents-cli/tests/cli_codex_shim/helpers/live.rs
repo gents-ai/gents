@@ -241,6 +241,39 @@ pub(super) struct RealSpawnProjection {
     pub(super) child_session_id: String,
 }
 
+async fn observe_exact_request_output(
+    graphql: &str,
+    request_id: &str,
+) -> Result<gents::session::CanonicalRequestOutput> {
+    let response = graphql_query(
+        graphql,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{
+                _docID request_id agent_did behavior_id content lifecycle_state failure_reason
+                terminal_output terminalized_at execution_generation execution_lease_secs
+                execution_lease_expires_at retry_root_request requester_did session_id input
+            }} }}"#,
+            escape_graphql_string(request_id)
+        ),
+    )
+    .await?;
+    let rows = response
+        .pointer("/data/AgentRequest")
+        .and_then(Value::as_array)
+        .context("canonical child request query omitted rows")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "canonical child request must resolve exactly once"
+    );
+    let request: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(rows[0].clone()).context("decode canonical child request")?;
+    gents::session::observe_request_output(
+        &gents::config_client::ConfigAccess::Graphql(graphql.to_owned()),
+        &request,
+    )
+    .await
+}
+
 pub(super) async fn wait_for_real_spawn_projection(
     graphql: &str,
     parent_request_id: &str,
@@ -274,10 +307,13 @@ pub(super) async fn wait_for_real_spawn_projection(
                     }},
                     order: {{ created_at: ASC }}
                 ) {{
+                    _docID
                     request_id
                     session_id
                     agent_did
+                    requester_did
                     behavior_id
+                    terminal_output
                     lifecycle_state
                     caused_by_parent_request_id
                     caused_by_parent_tool_call_id
@@ -366,53 +402,12 @@ pub(super) async fn wait_for_real_spawn_projection(
                 );
             }
             if child_state == "completed" && tool_state == "completed" {
-                let child_projection = graphql_query(
-                    graphql,
-                    &format!(
-                        r#"{{
-                            AgentResponse(
-                                filter: {{ request_id: {{ _eq: "{}" }} }},
-                                limit: 1
-                            ) {{ request_id content status }}
-                            AgentMessage(
-                                filter: {{
-                                    session_id: {{ _eq: "{}" }},
-                                    role: {{ _eq: "assistant" }}
-                                }},
-                                order: {{ sequence: ASC }}
-                            ) {{ content role sequence }}
-                        }}"#,
-                        escape_graphql_string(child_request_id),
-                        escape_graphql_string(
-                            child
-                                .get("session_id")
-                                .and_then(Value::as_str)
-                                .ok_or_else(|| anyhow!("spawned child missing session: {child}"))?
-                        ),
-                    ),
-                )
-                .await?;
-                if let Ok(response_row) = first_graphql_row(&child_projection, "AgentResponse") {
-                    let mut content = response_row
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default()
-                        .to_string();
-                    for message in child_projection
-                        .pointer("/data/AgentMessage")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                    {
-                        if let Some(message_content) =
-                            message.get("content").and_then(Value::as_str)
-                        {
-                            content.push_str(message_content);
-                        }
-                    }
-                    if response_row.get("status").and_then(Value::as_str) == Some("complete")
-                        && content.contains(child_token)
-                    {
+                if let gents::session::CanonicalRequestOutput::TerminalMessage {
+                    presentation,
+                    ..
+                } = observe_exact_request_output(graphql, child_request_id).await?
+                {
+                    if presentation.body_markdown.contains(child_token) {
                         let parent_session_id = tool
                             .get("session_id")
                             .and_then(Value::as_str)

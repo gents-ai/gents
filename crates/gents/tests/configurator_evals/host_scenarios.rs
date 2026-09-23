@@ -306,20 +306,39 @@ pub(super) async fn prepare_monitor(host: &Host, evidence: &Path) -> Result<Prep
         .as_str()
         .context("owner missing")?;
     let engineer = gents::default_behavior_id_for_agent(owner);
-    let preview = stages::checked(CASES[0], &evidence, stages::acceptance(async {
-        let host_before = host.snapshot("before-preview").await.map_err(stages::infrastructure)?;
-        let result = host.request(&engineer, CASES[0].as_str(), PREVIEW).await?;
-        result.ensure_completed()?;
-        let after = configuration_snapshot(&host.access).await.map_err(stages::infrastructure)?;
-        reporting::write_json_new(&evidence.join("configuration-after-preview.json"), &after)?;
-        ensure!(after == before, "preview mutated configuration");
-        let request = gents::graphql::escape_graphql_string(&result.request_id);
-        let calls = host.access.execute(&format!("{{ AgentToolCall(filter: {{ request_id: {{_eq: \"{request}\"}} }}) {{tool_name lifecycle_state tool_failure_class result}} }}")).await.map_err(stages::infrastructure)?;
-        super::onboarding_scenarios::assert_preview_calls(calls["data"]["AgentToolCall"].as_array().context("tool receipts missing")?)?;
-        let host_after = host.snapshot("after-preview").await.map_err(stages::infrastructure)?;
-        verify_read_only_check(&host_before, &host_after)?;
-        Ok(result)
-    })).await?;
+    let preview = stages::checked(
+        CASES[0],
+        &evidence,
+        stages::acceptance(async {
+            let host_before = host
+                .snapshot("before-preview")
+                .await
+                .map_err(stages::infrastructure)?;
+            let result = host.request(&engineer, CASES[0].as_str(), PREVIEW).await?;
+            result.ensure_completed()?;
+            let after = configuration_snapshot(&host.access)
+                .await
+                .map_err(stages::infrastructure)?;
+            reporting::write_json_new(&evidence.join("configuration-after-preview.json"), &after)?;
+            ensure!(after == before, "preview mutated configuration");
+            let calls =
+                gents::run_timeline_fetch::load_run_timeline_rows(&host.access, &result.request_id)
+                    .await
+                    .map_err(stages::infrastructure)?
+                    .tool_calls
+                    .into_iter()
+                    .map(serde_json::to_value)
+                    .collect::<Result<Vec<_>, _>>()?;
+            super::onboarding_scenarios::assert_preview_calls(&calls)?;
+            let host_after = host
+                .snapshot("after-preview")
+                .await
+                .map_err(stages::infrastructure)?;
+            verify_read_only_check(&host_before, &host_after)?;
+            Ok(result)
+        }),
+    )
+    .await?;
     let configured = stages::checked(
         CASES[1],
         &evidence,

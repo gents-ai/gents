@@ -48,6 +48,8 @@ inductive Action (Generation : Type) where
   /-- Atomic expiry recovery that elects the fresh terminal winner. Canonical
   source recovery and accepted tool-row handling are composed elsewhere. -/
   | recoverExpiredAndFail (boundary : Boundary) (expected fresh : Generation)
+  | recoverExpiredTerminal (boundary : Boundary) (expected fresh : Generation)
+      (outcome : Outcome)
   /-- Terminal recovery after an explicit drop. -/
   | recoverDroppedAndFail (boundary : Boundary) (expected fresh : Generation)
   deriving DecidableEq, Repr
@@ -70,10 +72,11 @@ def installFresh {Generation : Type}
     usedGenerations := generation :: pre.usedGenerations }
 
 def recoveryTerminal {Generation : Type}
-    (pre : World Generation) (generation : Generation) : World Generation :=
+    (pre : World Generation) (generation : Generation)
+    (outcome : Outcome := .failed) : World Generation :=
   terminalize
     { pre with usedGenerations := generation :: pre.usedGenerations }
-    generation .failed
+    generation outcome
 
 def step? {Generation : Type} [DecidableEq Generation]
     (pre : World Generation) : Action Generation → Option (World Generation)
@@ -174,6 +177,17 @@ def step? {Generation : Type} [DecidableEq Generation]
               canFinalize pre .failed ∧ pre.continuationCount = 0 ∧
               pre.tokenChargeCount = 0 then
             some (recoveryTerminal pre generation)
+          else none
+      | _ => none
+  | .recoverExpiredTerminal boundary expected generation outcome =>
+      match pre.lease with
+      | .active owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧
+              effectiveExpiry pre ≤ pre.now ∧ fresh pre generation ∧
+              (outcome = .failed ∨ outcome = .interrupted) ∧
+              canFinalize pre outcome ∧ pre.continuationCount = 0 ∧
+              pre.tokenChargeCount = 0 then
+            some (recoveryTerminal pre generation outcome)
           else none
       | _ => none
   | .recoverDroppedAndFail boundary expected generation =>

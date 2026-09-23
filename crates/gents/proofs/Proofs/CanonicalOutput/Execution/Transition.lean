@@ -189,6 +189,23 @@ def acceptedToolsPresent (world : World) (message : MessageEnvelope) : Bool :=
         tool.acceptedSequence == message.sequence
     | none => false
 
+/-- Replay must present the same physical admissions and immutable genesis as
+the accepted transaction. In particular, alias drift cannot retarget an
+already accepted remote subagent call to another behavior. -/
+def acceptedAdmissionsPresent (world : World) (admissions : List ToolAdmission) : Bool :=
+  admissions.all fun admission =>
+    match ownedToolByDocument? world admission.document with
+    | some tool => ToolGenesis.fromContext tool.context ==
+        ToolGenesis.fromContext admission.context &&
+        tool.delegatedWorkspace == admission.delegatedWorkspace
+    | none => false
+
+def acceptedReplayPresent (world : World) (closing : Segment)
+    (message : MessageEnvelope) (targets : List RemoteTarget)
+    (admissions : List ToolAdmission) : Bool :=
+  acceptedPublicationPresent world closing message targets &&
+    acceptedToolsPresent world message && acceptedAdmissionsPresent world admissions
+
 /-- Accepted provider turn transaction: validated Complete closure, typed native
 message, assistant transcript row, every ordered pending tool intent, and each
 requested remote-only delegated argument row appear together before dispatch. -/
@@ -203,8 +220,7 @@ def acceptAndPublishCore (world : World) (generation : Generation)
   else if ¬ (targets.map (fun target => target.call)).Nodup then .error .invalidDelegation
   else if remoteTargetsMatchConfiguredRoutes world message targets = false then
     .error .invalidDelegation
-  else if acceptedPublicationPresent world closing message targets &&
-      acceptedToolsPresent world message then
+  else if acceptedReplayPresent world closing message targets admissions then
     if !messageIdentityCollision world message && closedComplete closing &&
         validateClosingRecord world.segments closing &&
         acceptedMessageValid world generation world.segments message &&
@@ -281,8 +297,7 @@ theorem acceptAndPublishCore_success_effect
       · simp only [if_pos hr] at h
         contradiction
       · simp only [if_neg hr] at h
-        by_cases hp : acceptedPublicationPresent world closing message targets = true ∧
-            acceptedToolsPresent world message = true
+        by_cases hp : acceptedReplayPresent world closing message targets admissions = true
         · simp only [if_pos hp] at h
           split at h <;> try contradiction
           rename_i hvalid
@@ -452,7 +467,7 @@ def dispatchPublicationValid (world : World) (generation : Generation)
               match world.remoteRoutes.filter (fun route => route.1 == callId) with
               | [] => true
               | [route] => match prepareDelegatedCalls world world.segments message
-                  [⟨callId, world.principal, route.2⟩] with
+                  [⟨callId, world.principal, route.2.1, route.2.2⟩] with
                 | .error _ => false
                 | .ok rows => delegatedRowsPresent world rows
               | _ => false
@@ -774,6 +789,26 @@ def preparedRecoveryWorld (world : World) (prepared : RecoveryPrepared)
       transcript := prepared.transcript }
     expected true
 
+/-- A live producer may atomically retain the text prefix of one provider
+source under its current generation before terminal request CAS. This reuses
+the recovery closure/header validator, but neither swaps generation nor
+accounts tools: it is the same producer closing its own attempt. -/
+def closePartialAndPublishCore (world : World) (generation : Generation)
+    (item : RecoveryItem) : Except Error World :=
+  if recoveryReplayValid world generation generation [item] then .ok world
+  else match prepareRecoveryItems world generation generation [item]
+      ⟨world.segments, world.messages, world.transcript⟩ with
+  | .error error => .error error
+  | .ok prepared =>
+      match RequestExecutionLease.step? world.lease
+          (.authorizeProducerDecision .mutationWriteGate generation .closeOrRetract) with
+      | none => .error .leaseRejected
+      | some lease => .ok { world with
+          lease := lease
+          segments := prepared.segments
+          messages := prepared.messages
+          transcript := prepared.transcript }
+
 /-- One gate transaction closes every unresolved keyed provider source, accounts
 every exact old-generation tool document, and only then swaps generation.
 Running effects remain running; durable cancellation/reconcile intent releases
@@ -791,6 +826,26 @@ def recoverExpiredBatchCore (world : World) (expected fresh : Generation)
       | none => .error .leaseRejected
       | some lease => .ok
           { accounted with lease := lease }
+
+/-- Recovery publication, old-generation tool accounting, terminal lease CAS,
+and exact terminal selection form one transaction. This is distinct from the
+resumable `recoverExpiredBatchCore` transition. The caller supplies the
+selection; the execution owner validates it against the repaired facts. -/
+def recoverExpiredTerminalCore (world : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (items : List RecoveryItem) : Except Error World :=
+  if terminalReplayPresent world fresh outcome selection then .ok world
+  else if world.terminalSelection.isSome then .error .terminalRejected
+  else match prepareRecoveryBatch world expected fresh items with
+  | .error error => .error error
+  | .ok prepared =>
+      let accounted := preparedRecoveryWorld world prepared expected
+      if terminalSelectionValid accounted selection = false then .error .terminalRejected
+      else match RequestExecutionLease.step? accounted.lease
+          (.recoverExpiredTerminal .mutationWriteGate expected fresh outcome) with
+      | none => .error .leaseRejected
+      | some lease => .ok
+          { accounted with lease := lease, terminalSelection := some selection }
 
 /-- Final request lifecycle and exact terminal-output selection commit together.
 No latest-message fallback is available. -/
@@ -921,6 +976,32 @@ def recoverExpiredBatch (world : World) (expected fresh : Generation)
           (recoveryReplayValid world expected fresh items ||
             recoveryExtentExact world expected item.closing)))
     (recoverExpiredBatchCore world expected fresh duration deadline items)
+
+def recoverExpiredTerminal (world : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (items : List RecoveryItem) : Except Error World :=
+  checked (fun post =>
+    terminalReplayPresent post fresh outcome selection &&
+      terminalSelectionValid post selection && toolProjectionCoherent post &&
+      (terminalReplayPresent world fresh outcome selection ||
+        recoveryCoversAllSources world expected items) &&
+      items.all (fun item =>
+        (closures post.segments item.closing.coordinate).dedup == [item.closing] &&
+          item.closing.writer == .request expected &&
+          (terminalReplayPresent world fresh outcome selection ||
+            recoveryExtentExact world expected item.closing)))
+    (recoverExpiredTerminalCore world expected fresh outcome selection items)
+
+def closePartialAndPublish (world : World) (generation : Generation)
+    (item : RecoveryItem) : Except Error World :=
+  checked (fun post =>
+    recoveryItemPresent post item &&
+      (closures post.segments item.closing.coordinate).dedup == [item.closing] &&
+      item.closing.writer == .request generation &&
+      toolProjectionCoherent post &&
+      (recoveryReplayValid world generation generation [item] ||
+        recoveryExtentExact world generation item.closing))
+    (closePartialAndPublishCore world generation item)
 
 def terminalize (world : World) (generation : Generation)
     (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection) :

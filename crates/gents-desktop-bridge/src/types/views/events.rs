@@ -49,8 +49,6 @@ pub struct ClientUpdateEvent {
     pub store_version: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reconcile_version: Option<u64>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub response_only: bool,
 }
 
 impl ClientUpdateEvent {
@@ -59,7 +57,6 @@ impl ClientUpdateEvent {
             reason,
             store_version: None,
             reconcile_version: None,
-            response_only: false,
         }
     }
 
@@ -68,7 +65,6 @@ impl ClientUpdateEvent {
             reason: "store",
             store_version: Some(notice.revision.store_version),
             reconcile_version: Some(notice.revision.reconcile_version),
-            response_only: notice.response_only,
         }
     }
 }

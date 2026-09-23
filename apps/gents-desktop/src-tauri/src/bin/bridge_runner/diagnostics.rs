@@ -9,18 +9,20 @@ use gents_desktop_bridge::snapshot::{
     build_session_snapshot_for_agent_with_transcript,
 };
 use gents_desktop_bridge::types::{
-    turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot,
+    turn_state_label, DesktopClientSnapshot, DesktopSessionSnapshot, RenderedTimelineItem,
 };
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RequestRowDiagnostics {
+    doc_id: Option<String>,
     lifecycle_state: Option<String>,
     failure_reason: Option<String>,
     created_at: Option<String>,
     claimed_at: Option<String>,
     interrupt_requested_at: Option<String>,
     valid_until: Option<String>,
+    terminal_output: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -69,6 +71,10 @@ pub(crate) struct RequestDiagnostics {
     timeline_count: usize,
     active_response_overlay_content_len: usize,
     active_response_overlay_reasoning_len: usize,
+    raw_message_count_for_request: usize,
+    raw_segment_count_for_request: usize,
+    raw_message_doc_ids: Vec<String>,
+    raw_segment_doc_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -131,19 +137,13 @@ pub(crate) async fn build_desktop_session_snapshot(
             .map(|session| session.agent_did.clone())
     });
     let agent_did = resolved_agent_did.as_deref();
-    let requester_scope = if let Some(agent_did) = agent_did {
-        fixture
-            .desktop_core()
-            .peer_records()
-            .await
-            .iter()
-            .any(|peer| peer.agent_did == agent_did && peer.is_enrollment())
-            .then(|| fixture.desktop_core().principal().did().to_string())
-    } else {
-        None
-    };
+    // A local-standard route is self-authored by the target agent. Production
+    // enrollment uses the desktop principal instead; this fixture deliberately
+    // bypasses enrollment, so its transcript namespace is the agent DID rather
+    // than requester_did:null or the desktop principal.
+    let requester_scope = fixture.requester_scope(agent_did, session_id, request_id);
     let page = match gents_desktop_core::client::load_session_transcript_page(
-        fixture.desktop_core().node(),
+        fixture.remote_core().node(),
         session_id,
         agent_did,
         requester_scope.as_deref(),
@@ -164,7 +164,7 @@ pub(crate) async fn build_desktop_session_snapshot(
     };
     let context_store = if timeline_before_item_key.is_none() {
         match gents_desktop_core::client::load_session_context_store(
-            fixture.desktop_core().node(),
+            fixture.remote_core().node(),
             session_id,
             agent_did,
             requester_scope.as_deref(),
@@ -190,6 +190,7 @@ pub(crate) async fn build_desktop_session_snapshot(
         session_id,
         request_id,
         Some(&page.store),
+        Some(&page.canonical_dependencies),
         context_store.as_ref(),
         context_store.is_some(),
         timeline_before_item_key.is_none(),
@@ -222,6 +223,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
             fixture.desktop_core().as_ref(),
             session_id,
             request_id,
+            fixture.requester_scope(Some(fixture.agent_did()), session_id, Some(request_id)),
         )
         .await,
         remote: build_request_diagnostics(
@@ -229,6 +231,7 @@ pub(crate) async fn build_request_diagnostics_bundle(
             fixture.remote_core().as_ref(),
             session_id,
             request_id,
+            fixture.requester_scope(Some(fixture.agent_did()), session_id, Some(request_id)),
         )
         .await,
     }
@@ -239,6 +242,7 @@ async fn build_request_diagnostics(
     core: &ClientCore,
     session_id: &str,
     request_id: &str,
+    requester_scope: Option<String>,
 ) -> RequestDiagnostics {
     let refresh_error = refresh_store_with_timeout(core).await;
     let snapshot = core.store().snapshot();
@@ -247,26 +251,11 @@ async fn build_request_diagnostics(
         .iter()
         .find(|row| row.request_id == request_id)
         .cloned();
-    let matching_responses = snapshot
-        .responses
-        .iter()
-        .filter(|row| row.request_id.as_deref() == Some(request_id))
-        .collect::<Vec<_>>();
-    let response = snapshot.latest_response_for_request(request_id).cloned();
     let resolved_agent_did = snapshot
         .sessions
         .iter()
         .find(|session| session.session_id == session_id)
         .map(|session| session.agent_did.clone());
-    let requester_scope = if let Some(agent_did) = resolved_agent_did.as_deref() {
-        core.peer_records()
-            .await
-            .iter()
-            .any(|peer| peer.agent_did == agent_did && peer.is_enrollment())
-            .then(|| core.principal().did().to_string())
-    } else {
-        None
-    };
     // The rendered session uses the same bounded page as the app. Counts use a
     // separate explicit diagnostic read so acceptance evidence is exact rather
     // than silently capped by the interactive row budget.
@@ -318,10 +307,60 @@ async fn build_request_diagnostics(
         Some(request_id),
         transcript_store,
         None,
+        None,
         false,
         true,
     )
     .await;
+    let matching_responses = session_snapshot
+        .as_ref()
+        .into_iter()
+        .flat_map(|session| session.messages.iter())
+        .filter(|row| {
+            row.request_id.as_deref() == Some(request_id)
+                && row.display_role.as_deref() == Some("assistant")
+        })
+        .collect::<Vec<_>>();
+    let response = matching_responses.last().map(|row| ResponseRowDiagnostics {
+        status: Some("complete".to_string()),
+        error_message: row.reconstruction_error.clone(),
+        progress_seq: row.sequence,
+        materialized_message_sequence: row.sequence,
+        materialized_at: row.timestamp.clone(),
+        completed_at: row.timestamp.clone(),
+        content_len: row.display_content.as_deref().map_or(0, str::len),
+        reasoning_len: row.reasoning.as_deref().map_or(0, str::len),
+    });
+    let (live_content_len, live_reasoning_len) = session_snapshot
+        .as_ref()
+        .and_then(|session| {
+            session
+                .timeline_items
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    RenderedTimelineItem::LiveAssistant {
+                        content, reasoning, ..
+                    } => Some((
+                        content.as_deref().map_or(0, str::len),
+                        reasoning.as_deref().map_or(0, str::len),
+                    )),
+                    _ => None,
+                })
+        })
+        .unwrap_or_default();
+    let request_doc_id = request.as_ref().and_then(|row| row.doc_id.clone());
+    let canonical_store = diagnostics_store.as_ref().unwrap_or(snapshot.as_ref());
+    let raw_messages = canonical_store
+        .transcript_messages
+        .iter()
+        .filter(|row| row.message.request_doc_id.as_deref() == request_doc_id.as_deref())
+        .collect::<Vec<_>>();
+    let raw_segments = canonical_store
+        .output_segments
+        .iter()
+        .filter(|row| Some(row.segment.request_doc_id.as_str()) == request_doc_id.as_deref())
+        .collect::<Vec<_>>();
 
     RequestDiagnostics {
         source: source.to_string(),
@@ -345,31 +384,27 @@ async fn build_request_diagnostics(
                     .map(|observation| observation.last_activity_at.clone())
             }),
         request: request.map(|row| RequestRowDiagnostics {
+            doc_id: row.doc_id.clone(),
             lifecycle_state: row.lifecycle_state.map(|state| state.as_str().to_string()),
             failure_reason: row.failure_reason.clone(),
             created_at: row.created_at.clone(),
             claimed_at: row.claimed_at.clone(),
             interrupt_requested_at: row.interrupt_requested_at.clone(),
             valid_until: row.valid_until.clone(),
+            terminal_output: row
+                .terminal_output
+                .as_ref()
+                .and_then(|output| serde_json::to_value(output).ok()),
         }),
-        response: response.map(|row| ResponseRowDiagnostics {
-            status: row.status.clone(),
-            error_message: row.error_message.clone(),
-            progress_seq: row.progress_seq,
-            materialized_message_sequence: row.materialized_message_sequence,
-            materialized_at: row.materialized_at.clone(),
-            completed_at: row.completed_at.clone(),
-            content_len: row.content.as_deref().map_or(0, str::len),
-            reasoning_len: row.reasoning.as_deref().map_or(0, str::len),
-        }),
+        response,
         matching_response_count: matching_responses.len(),
         matching_response_progress_seqs: matching_responses
             .iter()
-            .map(|row| row.progress_seq.unwrap_or_default())
+            .map(|row| row.sequence.unwrap_or_default())
             .collect(),
         matching_response_statuses: matching_responses
             .iter()
-            .map(|row| row.status.clone().unwrap_or_default())
+            .map(|_| "complete".to_string())
             .collect(),
         tool_calls: ToolCallDiagnostics {
             total: relevant_tool_calls.len(),
@@ -381,21 +416,22 @@ async fn build_request_diagnostics(
             latest_status: latest_tool_call.and_then(|row| row.status.clone()),
             latest_completed_at: latest_tool_call.and_then(|row| row.completed_at.clone()),
         },
-        tool_result_count: transcript.tool_results.len(),
+        tool_result_count: session_snapshot
+            .as_ref()
+            .into_iter()
+            .flat_map(|session| session.messages.iter())
+            .filter(|row| row.has_tool_results)
+            .count(),
         message_count: transcript.messages.len(),
         timeline_count: session_snapshot
             .as_ref()
             .map_or(0, |session| session.timeline_items.len()),
-        active_response_overlay_content_len: session_snapshot
-            .as_ref()
-            .and_then(|session| session.active_response_overlay.as_ref())
-            .and_then(|overlay| overlay.content.as_deref())
-            .map_or(0, str::len),
-        active_response_overlay_reasoning_len: session_snapshot
-            .as_ref()
-            .and_then(|session| session.active_response_overlay.as_ref())
-            .and_then(|overlay| overlay.reasoning.as_deref())
-            .map_or(0, str::len),
+        active_response_overlay_content_len: live_content_len,
+        active_response_overlay_reasoning_len: live_reasoning_len,
+        raw_message_count_for_request: raw_messages.len(),
+        raw_segment_count_for_request: raw_segments.len(),
+        raw_message_doc_ids: raw_messages.iter().map(|row| row.doc_id.clone()).collect(),
+        raw_segment_doc_ids: raw_segments.iter().map(|row| row.doc_id.clone()).collect(),
     }
 }
 

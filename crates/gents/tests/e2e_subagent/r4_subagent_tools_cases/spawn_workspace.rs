@@ -29,6 +29,7 @@ struct IsolatedWorkspaceRow {
     repository_id: Option<String>,
     #[serde(default)]
     branch: Option<String>,
+    seal_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +122,7 @@ async fn seed_workspace_placement(
     agent_did: &str,
     host_path: &Path,
     repository_id: &str,
+    observed_tree_hash: &str,
 ) {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let doc = WorkspacePlacementDoc {
@@ -133,7 +135,7 @@ async fn seed_workspace_placement(
         dirty_base: false,
         dirty_base_summary: String::new(),
         provisioning_state: "{}".to_string(),
-        observed_tree_hash: String::new(),
+        observed_tree_hash: observed_tree_hash.to_owned(),
     };
     let mutation = workspace_placement_upsert_mutation(&doc, &now);
     let response = node.execute(&mutation).await;
@@ -191,7 +193,15 @@ async fn seed_local_workspace(
         principal_did,
     )
     .await;
-    seed_workspace_placement(node, workspace_id, owner, placement_path, repository_id).await;
+    seed_workspace_placement(
+        node,
+        workspace_id,
+        owner,
+        placement_path,
+        repository_id,
+        seal_hash.unwrap_or(""),
+    )
+    .await;
 }
 
 async fn fetch_child_workspace(node: &EmbeddedNode, child_request_id: &str) -> ChildWorkspaceRow {
@@ -226,6 +236,7 @@ async fn fetch_isolated_workspace(node: &EmbeddedNode, workspace_id: &str) -> Is
                 path_capability
                 repository_id
                 branch
+                seal_hash
             }}
         }}"#
     );
@@ -266,11 +277,9 @@ async fn spawn_background_child_result(
         args["workspace"] = workspace;
     }
     let args = args.to_string();
-    let action = fixture
-        .hook
-        .on_tool_call("spawn_subagent", None, tool_call_id, &args)
-        .await;
-    skip_reason_json(action)
+    run_canonical_spawn_turn(fixture, tool_call_id, &args).await;
+    let tool = fetch_tool_call(&fixture.db.node, &fixture.session_id, tool_call_id).await;
+    persisted_tool_result_json(&tool)
 }
 
 async fn spawn_background_child(
@@ -280,7 +289,12 @@ async fn spawn_background_child(
 ) -> ChildWorkspaceRow {
     let result = spawn_background_child_result(fixture, tool_call_id, workspace).await;
     assert_eq!(result["ok"], true, "{result}");
-    let child = wait_for_child_request_for_tool(fixture.db.node.as_ref(), tool_call_id).await;
+    let child = wait_for_child_request_for_tool(
+        fixture.db.node.as_ref(),
+        &fixture.session_id,
+        tool_call_id,
+    )
+    .await;
     fetch_child_workspace(fixture.db.node.as_ref(), &child.request_id).await
 }
 
@@ -325,6 +339,74 @@ fn placement_dir(label: &str) -> (TempDir, PathBuf) {
     (root, path)
 }
 
+async fn provision_parent_workspace(
+    fixture: &SpawnFixture,
+    workspace_id: &str,
+    repository_id: &str,
+    repo: &Path,
+    base_sha: &str,
+) -> PathBuf {
+    use gents::workspace::{
+        emit_create_workspace_plan, execute_create_workspace_plan, CreateWorkspaceAction,
+        CreationPolicy, HostExecutorContext, MemoryWorkspaceDocuments, RepositoryPlacementRef,
+        WorkspaceAdapterKind, WorkspacePathCapability, CAP_CREATE_WORKSPACE,
+        CAP_OBSERVE_DIRTY_BASE,
+    };
+    let mut documents = MemoryWorkspaceDocuments::default();
+    let mut context = HostExecutorContext {
+        owner_agent_did: fixture.agent_did.clone(),
+        repository: RepositoryPlacementRef {
+            repository_id: repository_id.into(),
+            owner_agent_did: fixture.agent_did.clone(),
+            host_path: repo.into(),
+            enabled: true,
+        },
+        ceiling: Some(repo),
+        capabilities: [CAP_CREATE_WORKSPACE.into(), CAP_OBSERVE_DIRTY_BASE.into()]
+            .into_iter()
+            .collect(),
+        writer_principal: fixture.agent_did.clone(),
+        integrator_principal: fixture.agent_did.clone(),
+        caused_by_invocation_id: format!("{workspace_id}-inv"),
+        caused_by_correlation: format!("{workspace_id}-corr"),
+        documents: &mut documents,
+    };
+    let created = execute_create_workspace_plan(
+        &emit_create_workspace_plan(CreateWorkspaceAction {
+            path_capability: WorkspacePathCapability::exact_paths(vec!["README.md".into()])
+                .unwrap(),
+            workspace_id: workspace_id.into(),
+            work_unit_id: format!("{workspace_id}-unit"),
+            repository_id: repository_id.into(),
+            base_sha: base_sha.into(),
+            branch: "topic".into(),
+            creation_policy: CreationPolicy::GitWorktreeDiff,
+            adapter: WorkspaceAdapterKind::GitWorktree,
+            clone_artifacts: None,
+        }),
+        &mut Vec::new(),
+        &mut context,
+    )
+    .expect("provision admitted parent workspace including host identity marker");
+    let response = fixture
+        .db
+        .node
+        .execute(&isolated_workspace_upsert_mutation(&created.workspace))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let now = chrono::Utc::now().to_rfc3339();
+    let response = fixture
+        .db
+        .node
+        .execute(&workspace_placement_upsert_mutation(
+            &created.placement,
+            &now,
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    PathBuf::from(created.placement.host_path)
+}
+
 fn parent_workspace_fields(workspace_id: &str, owner: &str, authority: &str) -> String {
     format!(
         r#", workspace_id: "{id}"
@@ -341,7 +423,7 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
     let workspace_id = "ws-inherit-infimum";
     let owner = "did:test:workspace-inherit";
     let extra = parent_workspace_fields(workspace_id, owner, "readOnly");
-    let fixture = setup_spawn_fixture_with_parent_fields(
+    let mut fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_inherit",
         vec![CHILD_BEHAVIOR_ID],
         0,
@@ -355,14 +437,14 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
     seed_local_workspace(
         fixture.db.node.as_ref(),
         workspace_id,
-        owner,
+        &fixture.agent_did,
         "ready",
         None,
         "repo-inherit",
         "abc123",
         "topic",
         &placement,
-        "did:key:zWriter",
+        &fixture.agent_did,
     )
     .await;
 
@@ -374,12 +456,19 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
         Some("readOnly"),
         "inherit must infimum Ready/ReadWrite default with parent ReadOnly"
     );
-    assert_eq!(child.workspace_owner_agent_did.as_deref(), Some(owner));
+    assert_eq!(
+        child.workspace_owner_agent_did.as_deref(),
+        Some(fixture.agent_did.as_str())
+    );
     assert!(child
         .workspace_seal_hash
         .as_deref()
         .is_none_or(|value| value.is_empty()));
 
+    // A second invocation is a new admitted request, not a replacement of the
+    // physical request already named by the workspace binding.
+    fixture.request_id.push_str("-default");
+    fixture.session_id.push_str("-default");
     let omitted = spawn_background_child(&fixture, "internal-spawn-inherit-default", None).await;
     assert_eq!(omitted.workspace_id.as_deref(), Some(workspace_id));
     assert_eq!(
@@ -394,9 +483,12 @@ async fn spawn_subagent_inherit_uses_parent_authority_infimum() {
 async fn spawn_subagent_inherit_sealed_copies_seal_hash() {
     let workspace_id = "ws-inherit-sealed";
     let owner = "did:test:workspace-inherit-sealed";
+    let (placement_root, placement, base_sha) = init_git_repo();
+    let seal_hash = git(&placement, &["rev-parse", "HEAD^{tree}"]);
     let extra = format!(
-        "{}, workspace_seal_hash: \"seal-inherit\"",
-        parent_workspace_fields(workspace_id, owner, "readWrite")
+        "{}, workspace_seal_hash: \"{}\"",
+        parent_workspace_fields(workspace_id, owner, "readOnly"),
+        escape_graphql_string(&seal_hash)
     );
     let fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_inherit_sealed",
@@ -408,18 +500,19 @@ async fn spawn_subagent_inherit_sealed_copies_seal_hash() {
         &extra,
     )
     .await;
-    let (placement_root, placement) = placement_dir("inherit-sealed");
+    // The canonical owned loop reads the sealed workspace's Git tree before
+    // dispatch; an empty directory is not an admitted workspace.
     seed_local_workspace(
         fixture.db.node.as_ref(),
         workspace_id,
-        owner,
+        &fixture.agent_did,
         "sealed",
-        Some("seal-inherit"),
+        Some(&seal_hash),
         "repo-inherit-sealed",
-        "abc123",
-        "topic",
+        &base_sha,
+        "main",
         &placement,
-        "did:key:zWriter",
+        &fixture.agent_did,
     )
     .await;
 
@@ -431,7 +524,10 @@ async fn spawn_subagent_inherit_sealed_copies_seal_hash() {
     .await;
     assert_eq!(child.workspace_id.as_deref(), Some(workspace_id));
     assert_eq!(child.workspace_authority.as_deref(), Some("readOnly"));
-    assert_eq!(child.workspace_seal_hash.as_deref(), Some("seal-inherit"));
+    assert_eq!(
+        child.workspace_seal_hash.as_deref(),
+        Some(seal_hash.as_str())
+    );
     let _keep = placement_root;
 }
 
@@ -489,14 +585,14 @@ async fn spawn_subagent_bind_id_infimums_parent_readonly() {
     seed_local_workspace(
         fixture.db.node.as_ref(),
         workspace_id,
-        owner,
+        &fixture.agent_did,
         "ready",
         None,
         "repo-bind-ro",
         "abc123",
         "topic",
         &placement,
-        "did:key:zWriter",
+        &fixture.agent_did,
     )
     .await;
 
@@ -553,21 +649,8 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
     let parent_workspace_id = "ws-provision-parent";
     let owner = "did:test:workspace-provision";
     let (root, repo, sha) = init_git_repo();
-    let parent_ws = root.path().join("parent-ws");
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "topic",
-            "--",
-            &parent_ws.to_string_lossy(),
-            &sha,
-        ],
-    );
     let extra = parent_workspace_fields(parent_workspace_id, owner, "readWrite");
-    let fixture = setup_spawn_fixture_with_parent_fields(
+    let mut fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_provision",
         vec![CHILD_BEHAVIOR_ID],
         0,
@@ -577,19 +660,7 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
         &extra,
     )
     .await;
-    seed_local_workspace(
-        fixture.db.node.as_ref(),
-        parent_workspace_id,
-        owner,
-        "ready",
-        None,
-        "repo-provision",
-        &sha,
-        "topic",
-        &parent_ws,
-        "did:key:zWriter",
-    )
-    .await;
+    provision_parent_workspace(&fixture, parent_workspace_id, "repo-provision", &repo, &sha).await;
     seed_repository_placement(
         fixture.db.node.as_ref(),
         "repo-provision",
@@ -669,6 +740,19 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
         "git worktree list missing dest {dest:?}: {listed}"
     );
 
+    fixture.request_id.push_str("-second");
+    fixture.session_id.push_str("-second");
+    // The first writer seals its parent workspace on completion. A later
+    // request must bind that immutable tree as a reader, not reopen a writer.
+    let parent = fetch_isolated_workspace(fixture.db.node.as_ref(), parent_workspace_id).await;
+    let seal_hash = parent
+        .seal_hash
+        .expect("completed parent writer sealed its workspace");
+    fixture.extra_parent_fields = format!(
+        "{}, workspace_seal_hash: \"{}\"",
+        parent_workspace_fields(parent_workspace_id, &fixture.agent_did, "readOnly"),
+        escape_graphql_string(&seal_hash)
+    );
     let second = spawn_background_child(
         &fixture,
         "internal-spawn-provision-2",
@@ -711,22 +795,32 @@ async fn spawn_subagent_provision_creates_isolated_workspace() {
 
 #[tokio::test]
 async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_root() {
+    // The operator ceiling is process-wide. Exercise a different ceiling in
+    // its own process so parallel runtime fixtures cannot overwrite it.
+    const ISOLATED: &str = "GENTS_SPAWN_WORKSPACE_CEILING_TEST";
+    if std::env::var_os(ISOLATED).is_none() {
+        let mut command = tokio::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .arg("--exact")
+            .arg("r4_subagent_tools::spawn_workspace::spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_root")
+            .arg("--nocapture")
+            .env(ISOLATED, "1")
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(Duration::from_secs(60), command.output())
+            .await
+            .expect("isolated operator-ceiling test timed out")
+            .expect("run isolated operator-ceiling test");
+        assert!(
+            output.status.success(),
+            "isolated operator-ceiling test failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let parent_workspace_id = "ws-provision-ceiling";
     let owner = "did:test:workspace-provision-ceiling";
     let (root, repo, sha) = init_git_repo();
-    let parent_ws = root.path().join("parent-ws");
-    git(
-        &repo,
-        &[
-            "worktree",
-            "add",
-            "-b",
-            "topic",
-            "--",
-            &parent_ws.to_string_lossy(),
-            &sha,
-        ],
-    );
     let extra = parent_workspace_fields(parent_workspace_id, owner, "readWrite");
     let mut fixture = setup_spawn_fixture_with_parent_fields(
         "spawn_ws_provision_ceiling",
@@ -738,23 +832,18 @@ async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_r
         &extra,
     )
     .await;
-    seed_local_workspace(
-        fixture.db.node.as_ref(),
+    let parent_ws = provision_parent_workspace(
+        &fixture,
         parent_workspace_id,
-        owner,
-        "ready",
-        None,
         "repo-provision-ceiling",
+        &repo,
         &sha,
-        "topic",
-        &parent_ws,
-        "did:key:zWriter",
     )
     .await;
     seed_repository_placement(
         fixture.db.node.as_ref(),
         "repo-provision-ceiling",
-        owner,
+        &fixture.agent_did,
         &repo,
     )
     .await;
@@ -763,11 +852,10 @@ async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_r
         &std::fs::canonicalize(root.path()).unwrap(),
     )
     .await;
-    let narrower_ceiling = repo.join("operator-root");
-    std::fs::create_dir_all(&narrower_ceiling).unwrap();
-    fixture
-        .hook
-        .set_operator_tool_root(Some(std::fs::canonicalize(&narrower_ceiling).unwrap()));
+    // Admit the parent itself, but exclude the sibling destination chosen for
+    // the new child workspace. A ceiling excluding the parent tests admission,
+    // not the spawn provisioning guard.
+    fixture.operator_tool_root = Some(std::fs::canonicalize(&parent_ws).unwrap());
 
     let tool_call_id = "internal-spawn-provision-ceiling";
     let result = spawn_background_child_result(
@@ -783,21 +871,26 @@ async fn spawn_subagent_provision_fails_closed_when_dest_escapes_operator_tool_r
         "expected operator ceiling denial, got {result}"
     );
 
-    let workspace_id = format!("spawn-ws-{tool_call_id}");
-    let escaped = escape_graphql_string(&workspace_id);
+    // Check the actual principal's entire fixture scope, not a guessed
+    // workspace ID derived from a provider ID rather than the physical call.
+    let escaped = escape_graphql_string(&fixture.agent_did);
     let query = format!(
         r#"{{
             IsolatedWorkspace(
-                filter: {{ workspace_id: {{ _eq: "{escaped}" }} }},
-                limit: 1
+                filter: {{ owner_agent_did: {{ _eq: "{escaped}" }} }}
             ) {{ workspace_id }}
         }}"#
     );
-    let created: Option<IsolatedWorkspaceRow> =
-        first_optional_row(&fixture.db.node.execute(&query).await, "IsolatedWorkspace");
-    assert!(
-        created.is_none(),
-        "provision must not persist IsolatedWorkspace after operator-ceiling denial: {created:?}"
+    let response = fixture.db.node.execute(&query).await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let rows = response.data.as_ref().unwrap()["IsolatedWorkspace"]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "denied spawn must leave only the parent workspace: {rows:?}"
     );
+    assert_eq!(rows[0]["workspace_id"], parent_workspace_id);
     let _keep = root;
 }

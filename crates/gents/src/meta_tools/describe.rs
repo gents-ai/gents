@@ -800,7 +800,9 @@ mod tests {
 
         assert!(output.starts_with("## search_posts\nPurpose: Search x-data posts."));
         assert!(output.contains("Input contract:"));
-        assert!(output.contains("Required arguments:\n- `/arguments/query` (string; examples: \"gents\") - Search text."));
+        assert!(output.contains(
+            "Required arguments:\n- `/arguments/query` (string; examples: \"gents\") - Search text."
+        ));
         assert!(output.contains("Optional arguments:\n- `/arguments/limit` (integer; default: 10; minimum: 1; maximum: 100) - Maximum results to return."));
         assert!(
             output.contains("Unknown top-level fields: rejected (`additionalProperties: false`)")

@@ -1,3 +1,5 @@
+use anyhow::{Context, Result};
+use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::ToolCallState;
 use gents_codex_protocol as codex;
@@ -9,6 +11,10 @@ use super::subagent_projection::LinkedSubagentThread;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct GentsToolCallProgress {
+    pub(super) doc_id: Option<String>,
+    pub(super) agent_did: Option<String>,
+    pub(super) requester_did: Option<String>,
+    pub(super) request_doc_id: Option<String>,
     pub(super) tool_call_key: String,
     pub(super) tool_name: String,
     pub(super) lifecycle_state: Option<String>,
@@ -41,35 +47,15 @@ pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) 
                 session_id
                 request_id
                 lifecycle_state
+                execution_generation
+                execution_lease_secs
+                execution_lease_expires_at
                 failure_reason
                 created_at
                 terminalized_at
+                terminal_output
                 interrupt_requested_at
                 valid_until
-            }}
-            AgentResponse(
-                filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }},
-                order: {{ created_at: DESC }},
-                limit: 2
-            ) {{
-                _docID
-                agent_did
-                requester_did
-                request_doc_id
-                request_id
-                session_id
-                status
-                content
-                reasoning
-                error_message
-                token_count
-                progress_seq
-                reasoning_progress_seq
-                created_at
-                materialized_message_sequence
-                materialized_at
-                completed_at
-                interrupted_at
             }}
             AgentToolCall(
                 filter: {{
@@ -78,13 +64,16 @@ pub(super) fn gents_turn_progress_query(request_doc_id: &str, session_id: &str) 
                 }},
                 order: {{ started_at: ASC }}
             ) {{
+                _docID
+                agent_did
+                requester_did
+                session_id
+                request_doc_id
                 tool_call_key
                 tool_name
                 lifecycle_state
                 await_mode
                 child_request_id
-                args
-                result
                 started_at
                 completed_at
                 selected_service_id
@@ -127,13 +116,16 @@ pub(super) fn gents_tool_progress_query(request_doc_id: &str, session_id: &str) 
                 }},
                 order: {{ started_at: ASC }}
             ) {{
+                _docID
+                agent_did
+                requester_did
+                session_id
+                request_doc_id
                 tool_call_key
                 tool_name
                 lifecycle_state
                 await_mode
                 child_request_id
-                args
-                result
                 started_at
                 completed_at
                 selected_service_id
@@ -151,6 +143,10 @@ pub(super) fn gents_tool_progress_query(request_doc_id: &str, session_id: &str) 
 
 pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCallProgress> {
     Some(GentsToolCallProgress {
+        doc_id: optional_nonempty_string(row, "_docID"),
+        agent_did: optional_nonempty_string(row, "agent_did"),
+        requester_did: optional_nonempty_string(row, "requester_did"),
+        request_doc_id: optional_nonempty_string(row, "request_doc_id"),
         tool_call_key: row.get("tool_call_key")?.as_str()?.to_string(),
         tool_name: row.get("tool_name")?.as_str()?.to_string(),
         lifecycle_state: row
@@ -166,16 +162,10 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .map(ToOwned::to_owned),
-        args: row
-            .get("args")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
-        result: row
-            .get("result")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        // These are presentation fields, hydrated from canonical message and
+        // output-segment owners after the row's exact physical identity is known.
+        args: String::new(),
+        result: String::new(),
         selected_service_id: optional_nonempty_string(row, "selected_service_id"),
         selected_tool_name: optional_nonempty_string(row, "selected_tool_name"),
         tool_failure_class: optional_nonempty_string(row, "tool_failure_class"),
@@ -186,6 +176,49 @@ pub(super) fn decode_gents_tool_call_progress(row: &Value) -> Option<GentsToolCa
         completed_at: optional_nonempty_string(row, "completed_at"),
         subagent_link: None,
     })
+}
+
+/// Attach presentation bytes only after the canonical owner validates their
+/// physical tool binding. A terminal lifecycle without a durable result is
+/// still pending projection; it is never presented as a successful empty one.
+pub(super) async fn hydrate_gents_tool_call_progress(
+    access: &ConfigAccess,
+    row: &Value,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+    request_doc_id: &str,
+) -> Result<Option<GentsToolCallProgress>> {
+    let mut tool = decode_gents_tool_call_progress(row)
+        .context("decoding exact AgentToolCall progress row")?;
+    anyhow::ensure!(
+        tool.agent_did.as_deref() == Some(agent_did)
+            && tool.requester_did.as_deref() == requester_did
+            && row.get("session_id").and_then(Value::as_str) == Some(session_id)
+            && row.get("request_doc_id").and_then(Value::as_str) == Some(request_doc_id),
+        "Codex tool projection crossed exact request/session scope"
+    );
+    let doc_id = tool
+        .doc_id
+        .as_deref()
+        .context("AgentToolCall omitted _docID")?;
+    let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
+        access,
+        doc_id,
+        agent_did,
+        session_id,
+        requester_did,
+    )
+    .await
+    .with_context(|| format!("reconstructing canonical tool {doc_id}"))?;
+    tool.args = presentation.arguments;
+    let terminal = observed_tool_status(&tool) != ProjectionStatus::InProgress;
+    match presentation.result {
+        Some(result) => tool.result = result,
+        None if terminal => return Ok(None),
+        None => {}
+    }
+    Ok(Some(tool))
 }
 
 pub(super) fn gents_tool_item(
@@ -327,15 +360,6 @@ pub(super) fn content_delta(previous: &str, current: &str) -> String {
     }
 }
 
-pub(super) fn response_field_is_blank(response: &Value, field: &str) -> bool {
-    response
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default()
-        .is_empty()
-}
-
 pub(super) fn codex_turn_status(state: ClientTurnState) -> codex::TurnStatus {
     match state {
         ClientTurnState::WaitingForClaim | ClientTurnState::Running => {
@@ -350,7 +374,6 @@ pub(super) fn codex_turn_status(state: ClientTurnState) -> codex::TurnStatus {
 }
 
 pub(super) fn terminal_error_message(
-    response_status: &str,
     response_error: Option<&str>,
     lifecycle_state: &str,
     failure_reason: &str,
@@ -360,9 +383,6 @@ pub(super) fn terminal_error_message(
         .filter(|value| !value.is_empty())
     {
         return Some(error.to_string());
-    }
-    if response_status == "error" {
-        return Some("GENTS response ended with status error".to_string());
     }
     if matches!(
         RequestLifecycleState::parse_opt(Some(lifecycle_state)),
@@ -573,6 +593,9 @@ mod tests {
             gents_tool_progress_query("request-1", "session-1"),
         ] {
             for field in [
+                "_docID",
+                "agent_did",
+                "requester_did",
                 "selected_service_id",
                 "selected_tool_name",
                 "tool_failure_class",
@@ -584,6 +607,8 @@ mod tests {
             ] {
                 assert!(query.contains(field), "query must load {field}: {query}");
             }
+            assert!(!query.contains("\n                args\n"));
+            assert!(!query.contains("\n                result\n"));
         }
     }
 

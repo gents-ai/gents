@@ -1,53 +1,37 @@
-use super::super::*;
+use crate::client::{ClientStore, ClientStoreRows};
+use gents::session::canonical_rows::TranscriptMessageRow;
+use gents_protocol::output::{MessagePublication, MessageRole, OutputOutcome, TranscriptMessage};
 
-fn response_row(content: &str, progress_seq: i64) -> AgentResponseRow {
-    serde_json::from_value(serde_json::json!({
-        "response_key": "response-1",
-        "request_id": "request-1",
-        "agent_did": "did:agent:1",
-        "session_id": "session-1",
-        "content": content,
-        "status": "streaming",
-        "progress_seq": progress_seq
-    }))
-    .expect("response row")
+fn header(id: &str) -> TranscriptMessageRow {
+    TranscriptMessageRow {
+        doc_id: id.into(),
+        message: TranscriptMessage {
+            message_key: id.into(),
+            session_id: "session-1".into(),
+            agent_did: "did:agent:1".into(),
+            requester_did: None,
+            request_doc_id: None,
+            publication: MessagePublication::RequestExecution {
+                execution_generation: "test".into(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 1,
+            role: MessageRole::Assistant,
+            native_id: None,
+            blocks: Vec::new(),
+            created_at: "2026-04-21T00:00:00Z".into(),
+        },
+    }
 }
 
 #[test]
-fn response_patch_preserves_cold_collection_allocations_and_updates_latest_index() {
-    let messages = (0..600)
-        .map(|sequence| {
-            serde_json::from_value(serde_json::json!({
-                "message_key": format!("session-1:{sequence}"),
-                "session_id": "session-1",
-                "sequence": sequence,
-                "role": "assistant",
-                "content": format!("durable transcript row {sequence}")
-            }))
-            .expect("message row")
-        })
-        .collect();
-    let mut store = ClientStore::from_rows(ClientStoreRows {
-        responses: vec![response_row("a", 1)],
-        messages,
+fn observer_projection_drops_canonical_payload_facts() {
+    let store = ClientStore::from_rows(ClientStoreRows {
+        transcript_messages: vec![header("header")],
         ..ClientStoreRows::default()
     });
-    let messages_ptr = store.messages.as_ptr();
-    let messages_capacity = store.messages.capacity();
-
-    store.merge_response_patch_in_place(ClientStore::from_rows(ClientStoreRows {
-        responses: vec![response_row("ab", 2)],
-        ..ClientStoreRows::default()
-    }));
-
-    assert_eq!(store.messages.len(), 600);
-    assert_eq!(store.messages.as_ptr(), messages_ptr);
-    assert_eq!(store.messages.capacity(), messages_capacity);
-    assert_eq!(store.responses.len(), 1);
-    assert_eq!(
-        store
-            .latest_response_for_request("request-1")
-            .and_then(|row| row.content.as_deref()),
-        Some("ab")
-    );
+    let observer = store.into_observer_projection();
+    assert!(observer.transcript_messages.is_empty());
+    assert!(observer.output_segments.is_empty());
+    assert!(observer.transcript("session-1").messages.is_empty());
 }

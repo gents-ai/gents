@@ -14,6 +14,22 @@ pub async fn graphql_query(graphql: &str, query: &str) -> Result<Value> {
     }
 }
 
+/// Write typed fixture payloads through the production transaction owner.
+/// Variable expansion, conflict handling, and commit remain owned by Gents.
+pub async fn graphql_mutation_with_variables(
+    access: &gents::config_client::ConfigAccess,
+    query: &str,
+    variables: &Value,
+) -> Result<Value> {
+    access
+        .transact("test.fixture.variables", |txn| {
+            let query = query.to_owned();
+            let variables = variables.clone();
+            Box::pin(async move { txn.execute_with_variables(&query, &variables).await })
+        })
+        .await
+}
+
 pub fn first_graphql_row<'a>(response: &'a Value, field: &str) -> Result<&'a Value> {
     response
         .pointer(&format!("/data/{field}"))

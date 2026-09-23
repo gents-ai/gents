@@ -5,19 +5,26 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::escape_graphql_string;
 
-mod canonical_rows;
+pub mod canonical_rows;
 mod compaction_entries;
 mod control;
 mod fork;
 mod history;
 mod observations;
+mod output;
 mod query;
+mod request_output;
 mod rows;
 mod sessions;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use tests::import_history_observation;
 
-pub use crate::tool_call_lifecycle::query::load_tool_call_result;
+pub use crate::tool_call_lifecycle::query::{
+    load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
+    CanonicalToolCallPresentation,
+};
 pub(crate) use compaction_entries::load_prompt_compaction_state;
 pub use compaction_entries::{compaction_key, load_compaction_entries};
 #[cfg(test)]
@@ -29,14 +36,8 @@ pub(crate) use control::preserve_control_session_in_txn;
 pub use fork::{fork, fork_via_http, is_user_turn, ForkError, ForkOutcome, ForkParams};
 #[cfg(test)]
 pub(crate) use history::load_history_through_sequence;
-pub(crate) use history::load_sequenced_history_for_request;
-#[allow(unused_imports)]
-pub(crate) use history::{
-    append_message_once_with_key_and_requester_did, append_message_with_requester_did,
-    create_message_mutation, mark_response_materialized, message_sequence_for_request_content,
-    save_message, save_message_with_requester_did,
-};
 pub use history::{load_history, sequence_message_key};
+pub(crate) use history::{load_sequenced_history_for_request, load_sequenced_history_projection};
 pub use observations::apply_title_in_txn;
 pub(crate) use observations::{
     advance_session_request_observation_in_txn, derive_session_preview,
@@ -45,10 +46,15 @@ pub(crate) use observations::{
     update_session_title_with_source,
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
+pub(crate) use output::load_canonical_payload_from_node;
+pub use output::{
+    load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
+};
+pub(crate) use output::{load_canonical_message_in_txn, load_request_headers_in_txn};
 pub use query::{decode_session_row, session_scope_filter, AGENT_SESSION_FIELDS};
-pub(crate) use query::{
-    load_session_behavior_id, require_session, session_has_live_response,
-    session_has_other_live_response,
+pub(crate) use query::{load_session_behavior_id, require_session};
+pub use request_output::{
+    observe_request_output, CanonicalPresentation, CanonicalRequestOutput, CanonicalSelectedSource,
 };
 pub use rows::SessionOwnerRow;
 pub use sessions::close_session;
@@ -68,14 +74,6 @@ pub(crate) fn requester_did_create_field(requester_did: Option<&str>) -> String 
         .map(str::trim)
         .filter(|did| !did.is_empty())
         .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
-        .unwrap_or_default()
-}
-
-pub(crate) fn request_doc_id_create_field(request_doc_id: Option<&str>) -> String {
-    request_doc_id
-        .map(str::trim)
-        .filter(|doc_id| !doc_id.is_empty())
-        .map(|doc_id| format!(r#"request_doc_id: "{}","#, escape_graphql_string(doc_id)))
         .unwrap_or_default()
 }
 

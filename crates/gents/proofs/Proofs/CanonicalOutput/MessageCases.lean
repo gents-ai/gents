@@ -146,7 +146,7 @@ theorem delegation_rejects_wrong_generation :
       (.error (.message .wrongSource)) = true := by native_decide
 
 theorem local_call_cannot_receive_delegated_projection :
-    receiveDelegatedInput 1 1 ⟨300, 1, 1, ⟨⟨100, 1⟩, "{}"⟩⟩ = none := by
+    receiveDelegatedInput 1 1 7 ⟨300, 1, 1, 7, ⟨⟨100, 1⟩, "{}"⟩⟩ = none := by
   rfl
 
 theorem presentation_preserves_recorded_normalization :

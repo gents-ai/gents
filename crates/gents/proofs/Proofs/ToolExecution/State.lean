@@ -76,6 +76,9 @@ structure ToolCallContext where
   awaitMode      : Subagent.AwaitMode := .foreground
   cancelPolicy   : Subagent.CancelPolicy := .cascade
   childRequestId : Option RequestId := none
+  /-- Immutable configured behavior selected when a remote subagent call is
+  accepted. This is admission metadata, not provider argument enrichment. -/
+  spawnBehaviorId : Option Nat := none
   deriving DecidableEq, Repr
 
 namespace ToolCallContext

@@ -122,7 +122,11 @@ async fn runtime_seal_case(unowned: bool) {
             .to_string();
         assert!(error.contains(".tmp-build/test-build.log"), "{error}");
         owner
-            .terminalize_owned(&writer, RequestTerminalOutcome::Failed, Some(&error))
+            .terminalize_owned(
+                RequestTerminalOutcome::Failed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                Some(&error),
+            )
             .await
             .unwrap();
         let mut integrator = request.clone();
@@ -138,7 +142,11 @@ async fn runtime_seal_case(unowned: bool) {
     } else {
         result.expect("owned untracked file seals through the runtime");
         owner
-            .terminalize_owned(&writer, RequestTerminalOutcome::Completed, None)
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
             .await
             .unwrap();
     }
@@ -148,8 +156,9 @@ async fn runtime_seal_case(unowned: bool) {
         CapabilityReviewVerdict { accepted }
         IsolatedWorkspace { lifecycle_state seal_hash path_capability }
         WorkspaceReceipt { kind path_capability_digest changed_files }
-        AgentRequest { lifecycle_state }
-        AgentResponse { status content error_message }
+        AgentRequest { request_id lifecycle_state failure_reason terminal_output }
+        AgentMessage { _docID }
+        AgentOutputSegment { _docID }
     }"#,
     )
     .await;
@@ -162,12 +171,19 @@ async fn runtime_seal_case(unowned: bool) {
         durable["AgentRequest"][0]["lifecycle_state"],
         if unowned { "failed" } else { "completed" }
     );
-    let responses = durable["AgentResponse"].as_array().unwrap();
-    assert_eq!(responses.len(), 1);
+    let requests = durable["AgentRequest"].as_array().unwrap();
+    assert_eq!(requests.len(), 1);
+    let terminal: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(requests[0].clone()).unwrap();
+    assert_eq!(
+        terminal.terminal_output,
+        Some(gents_protocol::output::TerminalOutput::NoMessage)
+    );
+    assert!(durable["AgentMessage"].as_array().unwrap().is_empty());
+    assert!(durable["AgentOutputSegment"].as_array().unwrap().is_empty());
     let receipts = durable["WorkspaceReceipt"].as_array().unwrap();
     if unowned {
-        assert_eq!(responses[0]["status"], "error");
-        assert!(responses[0]["error_message"]
+        assert!(requests[0]["failure_reason"]
             .as_str()
             .unwrap()
             .contains(".tmp-build/test-build.log"));

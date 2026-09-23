@@ -1,5 +1,21 @@
 use serde::Deserialize;
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCurrentInputHeader {
+    pub(crate) request: String,
+    pub(crate) kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCurrentInputCase {
+    pub(crate) name: String,
+    pub(crate) current_request: String,
+    pub(crate) headers: Vec<LeanCurrentInputHeader>,
+    pub(crate) retained_indices: Vec<usize>,
+}
+
 /// One item inside a message, as emitted by `PromptAssembly.Content.Item`.
 /// `value` is the text/reasoning index for `text`/`other`, and the tool-call id
 /// for `call`.

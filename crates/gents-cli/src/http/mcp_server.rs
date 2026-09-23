@@ -80,7 +80,7 @@ impl ServerHandler for DefraQueryMcp {
         info.capabilities = ServerCapabilities::builder().enable_tools().build();
         info.instructions = Some(
             "gents read-only query surface. Use the `defra_query` tool to read agent \
-             collections (AgentRequest, AgentResponse, AgentMessage, AgentToolCall, \
+             collections (AgentRequest, AgentOutputSegment, AgentMessage, AgentToolCall, \
              AgentSession, ...) as structured JSON."
                 .to_string(),
         );

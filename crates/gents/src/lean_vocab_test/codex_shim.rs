@@ -32,7 +32,6 @@ pub(crate) struct LeanCodexShimSubagentStatusCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,
     pub(crate) request_state: String,
-    pub(crate) response_status: Option<String>,
     pub(crate) projected_agent_status: String,
     pub(crate) terminal: bool,
 }
@@ -95,7 +94,6 @@ pub(crate) struct LeanCodexShimThreadStatusCase {
     pub(crate) witness: String,
     pub(crate) lean_theorems: Vec<String>,
     pub(crate) request_state: Option<String>,
-    pub(crate) response_status: Option<String>,
     pub(crate) projected_status: String,
 }
 

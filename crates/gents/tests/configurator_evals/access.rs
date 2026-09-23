@@ -6,12 +6,12 @@ use serde_json::Value;
 /// embedded trials retain their existing node and transaction handling.
 #[derive(Clone, Copy)]
 pub(super) enum RuntimeAccess<'a> {
-    Embedded(&'a EmbeddedNode),
+    Embedded(&'a std::sync::Arc<EmbeddedNode>),
     ControlPlane(&'a ConfigAccess),
 }
 
-impl<'a> From<&'a EmbeddedNode> for RuntimeAccess<'a> {
-    fn from(node: &'a EmbeddedNode) -> Self {
+impl<'a> From<&'a std::sync::Arc<EmbeddedNode>> for RuntimeAccess<'a> {
+    fn from(node: &'a std::sync::Arc<EmbeddedNode>) -> Self {
         Self::Embedded(node)
     }
 }
@@ -23,6 +23,76 @@ impl<'a> From<&'a ConfigAccess> for RuntimeAccess<'a> {
 }
 
 impl RuntimeAccess<'_> {
+    pub(super) async fn timeline(self, request_id: &str) -> Result<gents::RunTimelineRows> {
+        match self {
+            Self::Embedded(node) => {
+                gents::run_timeline_fetch::load_run_timeline_rows(
+                    &ConfigAccess::Local(node.clone()),
+                    request_id,
+                )
+                .await
+            }
+            Self::ControlPlane(access) => {
+                gents::run_timeline_fetch::load_run_timeline_rows(access, request_id).await
+            }
+        }
+    }
+
+    pub(super) async fn terminal_answer(self, request_id: &str) -> Result<String> {
+        let id = gents::graphql::escape_graphql_string(request_id);
+        let response = self.query(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{id}" }} }}) {{ _docID agent_did requester_did lifecycle_state terminal_output }} }}"#
+        )).await?;
+        let rows = response["AgentRequest"]
+            .as_array()
+            .context("answer request rows missing")?;
+        anyhow::ensure!(
+            rows.len() == 1,
+            "answer requires one exact physical request"
+        );
+        let row = &rows[0];
+        let state = gents_protocol::request_lifecycle::RequestLifecycleState::parse(
+            row["lifecycle_state"]
+                .as_str()
+                .context("answer lifecycle missing")?,
+        )?;
+        if !state.is_terminal() {
+            return Ok(String::new());
+        }
+        let selection: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(row["terminal_output"].clone())
+                .context("terminal answer selection missing or malformed")?;
+        let gents_protocol::output::TerminalOutput::Message { message_doc_id } = selection else {
+            return Ok(String::new());
+        };
+        let owner = row["agent_did"].as_str().context("answer owner missing")?;
+        let requester = row["requester_did"].as_str();
+        let (header, native) = match self {
+            Self::Embedded(node) => {
+                gents::session::load_canonical_message_from_node(
+                    node.as_ref(),
+                    &message_doc_id,
+                    owner,
+                    requester,
+                )
+                .await?
+            }
+            Self::ControlPlane(access) => {
+                gents::session::load_canonical_message(access, &message_doc_id, owner, requester)
+                    .await?
+            }
+        };
+        let request_doc_id = row["_docID"]
+            .as_str()
+            .context("answer request identity missing")?;
+        anyhow::ensure!(
+            header.request_doc_id.as_deref() == Some(request_doc_id)
+                && matches!(native, gents_protocol::message::Message::Assistant { .. }),
+            "terminal answer does not belong to the exact request"
+        );
+        Ok(gents_protocol::transcript::present_message(&native).body_markdown)
+    }
+
     pub(super) async fn interrupt(self, request_id: &str) -> Result<()> {
         match self {
             Self::Embedded(node) => gents::interrupt_request(node, request_id).await,
@@ -70,6 +140,58 @@ impl RuntimeAccess<'_> {
 }
 
 #[tokio::test]
+async fn terminal_answer_distinguishes_pending_no_message_and_invalid_evidence() {
+    use axum::{routing::post, Json, Router};
+    use serde_json::json;
+
+    // These are read-adapter observations, not fixtures claiming that a
+    // lifecycle transition produced malformed state.
+    let base = json!({
+        "_docID": "physical-request", "agent_did": "did:test:owner",
+        "requester_did": null, "lifecycle_state": "pending", "terminal_output": null
+    });
+    let mut no_message = base.clone();
+    no_message["lifecycle_state"] = json!("completed");
+    no_message["terminal_output"] =
+        serde_json::to_value(gents_protocol::output::TerminalOutput::NoMessage).unwrap();
+    let mut missing_selection = no_message.clone();
+    missing_selection["terminal_output"] = Value::Null;
+    let mut bad_state = base.clone();
+    bad_state["lifecycle_state"] = json!("unknown");
+
+    for (rows, succeeds) in [
+        (json!([base.clone()]), true),
+        (json!([no_message]), true),
+        (json!([missing_selection]), false),
+        (json!([bad_state]), false),
+        (json!([]), false),
+        (json!([base.clone(), base]), false),
+    ] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let access = ConfigAccess::Graphql(format!(
+            "http://{}/api/v0/graphql",
+            listener.local_addr().unwrap()
+        ));
+        let router = Router::new().route(
+            "/api/v0/graphql",
+            post(move || {
+                let rows = rows.clone();
+                async move { Json(json!({"data": {"AgentRequest": rows}})) }
+            }),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let result = RuntimeAccess::from(&access)
+            .terminal_answer("logical-request")
+            .await;
+        server.abort();
+        assert_eq!(result.is_ok(), succeeds, "{result:?}");
+        if let Ok(answer) = result {
+            assert!(answer.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn evidence_access_rejects_mutation_before_contacting_runtime() {
     let control = ConfigAccess::Graphql("http://127.0.0.1:1/api/v0/graphql".into());
     let result = RuntimeAccess::from(&control)
@@ -98,7 +220,7 @@ async fn embedded_and_http_evidence_have_the_same_data_shape() {
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     let access = ConfigAccess::Graphql(endpoint);
     let query = "{ AgentRequest { request_id lifecycle_state } }";
-    let local = RuntimeAccess::from(db.node.as_ref()).query(query).await;
+    let local = RuntimeAccess::from(&db.node).query(query).await;
     let remote = RuntimeAccess::from(&access).query(query).await;
     server.abort();
     db.node.shutdown().await;

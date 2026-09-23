@@ -77,7 +77,7 @@ impl LspWritethrough {
             Ok(Value::Null) => return None,
             Ok(edits) => edits,
             Err(_) => {
-                return Some("format-on-write skipped: language server formatting failed".into())
+                return Some("format-on-write skipped: language server formatting failed".into());
             }
         };
         let workspace = super::overlay_workspace_or(&self.config.workspace);

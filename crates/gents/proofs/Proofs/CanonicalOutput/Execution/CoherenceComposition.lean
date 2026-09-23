@@ -44,6 +44,12 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
   | toolClose document authority record =>
     exact ToolDelivery.closeToolOutput_preserves_toolProjectionCoherent before after document authority record
       coherent (mapError_success Gate.Error.delivery _ _ h)
+  | toolComplete document authority record message =>
+    obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
+      before after document authority record message
+      (mapError_success Gate.Error.delivery _ _ h)
+    exact ToolDelivery.publishToolDelivery_success_toolProjectionCoherent
+      closed after document message hdeliver
   | toolDeliver document message =>
     exact ToolDelivery.publishToolDelivery_success_toolProjectionCoherent before after document message
       (mapError_success Gate.Error.delivery _ _ h)
@@ -64,6 +70,14 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
   | recover expected fresh duration deadline items =>
     exact (recovery_is_all_sources_single_winner_and_exact before after expected fresh duration deadline
       items (mapError_success Gate.Error.execution _ _ h)).2.1
+  | recoverTerminal expected fresh outcome selection items =>
+    have hp := checked_success _ _ _ (mapError_success Gate.Error.execution _ _ h)
+    simp only [Bool.and_eq_true] at hp
+    exact hp.1.1.2
+  | closePartial generation item =>
+    have hp := checked_success _ _ _ (mapError_success Gate.Error.execution _ _ h)
+    simp only [Bool.and_eq_true] at hp
+    exact hp.1.2
   | revoke expected fresh outcome selection =>
     exact revokeCorrupt_preserves_toolProjectionCoherent before after expected fresh outcome selection
       coherent (mapError_success Gate.Error.execution _ _ h)

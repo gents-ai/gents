@@ -297,6 +297,23 @@ pub fn pending_is_armed() -> bool {
     current_scope().is_some_and(|scope| scope.lock().pending.is_some())
 }
 
+pub(crate) fn armed_capture_scope(turn_index: usize, attempt: u32) -> Option<String> {
+    let scope = current_scope()?;
+    let state = scope.lock();
+    state
+        .pending
+        .as_ref()
+        .filter(|pending| pending.turn_index == turn_index && pending.attempt == attempt)
+        .map(|pending| pending.capture_scope.clone())
+        .or_else(|| {
+            state
+                .claimed
+                .as_ref()
+                .filter(|claimed| claimed.turn_index == turn_index && claimed.attempt == attempt)
+                .map(|claimed| claimed.capture_scope.clone())
+        })
+}
+
 /// The `LoopConfig::on_rendered_request` callback every production completion
 /// loop installs: arm the ambient scope, never write.
 ///

@@ -232,14 +232,10 @@ structure SteerWithInterrupt
       entry.queueKey = none
   h_transcript_pre_session : transcriptPre.sessionId = childSessionId
   h_transcript_post_session : transcriptPost.sessionId = childSessionId
-  h_transcript_append :
-    ∃ messageId : Transcript.MessageId,
-      steeringMessage ≠ "" ∧
-      Transcript.Transition transcriptPre transcriptPost ∧
-      transcriptPost =
-        transcriptPre.appendUserMessage
-          messageId
-          Transcript.MessageKind.ordinary
+  h_steering_message_nonempty : steeringMessage ≠ ""
+  /-- Admission owns only the signed queued request. Its user transcript row is
+      published by the owned execution boundary when that request starts. -/
+  h_transcript_unchanged : transcriptPost = transcriptPre
 
 end BridgedState
 end Subagent

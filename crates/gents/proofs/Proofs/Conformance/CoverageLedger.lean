@@ -225,8 +225,8 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.runtimeInternal, Surface.operatorCli, Surface.operatorUi]
     , deferred := []
     }
-  , { feature := "streaming-response"
-    , required := [Surface.agentFacing, Surface.operatorUi]
+  , { feature := "canonical-output"
+    , required := [Surface.runtimeInternal, Surface.agentFacing, Surface.operatorUi]
     , deferred := []
     }
   , { feature := "client-shell"
@@ -591,10 +591,11 @@ def caseCoverage : List CoverageEntry :=
       "GoalContinuationMaterializationCases"
       "conformance::goals::generated_goal_continuation_materialization_cases_fence_restart_idempotency")
       "durable-goals" [Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "session_hydration_cases"
       "SessionHydrationDecisionCases"
-      "conformance::session_hydration::generated_session_hydration_cases_match_decision_core")
+      "agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
+      "The native closure builder is exercised, but the adapter filters access observations itself and derives authorized_reference_closure from its result. Bind independent ACP observations through the production authorization owner before claiming end-to-end selection coverage.")
       "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_hydration_apply_cases"
@@ -1010,13 +1011,80 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
-      "conformance::generated_restart_disposition_cases_drive_recover_all")
+      "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "tool_call_lifecycle::recovery_conformance::generated_linked_restart_dispositions_use_canonical_admission_owner")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_missing_parent_and_unclaimed_restart_cases_use_accepted_spawn")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "tool_call_lifecycle::background_hook_conformance::generated_absent_requester_process_control_uses_accepted_hook_calls"
+      "Three requester-scope cases use a persisted background process, the production authorization owner and canonical accepted hook calls. A forged nonempty requester fails at immutable header authorization; absent and empty requester calls exercise the native result envelopes. The metadata-only inventory test is not native behavior coverage for the other rows.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "tool_call_lifecycle::completion_owner_conformance::generated_r6_completion_owner_cases_use_accepted_native_output"
+      "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "restart_disposition_cases"
+      "RestartDispositionCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_native_missing_parent_restart_cases_defer")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_conformance::generated_native_recovery_cases_use_canonical_admission_owner")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_linked_recovery_cases_use_accepted_spawn")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_expired_child_liveness_cases_use_accepted_bridge")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_queued_descendant_case_releases_local_and_foreign_parent_children")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_orphan_background_recovery_cases_use_accepted_native_call")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_missing_parent_deferred_cases_keep_accepted_row_running")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_background_completion_recovery_uses_accepted_native_call")
+      "recovery" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
+      "recovery_sweep_cases"
+      "RecoverySweepCases"
+      "tool_call_lifecycle::recovery_closeout_conformance::generated_unclaimed_remote_spawn_uses_accepted_bridge")
       "recovery" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_cases"
       "R6BackgroundingCases"
-      "conformance::generated_r6_backgrounding_cases_drive_tool_backgrounding_contract")
-      "background-tools" [Surface.agentFacing]
+      "tool_call_lifecycle::completion_owner_conformance::generated_r6_notification_precedes_continuation_claim")
+      "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r5_cross_principal_cases"
       "R5CrossPrincipalCases"
@@ -1035,8 +1103,8 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"
-      "conformance::generated_composed_invariant_witnesses_drive_tool_lifecycle_conformance"
-      "Covers persisted tool recovery/cancellation outcomes for four representative deadline/interrupt inputs. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
+      "tool_call_lifecycle::composed_conformance::generated_composed_invariants_use_canonical_admission_owner"
+      "Covers four persisted tool recovery/cancellation outcomes through canonical accepted admission and physical request/tool rows. Full composed request, admission and clock traces still need their runtime owners; fixture path assertions are not replay.")
       "composed-invariants" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "cancel_propagation_cases"
@@ -1046,12 +1114,12 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "BackgroundBudgetBoundedTheoremWitness"
-      "conformance::generated_r6_background_theorem_witnesses_drive_admission_budget_invariant")
+      "hook::tests::background_budget::generated_background_budget_uses_accepted_dispatch")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "r6_background_theorem_witnesses"
       "CascadeCancelsChildTheoremWitness"
-      "conformance::generated_r6_background_theorem_witnesses_drive_cascade_cancellation_trace")
+      "tool_call_lifecycle::cascade_source_conformance::canonical_source_cascade_interrupts_processing_child_trace")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "subagent_delegation_graph_cases"
@@ -1085,10 +1153,11 @@ def caseCoverage : List CoverageEntry :=
       "ToolOutputPagingCases"
       "background_tools::tests::generated_tool_output_paging_cases_match_slice_function")
       "background-tools" [Surface.agentFacing]
-  , tagged (consumerCoverage
+  , tagged (consumerWithFollowUp
       "bridge_step_cases"
       "BridgeStepCases"
-      "conformance::generated_bridge_step_cases_drive_bridge_lifecycle")
+      "tool_call_lifecycle::background_hook_conformance::generated_bridge_steps_drive_real_background_projector_and_cascade"
+      "Nine committed-bridge cases drive canonical admission, the production background projector and cascade owner. The uncommitted-bridge rejection remains a model assertion, not a native owner invocation.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "codex_shim_projection_cases"
@@ -1168,10 +1237,10 @@ def caseCoverage : List CoverageEntry :=
       "CodexShimBindingCases"
       "conformance::generated_codex_shim_binding_cases_pin_runnable_gated_binding")
       "codex-shim" [Surface.api, Surface.runtimeInternal]
-  , tagged (consumerCoverage
+  , tagged (followUpCoverage
       "transcript_cases"
       "TranscriptConformanceCases"
-      "conformance::generated_transcript_cases_drive_agent_message_ordering_contract")
+      "Native owners cover ordering, model-scripted parallel completion, pair closure, and abandonment. Full coverage needs transaction fault injection for lost-ack duplicate delivery replay and a permissive orphan-result publication owner.")
       "transcript" [Surface.agentFacing]
   , tagged (consumerCoverage
       "transcript_cases"
@@ -1199,6 +1268,11 @@ def caseCoverage : List CoverageEntry :=
       "IdentityContracts"
       "Route through the canonical principal-scoped registry and exercise rejection before permission checks. The removed synthetic global-ID map did not exercise runtime routing.")
       "identity-permission" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "canonical_worker_capacity_cases"
+      "CanonicalWorkerCapacityCases"
+      "Bind modeled fresh admission, exact dependency parking, guarded resumption, overflow rejection and cleanup to the slot-owned Rust capacity scheduler. Native retained continuation, independent renewal and capacity-one child progress must be exercised before desktop acceptance.")
+      "canonical-output" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "canonical_execution_gate_cases"
       "CanonicalExecutionGateCases"
@@ -1239,6 +1313,12 @@ def caseCoverage : List CoverageEntry :=
       "CompactionCursorCases"
       "The cursor fixtures share the migrated immutable compaction contract; the native bridge has not yet been regenerated.")
       "compaction" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "current_input_cases"
+      "CurrentInputCases"
+      "session::output::tests::current_input_selection_matches_lean_owner"
+      "Binds canonical header classification and selection to CurrentInput. Full reconstructed-history regression additionally covers retaining a current-request tool result; arbitrary imported-seed reachability is not claimed.")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "prompt_assembly_cases"
       "PromptAssemblySanitizeCases"
@@ -1383,7 +1463,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerCoverage
       "vocabulary"
       "CancelCause"
-      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call")
+      "gents_desktop_bridge::snapshot::tests::session_state::session_snapshot_derives_cancel_causes_from_request_and_tool")
       "interrupt-and-cancel" [Surface.operatorUi]
   , tagged (consumerCoverage
       "state_machine"

@@ -373,9 +373,13 @@ def admissionsValid (world : World) (message : MessageEnvelope)
     admissions.all (fun admission =>
       admission.context.state == .pending &&
         !(world.toolContexts.any (fun tool => tool.document == admission.document)) &&
-        (if world.remoteRoutes.any (fun route => route.1 == admission.document) then
-          admission.context.awaitMode == .background
-        else true))
+        (match world.remoteRoutes.filter (fun route => route.1 == admission.document) with
+        | [] => admission.context.spawnBehaviorId.isNone
+        | [route] => admission.context.awaitMode == .background &&
+            admission.context.childRequestId.isSome &&
+            admission.context.spawnBehaviorId == some route.2.2
+        | _ => false
+        ))
 
 def installAcceptedTools (world : World) (message : MessageEnvelope)
     (admissions : List ToolAdmission) : List OwnedTool :=
@@ -385,7 +389,8 @@ def installAcceptedTools (world : World) (message : MessageEnvelope)
     , session := message.header.session
     , acceptedSequence := message.sequence
     , provenance := .acceptedIntent
-    , context := admission.context })
+    , context := admission.context
+    , delegatedWorkspace := admission.delegatedWorkspace })
 
 def spawnedAdmissionValid (world : World) (generation : Generation)
     (admission : SpawnedToolAdmission) : Bool :=
@@ -449,7 +454,7 @@ def prepareDelegatedCalls (world : World) (segments : List Segment) (message : M
         | some intent => .ok intent
       if target.coordinator != world.principal then .error .invalidDelegation
       let row ← match prepareDelegatedCall segments noDeniedDocuments message intent
-          target.coordinator target.target with
+          target.coordinator target.target target.behavior with
         | .error _ => .error .invalidDelegation
         | .ok row => .ok row
       let later ← prepareDelegatedCalls world segments message rest
@@ -457,7 +462,7 @@ def prepareDelegatedCalls (world : World) (segments : List Segment) (message : M
 
 def remoteTargetsMatchConfiguredRoutes (world : World) (message : MessageEnvelope)
     (targets : List RemoteTarget) : Bool :=
-  targets.map (fun target => (target.call, target.target)) == world.remoteRoutes &&
+  targets.map (fun target => (target.call, target.target, target.behavior)) == world.remoteRoutes &&
     targets.all (fun target => target.coordinator == world.principal) &&
     world.remoteRoutes.all (fun route =>
       (toolIntents message).any (fun intent => intent.call == route.1))

@@ -136,27 +136,6 @@ pub(crate) fn complete_lineage_from_bridge(
     })
 }
 
-pub(crate) fn merge_workspace_lineage(bridge: &mut serde_json::Value, lineage: &WorkspaceLineage) {
-    let Some(object) = bridge.as_object_mut() else {
-        return;
-    };
-    if let Some(value) = nonempty(lineage.workspace_id.as_deref()) {
-        object.insert("workspace_id".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = lineage.workspace_owner_agent_did.as_deref() {
-        object.insert(
-            "workspace_owner_agent_did".to_string(),
-            serde_json::json!(value),
-        );
-    }
-    if let Some(value) = nonempty(lineage.workspace_authority.as_deref()) {
-        object.insert("workspace_authority".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = nonempty(lineage.workspace_seal_hash.as_deref()) {
-        object.insert("workspace_seal_hash".to_string(), serde_json::json!(value));
-    }
-}
-
 /// Re-validate a complete bridge stamp, or resolve inherit/bind/provision.
 pub(crate) async fn resolve_child_workspace(
     node: &EmbeddedNode,

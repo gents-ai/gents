@@ -30,8 +30,10 @@ fn generated_consumers_resolve_to_registered_tests() {
     let registered = consumer_registry::assert_registered_conformance_consumers_resolve();
     let stale: Vec<_> = registered.difference(&declared).collect();
     let missing: Vec<_> = declared.difference(&registered).collect();
-    assert!(stale.is_empty() && missing.is_empty(),
-        "consumer registry disagrees with Lean ledger: stale={stale:?}, missing={missing:?}");
+    assert!(
+        stale.is_empty() && missing.is_empty(),
+        "consumer registry disagrees with Lean ledger: stale={stale:?}, missing={missing:?}"
+    );
 }
 
 #[test]

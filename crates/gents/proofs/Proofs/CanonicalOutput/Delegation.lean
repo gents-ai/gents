@@ -1,6 +1,38 @@
 import Proofs.CanonicalOutput.Message
+import Proofs.Workspace.Types
 
 namespace CanonicalOutput
+
+structure DelegatedWorkspace where
+  workspaceId : Nat
+  ownerAgent : Nat
+  sealHash : Option Nat
+  authority : BindingAuthority
+  deriving DecidableEq, Repr
+
+def workspaceAuthorityRank : BindingAuthority → Nat
+  | .readOnly => 0
+  | .integrate => 1
+  | .readWrite => 2
+
+def workspaceAttenuates (source child : DelegatedWorkspace) : Bool :=
+  child.workspaceId == source.workspaceId && child.ownerAgent == source.ownerAgent &&
+    child.sealHash == source.sealHash &&
+    workspaceAuthorityRank child.authority <= workspaceAuthorityRank source.authority
+
+def receiveDelegatedWorkspace (source child : Option DelegatedWorkspace) : Bool :=
+  match source, child with
+  | none, none => true
+  | some parent, some requested => workspaceAttenuates parent requested
+  | _, _ => false
+
+theorem delegated_workspace_cannot_escalate_readonly
+    (source child : DelegatedWorkspace)
+    (hsource : source.authority = .readOnly)
+    (h : workspaceAttenuates source child = true) :
+    child.authority = .readOnly := by
+  cases ha : child.authority <;>
+    simp [workspaceAttenuates, workspaceAuthorityRank, hsource, ha] at h ⊢
 
 structure DelegatedInput where
   source : PayloadRef
@@ -55,35 +87,36 @@ structure DelegatedCall where
   call : DocId
   coordinator : Nat
   target : Nat
+  behavior : Nat
   input : DelegatedInput
   deriving DecidableEq, Repr
 
-def receiveDelegatedInput (authenticatedCoordinator host : Nat)
+def receiveDelegatedInput (authenticatedCoordinator host configuredBehavior : Nat)
     (row : DelegatedCall) : Option DelegatedInput :=
   if row.coordinator = authenticatedCoordinator ∧ row.target = host ∧
-      row.coordinator ≠ row.target then some row.input else none
+      row.behavior = configuredBehavior ∧ row.coordinator ≠ row.target then some row.input else none
 
 /-- The coordinator binds the copied argument bytes to the one addressed remote
 call. Local calls retain no delegated projection. -/
 def prepareDelegatedCall (records : List Segment) (denied : List DocId)
-    (message : MessageEnvelope) (intent : ToolIntent) (coordinator target : Nat) :
+    (message : MessageEnvelope) (intent : ToolIntent) (coordinator target behavior : Nat) :
     Except DelegationError DelegatedCall := do
   if coordinator = target then .error .localTarget
   else
     let input ← prepareDelegatedInput records denied message intent
-    .ok ⟨intent.call, coordinator, target, input⟩
+    .ok ⟨intent.call, coordinator, target, behavior, input⟩
 
 theorem wrong_target_cannot_receive (coordinator host : Nat) (row : DelegatedCall)
-    (h : row.target ≠ host) : receiveDelegatedInput coordinator host row = none := by
+    (h : row.target ≠ host) : receiveDelegatedInput coordinator host row.behavior row = none := by
   simp [receiveDelegatedInput, h]
 
 theorem local_call_has_no_delegated_input (principal call : Nat) (input : DelegatedInput) :
-    receiveDelegatedInput principal principal ⟨call, principal, principal, input⟩ = none := by
+    receiveDelegatedInput principal principal 7 ⟨call, principal, principal, 7, input⟩ = none := by
   simp [receiveDelegatedInput]
 
 theorem source_reference_is_not_a_hydration_root
     (coordinator host call : Nat) (input : DelegatedInput) (hremote : coordinator ≠ host) :
-    receiveDelegatedInput coordinator host ⟨call, coordinator, host, input⟩ = some input := by
+    receiveDelegatedInput coordinator host 7 ⟨call, coordinator, host, 7, input⟩ = some input := by
   simp [receiveDelegatedInput, hremote]
 
 theorem admitted_input_is_exact_argument_stream

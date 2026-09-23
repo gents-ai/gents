@@ -34,12 +34,13 @@
           "type": "tool_call"
         },
         {
-          "id": "req-codex-1",
-          "output": "Projection contracts verified.",
+          "id": "thread-codex-1:message:2",
+          "request_id": "req-codex-1",
+          "content": "Projection contracts verified.",
           "reasoning": "Used local files only.",
-          "status": "completed",
+          "role": "assistant",
           "timestamp": "2026-06-05T17:00:04Z",
-          "type": "response"
+          "type": "message"
         }
       ],
       "run_id": "req-codex-1",

@@ -83,6 +83,19 @@ function LiveOutput({ tool }: { tool: RenderedToolCallView }) {
   );
 }
 
+function ToolPayloadAvailability({ tool }: { tool: RenderedToolCallView }) {
+  switch (tool.reconstruction.state) {
+    case "ready":
+      return null;
+    case "loading":
+      return <p role="status" data-testid={`tool-output-loading-${tool.itemKey}`}>Loading tool output…</p>;
+    case "denied":
+      return <p role="alert" data-testid={`tool-output-denied-${tool.itemKey}`}>Tool output unavailable: access denied.</p>;
+    case "invalid":
+      return <p role="alert" data-testid={`tool-output-invalid-${tool.itemKey}`}>Tool output could not be reconstructed.</p>;
+  }
+}
+
 function commonBadges(tool: RenderedToolCallView) {
   return (
     <>
@@ -126,6 +139,9 @@ function readCount(
 }
 
 function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
+  if (tool.reconstruction.state !== "ready") {
+    return <><span className="tool-primary mono">{tool.toolName}</span>{commonBadges(tool)}</>;
+  }
   const view = tool.presentation;
   if (view.kind === "command") {
     const exit = commandExit(view);
@@ -236,6 +252,7 @@ function ToolSummary({ tool }: { tool: RenderedToolCallView }) {
 
 function ToolBody({ tool }: { tool: RenderedToolCallView }) {
   const view = tool.presentation;
+  const payloadReady = tool.reconstruction.state === "ready";
   return (
     <div className="tool-item-body">
       {tool.cancelCause ? (
@@ -251,7 +268,8 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           {tool.deadlineAt ? <span>deadline: {tool.deadlineAt}</span> : null}
         </div>
       ) : null}
-      {view.kind === "command" ? (
+      {!payloadReady ? <ToolPayloadAvailability tool={tool} /> : null}
+      {payloadReady && view.kind === "command" ? (
         <>
           {view.durationMs != null ||
           view.cwd ||
@@ -275,13 +293,13 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="output" value={view.fallbackOutput} />
         </>
       ) : null}
-      {view.kind === "fileRead" ? (
+      {payloadReady && view.kind === "fileRead" ? (
         <>
           <Payload label="contents" value={view.body} />
           <Payload label="output" value={view.fallbackOutput} />
         </>
       ) : null}
-      {view.kind === "fileEdit" ? (
+      {payloadReady && view.kind === "fileEdit" ? (
         <>
           {view.diff.length > 0 ? (
             <div className="tool-payload-wrap">
@@ -314,7 +332,7 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="output" value={view.fallbackOutput} />
         </>
       ) : null}
-      {view.kind === "subagent" ? (
+      {payloadReady && view.kind === "subagent" ? (
         <>
           <Payload
             label={view.action === "spawn" ? "assignment" : "instruction"}
@@ -329,19 +347,19 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
           <Payload label="result" value={view.output} />
         </>
       ) : null}
-      {view.kind === "process" ? (
+      {payloadReady && view.kind === "process" ? (
         <>
           <Payload label="arguments" value={view.description} />
           <Payload label="result" value={view.output} />
         </>
       ) : null}
-      {view.kind === "mcp" ? (
+      {payloadReady && view.kind === "mcp" ? (
         <>
           <Payload label="arguments" value={view.arguments} />
           <Payload label="result" value={view.output} />
         </>
       ) : null}
-      {view.kind === "generic" ? (
+      {payloadReady && view.kind === "generic" ? (
         <>
           <Payload label="input" value={view.input} />
           <Payload label="result" value={view.output} />

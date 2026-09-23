@@ -175,16 +175,6 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
                     content: "hello"
                     lifecycle_state: "failed"
                 }}) {{ _docID }}
-                response: create_AgentResponse(input: {{
-                    response_key: "local-request:response"
-                    request_id: "local-request"
-                    requester_did: "{requester_did}"
-                    agent_did: "{agent_did}"
-                    behavior_id: "default"
-                    session_id: "{session_id}"
-                    status: "error"
-                    error_message: "backend unavailable"
-                }}) {{ _docID }}
             }}"#
         ))
         .await;
@@ -201,7 +191,7 @@ async fn initial_session_hydration_starts_when_local_transcript_rows_already_exi
         .session_hydration_progress(session_id, agent_did)
         .await?;
     assert_eq!(progress.phase.as_str(), "serving");
-    assert_eq!(progress.merged_count, 2);
+    assert_eq!(progress.merged_count, 1);
     assert_eq!(progress.served_count, None);
     let request_key =
         gents::graphql::escape_graphql_string(&format!("{}:{session_id}", core.local_peer_id()));

@@ -7,6 +7,9 @@ def transcriptCaseFromModel (witness : Transcript.TranscriptCase) : TranscriptCa
   { name := witness.name
   , group := witness.group
   , action := witness.action
+  , actionCallIds := witness.actionCallIds
+  , actionLogicalResultIds := witness.actionLogicalResultIds
+  , actionPayloadHashes := witness.actionPayloadHashes
   , legal := witness.legal
   , preMessageCount := witness.preMessageCount
   , postMessageCount := witness.postMessageCount

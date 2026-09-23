@@ -8,7 +8,6 @@ use crate::goal::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::llm::ToolCallHookAction;
-use crate::tool_call_lifecycle::ToolCallLifecycle;
 use crate::toolset::{CreateGoalArgs, GetGoalArgs, UpdateGoalArgs};
 
 use super::DefraSessionHook;
@@ -20,26 +19,21 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let (session_id, request_id, deadline_at, sequence) =
+        let (session_id, request_id, deadline_at, _sequence) =
             self.ensure_assistant_turn_sequence().await?;
-        self.state.lock().await.register_tool_result_identity(
-            internal_call_id,
-            None,
-            tool_call_id.as_deref(),
-        );
-        let mut lifecycle = ToolCallLifecycle::new(
-            self.node.clone(),
-            request_id,
-            session_id.clone(),
-            self.agent_did.clone(),
-            internal_call_id.to_string(),
-            sequence,
-            CREATE_GOAL_TOOL_NAME.to_string(),
-            args.to_string(),
-            deadline_at,
-        )
-        .with_requester_did(self.active_requester_did().await)
-        .with_request_doc_id(self.active_request_doc_id().await);
+        let mut lifecycle = self
+            .adopt_accepted_tool_dispatch(
+                internal_call_id,
+                tool_call_id.as_deref(),
+                &request_id,
+                &session_id,
+                CREATE_GOAL_TOOL_NAME,
+                args,
+                deadline_at,
+                crate::tool_call_lifecycle::AwaitMode::Foreground,
+                crate::tool_call_lifecycle::CancelPolicy::Cascade,
+            )
+            .await?;
         lifecycle.start_running().await?;
         let parsed = match serde_json::from_str::<CreateGoalArgs>(args) {
             Ok(parsed) => parsed,
@@ -50,8 +44,9 @@ impl DefraSessionHook {
                     "error": format!("invalid create_goal arguments: {error}"),
                 })
                 .to_string();
-                lifecycle.complete(&result).await?;
-                return Ok(self.skip_tool_result(CREATE_GOAL_TOOL_NAME, result));
+                return self
+                    .complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
+                    .await;
             }
         };
         let outcome = match create_goal_for_session(
@@ -88,8 +83,8 @@ impl DefraSessionHook {
             }),
         };
         let result = serde_json::to_string_pretty(&outcome)?;
-        lifecycle.complete(&result).await?;
-        Ok(self.skip_tool_result(CREATE_GOAL_TOOL_NAME, result))
+        self.complete_control_tool_call(&mut lifecycle, CREATE_GOAL_TOOL_NAME, result)
+            .await
     }
 
     pub(super) async fn persist_get_goal_tool_call(
@@ -98,26 +93,21 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let (session_id, request_id, deadline_at, sequence) =
+        let (session_id, request_id, deadline_at, _sequence) =
             self.ensure_assistant_turn_sequence().await?;
-        self.state.lock().await.register_tool_result_identity(
-            internal_call_id,
-            None,
-            tool_call_id.as_deref(),
-        );
-        let mut lifecycle = ToolCallLifecycle::new(
-            self.node.clone(),
-            request_id,
-            session_id.clone(),
-            self.agent_did.clone(),
-            internal_call_id.to_string(),
-            sequence,
-            GET_GOAL_TOOL_NAME.to_string(),
-            args.to_string(),
-            deadline_at,
-        )
-        .with_requester_did(self.active_requester_did().await)
-        .with_request_doc_id(self.active_request_doc_id().await);
+        let mut lifecycle = self
+            .adopt_accepted_tool_dispatch(
+                internal_call_id,
+                tool_call_id.as_deref(),
+                &request_id,
+                &session_id,
+                GET_GOAL_TOOL_NAME,
+                args,
+                deadline_at,
+                crate::tool_call_lifecycle::AwaitMode::Foreground,
+                crate::tool_call_lifecycle::CancelPolicy::Cascade,
+            )
+            .await?;
         lifecycle.start_running().await?;
         let result = if serde_json::from_str::<GetGoalArgs>(args).is_err() {
             json!({"error": "get_goal expects an empty object"}).to_string()
@@ -132,8 +122,8 @@ impl DefraSessionHook {
         } else {
             json!({"goal": null}).to_string()
         };
-        lifecycle.complete(&result).await?;
-        Ok(self.skip_tool_result(GET_GOAL_TOOL_NAME, result))
+        self.complete_control_tool_call(&mut lifecycle, GET_GOAL_TOOL_NAME, result)
+            .await
     }
 
     pub(super) async fn persist_update_goal_tool_call(
@@ -142,41 +132,38 @@ impl DefraSessionHook {
         internal_call_id: &str,
         args: &str,
     ) -> anyhow::Result<ToolCallHookAction> {
-        let (session_id, request_id, deadline_at, sequence) =
+        let (session_id, request_id, deadline_at, _sequence) =
             self.ensure_assistant_turn_sequence().await?;
-        self.state.lock().await.register_tool_result_identity(
-            internal_call_id,
-            None,
-            tool_call_id.as_deref(),
-        );
-        let mut lifecycle = ToolCallLifecycle::new(
-            self.node.clone(),
-            request_id.clone(),
-            session_id.clone(),
-            self.agent_did.clone(),
-            internal_call_id.to_string(),
-            sequence,
-            UPDATE_GOAL_TOOL_NAME.to_string(),
-            args.to_string(),
-            deadline_at,
-        )
-        .with_requester_did(self.active_requester_did().await)
-        .with_request_doc_id(self.active_request_doc_id().await);
+        let mut lifecycle = self
+            .adopt_accepted_tool_dispatch(
+                internal_call_id,
+                tool_call_id.as_deref(),
+                &request_id,
+                &session_id,
+                UPDATE_GOAL_TOOL_NAME,
+                args,
+                deadline_at,
+                crate::tool_call_lifecycle::AwaitMode::Foreground,
+                crate::tool_call_lifecycle::CancelPolicy::Cascade,
+            )
+            .await?;
         lifecycle.start_running().await?;
         let parsed = match serde_json::from_str::<UpdateGoalArgs>(args) {
             Ok(parsed) => parsed,
             Err(error) => {
                 let result =
                     json!({"error": format!("invalid update_goal arguments: {error}")}).to_string();
-                lifecycle.complete(&result).await?;
-                return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                return self
+                    .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                    .await;
             }
         };
         let Some(goal) = load_canonical_goal(&self.node, &self.agent_did, &session_id).await?
         else {
             let result = json!({"error": "the current session has no durable goal"}).to_string();
-            lifecycle.complete(&result).await?;
-            return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+            return self
+                .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                .await;
         };
 
         let now = Utc::now();
@@ -185,8 +172,9 @@ impl DefraSessionHook {
             let result =
                 json!({"error": format!("durable goal has unknown status {:?}", goal.status)})
                     .to_string();
-            lifecycle.complete(&result).await?;
-            return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+            return self
+                .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                .await;
         };
         let outcome = match parsed.status.trim() {
             "complete" => {
@@ -194,8 +182,9 @@ impl DefraSessionHook {
                     let result =
                         json!({"error": "complete is not legal from the goal's current status"})
                             .to_string();
-                    lifecycle.complete(&result).await?;
-                    return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                    return self
+                        .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                        .await;
                 };
                 if let Some(gate) = self.output_obligation_gate.as_ref() {
                     let unmet = gate.unmet().await?;
@@ -205,8 +194,13 @@ impl DefraSessionHook {
                             "error": crate::agent::output_obligation::continuation_message(&unmet),
                         })
                         .to_string();
-                        lifecycle.complete(&result).await?;
-                        return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                        return self
+                            .complete_control_tool_call(
+                                &mut lifecycle,
+                                UPDATE_GOAL_TOOL_NAME,
+                                result,
+                            )
+                            .await;
                     }
                 }
                 let active_time = goal.current_active_time_seconds(now);
@@ -245,8 +239,9 @@ impl DefraSessionHook {
                         )
                     })
                     .to_string();
-                    lifecycle.complete(&result).await?;
-                    return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                    return self
+                        .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                        .await;
                 }
                 let Some(reason) = parsed
                     .reason
@@ -255,8 +250,9 @@ impl DefraSessionHook {
                     .filter(|reason| !reason.is_empty())
                 else {
                     let result = json!({"error": "blocked requires a non-empty reason identifying the repeated condition"}).to_string();
-                    lifecycle.complete(&result).await?;
-                    return Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result));
+                    return self
+                        .complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+                        .await;
                 };
                 let (audits, accepted) = next_blocked_audit(
                     goal.consecutive_blocked_audits.unwrap_or_default(),
@@ -304,7 +300,7 @@ impl DefraSessionHook {
             }),
         };
         let result = serde_json::to_string_pretty(&outcome)?;
-        lifecycle.complete(&result).await?;
-        Ok(self.skip_tool_result(UPDATE_GOAL_TOOL_NAME, result))
+        self.complete_control_tool_call(&mut lifecycle, UPDATE_GOAL_TOOL_NAME, result)
+            .await
     }
 }

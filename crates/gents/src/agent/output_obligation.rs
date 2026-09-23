@@ -48,6 +48,17 @@ struct CompletedWriteRow {
     args: String,
 }
 
+#[derive(Deserialize)]
+struct CompletedWriteIdentity {
+    #[serde(rename = "_docID")]
+    doc_id: String,
+    agent_did: String,
+    requester_did: Option<String>,
+    session_id: String,
+    request_doc_id: String,
+    tool_name: String,
+}
+
 impl OutputObligationGate {
     #[cfg(test)]
     pub(crate) fn new(
@@ -132,8 +143,8 @@ impl OutputObligationGate {
                         lifecycle_state: {{ _eq: "completed" }}
                     }}
                 ) {{
+                    _docID agent_did requester_did session_id request_doc_id
                     tool_name
-                    args
                 }}
             }}"#,
             gents_protocol::graphql::graphql_string_list_literal(&self.request_doc_ids),
@@ -141,17 +152,83 @@ impl OutputObligationGate {
         let response =
             graphql_with_transaction_retry(&self.node, &query, "loading completed output writes")
                 .await?;
-        let rows: Vec<CompletedWriteRow> = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentToolCall"))
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?
-            .unwrap_or_default();
+        let rows: Vec<CompletedWriteIdentity> = serde_json::from_value(
+            response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("AgentToolCall"))
+                .cloned()
+                .context("completed output query omitted AgentToolCall rows")?,
+        )?;
+        let access = crate::config_client::ConfigAccess::Local(self.node.clone());
+        let mut sessions = HashMap::new();
+        let mut requests = HashMap::new();
         let mut writes = HashMap::<String, Vec<CompletedWriteRow>>::new();
         for row in rows {
-            writes.entry(row.tool_name.clone()).or_default().push(row);
+            if !self
+                .obligations
+                .iter()
+                .any(|obligation| obligation.tool_name == row.tool_name)
+            {
+                continue;
+            }
+            anyhow::ensure!(
+                !row.doc_id.trim().is_empty() && self.request_doc_ids.contains(&row.request_doc_id),
+                "completed output write lacks exact request membership"
+            );
+            if !requests.contains_key(&row.request_doc_id) {
+                let request = crate::request_binding::load_agent_request_by_doc_id(
+                    &self.node,
+                    &row.request_doc_id,
+                )
+                .await?
+                .context("completed output write references a missing request")?;
+                requests.insert(row.request_doc_id.clone(), request);
+            }
+            let request = &requests[&row.request_doc_id];
+            anyhow::ensure!(
+                request.agent_did == row.agent_did
+                    && request.session_id == row.session_id
+                    && request.requester_did == row.requester_did,
+                "completed output write crossed its physical request ownership scope"
+            );
+            let scope = (
+                row.agent_did.clone(),
+                row.session_id.clone(),
+                row.requester_did.clone(),
+            );
+            if !sessions.contains_key(&scope) {
+                let calls = crate::run_timeline_fetch::load_session_tool_calls(
+                    &access,
+                    &row.agent_did,
+                    &row.session_id,
+                    row.requester_did.as_deref(),
+                )
+                .await?;
+                sessions.insert(scope.clone(), calls);
+            }
+            let matches = sessions[&scope]
+                .iter()
+                .filter(|call| call.doc_id.as_deref() == Some(row.doc_id.as_str()))
+                .collect::<Vec<_>>();
+            anyhow::ensure!(
+                matches.len() == 1,
+                "completed output write has no unique physical tool binding"
+            );
+            let call = matches[0];
+            anyhow::ensure!(
+                call.request_doc_id.as_deref() == Some(row.request_doc_id.as_str())
+                    && call.tool_name == row.tool_name
+                    && call.lifecycle_state.as_deref() == Some("completed"),
+                "completed output write changed its accepted identity or terminal state"
+            );
+            writes
+                .entry(row.tool_name.clone())
+                .or_default()
+                .push(CompletedWriteRow {
+                    tool_name: row.tool_name,
+                    args: call.args.clone(),
+                });
         }
 
         let mut unmet = Vec::new();
@@ -244,6 +321,7 @@ fn expected_write_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::AgentIdentity;
 
     #[test]
     fn trigger_scope_follows_automated_trigger_lineage() {
@@ -265,10 +343,74 @@ mod tests {
         );
     }
 
+    /// The gate counts ONLY durable completed writes published through the
+    /// canonical accepted path under an actual claimed request, so this
+    /// fixture drives a signed automated-trigger request through the
+    /// production claim, native publication, and terminal tool delivery —
+    /// the same pattern as the logical fixtures — instead of fabricating a
+    /// ToolCall lifecycle that no publisher ever accepted.
     #[tokio::test]
     async fn durable_completed_writes_satisfy_the_gate() {
+        use crate::identity::KeyIdentity;
+        use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+        use crate::streaming::DefraStreamWriter;
+        use crate::tool_call_lifecycle::{AwaitMode, CancelPolicy};
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let mut create = AgentRequestCreate::base(
+            "request-output-gate",
+            identity.did(),
+            identity.did(),
+            "output-gate-behavior",
+            "output-gate-session",
+            "Write the result",
+            "scheduled",
+            "2026-09-05T00:00:00Z",
+            AgentRequestAdmissionRecord::runtime_automated_trigger(
+                identity.did(),
+                "output-gate-trigger",
+            ),
+        );
+        create.caused_by_trigger_kind = Some("event".into());
+        create.caused_by_trigger_id = Some("output-gate-trigger".into());
+        create.caused_by_trigger_doc_id = Some("original-trigger-doc".into());
+        create.caused_by_source_doc_id = Some("original-area-doc".into());
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .unwrap();
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                crate::graphql::escape_graphql_string(&create.request_id),
+                crate::request_admission::SIGNED_REQUEST_FIELDS,
+            ))
+            .await;
+        assert!(!data.has_errors(), "{:?}", data.errors);
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(data.data.unwrap()["AgentRequest"][0].clone()).unwrap();
+        let request = crate::watcher::AgentRequest::try_from(row).unwrap();
+
+        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            "general",
+            &request.agent_did,
+            request.clone(),
+            60,
+        );
+        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+        let writer = DefraStreamWriter::new(
+            node.clone(),
+            "did:test:test",
+            std::time::Duration::from_millis(1),
+        );
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+
         let obligation = ActiveOutputObligation {
             tool_name: "write_result".to_string(),
             contract: crate::document_config::WriteToolOutputObligation {
@@ -277,64 +419,189 @@ mod tests {
                 expected_count_field: None,
             },
         };
-        let gate =
-            OutputObligationGate::new(node.clone(), "request-doc-output", vec![obligation.clone()]);
+        let gate = OutputObligationGate::new(
+            node.clone(),
+            lifecycle.request().doc_id.clone(),
+            vec![obligation.clone()],
+        );
 
         let unmet = gate.unmet().await.unwrap();
         assert_eq!(unmet.len(), 1);
         assert_eq!(unmet[0].tool_name, obligation.tool_name);
         assert_eq!(unmet[0].completed_writes, 0);
 
-        let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new(
-            node.clone(),
-            "request-output".to_string(),
-            "session-output".to_string(),
-            "did:test:output".to_string(),
-            "call-output".to_string(),
+        writer
+            .start_provider_attempt(
+                &lifecycle.request().doc_id,
+                0,
+                0,
+                "inference.1".parse().unwrap(),
+            )
+            .await;
+        let message = gents_protocol::message::Message::Assistant {
+            id: Some("provider-message".into()),
+            content: vec![gents_protocol::message::AssistantContent::ToolCall(
+                gents_protocol::message::ToolCall {
+                    id: "native-write-result".into(),
+                    call_id: None,
+                    function: gents_protocol::message::ToolFunction::new(
+                        "write_result".into(),
+                        serde_json::json!({"expected_total": 1}),
+                    ),
+                    signature: None,
+                    additional_params: None,
+                },
+            )],
+        };
+        let mut published = writer
+            .publish_native_turn(&lifecycle, 0, 0, &message)
+            .await
+            .unwrap();
+        assert_eq!(
+            published.accepted_tools.len(),
             1,
-            "write_result".to_string(),
-            "{}".to_string(),
-            chrono::Utc::now() + chrono::Duration::minutes(1),
-        )
-        .with_request_doc_id(Some("request-doc-output".to_string()));
-        lifecycle.start_running().await.unwrap();
+            "canonical publication must accept exactly one tool call"
+        );
+        let accepted = published.accepted_tools.pop().unwrap();
 
-        assert_eq!(gate.unmet().await.unwrap().len(), 1);
-        lifecycle.complete("created Result abc").await.unwrap();
+        let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+            node.clone(),
+            lifecycle.request().agent_did.clone(),
+            lifecycle.request().requester_did.clone(),
+            accepted,
+            lifecycle
+                .claimed_deadline_at()
+                .expect("claimed request deadline"),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+        )
+        .unwrap();
+        tool.start_running().await.unwrap();
+        tool.complete("created Result abc").await.unwrap();
+
         assert!(gate.unmet().await.unwrap().is_empty());
         node.shutdown().await;
     }
 
+    /// A signed automated-trigger request the gate can resolve against: the
+    /// trigger scope activates on the request's automated lineage, and the
+    /// physical doc ID the gate counts is the persisted request's doc ID.
+    async fn automated_trigger_request(
+        node: &Arc<EmbeddedNode>,
+        request_id: &str,
+    ) -> crate::watcher::AgentRequest {
+        use crate::identity::KeyIdentity;
+        use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+
+        let temp = tempfile::tempdir().unwrap();
+        let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
+        let mut create = AgentRequestCreate::base(
+            request_id,
+            identity.did(),
+            identity.did(),
+            "output-gate-behavior",
+            "output-gate-session",
+            "Write the result",
+            "scheduled",
+            "2026-09-05T00:00:00Z",
+            AgentRequestAdmissionRecord::runtime_automated_trigger(
+                identity.did(),
+                "output-gate-trigger",
+            ),
+        );
+        create.caused_by_trigger_kind = Some("event".into());
+        create.caused_by_trigger_id = Some("output-gate-trigger".into());
+        create.caused_by_trigger_doc_id = Some("original-trigger-doc".into());
+        create.caused_by_source_doc_id = Some("original-area-doc".into());
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .unwrap();
+        let response = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        let data = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                crate::graphql::escape_graphql_string(&create.request_id),
+                crate::request_admission::SIGNED_REQUEST_FIELDS,
+            ))
+            .await;
+        assert!(!data.has_errors(), "{:?}", data.errors);
+        let row: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(data.data.unwrap()["AgentRequest"][0].clone()).unwrap();
+        crate::watcher::AgentRequest::try_from(row).unwrap()
+    }
+
+    /// The gate counts ONLY durable completed writes published through the
+    /// canonical accepted path under an actual claimed request, so this
+    /// helper publishes ONE accepted native tool call turn under the
+    /// caller's claimed request lifecycle and drives it to terminal
+    /// completion — the same pattern as the logical fixtures — instead of
+    /// fabricating a ToolCall lifecycle that no publisher ever accepted.
     async fn complete_write(
-        node: Arc<EmbeddedNode>,
-        request_doc_id: &str,
-        call_id: &str,
-        sequence: u32,
-        args: &str,
+        node: &Arc<EmbeddedNode>,
+        writer: &crate::streaming::DefraStreamWriter,
+        lifecycle: &mut crate::lifecycle::RequestLifecycle,
+        turn: usize,
+        tool_call_id: &str,
+        arguments: &serde_json::Value,
     ) {
-        let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::new(
-            node,
-            format!("request-{request_doc_id}"),
-            format!("session-{request_doc_id}"),
-            "did:test:output".to_string(),
-            call_id.to_string(),
-            sequence,
-            "write_result".to_string(),
-            args.to_string(),
-            chrono::Utc::now() + chrono::Duration::minutes(1),
+        writer
+            .start_provider_attempt(
+                &lifecycle.request().doc_id,
+                turn,
+                0,
+                "inference.1".parse().unwrap(),
+            )
+            .await;
+        let message = gents_protocol::message::Message::Assistant {
+            id: Some("provider-message".into()),
+            content: vec![gents_protocol::message::AssistantContent::ToolCall(
+                gents_protocol::message::ToolCall {
+                    id: tool_call_id.into(),
+                    call_id: None,
+                    function: gents_protocol::message::ToolFunction::new(
+                        "write_result".into(),
+                        arguments.clone(),
+                    ),
+                    signature: None,
+                    additional_params: None,
+                },
+            )],
+        };
+        let mut published = writer
+            .publish_native_turn(lifecycle, turn, 0, &message)
+            .await
+            .unwrap();
+        assert_eq!(
+            published.accepted_tools.len(),
+            1,
+            "canonical publication must accept exactly one tool call"
+        );
+        let accepted = published.accepted_tools.pop().unwrap();
+        let mut tool = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+            node.clone(),
+            lifecycle.request().agent_did.clone(),
+            lifecycle.request().requester_did.clone(),
+            accepted,
+            lifecycle
+                .claimed_deadline_at()
+                .expect("claimed request deadline"),
+            crate::tool_call_lifecycle::AwaitMode::Foreground,
+            crate::tool_call_lifecycle::CancelPolicy::Cascade,
         )
-        .with_request_doc_id(Some(request_doc_id.to_string()));
-        lifecycle.start_running().await.unwrap();
-        lifecycle.complete("created Result abc").await.unwrap();
+        .unwrap();
+        tool.start_running().await.unwrap();
+        tool.complete("persisted output").await.unwrap();
     }
 
     #[tokio::test]
     async fn dynamic_count_blocks_until_the_durable_closed_set_is_complete() {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let request = automated_trigger_request(&node, "request-doc-dynamic").await;
         let gate = OutputObligationGate::new(
             node.clone(),
-            "request-doc-dynamic",
+            request.doc_id.clone(),
             vec![ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
                 contract: crate::document_config::WriteToolOutputObligation {
@@ -348,12 +615,30 @@ mod tests {
         let initial = gate.unmet().await.unwrap();
         assert_eq!(initial.len(), 1);
         assert_eq!(initial[0].expected_writes, None);
-        complete_write(
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
             node.clone(),
-            "request-doc-dynamic",
-            "call-dynamic-1",
-            1,
-            r#"{"expected_total":"3"}"#,
+            "general",
+            &request.agent_did,
+            request.clone(),
+            60,
+        );
+        assert_eq!(
+            lifecycle.claim().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let writer = crate::streaming::DefraStreamWriter::new(
+            node.clone(),
+            "did:test:test",
+            std::time::Duration::from_millis(1),
+        );
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        complete_write(
+            &node,
+            &writer,
+            &mut lifecycle,
+            0,
+            "native-dynamic-1",
+            &serde_json::json!({"expected_total": "3"}),
         )
         .await;
         let partial = gate.unmet().await.unwrap();
@@ -361,13 +646,14 @@ mod tests {
         assert_eq!(partial[0].expected_writes, Some(3));
         assert!(continuation_message(&partial).contains("2 remaining"));
 
-        for (sequence, call_id) in [(2, "call-dynamic-2"), (3, "call-dynamic-3")] {
+        for (turn, call_id) in [(1, "native-dynamic-2"), (2, "native-dynamic-3")] {
             complete_write(
-                node.clone(),
-                "request-doc-dynamic",
+                &node,
+                &writer,
+                &mut lifecycle,
+                turn,
                 call_id,
-                sequence,
-                r#"{"expected_total":"3"}"#,
+                &serde_json::json!({"expected_total": "3"}),
             )
             .await;
         }
@@ -379,9 +665,10 @@ mod tests {
     async fn dynamic_count_rejects_inconsistent_durable_members() {
         let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
         crate::ensure_runtime_schemas(node.as_ref()).await.unwrap();
+        let request = automated_trigger_request(&node, "request-doc-inconsistent").await;
         let gate = OutputObligationGate::new(
             node.clone(),
-            "request-doc-inconsistent",
+            request.doc_id.clone(),
             vec![ActiveOutputObligation {
                 tool_name: "write_result".to_string(),
                 contract: crate::document_config::WriteToolOutputObligation {
@@ -391,22 +678,37 @@ mod tests {
                 },
             }],
         );
-        complete_write(
+        let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
             node.clone(),
-            "request-doc-inconsistent",
-            "call-inconsistent-1",
-            1,
-            r#"{"expected_total":"2"}"#,
-        )
-        .await;
-        complete_write(
+            "general",
+            &request.agent_did,
+            request.clone(),
+            60,
+        );
+        assert_eq!(
+            lifecycle.claim().await.unwrap(),
+            crate::lifecycle::ClaimOutcome::Claimed
+        );
+        let writer = crate::streaming::DefraStreamWriter::new(
             node.clone(),
-            "request-doc-inconsistent",
-            "call-inconsistent-2",
-            2,
-            r#"{"expected_total":"3"}"#,
-        )
-        .await;
+            "did:test:test",
+            std::time::Duration::from_millis(1),
+        );
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        for (turn, call_id, expected) in [
+            (0, "native-inconsistent-1", 2),
+            (1, "native-inconsistent-2", 3),
+        ] {
+            complete_write(
+                &node,
+                &writer,
+                &mut lifecycle,
+                turn,
+                call_id,
+                &serde_json::json!({"expected_total": expected}),
+            )
+            .await;
+        }
 
         assert!(gate
             .unmet()

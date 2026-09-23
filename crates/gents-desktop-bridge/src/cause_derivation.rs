@@ -15,11 +15,6 @@ pub struct ToolCallEvidence {
     pub timed_out: bool,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ResponseEvidence {
-    pub interrupted_at: Option<String>,
-}
-
 fn is_cancelled_terminal(state: &Option<String>) -> bool {
     matches!(
         state.as_deref(),
@@ -96,23 +91,33 @@ pub fn derive_tool_call_cause(
             "checked: no parent cascade (caused_by_parent_request_id is null)".into(),
             "checked: no deadline (lifecycle_state is not timedOut)".into(),
             "checked: no interrupt_requested_at on root".into(),
-            "schema has no persisted AgentToolCall.cancel_cause".into(),
+            "no persisted AgentToolCall.cancel_cause on this row".into(),
         ],
     })
 }
 
-pub fn derive_response_cause(
-    _req: &RequestEvidence,
-    resp: &ResponseEvidence,
+pub fn derive_request_cause(
+    lifecycle_state: Option<&str>,
+    req: &RequestEvidence,
+    terminalized_at: Option<String>,
 ) -> Option<DerivedCancelCauseView> {
-    if let Some(at) = &resp.interrupted_at {
+    if let Some(at) = &req.interrupt_requested_at {
         return Some(DerivedCancelCauseView {
-            cause: "interrupted".into(),
-            source: "responseInterruptedAt".into(),
+            cause: "userCancelled".into(),
+            source: "requestInterrupt".into(),
             confidence: "direct".into(),
             at: Some(at.clone()),
-            evidence: vec![format!("AgentResponse.interrupted_at = {at}")],
+            evidence: vec![format!("AgentRequest.interrupt_requested_at = {at}")],
         });
     }
-    None
+    if !matches!(lifecycle_state, Some("interrupted")) {
+        return None;
+    }
+    Some(DerivedCancelCauseView {
+        cause: "interrupted".into(),
+        source: "requestLifecycle".into(),
+        confidence: "direct".into(),
+        at: terminalized_at,
+        evidence: vec!["AgentRequest.lifecycle_state = \"interrupted\"".into()],
+    })
 }

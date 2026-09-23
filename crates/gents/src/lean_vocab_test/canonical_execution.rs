@@ -23,6 +23,15 @@ pub(crate) enum LeanCanonicalExecutionCase {
         query_document: u64,
         operations: Vec<LeanCanonicalExecutionOperation>,
         expected_observations: Vec<LeanCanonicalExecutionObservation>,
+        native_gap: Option<String>,
+    },
+    ModelExecution {
+        name: String,
+        seed: LeanCanonicalExecutionSeed,
+        query_document: u64,
+        operations: Vec<LeanCanonicalExecutionOperation>,
+        expected_observations: Vec<LeanCanonicalExecutionObservation>,
+        native_gap: String,
     },
 }
 
@@ -42,11 +51,12 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) in_flight: Vec<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalRemoteRoute {
     pub(crate) call: u64,
     pub(crate) target: u64,
+    pub(crate) behavior: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +65,7 @@ pub(crate) struct LeanCanonicalRemoteTarget {
     pub(crate) call: u64,
     pub(crate) coordinator: u64,
     pub(crate) target: u64,
+    pub(crate) behavior: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +84,17 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) await_mode: String,
     pub(crate) cancel_policy: String,
     pub(crate) child_request_id: Option<u64>,
+    pub(crate) spawn_behavior_id: Option<u64>,
+    pub(crate) delegated_workspace: Option<LeanCanonicalDelegatedWorkspace>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanCanonicalDelegatedWorkspace {
+    pub(crate) workspace_id: u64,
+    pub(crate) workspace_owner_agent_did: u64,
+    pub(crate) workspace_seal_hash: Option<u64>,
+    pub(crate) workspace_authority: String,
 }
 
 /// A background tool spawned by an already running parent tool. It shares the
@@ -95,6 +117,7 @@ pub(crate) struct LeanCanonicalSpawnedToolAdmission {
     pub(crate) await_mode: String,
     pub(crate) cancel_policy: String,
     pub(crate) child_request_id: Option<u64>,
+    pub(crate) spawn_behavior_id: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,6 +156,14 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         authority_outcome: String,
         record: LeanCanonicalSegment,
     },
+    CompleteForegroundTool {
+        actor: u64,
+        now: u64,
+        document: u64,
+        authority_outcome: String,
+        record: LeanCanonicalSegment,
+        message: LeanCanonicalMessage<LeanPayloadSpec>,
+    },
     DeliverForegroundResult {
         actor: u64,
         now: u64,
@@ -154,6 +185,21 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         duration: u64,
         deadline: u64,
         items: Vec<LeanCanonicalRecoveryItem>,
+    },
+    RecoverExpiredTerminal {
+        actor: u64,
+        now: u64,
+        expected_generation: u64,
+        fresh_generation: u64,
+        outcome: String,
+        selection: LeanTerminalSelection,
+        items: Vec<LeanCanonicalRecoveryItem>,
+    },
+    ClosePartial {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        item: LeanCanonicalRecoveryItem,
     },
     /// Explicit due-only deadline CAS. Output and dispatch never extend the lease.
     RenewLease {
@@ -250,9 +296,12 @@ impl LeanCanonicalExecutionOperation {
             | Self::AcceptRemote { actor, now, .. }
             | Self::Dispatch { actor, now, .. }
             | Self::CloseForegroundTool { actor, now, .. }
+            | Self::CompleteForegroundTool { actor, now, .. }
             | Self::DeliverForegroundResult { actor, now, .. }
             | Self::TerminalizeCompleted { actor, now, .. }
             | Self::RecoverExpiredGeneration { actor, now, .. }
+            | Self::RecoverExpiredTerminal { actor, now, .. }
+            | Self::ClosePartial { actor, now, .. }
             | Self::RenewLease { actor, now, .. }
             | Self::AppendOutput { actor, now, .. }
             | Self::AppendOutputWhileSiblingWaits { actor, now, .. }
@@ -273,6 +322,7 @@ impl LeanCanonicalExecutionOperation {
 pub(crate) struct LeanCanonicalExecutionObservation {
     pub(crate) accepted: bool,
     pub(crate) generation: Option<u64>,
+    pub(crate) terminal_generation: Option<u64>,
     pub(crate) request_state: String,
     pub(crate) tool_state: Option<String>,
     pub(crate) tool_stuck_since: Option<u64>,
@@ -356,6 +406,7 @@ where
         query_document,
         operations,
         expected_observations,
+        ..
     } = case
     else {
         return Err("trace summaries are witnesses, not native execution inputs".to_owned());
@@ -393,12 +444,46 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::exact_multiset_eq;
+    use super::{exact_multiset_eq, LeanCanonicalExecutionCase, LeanCanonicalExecutionOperation};
 
     #[test]
     fn exact_multiset_comparison_is_order_independent_and_multiplicity_sensitive() {
         assert!(exact_multiset_eq(&[1, 2, 1], &[2, 1, 1]));
         assert!(!exact_multiset_eq(&[1, 2], &[1, 3]));
         assert!(!exact_multiset_eq(&[1, 1], &[1, 2]));
+    }
+
+    #[test]
+    fn generated_remote_route_cases_decode_behavior_and_workspace() {
+        let cases = &super::super::lean_contract_snapshot().canonical_execution_gate_cases;
+        let case = cases
+            .iter()
+            .find(|case| {
+                matches!(case,
+                LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "real_spawn_route_workspace_drift_rejected_on_replay")
+            })
+            .expect("Lean exports immutable remote workspace replay case");
+        let LeanCanonicalExecutionCase::NativeExecution {
+            seed, operations, ..
+        } = case
+        else {
+            unreachable!()
+        };
+        assert_eq!(seed.remote_routes[0].behavior, 8);
+        let LeanCanonicalExecutionOperation::AcceptRemote {
+            targets,
+            admissions,
+            ..
+        } = &operations[0]
+        else {
+            panic!("first step must accept remote admission")
+        };
+        assert_eq!(targets[0].behavior, 8);
+        let workspace = admissions[0]
+            .delegated_workspace
+            .as_ref()
+            .expect("remote admission carries workspace source");
+        assert_eq!(workspace.workspace_authority, "readOnly");
     }
 }

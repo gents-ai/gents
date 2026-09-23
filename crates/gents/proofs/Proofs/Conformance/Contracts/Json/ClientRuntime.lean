@@ -3,6 +3,7 @@ import Proofs.Conformance.ContractCases
 import Proofs.StreamingResponse.Executable
 import Proofs.Compaction.Executable
 import Proofs.Recovery.ContractCases
+import Proofs.QueuedSteering
 
 namespace Conformance.Contracts
 
@@ -36,6 +37,23 @@ def pendingUserTurnCaseJson (witness : PendingUserTurnCase) : String :=
       ++ boolString witness.hasDurableUserOwner ++ ","
     ++ "\"unrelatedUserTurns\":" ++ toString witness.unrelatedUserTurns ++ ","
     ++ "\"expectPendingTurn\":" ++ boolString witness.expectPendingTurn
+    ++ "}"
+
+def queuedSteeringTraceJson (witness : QueuedSteering.TraceObservation) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"requestId\":" ++ toString witness.requestId ++ ","
+    ++ "\"requestDocId\":" ++ toString witness.requestDocId ++ ","
+    ++ "\"contentToken\":" ++ toString witness.contentToken ++ ","
+    ++ "\"lifecycleState\":" ++ jsonString witness.lifecycleState ++ ","
+    ++ "\"admissionVisible\":" ++ boolString witness.admissionVisible ++ ","
+    ++ "\"canonicalAuthoredCount\":" ++ toString witness.canonicalAuthoredCount
+    ++ "}"
+
+def queuedSteeringGuardJson (witness : QueuedSteering.GuardObservation) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"admitted\":" ++ boolString witness.admitted
     ++ "}"
 
 private def tagged (kind fields : String) : String :=

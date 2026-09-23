@@ -404,7 +404,7 @@ mod tests {
         let desired = vec![desired_row(
             "peer-a",
             "conversation",
-            &["AgentRequest", "AgentResponse"],
+            &["AgentRequest", "AgentMessage"],
             &["/ip4/1/tcp/4001"],
         )];
         let applied = vec![applied("peer-a", &[], &["/ip4/1/tcp/4001"])];
@@ -522,7 +522,7 @@ mod tests {
             json!({
                 "peer_id": "peer-b",
                 "agent_did": " did:key:b ",
-                "collections": ["AgentResponse", "", 3],
+                "collections": ["AgentMessage", "", 3],
                 "replicator_addresses": ["/ip4/2/tcp/4001"],
                 "profiles": ["chat-requests", "", 4],
                 "created_at": "",
@@ -548,7 +548,7 @@ mod tests {
         assert!(pairings[0].replicator_addresses.is_empty());
         assert_eq!(pairings[1].peer_id, "peer-b");
         assert_eq!(pairings[1].agent_did.as_deref(), Some("did:key:b"));
-        assert_eq!(pairings[1].collections, vec!["AgentResponse"]);
+        assert_eq!(pairings[1].collections, vec!["AgentMessage"]);
         assert_eq!(pairings[1].profiles, vec!["chat-requests"]);
         assert!(pairings[1].created_at.is_none());
         assert_eq!(

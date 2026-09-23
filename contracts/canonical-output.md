@@ -169,6 +169,17 @@ it. A snapshot or separately persisted response cannot manufacture a terminal
 decision. Goal continuation publication retains its existing Goal owner and
 must join the actual queue admission, not fabricate a background wake.
 
+User and steering admission does not publish transcript output. While queued,
+clients display the signed `AgentRequest.content` as admission input, not as an
+`AgentMessage`. When owned execution starts, its request-generation authority
+publishes the actual authored prompt/context through the canonical writer before
+provider dispatch. Enqueueing alone neither allocates a transcript sequence nor
+grants publication authority. Clients reconcile the queued input with its
+published input using the exact physical request binding, never text equality;
+replica arrival order must not create duplicate user messages. This does not
+change tool-owned background notification publication, which has independent
+`ToolDelivery` authority and retains its atomic notification/queue transaction.
+
 Provider acceptance and retry retraction use the existing retry transitions
 against the latest gate-held execution state. Policy-only actions cannot confirm
 durable publication, and raw publication cannot bypass retry eligibility. Exact
@@ -190,7 +201,10 @@ a filtered query creates field-level ACP. Do not grant parent output/header
 access merely to deliver one call's arguments.
 
 For remotely addressed calls only, the existing AgentToolCall carries immutable
-`delegated_input: DelegatedToolInput { source, arguments }`. At accepted
+`delegated_input: DelegatedToolInput { source, arguments, parent_subagent_depth }`.
+The depth is the accepted coordinator request's immutable depth; the remote host
+derives the child depth as `parent_subagent_depth + 1` without receiving the
+private parent request. At accepted
 publication the coordinator reconstructs and validates that call's exact argument
 stream, checks call identity/scope and native JSON validity, and copies only those
 argument bytes into the addressed row. Closure, header, pending call and delegated
@@ -200,6 +214,11 @@ The source reference is provenance, not authority or a host hydration dependency
 Hosts authenticate the existing coordinator/target route and retain existing
 lifecycle, policy and cancellation guards; they do not fetch parent history or
 need authority to verify its bytes. Replay reuses the same immutable input.
+The host signs and executes its child request as the target principal, while
+that request's immutable `requester_did` names the authenticated coordinator
+that authored the bridge. Claim checks that exact bridge-author binding and
+fresh authorization; host-to-coordinator return templates filter on this
+requester route. Local children still name their own runtime as requester.
 
 This deliberate one-time boundary copy costs bytes, not another document or a
 per-flush write. It is not a general args/result cache. The coordinator-to-host

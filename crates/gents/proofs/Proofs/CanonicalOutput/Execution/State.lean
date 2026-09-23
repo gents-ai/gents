@@ -50,7 +50,7 @@ inductive ClaimEvidence where
 structure Activation where
   request : PhysicalRequestAdmission
   evidence : ClaimEvidence
-  configuredRoutes : List (DocId × Nat)
+  configuredRoutes : List (DocId × Nat × Nat)
   routesAuthenticated : Bool
   generation : Generation
   duration : Time
@@ -72,6 +72,7 @@ authority and need not equal `document`. -/
 structure ToolAdmission where
   document : DocId
   context : ToolExecution.ToolCallContext
+  delegatedWorkspace : Option DelegatedWorkspace := none
   deriving DecidableEq, Repr
 
 inductive ToolProvenance where
@@ -84,13 +85,15 @@ structure ToolGenesis where
   logicalRequestId : RequestId
   operation : ToolExecution.ToolOperation
   childRequestId : Option RequestId
+  spawnBehaviorId : Option Nat
   deriving DecidableEq, Repr
 
 def ToolGenesis.fromContext (context : ToolExecution.ToolCallContext) : ToolGenesis :=
   { logicalCallId := context.callId
   , logicalRequestId := context.requestId
   , operation := context.operation
-  , childRequestId := context.childRequestId }
+  , childRequestId := context.childRequestId
+  , spawnBehaviorId := context.spawnBehaviorId }
 
 /-- Exact accepted-header ownership plus projections of existing durable native
 cancellation/reconciliation fields. None of these fields claims that a running
@@ -102,6 +105,7 @@ structure OwnedTool where
   acceptedSequence : Transcript.Sequence
   provenance : ToolProvenance := .acceptedIntent
   context : ToolExecution.ToolCallContext
+  delegatedWorkspace : Option DelegatedWorkspace := none
   cancelCascadeIntentAt : Option Time := none
   cancelPendingRemoteAck : Bool := false
   stuckSince : Option Time := none
@@ -143,10 +147,10 @@ structure World where
   /-- Authenticated coordinator principal supplied by existing DID/ACP ownership
   at the local gate. It is not inferred from a source or remote target. -/
   principal : Nat
-  /-- Exact `(physical tool document, remote target)` subset projected from the
+  /-- Exact `(physical tool document, remote target, selected behavior)` subset projected from the
   existing configured routing owner for the turn being accepted. Local calls
   are absent. This is an authenticated owner snapshot, not caller-created ACP. -/
-  remoteRoutes : List (DocId × Nat)
+  remoteRoutes : List (DocId × Nat × Nat)
   lease : RequestExecutionLease.World Generation
   segments : List Segment
   messages : List MessageEnvelope
@@ -183,6 +187,7 @@ structure RemoteTarget where
   call : DocId
   coordinator : Nat
   target : Nat
+  behavior : Nat
   deriving DecidableEq, Repr
 
 /-- Evidence projected from the existing cancellation and tool-policy owners at

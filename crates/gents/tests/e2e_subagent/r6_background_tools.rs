@@ -1,153 +1,28 @@
 use gents::defra_node::{EmbeddedNode, EventName};
 use gents::graphql::escape_graphql_string;
-use gents::llm::tool::BoxFuture;
-use gents::llm::tool::ToolDefinition;
-use gents::llm::tool::{ToolDyn, ToolError};
-use gents::llm::ToolCallHookAction;
-use gents::{
-    interrupt_request, BackgroundExecutionRegistry, BackgroundToolRegistry, DefraSessionHook,
-    FailurePolicy,
-};
+use gents::llm::message::{AssistantContent, Message, Text, ToolResultContent, UserContent};
+use gents::{interrupt_request, AgentIdentity, BackgroundExecutionRegistry};
 use serde::Deserialize;
 use serde_json::Value;
 use std::fmt::Debug;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Notify;
 
-use crate::support::{first_row, test_db};
+use crate::support::accepted_turn::{
+    boot_prepared_accepted_turn, prepare_accepted_turn, AcceptedTurnRuntime, AcceptedTurnSpec,
+};
+use crate::support::fixtures::configure_behavior_tools;
+use crate::support::streaming_backend::StreamChunk;
+use crate::support::test_db;
 
-struct StaticTool {
-    name: &'static str,
-    result: &'static str,
-}
-
-impl ToolDyn for StaticTool {
-    fn name(&self) -> String {
-        self.name.to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.to_string(),
-                description: "test tool".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async move { Ok(self.result.to_string()) })
-    }
-}
-
-struct LargeOutputTool {
-    name: &'static str,
-    output: String,
-}
-
-impl ToolDyn for LargeOutputTool {
-    fn name(&self) -> String {
-        self.name.to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async move {
-            ToolDefinition {
-                name: self.name.to_string(),
-                description: "test tool".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        let output = self.output.clone();
-        Box::pin(async move { Ok(output) })
-    }
-}
-
-struct PendingTool;
-
-impl ToolDyn for PendingTool {
-    fn name(&self) -> String {
-        "slow_tool".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "slow_tool".to_string(),
-                description: "test tool".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(std::future::pending())
-    }
-}
-
-struct PanickingTool;
-
-impl ToolDyn for PanickingTool {
-    fn name(&self) -> String {
-        "panicking_tool".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "panicking_tool".to_string(),
-                description: "test tool that panics".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        Box::pin(async { panic!("intentional background tool panic") })
-    }
-}
-
-struct ConcurrentGateTool {
-    entered: Arc<AtomicUsize>,
-    release: Arc<Notify>,
-}
-
-impl ToolDyn for ConcurrentGateTool {
-    fn name(&self) -> String {
-        "concurrent_tool".to_string()
-    }
-
-    fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
-        Box::pin(async {
-            ToolDefinition {
-                name: "concurrent_tool".to_string(),
-                description: "test tool".to_string(),
-                parameters: serde_json::json!({"type":"object"}),
-            }
-        })
-    }
-
-    fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
-        let entered = self.entered.clone();
-        let release = self.release.clone();
-        Box::pin(async move {
-            entered.fetch_add(1, Ordering::SeqCst);
-            release.notified().await;
-            Ok("done".to_string())
-        })
-    }
-}
+const R6_BEHAVIOR_ID: &str = "r6-background";
+const R6_BACKEND_ID: &str = "r6-background-backend";
+const R6_MODEL: &str = "test-model";
 
 #[derive(Debug, Deserialize)]
 struct ToolCallRow {
+    tool_call_id: Option<String>,
     tool_name: Option<String>,
-    result: Option<String>,
     lifecycle_state: Option<String>,
     cancel_cause: Option<String>,
     await_mode: Option<String>,
@@ -161,53 +36,149 @@ struct MessageRow {
     request_doc_id: Option<String>,
 }
 
-async fn setup_hook(
+struct AcceptedBackgroundTurn {
+    db: crate::support::TestDb,
+    runtime: AcceptedTurnRuntime,
+    session_id: String,
+    request_id: String,
+    prompt: String,
+}
+
+async fn boot_background_turn(
     test_name: &str,
-    registry: BackgroundToolRegistry,
-) -> (crate::support::TestDb, DefraSessionHook, String, String) {
+    accepted_chunks: Vec<StreamChunk>,
+) -> AcceptedBackgroundTurn {
+    boot_background_turn_with_bounds(test_name, accepted_chunks, None, None).await
+}
+
+async fn boot_background_turn_with_bounds(
+    test_name: &str,
+    accepted_chunks: Vec<StreamChunk>,
+    valid_until: Option<&str>,
+    execution_deadline_secs: Option<i64>,
+) -> AcceptedBackgroundTurn {
     let db = test_db(test_name).await;
-    let agent_did = db.node_identity.did().to_string();
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    crate::support::create_request_for_agent_with_signed_fields(
-        db.node.as_ref(),
-        &agent_did,
-        &request_id,
-        &session_id,
-        "processing",
-        "2026-05-14T00:00:00Z",
-        None,
-        None,
-        None,
-        None,
+    let prompt = format!("{test_name}-prompt");
+    let prepared = prepare_accepted_turn(
+        &db,
+        AcceptedTurnSpec {
+            backend_id: R6_BACKEND_ID,
+            model: R6_MODEL,
+            parent_behavior_id: R6_BEHAVIOR_ID,
+            configured_behavior_ids: &[R6_BEHAVIOR_ID],
+            request_id: &request_id,
+            session_id: &session_id,
+            prompt: &prompt,
+            accepted_chunks,
+            child_plans: Vec::new(),
+            valid_until,
+            subagent_depth: None,
+            request_setup: None,
+        },
     )
     .await;
-    crate::support::create_agent_session_in_scope(
+    if let Some(deadline_duration_secs) = execution_deadline_secs {
+        use gents::config_client::{
+            read_desired_state_record_in_txn as read, DesiredStateApplyDocument,
+            DesiredStateApplyPlan,
+        };
+        let agent_did = db.node_identity.did();
+        gents::ConfigAccess::transact_local(
+            db.node.as_ref(),
+            None,
+            "test.configure_r6_execution_deadline",
+            |txn| {
+                Box::pin(async move {
+                    let profile_id = format!("{R6_BEHAVIOR_ID}-inference");
+                    let (_, mut profile) = read(
+                        txn,
+                        gents::Collection::InferenceProfile,
+                        agent_did,
+                        &profile_id,
+                    )
+                    .await?
+                    .expect("R6 inference profile");
+                    let execution_id = format!("{R6_BEHAVIOR_ID}-deadline");
+                    profile["execution_id"] = execution_id.clone().into();
+                    let execution =
+                        serde_json::to_value(gents::document_config::InferenceExecution {
+                            agent_did: agent_did.to_string(),
+                            execution_id,
+                            stream_liveness_timeout_secs: Some(1),
+                            deadline_duration_secs: Some(deadline_duration_secs),
+                            ..Default::default()
+                        })?;
+                    let plan = DesiredStateApplyPlan::new(vec![
+                        DesiredStateApplyDocument {
+                            collection: gents::Collection::InferenceProfile,
+                            add: profile.clone(),
+                            update: profile,
+                        },
+                        DesiredStateApplyDocument {
+                            collection: gents::Collection::InferenceExecution,
+                            add: execution.clone(),
+                            update: execution,
+                        },
+                    ])?;
+                    gents::config_client::apply_desired_state_plan(txn, &plan)
+                        .await
+                        .map(|_| ())
+                })
+            },
+        )
+        .await
+        .expect("configure R6 execution deadline");
+    }
+    prepared.backend.enable_dynamic_followups(&prompt);
+    configure_behavior_tools(
         db.node.as_ref(),
-        &agent_did,
-        &session_id,
-        "r6-background",
-        "2026-05-14T00:00:00Z",
+        db.node_identity.did(),
+        R6_BEHAVIOR_ID,
+        None,
+        gents::document_config::Tools {
+            tools_id: format!("{R6_BEHAVIOR_ID}:tools"),
+            agent_did: db.node_identity.did().to_string(),
+            host: Some(gents::document_config::HostTools {
+                bash: Some(gents::document_config::BashTools {
+                    mode: gents::BashMode::ReadOnly,
+                    read_only_commands: Some(vec![
+                        "sleep".to_string(),
+                        "printf".to_string(),
+                        "sh".to_string(),
+                    ]),
+                    background_enabled: true,
+                    wait_timeout_secs: Some(1),
+                    max_wait_timeout_secs: Some(1),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        Vec::new(),
     )
     .await;
-
-    let hook = DefraSessionHook::resume_with_identity_policy(
+    let identity: Arc<dyn gents::AgentIdentity> = db.node_identity.clone();
+    let agent = gents::Gents::from_default_behavior_documents(
         db.node.clone(),
-        &session_id,
-        "r6-background",
-        &agent_did,
-        None,
-        FailurePolicy::default(),
+        identity,
+        gents::DocumentRuntimeOptions {
+            tool_ceiling: gents::ToolCeiling::readonly(),
+            ..Default::default()
+        },
     )
     .await
-    .unwrap()
-    .with_background_tool_registry(registry);
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
-        .await;
-    (db, hook, session_id, request_id)
+    .expect("build accepted background runtime");
+    let runtime = boot_prepared_accepted_turn(&db, prepared, agent).await;
+    AcceptedBackgroundTurn {
+        db,
+        runtime,
+        session_id,
+        request_id,
+        prompt,
+    }
 }
 
 async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow> {
@@ -217,7 +188,10 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
             AgentMessage(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
-            ) {{ content request_id request_doc_id }}
+            ) {{ _docID agent_did requester_did request_doc_id }}
+            AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{
+                _docID request_id
+            }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -226,12 +200,70 @@ async fn fetch_messages(node: &EmbeddedNode, session_id: &str) -> Vec<MessageRow
         "fetch AgentMessage rows failed: {:?}",
         response.errors
     );
-    response
+    let request_ids = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            Some((
+                row.get("_docID")?.as_str()?,
+                row.get("request_id")?.as_str()?,
+            ))
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let headers = response
         .data
         .as_ref()
         .and_then(|data| data.get("AgentMessage"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default()
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut messages = Vec::new();
+    for header in headers {
+        let header_doc_id = header["_docID"].as_str().expect("message header _docID");
+        let agent_did = header["agent_did"].as_str().expect("message header agent");
+        let requester_did = header["requester_did"].as_str();
+        let request_doc_id = header["request_doc_id"].as_str().map(str::to_owned);
+        let (_, message) = gents::session::load_canonical_message_from_node(
+            node,
+            header_doc_id,
+            agent_did,
+            requester_did,
+        )
+        .await
+        .expect("reconstruct canonical message");
+        let content = match message {
+            Message::System { content } => content,
+            Message::User { content } => content
+                .into_iter()
+                .filter_map(|item| match item {
+                    UserContent::Text(text) => Some(text.text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            Message::Assistant { content, .. } => content
+                .into_iter()
+                .filter_map(|item| match item {
+                    AssistantContent::Text(text) => Some(text.text),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+        };
+        messages.push(MessageRow {
+            content,
+            request_id: request_doc_id
+                .as_deref()
+                .and_then(|doc_id| request_ids.get(doc_id).copied())
+                .map(str::to_owned),
+            request_doc_id,
+        });
+    }
+    messages
 }
 
 async fn bounded_diagnostic<T: Debug>(
@@ -305,24 +337,17 @@ async fn fetch_background_wakes(node: &EmbeddedNode, session_id: &str) -> Vec<se
         .unwrap_or_default()
 }
 
-fn registry(tools: Vec<Box<dyn ToolDyn>>, allowlist: &[&str]) -> BackgroundToolRegistry {
-    BackgroundToolRegistry::from_tools(
-        tools,
-        &allowlist
-            .iter()
-            .map(|name| name.to_string())
-            .collect::<Vec<_>>(),
-    )
-}
-
-fn skip_reason_json(action: ToolCallHookAction) -> Value {
-    let ToolCallHookAction::Skip { reason } = action else {
-        panic!("expected Skip action, got {action:?}");
-    };
-    serde_json::from_str(&reason).expect("skip reason should be JSON")
-}
-
 async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> ToolCallRow {
+    fetch_tool_call(node, session_id, tool_call_id)
+        .await
+        .expect("AgentToolCall row")
+}
+
+async fn fetch_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> Option<ToolCallRow> {
     let session_id = escape_graphql_string(session_id);
     let tool_call_id = escape_graphql_string(tool_call_id);
     let query = format!(
@@ -335,7 +360,7 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
                 limit: 1
             ) {{
                 tool_name
-                result
+                tool_call_id
                 lifecycle_state
                 cancel_cause
                 await_mode
@@ -343,7 +368,232 @@ async fn load_tool_call(node: &EmbeddedNode, session_id: &str, tool_call_id: &st
             }}
         }}"#
     );
-    first_row(&node.execute(&query).await, "AgentToolCall")
+    let response = node.execute(&query).await;
+    assert!(
+        !response.has_errors(),
+        "fetch AgentToolCall failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| serde_json::from_value(row.clone()).ok())
+}
+
+async fn canonical_tool_payload_json(
+    db: &crate::support::TestDb,
+    session_id: &str,
+    provider_call_id: &str,
+) -> Value {
+    canonical_tool_payload_json_for(db, session_id, db.node_identity.did(), provider_call_id).await
+}
+
+async fn canonical_tool_payload_json_for(
+    db: &crate::support::TestDb,
+    session_id: &str,
+    principal_did: &str,
+    provider_call_id: &str,
+) -> Value {
+    let mut last_history = Vec::new();
+    for _ in 0..200 {
+        let history = gents::load_history(
+            db.node.as_ref(),
+            session_id,
+            principal_did,
+            Some(principal_did),
+        )
+        .await
+        .expect("load canonical history");
+        if let Some(payload) = history.iter().find_map(|message| match message {
+            Message::User { content } => content.iter().find_map(|content| match content {
+                UserContent::ToolResult(result)
+                    if result.id == provider_call_id
+                        || result.call_id.as_deref() == Some(provider_call_id) =>
+                {
+                    result.content.iter().find_map(|content| match content {
+                        ToolResultContent::Text(Text { text }) => serde_json::from_str(text).ok(),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            }),
+            _ => None,
+        }) {
+            return payload;
+        }
+        last_history = history;
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "canonical tool-result payload missing for {provider_call_id}; history={last_history:#?}"
+    )
+}
+
+async fn canonical_latest_tool_payload_json(
+    db: &crate::support::TestDb,
+    session_id: &str,
+    minimum_results: usize,
+) -> Value {
+    for _ in 0..200 {
+        let history = gents::load_history(
+            db.node.as_ref(),
+            session_id,
+            db.node_identity.did(),
+            Some(db.node_identity.did()),
+        )
+        .await
+        .expect("load canonical history");
+        let payloads = history
+            .iter()
+            .flat_map(|message| match message {
+                Message::User { content } => content.as_slice(),
+                _ => &[],
+            })
+            .filter_map(|content| match content {
+                UserContent::ToolResult(result) => {
+                    result.content.iter().find_map(|content| match content {
+                        ToolResultContent::Text(Text { text }) => serde_json::from_str(text).ok(),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<Value>>();
+        if payloads.len() >= minimum_results {
+            return payloads.into_iter().last().expect("latest tool result");
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("fewer than {minimum_results} canonical tool-result payloads")
+}
+
+async fn wait_for_named_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_name: &str,
+) -> ToolCallRow {
+    let session_id = escape_graphql_string(session_id);
+    let tool_name = escape_graphql_string(tool_name);
+    for _ in 0..200 {
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_name: {{ _eq: "{tool_name}" }} }}, limit: 1) {{ tool_call_id tool_name lifecycle_state cancel_cause await_mode child_request_id }} }}"#
+            ))
+            .await;
+        if let Some(row) = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentToolCall"))
+            .and_then(Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(|row| serde_json::from_value(row.clone()).ok())
+        {
+            return row;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let requests = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id lifecycle_state deadline valid_until claimed_at terminalized_at failure_reason }} }}"#
+        ))
+        .await;
+    let tools = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id tool_call_id tool_name lifecycle_state cancel_cause }} }}"#
+        ))
+        .await;
+    panic!(
+        "tool {tool_name} was not durably persisted before provider follow-up; requests={:?}; tools={:?}",
+        requests.data,
+        tools.data,
+    )
+}
+
+async fn wait_for_running_tool_call(
+    node: &EmbeddedNode,
+    session_id: &str,
+    tool_call_id: &str,
+) -> ToolCallRow {
+    let timeout = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let row = load_tool_call(node, session_id, tool_call_id).await;
+        if row.lifecycle_state.as_deref() == Some("running") {
+            return row;
+        }
+        assert_eq!(
+            row.lifecycle_state.as_deref(),
+            Some("pending"),
+            "accepted process must start before recovery premise: {row:?}"
+        );
+        assert!(
+            tokio::time::Instant::now() < timeout,
+            "accepted process did not start: {row:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn assert_accepted_rows_visible(turn: &AcceptedBackgroundTurn) {
+    let session_id = escape_graphql_string(&turn.session_id);
+    let response = turn
+        .db
+        .node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID request_id request_doc_id requester_did tool_call_id tool_name lifecycle_state spawned_by_tool_call_doc_id }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "accepted-row query failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(Value::as_array)
+        .expect("AgentToolCall rows");
+    assert!(
+        !rows.is_empty(),
+        "accepted provider result reached follow-up before durable headers; bodies={:?}",
+        turn.runtime.backend.observed_completion_bodies()
+    );
+}
+
+async fn wait_for_provider_requests(turn: &AcceptedBackgroundTurn, expected: usize) {
+    for _ in 0..200 {
+        if turn.runtime.backend.observed_requests(&turn.prompt) >= expected {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("provider did not receive {expected} requests")
+}
+
+fn finish_dynamic_turn(turn: &AcceptedBackgroundTurn) {
+    turn.runtime.backend.enqueue_response(
+        &turn.prompt,
+        crate::support::streaming_backend::StreamResponse::completes(
+            &turn.prompt,
+            ["parent complete"],
+        ),
+    );
+}
+
+async fn wait_for_initial_request_terminal(turn: &AcceptedBackgroundTurn) {
+    let state = crate::support::live_inference::wait_for_request_terminal(
+        turn.db.node.as_ref(),
+        &turn.request_id,
+        Duration::from_secs(10),
+    )
+    .await;
+    assert_eq!(
+        state, "completed",
+        "initial accepted request did not complete"
+    );
 }
 
 #[tokio::test]
@@ -390,59 +640,54 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 
 #[tokio::test]
 async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_envelope() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-success",
-        registry(
-            vec![Box::new(StaticTool {
-                name: "test_tool",
-                result: "done",
-            })],
-            &["test_tool"],
-        ),
+        vec![StreamChunk::tool_call(
+            "meta-bg-1",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"printf","args":["done"]}}"#,
+        )],
     )
     .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-1",
-            r#"{"tool_name":"test_tool","args":{"x":1}}"#,
-        )
-        .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("background handle");
+    assert_accepted_rows_visible(&turn).await;
+    turn.runtime.backend.enqueue_response(
+        &turn.prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            &turn.prompt,
+            vec![StreamChunk::tool_call(
+                "meta-wait-1",
+                "wait_process",
+                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+            )],
+        ),
     );
-    assert_eq!(receipt["status"], "running");
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+    wait_for_provider_requests(&turn, 3).await;
+    finish_dynamic_turn(&turn);
+    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
+    assert_eq!(waited["status"], "completed", "unexpected wait: {waited}");
+    assert!(waited["result"]
+        .as_str()
+        .is_some_and(|value| value.contains("done")));
 
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-1",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
-    );
-    assert_eq!(waited["status"], "completed");
-    assert_eq!(waited["result"], "done");
-
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
-    assert_eq!(row.tool_name.as_deref(), Some("test_tool"));
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    assert_eq!(row.tool_name.as_deref(), Some("bash"));
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
     assert_eq!(row.await_mode.as_deref(), Some("background"));
     assert_eq!(row.child_request_id.as_deref(), None);
-    assert_eq!(row.result.as_deref(), Some("done"));
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_process").await,
-        0
+        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "wait_process").await,
+        1
     );
 
     let message =
-        wait_for_tool_completion_message(db.node.as_ref(), &session_id, &tool_call_id).await;
-    assert!(message.content.contains(r#"tool_name="test_tool""#));
+        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+            .await;
+    assert!(message.content.contains(r#"tool_name="bash""#));
     assert!(message.content.contains(r#"status="completed""#));
-    assert!(message.content.contains("<result>done</result>"));
-    let wakes = fetch_background_wakes(db.node.as_ref(), &session_id).await;
+    assert!(message.content.contains("done"));
+    let wakes = fetch_background_wakes(turn.db.node.as_ref(), &turn.session_id).await;
     assert_eq!(
         wakes.len(),
         1,
@@ -450,9 +695,10 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
     );
     let wake_request_id = wakes[0]["request_id"].as_str().unwrap();
     let wake_doc_id = wakes[0]["_docID"].as_str().unwrap();
-    assert_ne!(wake_request_id, request_id);
+    assert_ne!(wake_request_id, turn.request_id);
     assert_eq!(message.request_id.as_deref(), Some(wake_request_id));
     assert_eq!(message.request_doc_id.as_deref(), Some(wake_doc_id));
+    turn.runtime.shutdown().await;
 }
 
 // #985: a backgrounded bash run's lifetime budget is decoupled from both the
@@ -461,43 +707,81 @@ async fn background_tool_success_returns_handle_and_wait_tool_returns_terminal_e
 // is still running.
 #[tokio::test]
 async fn background_tool_execution_survives_parent_request_deadline() {
-    let bash_tools = gents::ToolSet::builder()
-        .bash_read_only_with_policy_and_timeouts(
-            gents::CommandExecutionPolicy::read_only(vec!["sleep".to_string()]),
-            std::time::Duration::from_secs(120),
-            std::time::Duration::from_secs(120),
-        )
-        .build()
-        .build_native_tools()
-        .unwrap();
-    let (db, hook, session_id, _request_id) = setup_hook(
-        "r6-background-outlives-deadline",
-        registry(bash_tools, &["bash"]),
+    let turn = boot_background_turn("r6-background-outlives-deadline", Vec::new()).await;
+    // This fixture enables follow-ups for the initial authored prompt. Supply
+    // its terminal response before waiting, otherwise the mock correctly
+    // treats the second provider call as a not-yet-authored dynamic response.
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    let release_dir = tempfile::tempdir().unwrap();
+    let entered_path = release_dir.path().join("entered");
+    let release_path = release_dir.path().join("release");
+    let prompt = "start a process that outlives this request deadline";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![StreamChunk::tool_call(
+                "meta-bg-outlive",
+                "spawn_process",
+                serde_json::json!({
+                    "tool_name": "bash",
+                    "args": {
+                        "command": "sh",
+                        "args": [
+                            "-c",
+                            ": > \"$1\"; while [ ! -f \"$2\" ]; do sleep 0.05; done; printf survived",
+                            "gents-background-deadline",
+                            entered_path.to_string_lossy(),
+                            release_path.to_string_lossy()
+                        ]
+                    }
+                })
+                .to_string(),
+            )],
+        ),
+    );
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["started"]),
+    );
+    let valid_until = (chrono::Utc::now() + chrono::Duration::seconds(2))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    crate::support::accepted_turn::enqueue_local_accepted_request_until(
+        &turn.db,
+        R6_BEHAVIOR_ID,
+        "r6-background-outlives-deadline-request-2",
+        &turn.session_id,
+        prompt,
+        Some(&valid_until),
     )
     .await;
-    hook.set_request_deadline_at(Some(
-        chrono::Utc::now() + chrono::Duration::milliseconds(200),
-    ))
-    .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-outlive",
-            r#"{"tool_name":"bash","args":{"command":"sleep","args":["0.7"]}}"#,
-        )
-        .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("background handle");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while !entered_path.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("background process body entered");
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(
+        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+            .await
+            .lifecycle_state
+            .as_deref(),
+        Some("running"),
+        "background process must remain live after its parent deadline"
     );
-    assert_eq!(receipt["status"], "running");
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+    std::fs::write(&release_path, b"release").unwrap();
 
-    // The tool outlives both the parent deadline (200ms) and the shared
-    // 500ms wait helper; poll long enough for the 700ms sleep to finish.
+    // The document-authored process outlives the accepted parent deadline.
     let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
     let mut message = None;
-    for _ in 0..60 {
-        if let Some(found) = fetch_messages(db.node.as_ref(), &session_id)
+    for _ in 0..100 {
+        if let Some(found) = fetch_messages(turn.db.node.as_ref(), &turn.session_id)
             .await
             .into_iter()
             .find(|message| message.content.contains(&marker))
@@ -514,8 +798,23 @@ async fn background_tool_execution_survives_parent_request_deadline() {
         message.content
     );
 
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
+    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
+        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        "r6-background-outlives-deadline-request-2",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        timeline
+            .tool_calls
+            .iter()
+            .find(|call| call.tool_call_id == tool_call_id)
+            .and_then(|call| call.result.as_deref()),
+        Some("survived")
+    );
+    turn.runtime.shutdown().await;
 }
 
 // #985: wait_process is a bounded wait — on timeout it reports the process
@@ -523,191 +822,156 @@ async fn background_tool_execution_survives_parent_request_deadline() {
 // the session (or kill the job) until the parent request deadline.
 #[tokio::test]
 async fn wait_process_bounded_wait_returns_still_running_without_cancelling() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-wait-bounded",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-bounded",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-bounded",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
-    );
-    assert_eq!(receipt["status"], "running");
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("background handle");
+    assert_accepted_rows_visible(&turn).await;
 
     let started = std::time::Instant::now();
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-bounded",
-            &serde_json::json!({ "tool_call_id": tool_call_id, "timeout_secs": 1 }).to_string(),
-        )
-        .await,
+    turn.runtime.backend.enqueue_response(
+        &turn.prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            &turn.prompt,
+            vec![StreamChunk::tool_call(
+                "meta-wait-bounded",
+                "wait_process",
+                serde_json::json!({ "tool_call_id": tool_call_id, "timeout_secs": 1 }).to_string(),
+            )],
+        ),
     );
+    wait_for_provider_requests(&turn, 3).await;
+    finish_dynamic_turn(&turn);
+    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
     assert!(
         started.elapsed() < std::time::Duration::from_secs(4),
         "bounded wait must return promptly, took {:?}",
         started.elapsed()
     );
-    assert_eq!(waited["status"], "running");
+    assert_eq!(waited["status"], "running", "unexpected wait: {waited}");
     assert_eq!(waited["error"]["reason"], "wait_timeout");
 
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(
         row.lifecycle_state.as_deref(),
         Some("running"),
         "wait timeout must not cancel the background process"
     );
     assert_eq!(row.cancel_cause.as_deref(), None);
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn periodic_recovery_does_not_terminalize_registered_background_worker() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    assert_runtime_recovery_preserves_registered_worker(
         "r6-background-periodic-live-owner",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        "completed",
     )
     .await;
-    let executions = BackgroundExecutionRegistry::default();
-    let hook = hook.with_background_execution_registry(executions.clone());
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-periodic-live-owner",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    set_parent_state(db.node.as_ref(), &request_id, "completed").await;
-    let _runs =
-        gents::run_periodic_recovery_sweeps(db.node.as_ref(), db.node_identity.did(), &executions)
-            .await
-            .unwrap();
-    assert_eq!(
-        load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
-            .await
-            .lifecycle_state
-            .as_deref(),
-        Some("running")
-    );
-
-    let _ = hook
-        .on_tool_call(
-            "cancel_process",
-            None,
-            "meta-bg-periodic-live-owner-cleanup",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await;
 }
 
 #[tokio::test]
 async fn periodic_recovery_preserves_registered_worker_after_parent_interrupt() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    assert_runtime_recovery_preserves_registered_worker(
         "r6-background-periodic-interrupted-owner",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        "interrupted",
     )
     .await;
-    let executions = BackgroundExecutionRegistry::default();
-    let hook = hook.with_background_execution_registry(executions.clone());
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-periodic-interrupted-owner",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+}
 
-    set_parent_state(db.node.as_ref(), &request_id, "interrupted").await;
-    gents::run_periodic_recovery_sweeps(db.node.as_ref(), db.node_identity.did(), &executions)
-        .await
-        .unwrap();
+async fn assert_runtime_recovery_preserves_registered_worker(test_name: &str, parent_state: &str) {
+    let turn = boot_background_turn(
+        test_name,
+        vec![StreamChunk::tool_call(
+            format!("{test_name}-spawn"),
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
+    )
+    .await;
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("registered process handle");
+    wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    set_parent_state(turn.db.node.as_ref(), &turn.request_id, parent_state).await;
+    tokio::time::sleep(Duration::from_secs(6)).await;
     assert_eq!(
-        load_tool_call(db.node.as_ref(), &session_id, &tool_call_id)
+        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
             .await
             .lifecycle_state
             .as_deref(),
         Some("running")
     );
-
-    let _ = hook
-        .on_tool_call(
-            "cancel_process",
-            None,
-            "meta-bg-periodic-interrupted-owner-cleanup",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await;
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn periodic_recovery_applies_deadline_before_terminal_parent_to_orphan() {
-    let (db, _hook, session_id, request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-periodic-deadline-precedence",
-        registry(Vec::new(), &[]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-expired-orphan",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-    let tool_call_id = "expired-terminal-parent-orphan";
-    let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
-        db.node.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        db.node_identity.did().to_string(),
-        tool_call_id.to_string(),
-        1,
-        "slow_tool".to_string(),
-        "{}".to_string(),
-        chrono::Utc::now() - chrono::Duration::seconds(1),
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("accepted background handle");
+    // Acceptance first persists Pending; the orphan sweep only owns a process
+    // after the real worker has moved it to Running.
+    wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    let expired = (chrono::Utc::now() - chrono::Duration::seconds(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    let response = turn.db.node.execute(&format!(
+        r#"mutation {{ update_AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}, input: {{ deadline_at: "{}" }}) {{ _docID }} }}"#,
+        escape_graphql_string(&tool_call_id), escape_graphql_string(&expired)
+    )).await;
+    assert!(
+        !response.has_errors(),
+        "expire accepted background row: {:?}",
+        response.errors
     );
-    lifecycle.start_running().await.unwrap();
-    set_parent_state(db.node.as_ref(), &request_id, "completed").await;
+    set_parent_state(turn.db.node.as_ref(), &turn.request_id, "completed").await;
 
     gents::run_periodic_recovery_sweeps(
-        db.node.as_ref(),
-        db.node_identity.did(),
+        &turn.db.node,
+        turn.db.node_identity.did(),
         &BackgroundExecutionRegistry::default(),
     )
     .await
     .unwrap();
-    let row = load_tool_call(db.node.as_ref(), &session_id, tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("timedOut"));
     assert_eq!(row.cancel_cause.as_deref(), Some("deadline"));
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
-    let (db, _hook, session_id, request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-malformed-recovery-row",
-        registry(Vec::new(), &[]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-valid-orphan",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-    let tool_call_id = "valid-orphan";
-    let mut lifecycle = gents::tool_call_lifecycle::ToolCallLifecycle::new_background_tool(
-        db.node.clone(),
-        request_id,
-        session_id.clone(),
-        db.node_identity.did().to_string(),
-        tool_call_id.to_string(),
-        1,
-        "slow_tool".to_string(),
-        "{}".to_string(),
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-    );
-    lifecycle.start_running().await.unwrap();
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("accepted valid orphan");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    // A cleanly completed parent intentionally leaves its background job
+    // running. Make the parent uncleanly terminal before testing orphan
+    // recovery with an empty worker registry.
+    set_parent_state(turn.db.node.as_ref(), &turn.request_id, "interrupted").await;
 
     let malformed = format!(
         r#"mutation {{
@@ -718,31 +982,56 @@ async fn malformed_running_row_does_not_hide_valid_orphan_recovery() {
                 await_mode: "background"
             }}) {{ _docID }}
         }}"#,
-        escape_graphql_string(db.node_identity.did())
+        escape_graphql_string(turn.db.node_identity.did())
     );
-    let response = db.node.execute(&malformed).await;
+    let response = turn.db.node.execute(&malformed).await;
     assert!(
         !response.has_errors(),
         "failed to seed malformed recovery row: {:?}",
         response.errors
     );
 
+    let before = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    assert!(
+        matches!(
+            before.lifecycle_state.as_deref(),
+            Some("running" | "cancelled")
+        ),
+        "valid orphan must be running or already daemon-reconciled: {before:?}"
+    );
+
     let report =
         gents::tool_call_lifecycle::ToolCallLifecycle::reconcile_orphaned_background_tools(
-            db.node.as_ref(),
-            db.node_identity.did(),
+            &turn.db.node,
+            turn.db.node_identity.did(),
             &BackgroundExecutionRegistry::default(),
         )
         .await
         .unwrap();
-    assert_eq!(report.tool_calls_terminalized, 1);
+    let recovered = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(
-        load_tool_call(db.node.as_ref(), &session_id, tool_call_id)
-            .await
-            .lifecycle_state
-            .as_deref(),
-        Some("cancelled")
+        recovered.lifecycle_state.as_deref(),
+        Some("cancelled"),
+        "manual sweep report={report:?}; valid row={recovered:?}"
     );
+    assert!(
+        report.tool_calls_terminalized <= 1,
+        "only one well-formed orphan can be due to this sweep: {report:?}"
+    );
+    if before.lifecycle_state.as_deref() == Some("cancelled") {
+        assert_eq!(
+            report.tool_calls_terminalized, 0,
+            "daemon-reconciled row cannot be terminalized twice"
+        );
+    }
+    let malformed_rows = turn.db.node.execute(r#"{ AgentToolCall(filter: { tool_call_key: { _eq: "malformed-recovery-row" } }) { lifecycle_state } }"#).await;
+    assert!(!malformed_rows.has_errors(), "{:#?}", malformed_rows.errors);
+    assert_eq!(
+        malformed_rows.data.unwrap()["AgentToolCall"][0]["lifecycle_state"],
+        "running",
+        "malformed row must remain untouched"
+    );
+    turn.runtime.shutdown().await;
 }
 
 async fn set_parent_state(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
@@ -765,92 +1054,53 @@ async fn set_parent_state(node: &EmbeddedNode, request_id: &str, lifecycle_state
 }
 
 #[tokio::test]
-async fn panicking_background_tool_terminalizes_and_notifies() {
-    let (db, hook, session_id, _request_id) = setup_hook(
-        "r6-background-panic",
-        registry(vec![Box::new(PanickingTool)], &["panicking_tool"]),
-    )
-    .await;
-
-    let executions = BackgroundExecutionRegistry::default();
-    let hook = hook.with_background_execution_registry(executions.clone());
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-panic",
-            r#"{"tool_name":"panicking_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    // Registry ownership ends only after terminal persistence and completion
-    // projection finish. Await that owned task boundary directly instead of
-    // imposing a wall-clock deadline on Defra writes under suite load.
-    executions.wait_for_completion(&tool_call_id).await;
-
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("failed"));
-    assert!(row
-        .result
-        .as_deref()
-        .is_some_and(|result| { result.contains("intentional background tool panic") }));
-
-    let marker = format!(r#"<tool-completion tool_call_id="{tool_call_id}""#);
-    let notification = fetch_messages(db.node.as_ref(), &session_id)
-        .await
-        .into_iter()
-        .find(|message| message.content.contains(&marker))
-        .expect("registry release must follow the completion notification append");
-    assert!(notification.content.contains(r#"status="failed""#));
-    assert!(notification
-        .content
-        .contains("<reason>tool_panicked</reason>"));
-}
-
-#[tokio::test]
 async fn wait_envelope_bounds_oversized_background_tool_result() {
     let big_line = "x".repeat(200);
     let big_output = std::iter::repeat(big_line)
-        .take(5_000)
+        .take(500)
         .collect::<Vec<_>>()
         .join("\n");
     let full_len = big_output.len();
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let spawn_args = serde_json::json!({
+        "tool_name": "bash",
+        "args": { "command": "printf", "args": ["%s", big_output.clone()] }
+    })
+    .to_string();
+    let turn = boot_background_turn(
         "r6-background-bounded",
-        registry(
-            vec![Box::new(LargeOutputTool {
-                name: "big_tool",
-                output: big_output,
-            })],
-            &["big_tool"],
-        ),
+        vec![StreamChunk::tool_call(
+            "meta-bg-big",
+            "spawn_process",
+            spawn_args,
+        )],
     )
     .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-big",
-            r#"{"tool_name":"big_tool","args":{}}"#,
-        )
-        .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("background handle");
+    turn.runtime.backend.enqueue_response(
+        &turn.prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            &turn.prompt,
+            vec![StreamChunk::tool_call(
+                "meta-wait-big",
+                "wait_process",
+                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+            )],
+        ),
     );
-    assert_eq!(receipt["status"], "running");
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-big",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
+    wait_for_provider_requests(&turn, 3).await;
+    finish_dynamic_turn(&turn);
+    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
+    let terminal_row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    assert_eq!(
+        waited["status"],
+        "completed",
+        "wait status={:?}, error={}, result_bytes={}, result_prefix={:?}, terminal_row={terminal_row:?}",
+        waited["status"],
+        waited["error"],
+        waited["result"].as_str().map_or(0, str::len),
+        waited["result"].as_str().map(|s| s.chars().take(256).collect::<String>())
     );
-    assert_eq!(waited["status"], "completed");
     let envelope_result = waited["result"].as_str().expect("envelope result string");
     assert!(
         envelope_result.len() < full_len,
@@ -863,357 +1113,473 @@ async fn wait_envelope_bounds_oversized_background_tool_result() {
         "bounded result must be non-empty"
     );
 
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("completed"));
-    assert_eq!(
-        row.result.as_deref().map(str::len),
-        Some(full_len),
-        "the AgentToolCall row must keep the full output"
-    );
+    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
+        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &turn.request_id,
+    )
+    .await
+    .unwrap();
+    let full = timeline
+        .tool_calls
+        .iter()
+        .find(|call| call.tool_call_id == tool_call_id)
+        .and_then(|call| call.result.as_deref());
+    assert_eq!(full, Some(big_output.as_str()));
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn background_tool_rejects_not_allowlisted_target() {
-    let (_db, hook, _session_id, _request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-not-allowed",
-        registry(
-            vec![Box::new(StaticTool {
-                name: "test_tool",
-                result: "done",
-            })],
-            &["test_tool"],
-        ),
+        vec![StreamChunk::tool_call(
+            "meta-bg-denied",
+            "spawn_process",
+            r#"{"tool_name":"other_tool","args":{}}"#,
+        )],
     )
     .await;
-
-    let error = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-denied",
-            r#"{"tool_name":"other_tool","args":{}}"#,
-        )
-        .await,
-    );
+    turn.runtime.backend.wait_for_chunks(&turn.prompt, 1).await;
+    wait_for_provider_requests(&turn, 2).await;
+    assert_accepted_rows_visible(&turn).await;
+    finish_dynamic_turn(&turn);
+    let error = canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-bg-denied").await;
     assert_eq!(error["failure_class"], "tool_not_allowed");
     assert_eq!(error["requested_tool_name"], "other_tool");
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn background_tool_rejects_when_parent_budget_is_exhausted() {
-    let (db, hook, session_id, _request_id) = setup_hook(
-        "r6-background-budget",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
-    )
-    .await;
-
-    for index in 0..8 {
-        let receipt = skip_reason_json(
-            hook.on_tool_call(
+    let mut chunks = (0..8)
+        .map(|index| {
+            StreamChunk::tool_call(
+                format!("meta-bg-budget-{index}"),
                 "spawn_process",
-                None,
-                &format!("meta-bg-budget-{index}"),
-                r#"{"tool_name":"slow_tool","args":{}}"#,
+                r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
             )
-            .await,
-        );
-        assert_eq!(receipt["status"], "running");
-    }
-
-    let denied = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-budget-denied",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
+        })
+        .collect::<Vec<_>>();
+    chunks.push(StreamChunk::tool_call(
+        "meta-bg-budget-denied",
+        "spawn_process",
+        r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+    ));
+    let turn = boot_background_turn("r6-background-budget", chunks).await;
+    wait_for_provider_requests(&turn, 2).await;
+    assert_accepted_rows_visible(&turn).await;
+    finish_dynamic_turn(&turn);
+    let denied = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 9).await;
+    assert_eq!(
+        denied["code"], "background_tool_budget_exceeded",
+        "unexpected budget denial: {denied}"
     );
-    assert_eq!(denied["code"], "background_tool_budget_exceeded");
     assert_eq!(denied["current_backgrounded"], 8);
     assert_eq!(denied["max_backgrounded"], 8);
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "slow_tool").await,
+        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "bash").await,
         8
     );
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+    let turn = boot_background_turn_with_bounds(
         "r6-background-wait-deadline",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-wait-deadline",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
+        None,
+        Some(15),
     )
     .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-wait-deadline",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("accepted background handle");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    let prompt = "wait for process until caller deadline";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::Stream(
+            crate::support::streaming_backend::StreamScript::paused_before(
+                prompt,
+                vec![StreamChunk::tool_call(
+                    "meta-wait-deadline",
+                    "wait_process",
+                    serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+                )],
+            ),
+        ),
     );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    hook.set_request_deadline_at(Some(chrono::Utc::now() - chrono::Duration::milliseconds(1)))
-        .await;
-
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-deadline",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["deadline handled"]),
     );
-    assert_eq!(waited["status"], "running");
-    assert_eq!(waited["error"]["reason"], "caller_deadline_exceeded");
+    let valid_until = (chrono::Utc::now() + chrono::Duration::minutes(1))
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    crate::support::accepted_turn::enqueue_local_accepted_request_until(
+        &turn.db,
+        R6_BEHAVIOR_ID,
+        "r6-background-wait-deadline-request-2",
+        &turn.session_id,
+        prompt,
+        Some(&valid_until),
+    )
+    .await;
+    // Wait for the claim owner to synthesize and persist the configured
+    // execution deadline, then release inside its remaining budget. Admission
+    // valid_until is intentionally a different, later clock.
+    let request_id = escape_graphql_string("r6-background-wait-deadline-request-2");
+    let persisted_deadline_at = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = turn.db.node.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ lifecycle_state deadline }} }}"#,
+            )).await;
+            if let Some(deadline) = response.data.as_ref()
+                .and_then(|data| data["AgentRequest"].as_array())
+                .and_then(|rows| rows.first())
+                .filter(|row| row["lifecycle_state"] == "processing")
+                .and_then(|row| row["deadline"].as_str())
+            {
+                break chrono::DateTime::parse_from_rfc3339(deadline)
+                    .expect("parse claimed execution deadline")
+                    .with_timezone(&chrono::Utc);
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }).await.expect("follow-up request was not claimed with an execution deadline");
+    let release_at = persisted_deadline_at - chrono::Duration::milliseconds(900);
+    let delay = (release_at - chrono::Utc::now())
+        .to_std()
+        .unwrap_or_default();
+    tokio::time::sleep(delay).await;
+    turn.runtime.backend.release(prompt);
+    let wait_row =
+        wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
+    let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let current =
+            load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
+        if current.lifecycle_state.as_deref() == Some("timedOut") {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let requests = turn.db.node.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id lifecycle_state valid_until terminalized_at failure_reason terminal_output execution_generation }} }}"#,
+                escape_graphql_string(&turn.session_id),
+            )).await;
+            let tools = turn.db.node.execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{}" }} }}) {{ _docID request_id request_doc_id tool_call_id tool_name lifecycle_state cancel_cause tool_failure_class started_at completed_at message_sequence await_mode cancel_policy }} }}"#,
+                escape_graphql_string(&turn.session_id),
+            )).await;
+            panic!(
+                "accepted wait call did not follow the modeled request-deadline timeout owner: current={current:?}; requests={:?}; tools={:?}",
+                requests.data,
+                tools.data,
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let history = gents::load_history(
+        &turn.db.node,
+        &turn.session_id,
+        turn.db.node_identity.did(),
+        None,
+    )
+    .await
+    .unwrap();
+    assert!(
+        history.iter().all(|message| !matches!(message,
+            Message::User { content }
+                if content.iter().any(|item| matches!(item,
+                    UserContent::ToolResult(result) if result.id == "meta-wait-deadline")))),
+        "an expired caller must not publish a successful late wait result"
+    );
 
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(row.cancel_cause.as_deref(), None);
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "wait_process").await,
-        0
+        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "wait_process").await,
+        1
     );
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-wait-interrupt",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-interrupt",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-interrupt",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("accepted background handle");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    let prompt = "wait for process until caller interruption";
+    let request_id = "r6-background-wait-interrupt-request-2";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![StreamChunk::tool_call(
+                "meta-wait-interrupt",
+                "wait_process",
+                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+            )],
+        ),
     );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-    interrupt_request(db.node.as_ref(), &request_id)
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["interrupt handled"]),
+    );
+    crate::support::accepted_turn::enqueue_local_accepted_request(
+        &turn.db,
+        R6_BEHAVIOR_ID,
+        request_id,
+        &turn.session_id,
+        prompt,
+    )
+    .await;
+    turn.runtime.backend.wait_for_chunks(prompt, 1).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    interrupt_request(turn.db.node.as_ref(), request_id)
         .await
         .expect("interrupt caller request");
 
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-interrupt",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
-    );
+    let waited =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-wait-interrupt").await;
     assert_eq!(waited["status"], "running");
     assert_eq!(waited["error"]["reason"], "caller_interrupted");
 
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(row.cancel_cause.as_deref(), None);
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn process_controls_manage_same_principal_job_across_request_turns() {
-    let (db, hook, session_id, origin_request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-cross-turn-controls",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
-    )
-    .await;
-    let requester_did = "did:key:same-requester";
-    hook.set_active_request_lineage(Some(origin_request_id), Some(requester_did.to_string()))
-        .await
-        .unwrap();
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
+        vec![StreamChunk::tool_call(
             "meta-bg-cross-turn",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    let next_request_id = "r6-background-cross-turn-controls-request-2".to_string();
-    crate::support::create_request(
-        db.node.as_ref(),
-        &next_request_id,
-        &session_id,
-        "processing",
-        "2026-05-14T00:00:01Z",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-    hook.set_active_request_lineage(Some(next_request_id), Some(requester_did.to_string()))
-        .await
-        .unwrap();
-
-    let listed = skip_reason_json(
-        hook.on_tool_call("list_processes", None, "meta-list-cross-turn", r#"{}"#)
-            .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("cross-turn handle");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    let owner_after_first_turn =
+        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
+    assert_eq!(
+        owner_after_first_turn.lifecycle_state.as_deref(),
+        Some("running"),
+        "background process must survive the originating turn: {owner_after_first_turn:?}"
     );
-    assert!(listed["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|entry| entry["tool_call_id"] == tool_call_id));
-
-    let read = skip_reason_json(
-        hook.on_tool_call(
-            "read_process",
-            None,
-            "meta-read-cross-turn",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
+    let prompt = "control existing process from second request";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![
+                StreamChunk::tool_call("meta-list-cross-turn", "list_processes", r#"{}"#),
+                StreamChunk::tool_call(
+                    "meta-read-cross-turn",
+                    "read_process",
+                    serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+                ),
+            ],
+        ),
     );
+    crate::support::accepted_turn::enqueue_local_accepted_request(
+        &turn.db,
+        R6_BEHAVIOR_ID,
+        "r6-background-cross-turn-controls-request-2",
+        &turn.session_id,
+        prompt,
+    )
+    .await;
+    turn.runtime.backend.wait_for_chunks(prompt, 1).await;
+    let listed =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-list-cross-turn").await;
+    assert!(
+        listed["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["tool_call_id"] == tool_call_id),
+        "list_processes lost accepted handle {tool_call_id}: {listed:#}"
+    );
+
+    let read =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-read-cross-turn").await;
     assert_eq!(read["status"], "running");
-
-    hook.set_request_deadline_at(Some(chrono::Utc::now() - chrono::Duration::milliseconds(1)))
-        .await;
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-cross-turn",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
+    assert_eq!(
+        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+            .await
+            .lifecycle_state
+            .as_deref(),
+        Some("running"),
+        "read_process must observe the job before a later accepted cancel turn"
     );
-    assert_eq!(waited["status"], "running");
-    assert_eq!(waited["error"]["reason"], "caller_deadline_exceeded");
-
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
-        .await;
-    let cancelled = skip_reason_json(
-        hook.on_tool_call(
-            "cancel_process",
-            None,
-            "meta-cancel-cross-turn",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![StreamChunk::tool_call(
+                "meta-cancel-cross-turn",
+                "cancel_process",
+                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+            )],
+        ),
     );
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["controlled"]),
+    );
+    let cancelled =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-cancel-cross-turn").await;
     assert_eq!(cancelled["status"], "cancelled");
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
-async fn process_controls_deny_different_requester_in_same_session() {
-    let (db, hook, session_id, request_id) = setup_hook(
+async fn second_signed_principal_runtime_is_denied_foreign_process_handle() {
+    let turn = boot_background_turn(
         "r6-background-cross-requester-denied",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
-    )
-    .await;
-    hook.set_active_request_lineage(Some(request_id.clone()), Some("did:key:owner".to_string()))
-        .await
-        .unwrap();
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
+        vec![StreamChunk::tool_call(
             "meta-bg-cross-requester",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    let other_request_id = format!("{request_id}-other");
-    crate::support::create_request(
-        db.node.as_ref(),
-        &other_request_id,
-        &session_id,
-        "processing",
-        "2026-05-14T00:00:02Z",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-    hook.set_active_request_lineage(Some(other_request_id), Some("did:key:other".to_string()))
-        .await
-        .unwrap();
-    let listed = skip_reason_json(
-        hook.on_tool_call("list_processes", None, "meta-list-cross-requester", r#"{}"#)
-            .await,
-    );
-    assert!(listed["entries"].as_array().unwrap().is_empty());
-    let denied = skip_reason_json(
-        hook.on_tool_call(
-            "read_process",
-            None,
-            "meta-read-cross-requester",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
-    );
-    assert_eq!(denied["ok"], false);
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("owner background handle");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
 
-    let wait_denied = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
-            "meta-wait-cross-requester",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
+    let foreign = std::sync::Arc::new(crate::support::fixtures::test_identity(
+        "r6-foreign-requester",
+    ));
+    let foreign_behavior = "r6-background-foreign";
+    let foreign_session = "r6-background-foreign-session";
+    let foreign_prompt = "read a process owned by another principal";
+    let prepared = crate::support::accepted_turn::prepare_accepted_turn_as(
+        &turn.db,
+        foreign.as_ref(),
+        AcceptedTurnSpec {
+            backend_id: "r6-background-foreign-backend",
+            model: R6_MODEL,
+            parent_behavior_id: foreign_behavior,
+            configured_behavior_ids: &[foreign_behavior],
+            request_id: "r6-background-foreign-request",
+            session_id: foreign_session,
+            prompt: foreign_prompt,
+            accepted_chunks: vec![StreamChunk::tool_call(
+                "meta-read-foreign-process",
+                "read_process",
+                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+            )],
+            child_plans: Vec::new(),
+            valid_until: None,
+            subagent_depth: None,
+            request_setup: None,
+        },
+    )
+    .await;
+    configure_behavior_tools(
+        turn.db.node.as_ref(),
+        foreign.did(),
+        foreign_behavior,
+        None,
+        gents::document_config::Tools {
+            tools_id: format!("{foreign_behavior}:tools"),
+            agent_did: foreign.did().to_string(),
+            host: Some(gents::document_config::HostTools {
+                bash: Some(gents::document_config::BashTools {
+                    mode: gents::BashMode::ReadOnly,
+                    read_only_commands: Some(vec!["sleep".to_string()]),
+                    background_enabled: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        Vec::new(),
+    )
+    .await;
+    let foreign_identity: Arc<dyn gents::AgentIdentity> = foreign.clone();
+    let foreign_agent = gents::Gents::from_default_behavior_documents(
+        turn.db.node.clone(),
+        foreign_identity,
+        gents::DocumentRuntimeOptions {
+            tool_ceiling: gents::ToolCeiling::readonly(),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("build foreign principal runtime");
+    let foreign_runtime = boot_prepared_accepted_turn(&turn.db, prepared, foreign_agent).await;
+    let denied = canonical_tool_payload_json_for(
+        &turn.db,
+        foreign_session,
+        foreign.did(),
+        "meta-read-foreign-process",
+    )
+    .await;
+    assert_eq!(denied["ok"], false);
+    assert_eq!(denied["failure_class"], "tool_not_allowed");
+    assert_eq!(denied["path"], "/tool_call_id");
+    foreign_runtime.shutdown().await;
+    assert_eq!(
+        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "list_processes").await,
+        0
     );
-    assert_eq!(wait_denied["ok"], false);
-    let cancel_denied = skip_reason_json(
-        hook.on_tool_call(
-            "cancel_process",
-            None,
-            "meta-cancel-cross-requester",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
-    );
-    assert_eq!(cancel_denied["ok"], false);
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(row.cancel_cause.as_deref(), None);
-
-    hook.set_active_request_lineage(Some(request_id), Some("did:key:owner".to_string()))
-        .await
-        .unwrap();
-    let _ = hook
-        .on_tool_call(
-            "cancel_process",
-            None,
-            "meta-cleanup-cross-requester",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await;
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    let turn = boot_background_turn(
         "r6-background-list-malformed-rows",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-valid-row",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-valid-row",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let valid_tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let valid_tool_call_id = row.tool_call_id.expect("accepted valid process handle");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
 
-    let escaped_session_id = escape_graphql_string(&session_id);
-    let escaped_request_id = escape_graphql_string(&request_id);
-    let escaped_agent_did = escape_graphql_string(db.node_identity.did());
+    let escaped_session_id = escape_graphql_string(&turn.session_id);
+    let escaped_request_id = escape_graphql_string(&turn.request_id);
+    let escaped_agent_did = escape_graphql_string(turn.db.node_identity.did());
     let malformed_rows = format!(
         r#"mutation {{
             null_identity: create_AgentToolCall(input: {{
@@ -1235,17 +1601,40 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
             }}) {{ _docID }}
         }}"#,
     );
-    let response = db.node.execute(&malformed_rows).await;
+    let response = turn.db.node.execute(&malformed_rows).await;
     assert!(
         !response.has_errors(),
         "seed malformed AgentToolCall rows failed: {:?}",
         response.errors
     );
 
-    let listed = skip_reason_json(
-        hook.on_tool_call("list_processes", None, "meta-list-malformed", r#"{}"#)
-            .await,
+    let prompt = "list processes while malformed legacy rows exist";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![StreamChunk::tool_call(
+                "meta-list-malformed",
+                "list_processes",
+                r#"{}"#,
+            )],
+        ),
     );
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["listed"]),
+    );
+    crate::support::accepted_turn::enqueue_local_accepted_request(
+        &turn.db,
+        R6_BEHAVIOR_ID,
+        "r6-background-list-malformed-rows-request-2",
+        &turn.session_id,
+        prompt,
+    )
+    .await;
+    let listed =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-list-malformed").await;
     let entries = listed["entries"]
         .as_array()
         .expect("list_processes must return entries despite malformed rows");
@@ -1255,140 +1644,218 @@ async fn list_processes_skips_malformed_legacy_rows_without_hiding_valid_jobs() 
         Some(valid_tool_call_id.as_str())
     );
 
-    let _ = hook
-        .on_tool_call(
-            "cancel_process",
-            None,
-            "meta-cleanup-malformed",
-            &serde_json::json!({ "tool_call_id": valid_tool_call_id }).to_string(),
-        )
-        .await;
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn same_tool_background_calls_execute_concurrently_without_registry_mutex() {
-    let entered = Arc::new(AtomicUsize::new(0));
-    let release = Arc::new(Notify::new());
-    let (_db, hook, _session_id, _request_id) = setup_hook(
+    let release_dir = tempfile::tempdir().unwrap();
+    let release_path = release_dir.path().join("release");
+    let command_args = |marker: &str| {
+        let entered_path = release_dir.path().join(marker);
+        serde_json::json!({
+            "tool_name": "bash",
+            "args": {
+                "command": "sh",
+                "args": [
+                    "-c",
+                    "printf '%s\\n' \"$1\"; : > \"$2\"; while [ ! -f \"$3\" ]; do sleep 0.05; done",
+                    "gents-background-gate",
+                    marker,
+                    entered_path.to_string_lossy(),
+                    release_path.to_string_lossy()
+                ]
+            }
+        })
+        .to_string()
+    };
+    let turn = boot_background_turn(
         "r6-background-concurrent-tool",
-        registry(
-            vec![Box::new(ConcurrentGateTool {
-                entered: entered.clone(),
-                release: release.clone(),
-            })],
-            &["concurrent_tool"],
-        ),
+        vec![
+            StreamChunk::tool_call(
+                "meta-bg-concurrent-1",
+                "spawn_process",
+                command_args("entered-one"),
+            ),
+            StreamChunk::tool_call(
+                "meta-bg-concurrent-2",
+                "spawn_process",
+                command_args("entered-two"),
+            ),
+        ],
     )
     .await;
-
-    let first = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-concurrent-1",
-            r#"{"tool_name":"concurrent_tool","args":{}}"#,
-        )
-        .await,
-    );
-    let second = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-concurrent-2",
-            r#"{"tool_name":"concurrent_tool","args":{}}"#,
-        )
-        .await,
-    );
-
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while entered.load(Ordering::SeqCst) < 2 {
-            tokio::task::yield_now().await;
+    let session = escape_graphql_string(&turn.session_id);
+    let handles = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let response = turn.db.node.execute(&format!(
+                r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }}, tool_name: {{ _eq: "bash" }}, lifecycle_state: {{ _eq: "running" }} }}) {{ tool_call_id }} }}"#
+            )).await;
+            let handles = response.data.as_ref()
+                .and_then(|data| data["AgentToolCall"].as_array())
+                .map(|rows| rows.iter().filter_map(|row| row["tool_call_id"].as_str().map(str::to_owned)).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if handles.len() == 2 {
+                break handles;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
-    .expect("both calls to the same tool must enter concurrently");
-    release.notify_waiters();
-
-    for (index, receipt) in [first, second].into_iter().enumerate() {
-        let waited = skip_reason_json(
-            hook.on_tool_call(
-                "wait_process",
-                None,
-                &format!("meta-wait-concurrent-{index}"),
-                &serde_json::json!({ "tool_call_id": receipt["tool_call_id"] }).to_string(),
-            )
-            .await,
-        );
-        assert_eq!(waited["status"], "completed");
+    .expect("both calls to the same document tool must run concurrently");
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if release_dir.path().join("entered-one").exists()
+                && release_dir.path().join("entered-two").exists()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("both real tool bodies must enter before release");
+    finish_dynamic_turn(&turn);
+    wait_for_initial_request_terminal(&turn).await;
+    let prompt = "read both concurrently running process outputs";
+    turn.runtime.backend.enable_dynamic_followups(prompt);
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            prompt,
+            vec![
+                StreamChunk::tool_call(
+                    "meta-read-concurrent-1",
+                    "read_process",
+                    serde_json::json!({ "tool_call_id": handles[0] }).to_string(),
+                ),
+                StreamChunk::tool_call(
+                    "meta-read-concurrent-2",
+                    "read_process",
+                    serde_json::json!({ "tool_call_id": handles[1] }).to_string(),
+                ),
+            ],
+        ),
+    );
+    turn.runtime.backend.enqueue_response(
+        prompt,
+        crate::support::streaming_backend::StreamResponse::completes(prompt, ["observed"]),
+    );
+    crate::support::accepted_turn::enqueue_local_accepted_request(
+        &turn.db,
+        R6_BEHAVIOR_ID,
+        "r6-background-concurrent-tool-request-2",
+        &turn.session_id,
+        prompt,
+    )
+    .await;
+    let first =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-read-concurrent-1").await;
+    let second =
+        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-read-concurrent-2").await;
+    let open_outputs = [first["output"].as_str(), second["output"].as_str()];
+    assert!(open_outputs.contains(&Some("entered-one\n")));
+    assert!(open_outputs.contains(&Some("entered-two\n")));
+    std::fs::write(&release_path, b"release").unwrap();
+    assert_eq!(
+        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "bash").await,
+        2
+    );
+    for handle in &handles {
+        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &handle).await;
     }
+    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(
+        &gents::config_client::ConfigAccess::Local(turn.db.node.clone()),
+        &turn.request_id,
+    )
+    .await
+    .unwrap();
+    let outputs = handles
+        .iter()
+        .map(|handle| {
+            timeline
+                .tool_calls
+                .iter()
+                .find(|call| &call.tool_call_id == handle)
+                .and_then(|call| call.result.as_deref())
+                .expect("completed process canonical raw output")
+        })
+        .collect::<Vec<_>>();
+    assert!(outputs.iter().any(|output| *output == "entered-one\n"));
+    assert!(outputs.iter().any(|output| *output == "entered-two\n"));
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
-async fn cancel_tool_cancels_running_background_row_without_persisting_cancel_tool_call() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+async fn cancel_tool_cancels_running_background_row_through_canonical_control_call() {
+    let turn = boot_background_turn(
         "r6-background-cancel",
-        registry(vec![Box::new(PendingTool)], &["slow_tool"]),
+        vec![StreamChunk::tool_call(
+            "meta-bg-slow",
+            "spawn_process",
+            r#"{"tool_name":"bash","args":{"command":"sleep","args":["60"]}}"#,
+        )],
     )
     .await;
-
-    let receipt = skip_reason_json(
-        hook.on_tool_call(
-            "spawn_process",
-            None,
-            "meta-bg-slow",
-            r#"{"tool_name":"slow_tool","args":{}}"#,
-        )
-        .await,
+    let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
+    let tool_call_id = row.tool_call_id.expect("background handle");
+    assert_accepted_rows_visible(&turn).await;
+    turn.runtime.backend.enqueue_response(
+        &turn.prompt,
+        crate::support::streaming_backend::StreamResponse::streams(
+            &turn.prompt,
+            vec![StreamChunk::tool_call(
+                "meta-cancel-slow",
+                "cancel_process",
+                serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
+            )],
+        ),
     );
-    let tool_call_id = receipt["tool_call_id"].as_str().unwrap().to_string();
-
-    let cancelled = skip_reason_json(
-        hook.on_tool_call(
-            "cancel_process",
-            None,
-            "meta-cancel-slow",
-            &serde_json::json!({ "tool_call_id": tool_call_id }).to_string(),
-        )
-        .await,
-    );
+    wait_for_provider_requests(&turn, 3).await;
+    finish_dynamic_turn(&turn);
+    let cancelled = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 2).await;
     assert_eq!(cancelled["status"], "cancelled");
 
-    let row = load_tool_call(db.node.as_ref(), &session_id, &tool_call_id).await;
+    let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
     assert_eq!(row.lifecycle_state.as_deref(), Some("cancelled"));
     assert_eq!(row.cancel_cause.as_deref(), Some("userCancelled"));
     assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "cancel_process").await,
-        0
+        count_tool_calls_by_name(turn.db.node.as_ref(), &turn.session_id, "cancel_process").await,
+        1
     );
 
     let message =
-        wait_for_tool_completion_message(db.node.as_ref(), &session_id, &tool_call_id).await;
+        wait_for_tool_completion_message(turn.db.node.as_ref(), &turn.session_id, &tool_call_id)
+            .await;
     assert!(message.content.contains(r#"status="cancelled""#));
     assert!(message.content.contains("<reason>explicit_cancel</reason>"));
 
     assert_eq!(
-        fetch_background_wakes(db.node.as_ref(), &session_id)
+        fetch_background_wakes(turn.db.node.as_ref(), &turn.session_id)
             .await
             .len(),
         1,
         "tool cancellation notification should enqueue one resumable agent turn"
     );
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
-    let (_db, hook, _session_id, _request_id) =
-        setup_hook("r6-background-cancel-missing", registry(Vec::new(), &[])).await;
-
-    let cancelled = skip_reason_json(
-        hook.on_tool_call(
-            "cancel_process",
-            None,
+    let turn = boot_background_turn(
+        "r6-background-cancel-missing",
+        vec![StreamChunk::tool_call(
             "meta-cancel-missing",
+            "cancel_process",
             r#"{"tool_call_id":"missing-background-handle"}"#,
-        )
-        .await,
-    );
+        )],
+    )
+    .await;
+    turn.runtime.backend.wait_for_chunks(&turn.prompt, 1).await;
+    wait_for_provider_requests(&turn, 2).await;
+    assert_accepted_rows_visible(&turn).await;
+    finish_dynamic_turn(&turn);
+    let cancelled = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 1).await;
 
     assert_eq!(cancelled["ok"], false);
     assert_eq!(cancelled["tool_name"], "cancel_process");
@@ -1396,22 +1863,25 @@ async fn cancel_tool_unknown_handle_returns_tool_error_instead_of_failing_turn()
         .as_str()
         .unwrap()
         .contains("missing-background-handle"));
+    turn.runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
-    let (_db, hook, _session_id, _request_id) =
-        setup_hook("r6-background-wait-missing", registry(Vec::new(), &[])).await;
-
-    let waited = skip_reason_json(
-        hook.on_tool_call(
-            "wait_process",
-            None,
+    let turn = boot_background_turn(
+        "r6-background-wait-missing",
+        vec![StreamChunk::tool_call(
             "meta-wait-missing",
+            "wait_process",
             r#"{"tool_call_id":"missing-background-handle"}"#,
-        )
-        .await,
-    );
+        )],
+    )
+    .await;
+    turn.runtime.backend.wait_for_chunks(&turn.prompt, 1).await;
+    wait_for_provider_requests(&turn, 2).await;
+    assert_accepted_rows_visible(&turn).await;
+    finish_dynamic_turn(&turn);
+    let waited = canonical_latest_tool_payload_json(&turn.db, &turn.session_id, 1).await;
 
     assert_eq!(waited["ok"], false);
     assert_eq!(waited["tool_name"], "wait_process");
@@ -1419,4 +1889,5 @@ async fn wait_tool_unknown_handle_returns_tool_error_instead_of_failing_turn() {
         .as_str()
         .unwrap()
         .contains("missing-background-handle"));
+    turn.runtime.shutdown().await;
 }

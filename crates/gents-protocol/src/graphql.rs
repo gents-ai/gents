@@ -876,6 +876,8 @@ pub fn session_shape_query(session_id: &str) -> String {
                 status
                 lifecycle_state
                 child_request_id
+                spawn_target_did
+                spawn_behavior_id
                 await_mode
                 deadline_at
                 selected_service_id

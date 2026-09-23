@@ -11,6 +11,7 @@ const COMMANDS: &[&str] = &[
     "desktop_managed_server_stop",
     "desktop_managed_server_set_auto_start",
     "desktop_managed_server_restart",
+    "desktop_managed_server_reset",
     "desktop_managed_server_validate_root",
     "desktop_open_db_explorer",
     "desktop_open_external_url",

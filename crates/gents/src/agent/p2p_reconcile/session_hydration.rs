@@ -7,15 +7,27 @@
 
 use std::collections::BTreeSet;
 
-pub use gents_protocol::session_hydration::SessionHydrationDocumentKey;
+pub use gents_protocol::session_hydration::{
+    SessionHydrationCollection, SessionHydrationDocumentKey,
+};
 
-pub const HYDRATION_COLLECTIONS: &[&str] = &[
-    "AgentRequest",
-    "AgentMessage",
-    "AgentToolCall",
-    "AgentOutputSegment",
-    "CompactionEntry",
+pub const HYDRATION_COLLECTIONS: &[SessionHydrationCollection] = &[
+    SessionHydrationCollection::AgentRequest,
+    SessionHydrationCollection::AgentMessage,
+    SessionHydrationCollection::AgentToolCall,
+    SessionHydrationCollection::AgentOutputSegment,
+    SessionHydrationCollection::CompactionEntry,
 ];
+
+pub fn hydration_collection_name(collection: SessionHydrationCollection) -> &'static str {
+    match collection {
+        SessionHydrationCollection::AgentRequest => "AgentRequest",
+        SessionHydrationCollection::AgentMessage => "AgentMessage",
+        SessionHydrationCollection::AgentToolCall => "AgentToolCall",
+        SessionHydrationCollection::AgentOutputSegment => "AgentOutputSegment",
+        SessionHydrationCollection::CompactionEntry => "CompactionEntry",
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HydrationRequest {
@@ -76,7 +88,7 @@ pub struct VerifiedActiveMembership {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct HydrationDocument {
-    pub collection: String,
+    pub collection: SessionHydrationCollection,
     pub doc_id: String,
     pub requester_did: String,
     pub agent_did: String,
@@ -90,6 +102,9 @@ pub struct HydrationCatalog {
     pub verified_active_memberships: BTreeSet<VerifiedActiveMembership>,
     pub sessions: BTreeSet<SessionOwner>,
     pub documents: BTreeSet<HydrationDocument>,
+    /// Exact cross-session dependencies reached through authorized immutable
+    /// references. This is never inferred from an origin session scan.
+    pub authorized_reference_closure: BTreeSet<SessionHydrationDocumentKey>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,10 +222,16 @@ pub fn decide_hydration(
             .documents
             .iter()
             .filter(|doc| {
-                HYDRATION_COLLECTIONS.contains(&doc.collection.as_str())
+                HYDRATION_COLLECTIONS.contains(&doc.collection)
                     && doc.requester_did == request.requester_did
                     && doc.agent_did == request.agent_did
-                    && doc.session_id == request.session_id
+                    && (doc.session_id == request.session_id
+                        || catalog.authorized_reference_closure.contains(
+                            &SessionHydrationDocumentKey {
+                                collection: doc.collection,
+                                doc_id: doc.doc_id.clone(),
+                            },
+                        ))
             })
             .cloned()
             .collect(),

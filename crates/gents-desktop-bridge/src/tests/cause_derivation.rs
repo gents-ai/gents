@@ -1,6 +1,5 @@
 use crate::cause_derivation::{
-    derive_response_cause, derive_tool_call_cause, RequestEvidence, ResponseEvidence,
-    ToolCallEvidence,
+    derive_request_cause, derive_tool_call_cause, RequestEvidence, ToolCallEvidence,
 };
 
 fn req_default() -> RequestEvidence {
@@ -138,19 +137,27 @@ fn none_for_failed_tool_calls() {
 }
 
 #[test]
-fn response_cause_uses_response_interrupted_at_when_present() {
-    let resp = ResponseEvidence {
-        interrupted_at: Some("2026-05-20T10:36:11Z".into()),
-    };
-    let cause = derive_response_cause(&req_default(), &resp).expect("derives");
+fn request_cause_uses_interrupted_lifecycle_and_terminal_timestamp() {
+    let cause = derive_request_cause(
+        Some("interrupted"),
+        &req_default(),
+        Some("2026-05-20T10:36:11Z".into()),
+    )
+    .expect("derives");
     assert_eq!(cause.cause, "interrupted");
-    assert_eq!(cause.source, "responseInterruptedAt");
+    assert_eq!(cause.source, "requestLifecycle");
+    assert_eq!(cause.at.as_deref(), Some("2026-05-20T10:36:11Z"));
 }
 
 #[test]
-fn response_cause_none_when_no_interrupted_at() {
-    let resp = ResponseEvidence {
-        interrupted_at: None,
-    };
-    assert!(derive_response_cause(&req_default(), &resp).is_none());
+fn request_cause_none_without_cancellation_evidence() {
+    for state in [
+        None,
+        Some("pending"),
+        Some("processing"),
+        Some("completed"),
+        Some("failed"),
+    ] {
+        assert!(derive_request_cause(state, &req_default(), None).is_none());
+    }
 }

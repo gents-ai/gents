@@ -1,6 +1,7 @@
 import Proofs.Basic
 import Proofs.Scheduling
 import Proofs.RuntimeReconcile.State
+import Proofs.CanonicalOutput.State
 
 namespace Conformance.ContractCases
 
@@ -194,6 +195,7 @@ structure AgentRequestAdmissionCase where
   signerMatchesTarget : Bool
   signerMatchesIssuer : Bool
   requesterMatchesIssuer : Bool
+  requesterMatchesBridgeAuthor : Bool
   currentApproval : Bool
   exactGeneration : Bool
   authorizationFresh : Bool
@@ -673,19 +675,24 @@ structure ReadTranscriptHidesBridgeRows where
   renderedTranscript : String
   deriving Repr
 
+/-- One executable canonical-tool-source projection input and the result
+    computed by `Subagent.ToolOutput.project`.  The native adapter supplies the
+    fixed accepted physical tool binding and persists these exact segment
+    facts; it does not infer output from flags. -/
+structure ToolOutputProjectionCase where
+  name : String
+  document : Nat
+  segments : List CanonicalOutput.Segment
+  expectedState : Option String
+  expectedPayload : Option (List UInt8)
+  deriving Repr
+
 /-- Canonical `read_tool_output`: open and closed reads use the same immutable
     physical tool source; missing/conflicting facts are rejection. -/
 structure ReadToolOutputCanonicalSourceReconstruction where
   toolCallId : String
   canonicalSource : String
-  openPayload : String
-  closedPayload : String
-  nextOffset : Nat
-  totalBytes : Nat
-  hasMore : Bool
-  missingRejected : Bool
-  conflictRejected : Bool
-  lateSuffixIgnored : Bool
+  cases : List ToolOutputProjectionCase
   deriving Repr
 
 structure SteerAppendPreservesLineage where
@@ -700,8 +707,6 @@ structure SteerAppendPreservesLineage where
   lineageAdmissible : Bool
   depthZeroLineageAdmissible : Bool
   backgroundCompletionDepthZeroAdmissible : Bool
-  requestVisibleBeforeMessageAllowed : Bool
-  messageThenRequestAllowed : Bool
   queueSource : String
   queuePolicy : String
   deriving Repr
@@ -736,6 +741,9 @@ structure TranscriptCase where
   name : String
   group : String
   action : String
+  actionCallIds : List Nat
+  actionLogicalResultIds : List Nat
+  actionPayloadHashes : List Nat
   legal : Bool
   preMessageCount : Nat
   postMessageCount : Nat

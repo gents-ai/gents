@@ -5,12 +5,6 @@ struct BackgroundedRow {
     lifecycle_state: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-pub(super) struct StoredToolCallResult {
-    pub tool_name: String,
-    pub result: String,
-}
-
 pub(super) async fn count_live_backgrounded_rows(
     node: &defra_node::EmbeddedNode,
     request_id: &str,
@@ -99,48 +93,6 @@ pub(super) async fn wait_for_external_lifecycle_owner(
     Ok(())
 }
 
-pub(super) async fn load_stored_tool_call_result(
-    node: &defra_node::EmbeddedNode,
-    session_id: &str,
-    tool_call_id: &str,
-) -> anyhow::Result<StoredToolCallResult> {
-    let escaped_session_id = crate::graphql::escape_graphql_string(session_id);
-    let escaped_tool_call_id = crate::graphql::escape_graphql_string(tool_call_id);
-    let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
-                limit: 1
-            ) {{
-                tool_name
-                result
-            }}
-        }}"#
-    );
-
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "loading stored tool call result for session_id={session_id} tool_call_id={tool_call_id} failed: {:?}",
-            response.errors
-        );
-    }
-
-    let mut rows: Vec<StoredToolCallResult> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_default();
-
-    rows.pop().ok_or_else(|| {
-        anyhow::anyhow!(
-            "loading stored tool call result: no AgentToolCall for session_id={session_id} tool_call_id={tool_call_id}"
-        )
-    })
-}
-
 pub(super) fn truncation_mode_for(tool_name: &str) -> TruncationMode {
     crate::truncation::tool_result_truncation_mode(tool_name)
 }
@@ -163,6 +115,81 @@ pub(super) fn bounded_tool_result_for_model(
         );
     }
     bounded
+}
+
+pub(super) fn bounded_tool_result_with_presentation(
+    tool_name: &str,
+    raw_result: &str,
+    limits: &crate::truncation::TruncationLimits,
+) -> (String, Option<gents_protocol::output::PayloadPresentation>) {
+    use gents_protocol::output::{PayloadPresentation, PresentationPart};
+
+    let mode = truncation_mode_for(tool_name);
+    let truncated = crate::truncation::truncate(raw_result, mode, limits);
+    if !truncated.truncated {
+        return (truncated.text, None);
+    }
+    if truncated.returned_bytes == 0 {
+        return (
+            truncated.text.clone(),
+            Some(PayloadPresentation::Composed {
+                parts: vec![PresentationPart::Literal {
+                    text: truncated.text,
+                }],
+            }),
+        );
+    }
+    let selected_bytes = truncated.returned_bytes as u64;
+    let (literal, range) = match mode {
+        TruncationMode::Head => {
+            let selected = &truncated.text[..truncated.returned_bytes];
+            if !raw_result.starts_with(selected) {
+                return (
+                    truncated.text.clone(),
+                    Some(PayloadPresentation::Composed {
+                        parts: vec![PresentationPart::Literal {
+                            text: truncated.text,
+                        }],
+                    }),
+                );
+            }
+            (
+                truncated.text[truncated.returned_bytes..].to_string(),
+                PresentationPart::OutputRange {
+                    start_byte: 0,
+                    end_byte: selected_bytes,
+                },
+            )
+        }
+        TruncationMode::Tail => {
+            let selected = &truncated.text[truncated.text.len() - truncated.returned_bytes..];
+            let Some(start) = raw_result.rfind(selected) else {
+                return (
+                    truncated.text.clone(),
+                    Some(PayloadPresentation::Composed {
+                        parts: vec![PresentationPart::Literal {
+                            text: truncated.text,
+                        }],
+                    }),
+                );
+            };
+            (
+                truncated.text[..truncated.text.len() - truncated.returned_bytes].to_string(),
+                PresentationPart::OutputRange {
+                    start_byte: start as u64,
+                    end_byte: (start + selected.len()) as u64,
+                },
+            )
+        }
+    };
+    let parts = match mode {
+        TruncationMode::Head => vec![range, PresentationPart::Literal { text: literal }],
+        TruncationMode::Tail => vec![PresentationPart::Literal { text: literal }, range],
+    };
+    (
+        truncated.text,
+        Some(PayloadPresentation::Composed { parts }),
+    )
 }
 
 pub(super) fn model_observation_for_tool_result(tool_name: &str, raw_result: &str) -> String {
@@ -256,65 +283,6 @@ fn json_usize(value: &serde_json::Value, key: &str) -> Option<usize> {
         .get(key)
         .and_then(|value| value.as_u64())
         .and_then(|value| usize::try_from(value).ok())
-}
-
-pub(super) fn render_tool_result_text(tool_result: &ToolResult) -> String {
-    tool_result
-        .content
-        .iter()
-        .filter_map(|content| match content {
-            ToolResultContent::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub(super) fn tool_result_message_key(
-    session_id: &str,
-    message: &Message,
-) -> anyhow::Result<Option<String>> {
-    let Message::User { content } = message else {
-        return Ok(None);
-    };
-    if content.len() != 1 {
-        return Ok(None);
-    }
-    let Some(UserContent::ToolResult(tool_result)) = content.first() else {
-        return Ok(None);
-    };
-
-    let Some(logical_id) = non_empty(Some(tool_result.id.as_str()))
-        .or_else(|| non_empty(tool_result.call_id.as_deref()))
-    else {
-        return Ok(None);
-    };
-    let content_json = serde_json::to_string(&tool_result.content)?;
-    Ok(Some(format!(
-        "{session_id}:tool-result:{:016x}:{:016x}",
-        stable_hash(logical_id.as_bytes()),
-        stable_hash(content_json.as_bytes())
-    )))
-}
-
-pub(super) fn stable_hash(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}
-
-pub(super) fn is_subagent_tool_result_payload(raw: &str) -> bool {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(raw) else {
-        return false;
-    };
-    value
-        .get("service_id")
-        .and_then(|value| value.as_str())
-        .is_some_and(|service_id| service_id == "subagent")
-        || (value.get("child_request_id").is_some() && value.get("await_mode").is_some())
 }
 
 pub(super) fn json_string(value: serde_json::Value) -> String {
@@ -620,5 +588,39 @@ mod tests {
         assert!(bounded.contains("line 1\nline 2"));
         assert!(!bounded.contains("line 3"));
         assert!(bounded.contains("[Showing lines 1-2 of 4"));
+    }
+
+    #[test]
+    fn prepared_presentation_handles_normalized_crlf_head_and_tail() {
+        let limits = crate::truncation::TruncationLimits {
+            max_lines: 2,
+            max_bytes: 80,
+        };
+        let raw = "one\r\ntwo\r\nthree\r\nfour";
+        for tool in ["wait_process", "bash"] {
+            let (bounded, presentation) = bounded_tool_result_with_presentation(tool, raw, &limits);
+            let presentation = presentation.expect("CRLF input should truncate");
+            assert_eq!(
+                crate::tool_call_lifecycle::delivery::render_presentation(raw, &presentation)
+                    .unwrap(),
+                bounded
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_presentation_handles_empty_selected_output() {
+        let limits = crate::truncation::TruncationLimits {
+            max_lines: 0,
+            max_bytes: 0,
+        };
+        let raw = "one\ntwo";
+        let (bounded, presentation) =
+            bounded_tool_result_with_presentation("wait_process", raw, &limits);
+        let presentation = presentation.expect("zero budget should truncate");
+        assert_eq!(
+            crate::tool_call_lifecycle::delivery::render_presentation(raw, &presentation).unwrap(),
+            bounded
+        );
     }
 }

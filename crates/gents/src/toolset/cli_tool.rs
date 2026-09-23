@@ -138,7 +138,10 @@ async fn run_cli_command(config: &CliToolConfig, argv: &[String]) -> Result<Stri
         stdin: Vec::new(),
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
-        live_output: bounds.live_output,
+        // This tool post-processes both command channels into a distinct JSON
+        // result and has no canonical composed-presentation owner.  Bash's
+        // shared command renderer is the sole streamed-command path.
+        live_output: None,
     })
     .await;
 

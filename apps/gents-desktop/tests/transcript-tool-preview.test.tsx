@@ -22,6 +22,7 @@ function renderGeneric(summary: string | null) {
             input: '{"large":"payload remains collapsed"}',
             output: null,
           },
+          reconstruction: { state: "ready" },
         },
       ],
     },

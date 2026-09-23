@@ -54,12 +54,6 @@ pub async fn load_agent_scoped_snapshot(
         &format!("query {{ {MAILBOX_ITEM_NAME}({did_filter}) {{ {MAILBOX_ITEM_FIELDS} }} }}"),
     )
     .await?;
-    let responses: Vec<AgentResponseRow> = load_rows(
-        node,
-        AGENT_RESPONSE_NAME,
-        &format!("query {{ {AGENT_RESPONSE_NAME}({did_filter}) {{ {AGENT_RESPONSE_FIELDS} }} }}"),
-    )
-    .await?;
     let goals: Vec<GoalRow> = load_rows(
         node,
         GOAL_NAME,
@@ -227,7 +221,6 @@ pub async fn load_agent_scoped_snapshot(
         behavior_readiness,
         requests,
         mailbox_items,
-        responses,
         sessions,
         session_source_agent_dids,
         goals,

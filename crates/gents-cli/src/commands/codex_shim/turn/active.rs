@@ -469,6 +469,13 @@ fn active_codex_turn_from_rows(
 
     let mut candidates = Vec::<(&AgentRequestRow, String, usize)>::new();
     for row in active_rows {
+        // A pending steering admission remains visible through the queue
+        // projection, but it cannot revive a turn whose execution ancestor
+        // has been superseded. The pending child has not claimed publication
+        // authority yet, so there is no active Codex turn to interrupt.
+        if steering_lineage_has_superseded_request(row, &by_id)? {
+            continue;
+        }
         let (root, depth) = codex_turn_root_and_depth(row, &by_id)?;
         if expected_turn_id.is_none_or(|expected| root == expected) {
             candidates.push((row, root, depth));
@@ -509,6 +516,36 @@ fn active_codex_turn_from_rows(
             .context("active request has no physical identity")?,
         interrupt_request_doc_id,
     }))
+}
+
+fn steering_lineage_has_superseded_request<'a>(
+    row: &'a AgentRequestRow,
+    by_id: &BTreeMap<&'a str, &'a AgentRequestRow>,
+) -> Result<bool> {
+    let mut current = row;
+    let mut seen = BTreeSet::<String>::new();
+    loop {
+        if !seen.insert(current.request_id.clone()) {
+            anyhow::bail!(
+                "cycle in Codex steering queue ancestry at request {}",
+                current.request_id
+            );
+        }
+        if current
+            .superseded_by_request
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            return Ok(true);
+        }
+        let Some(parent_id) = steering_parent_id(current) else {
+            return Ok(false);
+        };
+        let Some(parent) = by_id.get(parent_id.as_str()).copied() else {
+            return Ok(false);
+        };
+        current = parent;
+    }
 }
 
 fn codex_turn_root_and_depth<'a>(
@@ -588,6 +625,7 @@ mod tests {
     fn active_codex_turn_projects_deepest_gents_steering_tail() {
         let rows = vec![
             row("turn-1", "processing", None),
+            row("steer-1", "pending", Some("turn-1")),
             row("steer-2", "pending", Some("steer-1")),
         ];
 
@@ -633,6 +671,12 @@ mod tests {
         ];
 
         assert_eq!(active_codex_turn_from_rows(&rows, None).unwrap(), None);
+
+        // Excluding the superseded execution lineage from the interruptable
+        // turn must not hide its separately durable queued user admission.
+        let queued = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
+        assert_eq!(queued.request_id, "steer-1");
+        assert!(queued.is_pending());
     }
 
     #[test]

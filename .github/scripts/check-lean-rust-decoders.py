@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Structurally lint generated Lean JSON against a supported Rust type subset.
 
-The #1571 foundation is intentionally red, so `lean_vocab_test` cannot compile
-and its `deny_unknown_fields` decoders have never deserialized real output. A
-mismatch would otherwise surface only after the crate turns green. This script
-intentionally supports only the small, explicit serde shape subset used by the
-reachable fixture types; unsupported syntax fails closed.
+Introduced for the intentionally red #1571 foundation, this check provides an
+early shape diagnostic before native tests compile. Native `lean_vocab_test`
+tests remain the authority for actual serde decoding and behavior. This script
+supports only the small, explicit serde shape subset used by the reachable
+fixture types; unsupported syntax fails closed.
 
 It is a structural lint, not serde or an actual Rust decoder guarantee. It does
 not establish native behavior. Types re-exported from `gents-protocol` own their
@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 GROUPS = {
+    "current_input_cases": "LeanCurrentInputCase",
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
     "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",

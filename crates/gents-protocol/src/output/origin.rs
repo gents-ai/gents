@@ -72,11 +72,46 @@ pub fn validate_fork_metadata(
     Ok(())
 }
 
-/// Resolve a complete immutable origin chain, including physical-ID and
-/// session/key/sequence twins. Exact repeated observations are harmless.
+/// Resolve one immutable header, checking physical-ID and session/key/sequence
+/// twins. Exact repeated observations are harmless.
 /// Missing facts are incomplete; known denial is never inferred from absence.
-/// The returned ultimate origin still needs ordinary payload reconstruction:
-/// validating a fork must not bypass the origin's publication/source checks.
+pub fn lookup_message<'a>(
+    messages: &[ObservedMessage<'a>],
+    denied: &[String],
+    id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<ObservedMessage<'a>, OriginError> {
+    if denied.iter().any(|denied| denied == id) {
+        return Err(OriginError::Denied { doc_id: id.into() });
+    }
+    let mut matching = messages.iter().copied().filter(|row| row.doc_id == id);
+    let row = matching
+        .next()
+        .ok_or_else(|| OriginError::Unavailable { doc_id: id.into() })?;
+    if matching.any(|other| other != row)
+        || messages.iter().any(|other| {
+            *other != row
+                && other.message.session_id == row.message.session_id
+                && (other.message.message_key == row.message.message_key
+                    || other.message.sequence == row.message.sequence)
+        })
+    {
+        return Err(OriginError::Conflict { doc_id: id.into() });
+    }
+    if row.doc_id.trim().is_empty()
+        || row.message.agent_did != agent_did
+        || row.message.requester_did.as_deref() != requester_did
+    {
+        return Err(OriginError::ScopeMismatch { doc_id: id.into() });
+    }
+    Ok(row)
+}
+
+/// Follow only the supplied, authorized exact origin references. Each lookup
+/// shares the same physical/logical conflict checks as an ordinary header read.
+/// The ultimate origin still needs ordinary payload reconstruction: validating
+/// fork metadata must not bypass the origin's publication/source checks.
 pub fn resolve_origin<'a>(
     messages: &[ObservedMessage<'a>],
     denied: &[String],
@@ -84,32 +119,7 @@ pub fn resolve_origin<'a>(
     agent_did: &str,
     requester_did: Option<&str>,
 ) -> Result<ObservedMessage<'a>, OriginError> {
-    let lookup = |id: &str| -> Result<ObservedMessage<'a>, OriginError> {
-        if denied.iter().any(|denied| denied == id) {
-            return Err(OriginError::Denied { doc_id: id.into() });
-        }
-        let mut matching = messages.iter().copied().filter(|row| row.doc_id == id);
-        let row = matching
-            .next()
-            .ok_or_else(|| OriginError::Unavailable { doc_id: id.into() })?;
-        if matching.any(|other| other != row)
-            || messages.iter().any(|other| {
-                *other != row
-                    && other.message.session_id == row.message.session_id
-                    && (other.message.message_key == row.message.message_key
-                        || other.message.sequence == row.message.sequence)
-            })
-        {
-            return Err(OriginError::Conflict { doc_id: id.into() });
-        }
-        if row.doc_id.trim().is_empty()
-            || row.message.agent_did != agent_did
-            || row.message.requester_did.as_deref() != requester_did
-        {
-            return Err(OriginError::ScopeMismatch { doc_id: id.into() });
-        }
-        Ok(row)
-    };
+    let lookup = |id: &str| lookup_message(messages, denied, id, agent_did, requester_did);
     let mut current = lookup(root_doc_id)?;
     let mut visited = BTreeSet::new();
     loop {
@@ -166,6 +176,36 @@ mod tests {
 
     fn observed<'a>(doc_id: &'a str, message: &'a TranscriptMessage) -> ObservedMessage<'a> {
         ObservedMessage { doc_id, message }
+    }
+
+    #[test]
+    fn exact_header_lookup_rejects_key_twin_even_at_another_sequence() {
+        let first = header("session");
+        let mut twin = first.clone();
+        twin.sequence = 1;
+        let facts = [observed("first", &first), observed("twin", &twin)];
+        assert_eq!(
+            lookup_message(&facts, &[], "first", "agent", Some("requester")),
+            Err(OriginError::Conflict {
+                doc_id: "first".into()
+            })
+        );
+    }
+
+    #[test]
+    fn header_lookup_does_not_misclassify_missing_origin_as_missing_header() {
+        let child = fork("child", "not-yet-replicated");
+        let facts = [observed("child", &child)];
+        assert_eq!(
+            lookup_message(&facts, &[], "child", "agent", Some("requester")),
+            Ok(facts[0])
+        );
+        assert_eq!(
+            resolve_origin(&facts, &[], "child", "agent", Some("requester")),
+            Err(OriginError::Unavailable {
+                doc_id: "not-yet-replicated".into()
+            })
+        );
     }
 
     #[test]

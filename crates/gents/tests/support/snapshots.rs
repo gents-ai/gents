@@ -58,36 +58,6 @@ pub struct RequestLineageSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-struct ResponseSnapshotRow {
-    status: String,
-    behavior_id: String,
-    progress_seq: i64,
-    completed_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResponseSnapshot {
-    pub status: String,
-    pub behavior_id: String,
-    pub progress_seq: i64,
-    pub completed_at_present: bool,
-}
-
-impl From<ResponseSnapshotRow> for ResponseSnapshot {
-    fn from(row: ResponseSnapshotRow) -> Self {
-        Self {
-            status: row.status,
-            behavior_id: row.behavior_id,
-            progress_seq: row.progress_seq,
-            completed_at_present: row
-                .completed_at
-                .as_deref()
-                .is_some_and(|value| !value.is_empty()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct RuntimeSnapshot {
     pub process_state: String,
     pub reconcile_phase: String,
@@ -263,75 +233,6 @@ pub async fn fetch_session_snapshot(
         .map(|row| serde_json::from_value(row.clone()).expect("canonical AgentSession"))
 }
 
-pub async fn fetch_response_interrupted_at(node: &EmbeddedNode, doc_id: &str) -> Option<String> {
-    let doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                interrupted_at
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
-    resp.data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("interrupted_at"))
-        .and_then(|value| value.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
-}
-
-pub async fn fetch_response_content(node: &EmbeddedNode, doc_id: &str) -> String {
-    let doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                content
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(!resp.has_errors(), "query failed: {:?}", resp.errors);
-    resp.data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(|rows| rows.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("content"))
-        .and_then(|value| value.as_str())
-        .map(str::to_owned)
-        .unwrap_or_default()
-}
-
-pub async fn fetch_response_snapshot(node: &EmbeddedNode, doc_id: &str) -> ResponseSnapshot {
-    let doc_id = escape_graphql_string(doc_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                status
-                behavior_id
-                progress_seq
-                completed_at
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    first_row::<ResponseSnapshotRow>(&resp, "AgentResponse").into()
-}
-
 pub async fn fetch_runtime_snapshot(
     node: &EmbeddedNode,
     agent_did: &str,
@@ -403,7 +304,7 @@ pub async fn fetch_behavior_readiness_snapshot(
         .and_then(|json| serde_json::from_str(json).ok())
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[derive(Debug, PartialEq)]
 pub struct MessageSnapshot {
     pub message_key: String,
     pub session_id: String,
@@ -411,6 +312,8 @@ pub struct MessageSnapshot {
     pub role: String,
     pub content: String,
     pub timestamp: String,
+    /// Exact reconstructed native blocks; `content` is only their display view.
+    pub native: gents_protocol::message::Message,
 }
 
 pub async fn fetch_message_snapshots_for_session(
@@ -424,12 +327,9 @@ pub async fn fetch_message_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ sequence: ASC }}
             ) {{
-                message_key
-                session_id
-                sequence
-                role
-                content
-                timestamp
+                _docID
+                agent_did
+                requester_did
             }}
         }}"#
     );
@@ -440,11 +340,44 @@ pub async fn fetch_message_snapshots_for_session(
         resp.errors
     );
     let data = resp.data.expect("data");
-    serde_json::from_value(data["AgentMessage"].clone()).expect("parse MessageSnapshot")
+    let rows = data["AgentMessage"].as_array().expect("message rows");
+    let mut snapshots = Vec::with_capacity(rows.len());
+    for row in rows {
+        let header_id = row["_docID"].as_str().expect("physical message identity");
+        let agent_did = row["agent_did"].as_str().expect("message principal");
+        let requester_did = row["requester_did"].as_str();
+        let (header, native) = gents::session::load_canonical_message_from_node(
+            node,
+            header_id,
+            agent_did,
+            requester_did,
+        )
+        .await
+        .unwrap_or_else(|error| panic!("reconstruct message {header_id}: {error:#}"));
+        let role = serde_json::to_value(header.role)
+            .expect("serialize message role")
+            .as_str()
+            .expect("message role string")
+            .to_owned();
+        snapshots.push(MessageSnapshot {
+            message_key: header.message_key,
+            session_id: header.session_id,
+            sequence: header.sequence,
+            role,
+            content: gents_protocol::transcript::present_message(&native).body_markdown,
+            timestamp: header.created_at,
+            native,
+        });
+    }
+    snapshots
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize)]
 pub struct ToolCallSnapshot {
+    #[serde(rename = "_docID")]
+    pub doc_id: String,
+    pub agent_did: String,
+    pub requester_did: Option<String>,
     pub tool_call_key: String,
     #[serde(default)]
     pub request_id: Option<String>,
@@ -452,9 +385,12 @@ pub struct ToolCallSnapshot {
     pub message_sequence: u32,
     pub tool_name: String,
     pub tool_call_id: String,
-    pub args: String,
-    pub result: String,
-    pub status: String,
+    #[serde(default)]
+    pub child_request_id: Option<String>,
+    /// Retired compatibility status is nullable on canonically accepted rows.
+    /// Assertions must use `lifecycle_state` as the authoritative owner.
+    #[serde(default)]
+    pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
     #[serde(default)]
@@ -491,6 +427,23 @@ pub struct ToolCallSnapshot {
     pub latency_ms: Option<i64>,
 }
 
+impl ToolCallSnapshot {
+    /// Read the exact canonical invocation reply, never a retired row payload.
+    pub async fn load_result(&self, node: std::sync::Arc<EmbeddedNode>) -> String {
+        let message = gents::tool_call_lifecycle::load_tool_call_result(
+            &gents::config_client::ConfigAccess::Local(node),
+            &self.doc_id,
+            &self.agent_did,
+            &self.session_id,
+            self.requester_did.as_deref(),
+        )
+        .await
+        .expect("snapshot tool must have an exact canonical invocation reply");
+        gents::tool_call_lifecycle::render_tool_result(&message)
+            .expect("render canonical snapshot tool reply")
+    }
+}
+
 pub async fn fetch_tool_call_snapshots_for_session(
     node: &EmbeddedNode,
     session_id: &str,
@@ -502,8 +455,8 @@ pub async fn fetch_tool_call_snapshots_for_session(
                 filter: {{ session_id: {{ _eq: "{session_id}" }} }},
                 order: {{ message_sequence: ASC }}
             ) {{
-                tool_call_key request_id session_id message_sequence tool_name tool_call_id
-                args result status lifecycle_state started_at deadline_at completed_at
+                _docID agent_did requester_did tool_call_key request_id session_id message_sequence tool_name tool_call_id child_request_id
+                status lifecycle_state started_at deadline_at completed_at
                 selected_service_id selected_tool_name tool_failure_class
                 denial_reason denied_argv denied_command denied_argument denied_subcommand
                 denied_prefix policy_mode policy_network cancel_cause latency_ms

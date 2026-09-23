@@ -313,18 +313,21 @@ theorem fresh_provider_close_must_cover_every_committed_flush :
       7 shortProviderClose shortProviderMessage [] []) = false := by
   native_decide
 
-def remote : RemoteTarget := ⟨600, 1, 2⟩
+def remote : RemoteTarget := ⟨600, 1, 2, 8⟩
 def permit : DispatchPermit := ⟨600, true, true⟩
 def remoteToolContext : ToolExecution.ToolCallContext :=
   { callId := 600, requestId := 10, state := .pending
     operation := .nativeCommand, deadline := 20, currentTime := 5
-    persistence := .committed, awaitMode := .background }
-def remoteAdmission : ToolAdmission := ⟨600, remoteToolContext⟩
+    persistence := .committed, awaitMode := .background, childRequestId := some 50,
+    spawnBehaviorId := some 8 }
+def remoteWorkspace : DelegatedWorkspace :=
+  ⟨70, 2, some 71, .readOnly⟩
+def remoteAdmission : ToolAdmission := ⟨600, remoteToolContext, some remoteWorkspace⟩
 def foregroundToolContext : ToolExecution.ToolCallContext :=
-  { remoteToolContext with awaitMode := .foreground }
-def foregroundAdmission : ToolAdmission := ⟨600, foregroundToolContext⟩
+  { remoteToolContext with awaitMode := .foreground, childRequestId := none, spawnBehaviorId := none }
+def foregroundAdmission : ToolAdmission := ⟨600, foregroundToolContext, none⟩
 def routedWorld (now : Time := 5) : World :=
-  { world now with remoteRoutes := [(600, 2)] }
+  { world now with remoteRoutes := [(600, 2, 8)] }
 
 def acceptedAndDispatched : Bool :=
   match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage [remote]
@@ -422,8 +425,30 @@ theorem missing_remote_route_projection_is_rejected :
 
 theorem wrong_remote_target_is_rejected :
     (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage
-        [⟨600, 1, 3⟩] [remoteAdmission] with
+        [⟨600, 1, 3, 8⟩] [remoteAdmission] with
       | .error .invalidDelegation => true | _ => false) = true := by
+  native_decide
+
+theorem wrong_remote_behavior_is_rejected :
+    (match acceptAndPublish (routedWorld 5) 7 providerTurn providerMessage
+        [⟨600, 1, 2, 9⟩] [remoteAdmission] with
+      | .error .invalidDelegation => true | _ => false) = true := by
+  native_decide
+
+def driftedRemoteAdmission : ToolAdmission :=
+  ⟨600, { remoteToolContext with spawnBehaviorId := some 9 }, some remoteWorkspace⟩
+
+def driftedWorkspaceAdmission : ToolAdmission :=
+  ⟨600, remoteToolContext, some { remoteWorkspace with authority := .readWrite }⟩
+
+theorem accepted_call_replay_cannot_select_different_behavior :
+    (match acceptAndPublish acceptedToolWorld 7 providerTurn providerMessage [remote]
+        [driftedRemoteAdmission] with
+      | .error .identityCollision => true | _ => false) = true := by
+  native_decide
+
+theorem accepted_call_replay_cannot_change_workspace_source :
+    acceptedAdmissionsPresent acceptedToolWorld [driftedWorkspaceAdmission] = false := by
   native_decide
 
 def partialProviderTurn : Segment :=

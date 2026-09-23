@@ -29,8 +29,7 @@ use anyhow::Result;
 use crate::config::ResolvedBehavior;
 use crate::tool_surface::ToolSurface;
 
-const TITLE_GENERATION_SUFFIX: &str =
-    "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
+const TITLE_GENERATION_SUFFIX: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
 const TOOL_DISCOVERY_GUIDANCE: &str = "\
 ## Tool Discovery

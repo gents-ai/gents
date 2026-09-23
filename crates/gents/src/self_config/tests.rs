@@ -913,7 +913,11 @@ async fn schema_publication_matches_lean_grant_artifact_and_contract_guards() {
                 )
                 .await;
                 let accepted = granted && artifact_matches && compatible;
-                assert_eq!(result.is_ok(), accepted, "grant={granted}, artifact={artifact_matches}, compatible={compatible}: {result:?}");
+                assert_eq!(
+                    result.is_ok(),
+                    accepted,
+                    "grant={granted}, artifact={artifact_matches}, compatible={compatible}: {result:?}"
+                );
                 let after = access
                     .collection_version("ConfiguratorTruthTable")
                     .await

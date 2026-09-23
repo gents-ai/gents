@@ -113,6 +113,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
     readonly deploymentLabel: string,
     readonly agentDid: string,
     readonly toolRoot: string,
+    readonly dataRoot: string | undefined,
     startupStdout = "",
     startupStderr = "",
   ) {
@@ -164,6 +165,7 @@ export class LiveBridgeRunner implements TauriDriverBridge {
       message.deploymentLabel,
       message.agentDid,
       message.toolRoot,
+      message.dataRoot,
       stdout,
       stderr,
     );

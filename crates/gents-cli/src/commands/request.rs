@@ -18,11 +18,13 @@ use crate::cli::args::{
 };
 use crate::cli::output_format::OutputFormat;
 use crate::request_helpers::{
-    ensure_local_request_signer, fetch_request_view, parse_duration_suffix, parse_valid_until_flag,
+    ensure_local_request_signer, fetch_request_view, observe_canonical_request_output,
+    parse_duration_suffix, parse_valid_until_flag, request_output_envelope, CliOutputObservation,
+    RequestOutputEnvelope,
 };
 use crate::{
     create_agent_request, post_graphql, print_json, resolve_agent_did, resolve_graphql_endpoint,
-    resolve_request_content, resolve_request_id, response_query, wait_for_terminal_response,
+    resolve_request_content, resolve_request_id, wait_for_terminal_response,
     write_json_output_file, RequestSubmitOptions,
 };
 
@@ -33,6 +35,25 @@ pub(crate) async fn dispatch(command: RequestCommand) -> Result<()> {
         RequestCommand::Interrupt(args) => request_interrupt(args).await,
         RequestCommand::Resend(args) => request_resend(args).await,
     }
+}
+
+/// Canonical `request create --wait` result: the submitted-request summary plus
+/// the typed terminal output envelope, with no response-shaped overlay and no
+/// request prompt overwritten as output.
+fn wait_result(
+    request_summary: serde_json::Value,
+    envelope: &RequestOutputEnvelope,
+) -> Result<serde_json::Value> {
+    let mut object = request_summary
+        .as_object()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("request summary was not a JSON object"))?;
+    object.insert(
+        "output".to_string(),
+        serde_json::to_value(&envelope.output)
+            .context("serializing canonical request output observation")?,
+    );
+    Ok(serde_json::Value::Object(object))
 }
 
 async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
@@ -85,16 +106,16 @@ async fn request_submit(args: RequestSubmitArgs) -> Result<()> {
         args.poll_secs,
     )
     .await
-    .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?;
-    let mut output = request_summary
-        .as_object()
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request summary was not a JSON object"))?;
-    output.insert("response".to_string(), response);
-    let output = serde_json::Value::Object(output);
-    print_json(&output)?;
+    .with_context(|| {
+        format!(
+            "waiting for request {} to reach a terminal lifecycle state",
+            submitted.request_id
+        )
+    })?;
+    let result = wait_result(request_summary, &response)?;
+    print_json(&result)?;
     if let Some(path) = args.output_file.as_deref() {
-        write_json_output_file(path, &output)?;
+        write_json_output_file(path, &result)?;
     }
     Ok(())
 }
@@ -129,6 +150,7 @@ struct RequestShowSchema {
 #[derive(Debug, Clone, Serialize)]
 struct RequestShowSnapshot {
     request: RequestShowHeader,
+    output: CliOutputObservation,
     cancel_cause: Option<RequestCancelCauseView>,
     tool_calls: Vec<RequestToolCallView>,
     backgrounded_tools: Vec<BackgroundedToolView>,
@@ -268,18 +290,8 @@ async fn load_request_show_snapshot(
     let canonical_request: AgentRequestRow = serde_json::from_value(request_row.clone())
         .with_context(|| format!("decoding AgentRequest {request_id}"))?;
 
-    let response_response = post_graphql(graphql, &response_query(&canonical_request)?)
-        .await
-        .with_context(|| format!("loading latest AgentResponse for {request_id}"))?;
-    let mut response_row = crate::optional_response_row(&response_response)?;
-    if let Some(response) = response_row.as_mut() {
-        let presentation = crate::hydrate_materialized_response_content(graphql, response).await?;
-        if presentation != crate::MaterializedResponsePresentation::Presentable {
-            anyhow::bail!(crate::materialized_response_diagnostic(
-                request_id, response
-            ));
-        }
-    }
+    let output = observe_canonical_request_output(&graphql, &canonical_request).await?;
+    let envelope = request_output_envelope(&canonical_request, output)?;
 
     let tool_response = post_graphql(
         graphql,
@@ -369,12 +381,8 @@ async fn load_request_show_snapshot(
             .collect()
     };
     let cancel_cause = request_cancel_cause_view(&request_row, &tool_calls);
-    let terminal_cause = terminal_cause(&request_row, response_row.as_ref(), cancel_cause.as_ref());
-    let transition_history = transition_history(
-        &request_row,
-        response_row.as_ref(),
-        terminal_cause.as_deref(),
-    );
+    let terminal_cause = terminal_cause(&request_row, cancel_cause.as_ref());
+    let transition_history = transition_history(&request_row, terminal_cause.as_deref());
     let request = request_header_view(&request_row, terminal_cause, transition_history)?;
     let child_requests = descendant_edges
         .iter()
@@ -383,6 +391,7 @@ async fn load_request_show_snapshot(
 
     Ok(RequestShowSnapshot {
         request,
+        output: envelope.output,
         cancel_cause,
         tool_calls,
         backgrounded_tools,
@@ -440,6 +449,7 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         "created_at",
         "claimed_at",
         "deadline",
+        "terminalized_at",
         "valid_until",
         "interrupt_requested_at",
         "retry_parent_request",
@@ -460,6 +470,10 @@ fn request_show_request_query(request_id: &str, schema: &RequestShowSchema) -> S
         &[
             "cancel_cause",
             "cancel_initiated_at",
+            "terminal_output",
+            "execution_generation",
+            "execution_lease_secs",
+            "execution_lease_expires_at",
             "workspace_id",
             "workspace_authority",
             "workspace_owner_agent_did",
@@ -590,11 +604,7 @@ fn request_header_view(
     })
 }
 
-fn transition_history(
-    request: &Value,
-    response: Option<&Value>,
-    terminal_cause: Option<&str>,
-) -> Vec<RequestTransitionView> {
+fn transition_history(request: &Value, terminal_cause: Option<&str>) -> Vec<RequestTransitionView> {
     let state = string_field(request, "lifecycle_state").unwrap_or_else(|| "unknown".to_string());
     let mut transitions = Vec::new();
     if let Some(claimed_at) = string_field(request, "claimed_at") {
@@ -642,7 +652,7 @@ fn transition_history(
             action: action.to_string(),
             from: None,
             to: state,
-            at: terminal_timestamp(request, response, action),
+            at: terminal_timestamp(request, action),
             source: terminal_source(action).to_string(),
             inferred: true,
             note: terminal_cause.map(ToOwned::to_owned),
@@ -674,24 +684,22 @@ fn terminal_action_for_state(state: &str) -> Option<&'static str> {
     }
 }
 
-fn terminal_timestamp(request: &Value, response: Option<&Value>, action: &str) -> Option<String> {
+fn terminal_timestamp(request: &Value, action: &str) -> Option<String> {
     match action {
-        "finish" | "fail" => response
-            .and_then(|row| string_field(row, "completed_at"))
-            .or_else(|| string_field(request, "deadline")),
-        "expire" => {
-            string_field(request, "valid_until").or_else(|| string_field(request, "deadline"))
-        }
-        "interrupt" => string_field(request, "interrupt_requested_at")
-            .or_else(|| response.and_then(|row| string_field(row, "interrupted_at"))),
+        // AgentRequest.terminalized_at is the canonical durable terminal
+        // timestamp; AgentResponse.completed_at/interrupted_at are retired.
+        "finish" | "fail" => string_field(request, "terminalized_at"),
+        "expire" => string_field(request, "terminalized_at")
+            .or_else(|| string_field(request, "valid_until")),
+        "interrupt" => string_field(request, "interrupt_requested_at"),
         _ => None,
     }
 }
 
 fn terminal_source(action: &str) -> &'static str {
     match action {
-        "finish" | "fail" => "AgentResponse.completed_at",
-        "expire" => "AgentRequest.valid_until",
+        "finish" | "fail" => "AgentRequest.terminalized_at",
+        "expire" => "AgentRequest.terminalized_at",
         "interrupt" => "AgentRequest.interrupt_requested_at",
         _ => "AgentRequest.lifecycle_state",
     }
@@ -699,7 +707,6 @@ fn terminal_source(action: &str) -> &'static str {
 
 fn terminal_cause(
     request: &Value,
-    response: Option<&Value>,
     cancel_cause: Option<&RequestCancelCauseView>,
 ) -> Option<String> {
     let state = string_field(request, "lifecycle_state")?;
@@ -707,11 +714,7 @@ fn terminal_cause(
         RequestLifecycleState::Completed => Some("finish".to_string()),
         RequestLifecycleState::Failed => Some(format!(
             "fail{}",
-            cause_suffix(
-                string_field(request, "failure_reason")
-                    .or_else(|| response.and_then(|row| string_field(row, "error_message")))
-                    .as_deref()
-            )
+            cause_suffix(string_field(request, "failure_reason").as_deref())
         )),
         RequestLifecycleState::Dead => Some(format!(
             "expire{}",
@@ -992,6 +995,10 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
     );
 
     lines.push(String::new());
+    lines.push("Canonical output:".to_string());
+    push_request_output_text(&mut lines, &snapshot.output);
+
+    lines.push(String::new());
     lines.push("Transition history:".to_string());
     if request.transition_history.is_empty() {
         lines.push("  none observed".to_string());
@@ -1120,6 +1127,48 @@ fn render_request_show_text(snapshot: &RequestShowSnapshot) -> String {
 
     lines.push(String::new());
     lines.join("\n")
+}
+
+fn push_request_output_text(lines: &mut Vec<String>, output: &CliOutputObservation) {
+    let (state, presentation) = match output {
+        CliOutputObservation::Absent => ("absent", None),
+        CliOutputObservation::Live { presentation } => ("live", Some(presentation)),
+        CliOutputObservation::Settling { presentation } => ("settling", Some(presentation)),
+        CliOutputObservation::Loading => ("loading", None),
+        CliOutputObservation::Denied => ("denied", None),
+        CliOutputObservation::Conflicted => ("conflicted", None),
+        CliOutputObservation::Invalid => ("invalid", None),
+        CliOutputObservation::Retracted => ("retracted", None),
+        CliOutputObservation::RetainedPartial => ("retained_partial_diagnostic", None),
+        CliOutputObservation::Published { presentation, .. } => {
+            ("published_nonterminal", Some(presentation))
+        }
+        CliOutputObservation::TerminalNoMessage => ("terminal_no_message", None),
+        CliOutputObservation::TerminalMessage { presentation, .. } => {
+            ("terminal_message", Some(presentation))
+        }
+    };
+    lines.push(format!("  state: {state}"));
+    let Some(presentation) = presentation else {
+        return;
+    };
+    if !presentation.body_markdown.is_empty() {
+        lines.push("  body:".to_string());
+        lines.extend(
+            presentation
+                .body_markdown
+                .lines()
+                .map(|line| format!("    {line}")),
+        );
+    }
+    if let Some(reasoning) = presentation
+        .reasoning_markdown
+        .as_deref()
+        .filter(|reasoning| !reasoning.is_empty())
+    {
+        lines.push("  reasoning:".to_string());
+        lines.extend(reasoning.lines().map(|line| format!("    {line}")));
+    }
 }
 
 fn push_option_line(lines: &mut Vec<String>, label: &str, value: Option<&str>) {
@@ -1417,16 +1466,16 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
         args.poll_secs,
     )
     .await
-    .with_context(|| format!("waiting for AgentResponse {}", submitted.request_id))?;
-    let mut output = request_summary
-        .as_object()
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("request summary was not a JSON object"))?;
-    output.insert("response".to_string(), response);
-    let output = serde_json::Value::Object(output);
-    print_json(&output)?;
+    .with_context(|| {
+        format!(
+            "waiting for request {} to reach a terminal lifecycle state",
+            submitted.request_id
+        )
+    })?;
+    let result = wait_result(request_summary, &response)?;
+    print_json(&result)?;
     if let Some(path) = args.output_file.as_deref() {
-        write_json_output_file(path, &output)?;
+        write_json_output_file(path, &result)?;
     }
     Ok(())
 }
@@ -1434,6 +1483,59 @@ async fn request_resend(args: RequestResendArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn output_envelope(output: CliOutputObservation) -> RequestOutputEnvelope {
+        RequestOutputEnvelope {
+            request: crate::request_helpers::CliRequestMetadata {
+                request_doc_id: "request-doc".into(),
+                request_id: "request".into(),
+                agent_did: "did:key:agent".into(),
+                requester_did: Some("did:key:requester".into()),
+                behavior_id: Some("behavior".into()),
+                session_id: "session".into(),
+                lifecycle_state: RequestLifecycleState::Completed,
+                failure_reason: None,
+                terminalized_at: Some("2026-09-22T00:00:00Z".into()),
+            },
+            output,
+        }
+    }
+
+    #[test]
+    fn waited_request_json_has_one_output_observation_layer() {
+        let result = wait_result(
+            json!({"request_id": "request", "input": {"prompt": "not an answer"}}),
+            &output_envelope(CliOutputObservation::TerminalNoMessage),
+        )
+        .unwrap();
+
+        assert_eq!(
+            result.pointer("/output/kind"),
+            Some(&json!("terminal_no_message"))
+        );
+        assert!(result.pointer("/output/request").is_none());
+        assert_eq!(
+            result.pointer("/input/prompt"),
+            Some(&json!("not an answer"))
+        );
+    }
+
+    #[test]
+    fn request_text_renders_only_canonical_presentation_bytes() {
+        let mut lines = Vec::new();
+        push_request_output_text(
+            &mut lines,
+            &CliOutputObservation::Live {
+                presentation: crate::CliOutputPresentation {
+                    body_markdown: "canonical answer".into(),
+                    reasoning_markdown: None,
+                },
+            },
+        );
+        let rendered = lines.join("\n");
+        assert!(rendered.contains("state: live"));
+        assert!(rendered.contains("canonical answer"));
+    }
 
     #[test]
     fn lifecycle_helpers_cover_all_ten_states() {
@@ -1512,7 +1614,7 @@ mod tests {
             "claimed_at": "2026-05-20T10:00:01Z",
         });
 
-        let transitions = transition_history(&request, None, None);
+        let transitions = transition_history(&request, None);
 
         assert!(transitions
             .iter()
@@ -1535,12 +1637,10 @@ mod tests {
             "lifecycle_state": "completed",
             "claimed_at": "2026-05-20T10:00:01Z",
             "interrupt_requested_at": "2026-05-20T10:00:02Z",
-        });
-        let response = json!({
-            "completed_at": "2026-05-20T10:00:03Z",
+            "terminalized_at": "2026-05-20T10:00:03Z",
         });
 
-        let transitions = transition_history(&request, Some(&response), Some("finish"));
+        let transitions = transition_history(&request, Some("finish"));
         let interrupt = transitions
             .iter()
             .find(|transition| transition.action == "interrupt_requested")
@@ -1562,6 +1662,50 @@ mod tests {
     }
 
     #[test]
+    fn terminal_timestamp_uses_canonical_request_fields() {
+        let request = json!({
+            "lifecycle_state": "completed",
+            "terminalized_at": "2026-05-20T10:00:03Z",
+            "valid_until": "2026-05-20T10:00:05Z",
+            "interrupt_requested_at": "2026-05-20T10:00:02Z",
+        });
+
+        assert_eq!(
+            terminal_timestamp(&request, "finish").as_deref(),
+            Some("2026-05-20T10:00:03Z")
+        );
+        assert_eq!(
+            terminal_timestamp(&request, "fail").as_deref(),
+            Some("2026-05-20T10:00:03Z")
+        );
+        assert_eq!(
+            terminal_timestamp(&request, "expire").as_deref(),
+            Some("2026-05-20T10:00:03Z")
+        );
+        assert_eq!(
+            terminal_timestamp(&request, "interrupt").as_deref(),
+            Some("2026-05-20T10:00:02Z")
+        );
+
+        let expiring = json!({
+            "lifecycle_state": "dead",
+            "valid_until": "2026-05-20T10:00:05Z",
+        });
+        assert_eq!(
+            terminal_timestamp(&expiring, "expire").as_deref(),
+            Some("2026-05-20T10:00:05Z")
+        );
+
+        assert_eq!(terminal_source("finish"), "AgentRequest.terminalized_at");
+        assert_eq!(terminal_source("fail"), "AgentRequest.terminalized_at");
+        assert_eq!(terminal_source("expire"), "AgentRequest.terminalized_at");
+        assert_eq!(
+            terminal_source("interrupt"),
+            "AgentRequest.interrupt_requested_at"
+        );
+    }
+
+    #[test]
     fn terminal_transitions_do_not_guess_prior_state() {
         let cases = [
             ("completed", "finish"),
@@ -1579,7 +1723,7 @@ mod tests {
                 "valid_until": "2026-05-20T10:00:03Z",
                 "deadline": "2026-05-20T10:00:04Z",
             });
-            let transitions = transition_history(&request, None, Some(action));
+            let transitions = transition_history(&request, Some(action));
             let terminal = transitions
                 .iter()
                 .find(|transition| transition.action == action)

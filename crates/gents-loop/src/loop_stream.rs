@@ -212,6 +212,16 @@ where
                 }
             }
 
+            // A resumed checkpoint already includes its original authored
+            // input. New executions publish under their live request owner,
+            // before dispatch, not when the request is merely queued.
+            if current_turn == 1 && hook.is_some() && turn_index == 0 {
+                yield LoopStreamItem::AuthoredInputReady {
+                    context: config.context_message.clone(),
+                    prompt: current_prompt.clone(),
+                };
+            }
+
             let mut attempt = 0_u32;
             // Repair bypasses budgeted construction, although both dispatch
             // clamps are reapplied below. The build path is not recoverable
@@ -291,7 +301,7 @@ where
                                         error = %error_text,
                                         "retrying completion after transient failure"
                                     );
-                                    tokio::time::sleep(delay).await;
+                                    sleep_retry_delay(delay, config.deadline).await?;
                                     attempt += 1;
                                 }
                                 PreStreamDirective::Repair => {
@@ -342,14 +352,34 @@ where
                     }
                 };
 
+            if let Some(scope) = crate::rendered_request::scope::armed_capture_scope(
+                turn_index,
+                attempt,
+            ) {
+                yield LoopStreamItem::ProviderAttemptStarted {
+                    turn: turn_index,
+                    attempt,
+                    capture_scope: scope.parse().map_err(|error| {
+                        StreamingError::Completion(CompletionError::ProviderError(
+                            format!("invalid rendered-request capture scope: {error}"),
+                        ))
+                    })?,
+                };
+            } else if hook.is_some() {
+                // Canonical persistence requires the exact input/output join.
+                // Standalone non-persisting loops have no request authority or
+                // capture scope; they must not fabricate either one.
+                Err(StreamingError::Completion(CompletionError::ProviderError(
+                    "provider attempt has no exact rendered-request capture scope".into(),
+                )))?;
+            }
+
             // Accumulate assistant content twice over: `accumulator` builds the
             // assistant message we thread back into `new_messages` for the next
             // turn (reasoning/tool-call/text ordering handled there), while the
             // yielded items drive the consumer's own accumulation/persistence.
-            // `pending_results` holds each tool call's bounded result, executed
-            // inline as its ToolCall arrives (see below) and threaded/yielded only
-            // once the turn's stream has drained.
             let mut accumulator = AssistantTurnAccumulator::default();
+            let mut pending_calls = Vec::new();
             let mut pending_results: Vec<(ToolCall, String, String)> = Vec::new();
             let mut turn_text = String::new();
             let mut saw_stream_item = false;
@@ -373,7 +403,9 @@ where
                         saw_stream_item = true;
                         item
                     }
-                    Err(completion_error) if pending_results.is_empty() => {
+                    // Dispatch begins only after this provider stream closes
+                    // and its turn is accepted. No host effect exists here.
+                    Err(completion_error) => {
                         let streaming_error = StreamingError::Completion(completion_error);
                         let classified = crate::error::classify_completion_error(&streaming_error);
                         let error_text = streaming_error.to_string();
@@ -400,7 +432,7 @@ where
                                         error = %error_text,
                                         "retrying completion after first stream item failed"
                                     );
-                                    tokio::time::sleep(delay).await;
+                                    sleep_retry_delay(delay, config.deadline).await?;
                                     attempt += 1;
                                     continue 'attempts;
                                 }
@@ -474,79 +506,13 @@ where
                                     error = %error_text,
                                     "retracting partial completion turn after mid-stream failure"
                                 );
-                                tokio::time::sleep(delay).await;
+                                sleep_retry_delay(delay, config.deadline).await?;
                                 attempt += 1;
                                 continue 'attempts;
                             }
                             MidStreamDirective::CloseAndContinue { .. } => {
                                 unreachable!(
                                     "no-effect mid-stream failure cannot close and continue"
-                                );
-                            }
-                            MidStreamDirective::Fail { reason } => {
-                                let terminal_reason =
-                                    terminal_pre_stream_retry_reason(&classified, attempt, reason);
-                                Err(StreamingError::Completion(
-                                    CompletionError::ProviderError(terminal_reason),
-                                ))?;
-                                unreachable!("Err(..)? above ends the stream");
-                            }
-                        }
-                    }
-                    Err(completion_error) => {
-                        if let Some(budget) = aggregate_token_budget.as_ref() {
-                            for item in close_streaming_turn(
-                                &mut new_messages,
-                                &mut accumulator,
-                                stream.message_id.clone(),
-                                pending_results,
-                            ) {
-                                yield item;
-                            }
-                            let ledger = budget.snapshot()?;
-                            Err(StreamingError::Completion(
-                                CompletionError::ProviderError(format!(
-                                    "aggregate_token_usage_missing: limit={}, used={}; \
-                                     provider stream failed after tool effects without a final \
-                                     usage event",
-                                    ledger.limit, ledger.used,
-                                )),
-                            ))?;
-                            unreachable!("Err(..)? above ends the stream");
-                        }
-                        let streaming_error = StreamingError::Completion(completion_error);
-                        let classified = crate::error::classify_completion_error(&streaming_error);
-                        let error_text = streaming_error.to_string();
-                        match retry.on_mid_stream_failure(true, Utc::now(), config.deadline) {
-                            MidStreamDirective::CloseAndContinue { delay } => {
-                                for item in close_streaming_turn(
-                                    &mut new_messages,
-                                    &mut accumulator,
-                                    stream.message_id.clone(),
-                                    pending_results,
-                                ) {
-                                    yield item;
-                                }
-                                yield LoopStreamItem::AttemptFailed {
-                                    turn: turn_index,
-                                    attempt,
-                                    error: classified,
-                                    will_retry: true,
-                                    backoff: delay,
-                                };
-                                tracing::warn!(
-                                    turn = turn_index,
-                                    attempt,
-                                    delay_ms = delay.as_millis() as u64,
-                                    error = %error_text,
-                                    "closing completion turn after mid-stream failure with tool effects"
-                                );
-                                tokio::time::sleep(delay).await;
-                                continue 'turns;
-                            }
-                            MidStreamDirective::RetractAndResample { .. } => {
-                                unreachable!(
-                                    "effectful mid-stream failure cannot retract and resample"
                                 );
                             }
                             MidStreamDirective::Fail { reason } => {
@@ -584,113 +550,7 @@ where
                             },
                         ));
 
-                        let tool_name = tool_call.function.name.clone();
-                        let tool_args = value_to_json_string(&tool_call.function.arguments);
-
-                        let call_action = match hook.as_ref() {
-                            Some(hook) => {
-                                hook.on_tool_call(
-                                    &tool_name,
-                                    tool_call.call_id.clone(),
-                                    &internal_call_id,
-                                    &tool_args,
-                                )
-                                .await
-                            }
-                            None => ToolCallHookAction::Continue,
-                        };
-
-                        let bounded_result = match call_action {
-                            ToolCallHookAction::Terminate { reason } => {
-                                Err(StreamingError::Prompt(Box::new(
-                                    PromptError::PromptCancelled {
-                                        chat_history: rig_compat::to_rig_messages(&error_chat_history(
-                                            &history,
-                                            &new_messages,
-                                        )),
-                                        reason,
-                                    },
-                                )))?;
-                                unreachable!("Err(..)? above ends the stream");
-                            }
-                            ToolCallHookAction::Skip { reason } => {
-                                reason
-                            }
-                            _ => {
-                                let live_output = match hook.as_ref() {
-                                    Some(hook) => Some(
-                                        hook.foreground_live_output_writer(&internal_call_id)
-                                            .await,
-                                    ),
-                                    None => None,
-                                };
-                                let session_id = match hook.as_ref() {
-                                    Some(hook) => hook.session_id().await,
-                                    None => None,
-                                };
-                                let outcome = dispatch_tool(
-                                    tools.as_slice(),
-                                    &tool_name,
-                                    tool_args.clone(),
-                                    live_output,
-                                    session_id,
-                                )
-                                .await;
-
-                                if let Some(hook) = hook.as_ref() {
-                                    let result_action = hook
-                                        .on_tool_result(
-                                            &tool_name,
-                                            tool_call.call_id.clone(),
-                                            &internal_call_id,
-                                            &tool_args,
-                                            &outcome,
-                                        )
-                                        .await;
-                                    if let HookAction::Terminate { reason } = result_action {
-                                        Err(StreamingError::Prompt(Box::new(
-                                            PromptError::PromptCancelled {
-                                                chat_history: rig_compat::to_rig_messages(&error_chat_history(
-                                                    &history,
-                                                    &new_messages,
-                                                )),
-                                                reason,
-                                            },
-                                        )))?;
-                                    }
-                                }
-                                // Charge only after the hook has accepted the outcome.
-                                // Default fail-closed persistence aborts above on failure;
-                                // explicit fail-open callers retain their existing policy.
-                                invalid_tool_progress.record(&outcome);
-                                // The typed outcome's model-facing accessor is
-                                // the only text that may thread to the model.
-                                let (bounded, _, _) = truncate_text(
-                                    outcome.model_facing_text(),
-                                    tool_result_truncation_mode(&tool_name),
-                                    &TruncationLimits::default(),
-                                );
-                                bounded
-                            }
-                        };
-
-                        pending_results.push((rig_compat::from_rig_tool_call(&tool_call), internal_call_id, bounded_result));
-                        if invalid_tool_progress.exhausted() {
-                            // Deliver the eighth result before failing. Do not await another
-                            // provider item: it could stall or contain a ninth tool call.
-                            for item in close_streaming_turn(
-                                &mut new_messages,
-                                &mut accumulator,
-                                stream.message_id.clone(),
-                                pending_results,
-                            ) {
-                                yield item;
-                            }
-                            Err(StreamingError::Completion(CompletionError::ProviderError(
-                                invalid_tool_progress.exhaustion_reason(),
-                            )))?;
-                            unreachable!("invalid tool budget exhaustion ends the stream");
-                        }
+                        pending_calls.push((tool_call, internal_call_id));
                     }
                     StreamedAssistantContent::ToolCallDelta { .. } => {
                     }
@@ -770,7 +630,7 @@ where
                 unreachable!("terminal EOF failure ends the stream");
             }
 
-            let structured_output_error = if pending_results.is_empty() {
+            let structured_output_error = if pending_calls.is_empty() {
                 config
                     .structured_output
                     .as_ref()
@@ -778,7 +638,7 @@ where
             } else {
                 None
             };
-            let terminal_valid = pending_results.is_empty()
+            let terminal_valid = pending_calls.is_empty()
                 && !turn_text.trim().is_empty()
                 && structured_output_error.is_none();
             if aggregate_budget_exhausted
@@ -811,7 +671,7 @@ where
                 unreachable!("Err(..)? above ends the stream");
             }
 
-            if pending_results.is_empty() && turn_text.trim().is_empty() {
+            if pending_calls.is_empty() && turn_text.trim().is_empty() {
                 // A reasoning-only or empty terminal response is unusable.
                 // With no tool effect to replay, use the proven no-effect
                 // retract transition and resample the same request.
@@ -828,7 +688,7 @@ where
                             delay_ms = delay.as_millis() as u64,
                             "retracting completion turn with no visible output"
                         );
-                        tokio::time::sleep(delay).await;
+                        sleep_retry_delay(delay, config.deadline).await?;
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -870,7 +730,7 @@ where
                             error = %error,
                             "retracting completion turn after structured-output validation failure"
                         );
-                        tokio::time::sleep(delay).await;
+                        sleep_retry_delay(delay, config.deadline).await?;
                         attempt += 1;
                         continue 'attempts;
                     }
@@ -887,6 +747,117 @@ where
                         ))?;
                         unreachable!("Err(..)? above ends the stream");
                     }
+                }
+            }
+
+            let mut accepted_message = accumulator.clone().take_message().ok_or_else(|| {
+                StreamingError::Completion(CompletionError::ProviderError(
+                    "provider completed without an acceptable native message".to_string(),
+                ))
+            })?;
+            if let Message::Assistant { id, .. } = &mut accepted_message {
+                *id = stream.message_id.clone();
+            }
+            yield LoopStreamItem::ProviderTurnReady {
+                turn: turn_index,
+                attempt,
+                message: accepted_message,
+            };
+
+            for (tool_call, internal_call_id) in pending_calls {
+                let tool_name = tool_call.function.name.clone();
+                let tool_args = value_to_json_string(&tool_call.function.arguments);
+                let call_action = match hook.as_ref() {
+                    Some(hook) => {
+                        hook.on_tool_call(
+                            &tool_name,
+                            tool_call.call_id.clone(),
+                            &internal_call_id,
+                            &tool_args,
+                        )
+                        .await
+                    }
+                    None => ToolCallHookAction::Continue,
+                };
+                let bounded_result = match call_action {
+                    ToolCallHookAction::Terminate { reason } => {
+                        Err(StreamingError::Prompt(Box::new(PromptError::PromptCancelled {
+                            chat_history: rig_compat::to_rig_messages(&error_chat_history(
+                                &history,
+                                &new_messages,
+                            )),
+                            reason,
+                        })))?;
+                        unreachable!("Err(..)? above ends the stream");
+                    }
+                    ToolCallHookAction::Skip { reason } => reason,
+                    _ => {
+                        let live_output = match hook.as_ref() {
+                            Some(hook) => Some(
+                                hook.foreground_live_output_writer(&internal_call_id).await,
+                            ),
+                            None => None,
+                        };
+                        let session_id = match hook.as_ref() {
+                            Some(hook) => hook.session_id().await,
+                            None => None,
+                        };
+                        let outcome = dispatch_tool(
+                            tools.as_slice(),
+                            &tool_name,
+                            tool_args.clone(),
+                            live_output,
+                            session_id,
+                        )
+                        .await;
+                        if let Some(hook) = hook.as_ref() {
+                            let result_action = hook
+                                .on_tool_result(
+                                    &tool_name,
+                                    tool_call.call_id.clone(),
+                                    &internal_call_id,
+                                    &tool_args,
+                                    &outcome,
+                                )
+                                .await;
+                            if let HookAction::Terminate { reason } = result_action {
+                                Err(StreamingError::Prompt(Box::new(
+                                    PromptError::PromptCancelled {
+                                        chat_history: rig_compat::to_rig_messages(
+                                            &error_chat_history(&history, &new_messages),
+                                        ),
+                                        reason,
+                                    },
+                                )))?;
+                            }
+                        }
+                        invalid_tool_progress.record(&outcome);
+                        let (bounded, _, _) = truncate_text(
+                            outcome.model_facing_text(),
+                            tool_result_truncation_mode(&tool_name),
+                            &TruncationLimits::default(),
+                        );
+                        bounded
+                    }
+                };
+                pending_results.push((
+                    rig_compat::from_rig_tool_call(&tool_call),
+                    internal_call_id,
+                    bounded_result,
+                ));
+                if invalid_tool_progress.exhausted() {
+                    for item in close_streaming_turn(
+                        &mut new_messages,
+                        &mut accumulator,
+                        stream.message_id.clone(),
+                        pending_results,
+                    ) {
+                        yield item;
+                    }
+                    Err(StreamingError::Completion(CompletionError::ProviderError(
+                        invalid_tool_progress.exhaustion_reason(),
+                    )))?;
+                    unreachable!("invalid tool budget exhaustion ends the stream");
                 }
             }
 
@@ -928,6 +899,23 @@ where
         }
         }
     }
+}
+
+async fn sleep_retry_delay(
+    delay: std::time::Duration,
+    deadline: Option<DateTime<Utc>>,
+) -> Result<(), StreamingError> {
+    tokio::time::sleep(delay).await;
+    let observed_at = Utc::now();
+    if crate::completion_retry::retry_wake_fits_deadline(observed_at, deadline) {
+        return Ok(());
+    }
+    Err(StreamingError::Completion(CompletionError::ProviderError(
+        format!(
+            "retry wake at {observed_at} exceeded the request deadline ({}); refusing to reissue provider attempt",
+            deadline.expect("failed wake guard requires a deadline")
+        ),
+    )))
 }
 
 fn terminal_pre_stream_retry_reason(

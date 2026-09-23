@@ -53,10 +53,18 @@ type AgentToolCall @branchable {
     # Same sequence/name is not sufficient when a turn has multiple spawns.
     spawned_by_tool_call_doc_id: String @index @immutable
     spawn_target_did: String @index @immutable
-    # DelegatedToolInput JSON: exact argument bytes and source provenance.
+    # Exact behavior selected from the target alias at accepted publication.
+    # Remote hosts validate this local behavior directly; args are never
+    # enriched or re-read as routing authority.
+    spawn_behavior_id: String @index @immutable
+    # DelegatedToolInput JSON: exact argument bytes, source provenance, and
+    # immutable parent subagent depth for remote child depth derivation.
     # Required iff remotely delegated, absent on local calls; populated once
     # with accepted publication. No host grant to parent output is implied.
     delegated_input: JSON @immutable
+    # Authenticated parent workspace capability snapshot used only to verify
+    # remote child attenuation; this is not a new grant.
+    delegated_workspace: JSON @immutable
     unclaimed_deadline_at: DateTime
     # Durable cancellation/recovery handoff, not evidence the host has stopped.
     # Generation recovery accounts for accepted pending/running calls in the

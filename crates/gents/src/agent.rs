@@ -42,6 +42,7 @@ pub(crate) mod stream_processor;
 mod supervision;
 #[cfg(test)]
 mod tests;
+pub(crate) mod worker_capacity;
 
 pub(crate) use principal_assembly::assemble_principal_and_behaviors;
 pub(crate) use principal_assembly::BehaviorBuildError;

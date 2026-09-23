@@ -55,7 +55,7 @@ def backgroundReceiptMessage : MessageEnvelope :=
       [.text ⟨⟨702, 0⟩, .composed [.literal [91], .range 0 1, .literal [93]]⟩]] }
 
 def bridgeAdmission : ToolAdmission :=
-  ⟨600, { foregroundToolContext with childRequestId := some 42 }⟩
+  ⟨600, { foregroundToolContext with childRequestId := some 42 }, none⟩
 
 def requestContext (state : RequestState) (requestId : RequestId) : RequestContext :=
   { state := state
@@ -279,7 +279,7 @@ theorem typed_goal_owner_publishes_without_background_wake :
     authenticatedGoalOwnsParentNotification = true := by native_decide
 
 def distinctLogicalAdmission : ToolAdmission :=
-  ⟨600, { foregroundToolContext with callId := 999 }⟩
+  ⟨600, { foregroundToolContext with callId := 999 }, none⟩
 
 def physicalDocumentDoesNotAliasLogicalCallId : Bool :=
   match acceptAndPublish (world 5) 7 providerTurn providerMessage [] [distinctLogicalAdmission] with

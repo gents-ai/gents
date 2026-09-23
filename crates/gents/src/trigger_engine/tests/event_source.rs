@@ -65,6 +65,43 @@ async fn event_source_acknowledges_exact_configuration_after_subscription_setup(
 }
 
 #[tokio::test]
+async fn event_source_retries_schema_visibility_before_subscription_readiness() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let snapshot = snapshot_with_event_triggers(
+        1,
+        HashMap::from([(
+            "delayed-schema".into(),
+            resolved_event_trigger(
+                "delayed-schema",
+                "DelayedSchemaInput",
+                resolved_task("observe"),
+            ),
+        )]),
+    );
+    let (_tx, rx) = watch::channel(snapshot.clone());
+    let observer = Arc::new(SubscriptionObserver::default());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
+        .with_runtime_observer(Some(observer.clone()));
+    let schema_node = node.clone();
+    let install = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        schema_node
+            .add_schema("type DelayedSchemaInput { value: String }")
+            .await
+            .unwrap();
+    });
+
+    source.reconcile_subscriptions(&snapshot).await;
+    install.await.unwrap();
+
+    assert_eq!(
+        *observer.0.lock().unwrap(),
+        vec![(1, snapshot.configuration_fingerprint(), Ok(()))]
+    );
+}
+
+#[tokio::test]
 async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations() {
     let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
@@ -91,6 +128,36 @@ async fn event_source_does_not_acknowledge_failed_seeding_on_later_generations()
     assert_eq!(
         observer.0.lock().unwrap().last(),
         Some(&(3, removed.configuration_fingerprint(), Ok(())))
+    );
+}
+
+#[tokio::test]
+async fn event_source_repairs_failed_seed_on_later_reconcile_before_readiness() {
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let triggers = HashMap::from([(
+        "eventual".into(),
+        resolved_event_trigger("eventual", "EventualInput", resolved_task("observe")),
+    )]);
+    let first = snapshot_with_event_triggers(1, triggers.clone());
+    let (_tx, rx) = watch::channel(first.clone());
+    let observer = Arc::new(SubscriptionObserver::default());
+    let mut source = EventSource::new(rx, node.clone(), CancellationToken::new())
+        .with_runtime_observer(Some(observer.clone()));
+
+    source.reconcile_subscriptions(&first).await;
+    node.add_schema("type EventualInput { value: String }")
+        .await
+        .unwrap();
+    let second = snapshot_with_event_triggers(2, triggers);
+    source.reconcile_subscriptions(&second).await;
+
+    let observations = observer.0.lock().unwrap();
+    assert_eq!(observations.len(), 2);
+    assert!(observations[0].2.is_err());
+    assert_eq!(
+        observations[1],
+        (2, second.configuration_fingerprint(), Ok(()))
     );
 }
 

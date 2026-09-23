@@ -28,7 +28,7 @@ describeLive("Tauri app live bridge runner sad paths", () => {
 
         const failedSession = await runner.waitForRequestCompletion(submitted);
         expect(failedSession.turnState).toBe("failed");
-        expect(failedSession.latestResponse?.errorMessage).toBeTruthy();
+        expect(failedSession.latestRequestOutcome?.failureReason).toBeTruthy();
 
         await waitFor(
           () => {
@@ -69,7 +69,7 @@ describeLive("Tauri app live bridge runner sad paths", () => {
 
         const failedSession = await runner.waitForRequestCompletion(submitted);
         expect(failedSession.turnState).toBe("failed");
-        expect(failedSession.latestResponse?.errorMessage).toMatch(
+        expect(failedSession.latestRequestOutcome?.failureReason).toMatch(
           /agent stream failed|connection|connect|refused|error sending request|transport/i,
         );
 

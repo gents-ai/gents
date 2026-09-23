@@ -296,9 +296,15 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
     )
     .expect("decode process readiness");
     assert_eq!(
-        readiness.process_state.as_str(), case.to,
+        readiness.process_state.as_str(),
+        case.to,
         "generated Process transition {} expected {} -> {} classified as {} via {:?}, got authoritative process_state={}",
-        case.name, case.from, case.to, case.classification, case.action, readiness.process_state.as_str()
+        case.name,
+        case.from,
+        case.to,
+        case.classification,
+        case.action,
+        readiness.process_state.as_str()
     );
     owner.close().await.unwrap();
 }

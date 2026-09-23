@@ -156,6 +156,7 @@ pub async fn desktop_session_snapshot(
         &session_id,
         request_id.as_deref(),
         Some(&transcript_page.store),
+        Some(&transcript_page.canonical_dependencies),
         context_store.as_ref(),
         context_store.is_some(),
         timeline_before_item_key.is_none(),

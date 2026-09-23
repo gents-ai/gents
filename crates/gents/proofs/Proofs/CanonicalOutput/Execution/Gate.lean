@@ -34,13 +34,19 @@ inductive Operation where
   | toolAppend (document : DocId) (record : Segment)
   | toolClose (document : DocId) (authority : ToolDelivery.CloseAuthority)
       (record : Segment)
+  | toolComplete (document : DocId) (authority : ToolDelivery.CloseAuthority)
+      (record : Segment) (message : MessageEnvelope)
   | toolDeliver (document : DocId) (message : MessageEnvelope)
   | toolGoalDeliver (document : DocId) (binding : GoalNotificationBinding)
       (message : MessageEnvelope)
   | backgroundReceipt (parentDocument : DocId) (closing : Segment)
       (message : MessageEnvelope)
   | compact (cursor : Transcript.Sequence)
+  | closePartial (generation : Generation) (item : RecoveryItem)
   | recover (expected fresh : Generation) (duration deadline : Time) (items : List RecoveryItem)
+  | recoverTerminal (expected fresh : Generation)
+      (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+      (items : List RecoveryItem)
   | revoke (expected fresh : Generation) (outcome : RequestExecutionLease.Outcome)
       (selection : TerminalSelection)
   | terminalize (generation : Generation) (outcome : RequestExecutionLease.Outcome)
@@ -74,6 +80,8 @@ def evaluate (operation : Operation) (world : World) : Except Error World :=
       (ToolDelivery.appendToolOutput world document record).mapError .delivery
   | .toolClose document authority record =>
       (ToolDelivery.closeToolOutput world document authority record).mapError .delivery
+  | .toolComplete document authority record message =>
+      (ToolDelivery.completeAndDeliver world document authority record message).mapError .delivery
   | .toolDeliver document message =>
       (ToolDelivery.publishToolDelivery world document message).mapError .delivery
   | .toolGoalDeliver document binding message =>
@@ -84,8 +92,12 @@ def evaluate (operation : Operation) (world : World) : Except Error World :=
       match Compaction.advanceCursor? world cursor with
       | some after => .ok after
       | none => .error .compactionRejected
+  | .closePartial generation item =>
+      (closePartialAndPublish world generation item).mapError .execution
   | .recover expected fresh duration deadline items =>
       (recoverExpiredBatch world expected fresh duration deadline items).mapError .execution
+  | .recoverTerminal expected fresh outcome selection items =>
+      (recoverExpiredTerminal world expected fresh outcome selection items).mapError .execution
   | .revoke expected fresh outcome selection =>
       (revokeCorrupt world expected fresh outcome selection).mapError .execution
   | .terminalize generation outcome selection =>
@@ -129,6 +141,13 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
   | toolClose document authority record =>
       rw [ToolDelivery.close_preserves_nextSeq before after document authority record
         (mapError_success Error.delivery _ _ h)]
+  | toolComplete document authority record message =>
+      obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
+        before after document authority record message
+        (mapError_success Error.delivery _ _ h)
+      exact Nat.le_trans
+        (by rw [ToolDelivery.close_preserves_nextSeq before closed document authority record hclose])
+        (ToolDelivery.publication_nextSeq_monotone closed after document message hdeliver)
   | toolDeliver document message =>
       exact ToolDelivery.publication_nextSeq_monotone before after document message
         (mapError_success Error.delivery _ _ h)
@@ -145,9 +164,15 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
           simp [hcompact] at h
           subst after
           rw [(Compaction.advanceCursor_preserves_publications before post cursor hcompact).1]
+  | closePartial generation item =>
+      exact closePartialAndPublish_nextSeq_monotone before after generation item
+        (mapError_success Error.execution _ _ h)
   | recover expected fresh duration deadline items =>
       exact recoverExpiredBatch_nextSeq_monotone before after expected fresh duration deadline items
         (mapError_success Error.execution _ _ h)
+  | recoverTerminal expected fresh outcome selection items =>
+      exact recoverExpiredTerminal_nextSeq_monotone before after expected fresh outcome selection
+        items (mapError_success Error.execution _ _ h)
   | revoke expected fresh outcome selection =>
       rw [revokeCorrupt_preserves_nextSeq before after expected fresh outcome selection
         (mapError_success Error.execution _ _ h)]
@@ -332,11 +357,20 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
     replace hcore := checked_core_success _ _ _ hcore
     rcases acceptAndPublishCore_success_effect before after generation closing message targets
       admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+  case toolComplete document authority record message =>
+    have hcomposed := mapError_success Error.delivery _ _ h
+    obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
+      before after document authority record message hcomposed
+    have hc := ToolDelivery.tool_write_preserves_request_identity hclose
+    have hd := ToolDelivery.tool_write_preserves_request_identity hdeliver
+    exact ⟨hd.1.trans hc.1, hd.2.trans hc.2⟩
   all_goals
     have hcore := mapError_success Error.execution _ _ h
     try replace hcore := checked_core_success _ _ _ hcore
     first
+      | exact closePartialAndPublishCore_preserves_request_identity _ _ _ _ hcore
       | exact recoverExpiredBatchCore_preserves_request_identity _ _ _ _ _ _ _ hcore
+      | exact recoverExpiredTerminalCore_preserves_request_identity _ _ _ _ _ _ _ hcore
       | exact terminalizeCore_preserves_request_identity _ _ _ _ _ hcore
       | exact revokeCorruptCore_preserves_request_identity _ _ _ _ _ _ hcore
       | simp only [Execution.renew, renewCore, appendRaw, appendRawCore,

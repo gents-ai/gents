@@ -103,7 +103,7 @@ export function resolveLivePlaywrightOptions(rawArgv, rawEnv) {
 export function applyMockInference(env, mockInference) {
   const next = { ...env };
   applyResolvedInference(next, mockInference.endpoint, mockInference.modelName);
-  next.GENTS_TAURI_LIVE_PROVIDER ??= "openai-compatible";
+  next.GENTS_TAURI_LIVE_PROVIDER ??= "OpenAiCompatible";
   next.GENTS_TAURI_LIVE_API_KEY ??= "desktop-live-browser-test-key";
   return next;
 }

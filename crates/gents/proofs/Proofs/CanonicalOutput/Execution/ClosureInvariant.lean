@@ -308,6 +308,27 @@ private theorem closureUnique_of_segment_provenance
     simp at hm
     exact hm.symm
 
+private theorem closePartial_preserves (before after : World) (generation : Generation)
+    (item : RecoveryItem) (unique : ClosureUnique before)
+    (h : closePartialAndPublish before generation item = .ok after) : ClosureUnique after := by
+  have hpredicate := checked_success _ _ _ h
+  simp only [Bool.and_eq_true] at hpredicate
+  have hcore := checked_core_success _ _ _ h
+  unfold closePartialAndPublishCore at hcore
+  split at hcore
+  · cases hcore; exact unique
+  · split at hcore <;> try contradiction
+    rename_i prepared hprepared
+    split at hcore <;> try contradiction
+    cases hcore
+    apply closureUnique_of_segment_provenance before _ [item] unique
+    · exact prepareRecoveryItems_segment_provenance before generation generation [item]
+        _ prepared hprepared
+    · intro candidate hcandidate
+      simp only [List.mem_singleton] at hcandidate
+      subst candidate
+      simpa using hpredicate.1.1.1.2
+
 private theorem recovery_preserves (before after : World) (expected fresh : Generation)
     (duration deadline : Time) (items : List RecoveryItem) (unique : ClosureUnique before)
     (h : recoverExpiredBatch before expected fresh duration deadline items = .ok after) :
@@ -347,6 +368,51 @@ private theorem recovery_preserves (before after : World) (expected fresh : Gene
               have hi := hall item hitem
               simp only [Bool.and_eq_true] at hi
               simpa only [beq_iff_eq] using hi.1.1
+
+private theorem terminal_recovery_preserves (before after : World)
+    (expected fresh : Generation) (outcome : RequestExecutionLease.Outcome)
+    (selection : TerminalSelection) (items : List RecoveryItem)
+    (unique : ClosureUnique before)
+    (h : recoverExpiredTerminal before expected fresh outcome selection items = .ok after) :
+    ClosureUnique after := by
+  have hcore := checked_core_success _ _ _ h
+  unfold recoverExpiredTerminalCore at hcore
+  split at hcore
+  · cases hcore; exact unique
+  · split at hcore
+    · contradiction
+    · cases hb : prepareRecoveryBatch before expected fresh items with
+      | error error => simp [hb] at hcore
+      | ok prepared =>
+          simp only [hb] at hcore
+          split at hcore
+          · contradiction
+          · cases hl : RequestExecutionLease.step?
+                (preparedRecoveryWorld before prepared expected).lease
+                (.recoverExpiredTerminal .mutationWriteGate expected fresh outcome) with
+            | none => simp [hl] at hcore
+            | some lease =>
+                simp only [hl] at hcore
+                cases hcore
+                apply closureUnique_of_segment_provenance before _ items unique
+                · intro record hrecord
+                  have hsegments :
+                      (preparedRecoveryWorld before prepared expected).segments =
+                        prepared.segments := by
+                    unfold preparedRecoveryWorld
+                    exact accountOwnedTools_segments _ expected true
+                  rw [hsegments] at hrecord
+                  unfold prepareRecoveryBatch at hb
+                  split at hb <;> try contradiction
+                  exact prepareRecoveryItems_segment_provenance before expected fresh items
+                    ⟨before.segments, before.messages, before.transcript⟩ prepared hb record hrecord
+                · intro item hitem
+                  have hp := checked_success _ _ _ h
+                  simp only [Bool.and_eq_true] at hp
+                  have hall := List.all_eq_true.mp hp.2
+                  have hi := hall item hitem
+                  simp only [Bool.and_eq_true] at hi
+                  simpa only [beq_iff_eq] using hi.1.1
 
 private theorem toolAppend_preserves (before after : World) (document : DocId)
     (record : Segment) (unique : ClosureUnique before)
@@ -418,6 +484,13 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
   | toolClose document authority record =>
       exact toolClose_preserves before after document authority record unique
         (mapError_success Gate.Error.delivery _ _ h)
+  | toolComplete document authority record message =>
+      obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
+        before after document authority record message
+        (mapError_success Gate.Error.delivery _ _ h)
+      exact closureUnique_of_segments_eq
+        (toolClose_preserves before closed document authority record unique hclose)
+        (ToolDelivery.publishToolDelivery_preserves_segments closed after document message hdeliver)
   | compact cursor =>
       unfold Gate.evaluate at h
       cases hc : Compaction.advanceCursor? before cursor with
@@ -427,8 +500,14 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
           subst after
           exact closureUnique_of_segments_eq unique
             (Compaction.advanceCursor_preserves_publications before post cursor hc).2.2.1
+  | closePartial generation item =>
+      exact closePartial_preserves before after generation item unique
+        (mapError_success Gate.Error.execution _ _ h)
   | recover expected fresh duration deadline items =>
       exact recovery_preserves before after expected fresh duration deadline items unique
+        (mapError_success Gate.Error.execution _ _ h)
+  | recoverTerminal expected fresh outcome selection items =>
+      exact terminal_recovery_preserves before after expected fresh outcome selection items unique
         (mapError_success Gate.Error.execution _ _ h)
   | revoke expected fresh outcome selection =>
       exact closureUnique_of_segments_eq unique

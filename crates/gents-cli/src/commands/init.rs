@@ -1462,7 +1462,7 @@ mod tests {
             None,
             true,
             true,
-            vec!["AgentRequest".to_string(), "AgentResponse".to_string()],
+            vec!["AgentRequest".to_string(), "AgentMessage".to_string()],
         );
 
         assert!(
@@ -1475,10 +1475,7 @@ mod tests {
         assert_eq!(datastore.enable_defra_query, Some(true));
         assert_eq!(
             datastore.defra_query_collections,
-            Some(vec![
-                "AgentRequest".to_string(),
-                "AgentResponse".to_string()
-            ])
+            Some(vec!["AgentRequest".to_string(), "AgentMessage".to_string()])
         );
         let host = tools.host.as_ref().unwrap();
         assert_eq!(host.files.as_ref().unwrap().mode, FileToolMode::ReadOnly);

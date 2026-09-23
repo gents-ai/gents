@@ -100,7 +100,9 @@ fn reject_empty_json_arrays(value: &Value) -> Result<()> {
     match value {
         Value::Array(values) => {
             if values.is_empty() {
-                bail!("empty JSON arrays cannot be represented in a DefraDB mutation without changing the value");
+                bail!(
+                    "empty JSON arrays cannot be represented in a DefraDB mutation without changing the value"
+                );
             }
             values.iter().try_for_each(reject_empty_json_arrays)
         }

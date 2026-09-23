@@ -105,7 +105,7 @@ def boundaries : List Boundary :=
     , domain := "RequestLifecycle"
     , subject := "recovery-sweep reachable request edges"
     , statement :=
-        "claimed->completed, claimed->dead, and processing->dead are taken by no single RequestContext.Action, but registered recovery sweeps perform them on persisted rows: terminal repair completes a claimed request whose response already landed, and the subagent-liveness sweep terminalizes an expired claimed or processing child as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs."
+        "claimed->dead and processing->dead are taken by no single RequestContext.Action, but the subagent-liveness recovery sweep terminalizes an expired claimed or processing child as dead. They are published as recoveryReachable rather than illegal so the emitted contract does not assert Rust has no writer for an edge the product performs. Expired owned generations otherwise terminalize failed or interrupted through CanonicalOutput.Execution recovery; no durable response row repairs claimed work to completed."
     , acceptedFollowUp :=
         some "Compose the Request machine with Proofs/Recovery so these edges are proven in one model instead of cited across two."
     }

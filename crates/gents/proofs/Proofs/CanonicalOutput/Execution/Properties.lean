@@ -143,7 +143,7 @@ theorem fresh_accept_core_success_requires_exact_extent
   have hexact : freshCompleteExtentExact (world.segments ++ [closing]) closing = false :=
     Bool.eq_false_of_not_eq_true hnotExact
   simp (config := { maxSteps := 1000000 })
-    [acceptAndPublishCore, hnotReplay, hexact] at h
+    [acceptAndPublishCore, acceptedReplayPresent, hnotReplay, hexact] at h
   split at h <;> try contradiction
   split at h <;> try contradiction
   split at h <;> try contradiction
@@ -249,6 +249,20 @@ theorem exact_recovery_replay_core_does_not_renew_or_republish
   simp only [recoverExpiredBatchCore, hreplay, ↓reduceIte] at h
   cases h
   exact ⟨rfl, rfl, rfl, rfl⟩
+
+theorem terminal_recovery_commits_selection_and_tool_accounting
+    (pre post : World) (expected fresh : Generation)
+    (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
+    (items : List RecoveryItem)
+    (h : recoverExpiredTerminal pre expected fresh outcome selection items = .ok post) :
+    terminalReplayPresent post fresh outcome selection = true ∧
+      terminalSelectionValid post selection = true ∧
+      toolProjectionCoherent post = true ∧
+      (terminalReplayPresent pre fresh outcome selection ||
+        recoveryCoversAllSources pre expected items) = true := by
+  have hp := checked_success _ _ _ h
+  simp only [Bool.and_eq_true] at hp
+  exact ⟨hp.1.1.1.1, hp.1.1.1.2, hp.1.1.2, hp.1.2⟩
 
 theorem terminal_selection_commits_with_lifecycle
     (pre post : World) (generation : Generation)

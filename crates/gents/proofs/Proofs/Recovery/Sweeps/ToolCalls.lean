@@ -146,11 +146,20 @@ structure OrphanedBackgroundToolRow where
   executionRegistered : Bool
   deriving Repr
 
+/-- A missing exact physical parent is an incomplete owner observation. The
+    booleans come from the scoped request lookup, not a caller-selected cause. -/
+def OrphanedBackgroundToolRow.parentResolvable
+    (row : OrphanedBackgroundToolRow) : Bool :=
+  row.parentLive || row.parentInterrupted || row.parentTerminal
+
 /-- The periodic orphan sweep uses the same precedence as startup recovery.
-    Parent flags are observations, not a caller-selected recovery cause. -/
+    Owner resolution precedes expiry, since neither deadline nor unclaimed
+    status licenses a write to a tool whose parent scope is unavailable. -/
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
-  if row.deadlineExpired then
+  if !row.parentResolvable then
+    none
+  else if row.deadlineExpired then
     some .deadlineExceeded
   else if row.unclaimedExpired then
     some .unclaimedCrossPrincipalSpawn
@@ -162,6 +171,12 @@ def orphanedBackgroundToolCause
     some .parentTerminal
   else
     none
+
+theorem orphanedBackgroundTool_no_parent_no_cause
+    (row : OrphanedBackgroundToolRow)
+    (h : row.parentResolvable = false) :
+    orphanedBackgroundToolCause row = none := by
+  simp [orphanedBackgroundToolCause, h]
 
 def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
   row.call.state = .running ∧
@@ -180,6 +195,16 @@ def orphanedBackgroundToolRecover
   match orphanedBackgroundToolCause row with
   | some cause => { row with call := { row.call with state := cause.terminalState } }
   | none => row
+
+theorem orphanedBackgroundTool_no_parent_no_terminal
+    (row : OrphanedBackgroundToolRow)
+    (h : row.parentResolvable = false) :
+    orphanedBackgroundToolRecover row = row ∧
+      ¬ orphanedBackgroundToolStale row := by
+  have hc := orphanedBackgroundTool_no_parent_no_cause row h
+  constructor
+  · simp [orphanedBackgroundToolRecover, hc]
+  · simp [orphanedBackgroundToolStale, hc]
 
 def orphanedBackgroundToolMeasure (row : OrphanedBackgroundToolRow) : Nat :=
   if orphanedBackgroundToolStale row then 1 else 0

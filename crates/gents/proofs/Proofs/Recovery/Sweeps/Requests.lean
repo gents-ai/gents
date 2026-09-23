@@ -3,37 +3,28 @@ import Proofs.Properties.Liveness
 
 namespace Recovery
 
-inductive DurableRequestOutcome where
-  | absent
-  | completed
-  | failed
-  | interrupted
-  deriving DecidableEq, Repr
-
 structure RequestRecoveryRow where
   request : RequestContext
-  durableOutcome : DurableRequestOutcome
+  leaseExpired : Bool
+  interruptRequested : Bool
   deriving Repr
 
 def requestRecoveryStale (row : RequestRecoveryRow) : Prop :=
   (row.request.state = .claimed ∨ row.request.state = .processing) ∧
-    row.durableOutcome ≠ .absent
+    row.leaseExpired = true
 
 instance (row : RequestRecoveryRow) : Decidable (requestRecoveryStale row) := by
   unfold requestRecoveryStale
   infer_instance
 
-def recoveredRequestState : DurableRequestOutcome → RequestState
-  | .completed => .completed
-  | .failed => .failed
-  | .interrupted => .interrupted
-  | .absent => .failed
+def recoveredRequestState (interruptRequested : Bool) : RequestState :=
+  if interruptRequested then .interrupted else .failed
 
 def requestRecover (row : RequestRecoveryRow) : RequestRecoveryRow :=
   { row with
       request :=
         { row.request with
-            state := recoveredRequestState row.durableOutcome
+            state := recoveredRequestState row.interruptRequested
             admission := .released } }
 
 def requestRecoveryMeasure (row : RequestRecoveryRow) : Nat :=
@@ -47,19 +38,11 @@ theorem requestRecovery_stale_positive :
 theorem requestRecover_terminal :
     ∀ row, requestRecoveryStale row → isTerminal (requestRecover row).request.state := by
   intro row h_stale
-  rcases h_stale with ⟨_h_active, h_outcome⟩
-  cases h_outcome_value : row.durableOutcome with
-  | absent =>
-      exact False.elim (h_outcome h_outcome_value)
-  | completed =>
-      simp [requestRecover, recoveredRequestState, h_outcome_value,
-        HasTerminal.isTerminal, RequestState.instHasTerminal]
-  | failed =>
-      simp [requestRecover, recoveredRequestState, h_outcome_value,
-        HasTerminal.isTerminal, RequestState.instHasTerminal]
-  | interrupted =>
-      simp [requestRecover, recoveredRequestState, h_outcome_value,
-        HasTerminal.isTerminal, RequestState.instHasTerminal]
+  rcases h_stale with ⟨_h_active, _h_expired⟩
+  cases h_interrupt : row.interruptRequested <;>
+    simp [requestRecover, recoveredRequestState,
+      h_interrupt,
+      HasTerminal.isTerminal, RequestState.instHasTerminal]
 
 theorem requestRecover_zero :
     ∀ row, requestRecoveryStale row → requestRecoveryMeasure (requestRecover row) = 0 := by
@@ -69,11 +52,11 @@ theorem requestRecover_zero :
     rcases h_stale with ⟨h_active, _h_outcome⟩
     cases h_active with
     | inl h_claimed =>
-        cases h_outcome_value : row.durableOutcome <;>
-          simp [requestRecover, recoveredRequestState, h_outcome_value] at h_claimed
+        cases h_interrupt : row.interruptRequested <;>
+          simp [requestRecover, recoveredRequestState, h_interrupt] at h_claimed
     | inr h_processing =>
-        cases h_outcome_value : row.durableOutcome <;>
-          simp [requestRecover, recoveredRequestState, h_outcome_value] at h_processing
+        cases h_interrupt : row.interruptRequested <;>
+          simp [requestRecover, recoveredRequestState, h_interrupt] at h_processing
   simp [requestRecoveryMeasure, h_not]
 
 def requestRecoverySweep : RecoverySweep :=

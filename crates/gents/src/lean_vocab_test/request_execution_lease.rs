@@ -130,6 +130,12 @@ pub(crate) enum LeanRequestExecutionAction {
         expected_generation: u64,
         fresh_generation: u64,
     },
+    RecoverExpiredTerminal {
+        boundary: LeanRequestExecutionBoundary,
+        expected_generation: u64,
+        fresh_generation: u64,
+        outcome: LeanRequestExecutionOutcome,
+    },
     RecoverDroppedAndFail {
         boundary: LeanRequestExecutionBoundary,
         expected_generation: u64,
@@ -154,6 +160,7 @@ impl LeanRequestExecutionAction {
             Self::Finalize { .. } => "finalize",
             Self::PolicyRevoke { .. } => "policy_revoke",
             Self::RecoverExpiredAndFail { .. } => "recover_expired_and_fail",
+            Self::RecoverExpiredTerminal { .. } => "recover_expired_terminal",
             Self::RecoverDroppedAndFail { .. } => "recover_dropped_and_fail",
         }
     }

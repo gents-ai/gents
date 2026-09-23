@@ -1,447 +1,206 @@
-//! Fences the *wiring* of the compaction gate, not just its predicate.
-//!
-//! `streaming_compaction.rs` drives `compaction::safe_to_reduce` and
-//! `compaction::pair_safe_boundary` directly. That checks the functions agree
-//! with `Compaction.PromptView.safeToReduce` and `Compaction.pairSafeBoundary`,
-//! but it would stay green if `BehaviorDaemon::handle_request` stopped
-//! consulting the gate altogether — the same class of gap #993 was filed for,
-//! where the conformance case reimplemented the gate inside the test.
-//!
-//! This drives a real daemon. Compaction issues a sub-completion carrying
-//! `compaction_prompt()`, so the mock backend's per-marker request counter is a
-//! direct observation of whether the daemon attempted to reduce: zero while a
-//! response in the session is still streaming, non-zero once it is terminal.
+//! Runtime wiring fence for request-local canonical transcript compaction.
 
 use super::*;
-
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 use super::support::fixtures::test_identity;
 use super::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use super::support::streaming_backend::{MockStreamingBackend, StreamScript};
+use super::support::streaming_backend::{
+    MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse,
+};
 
-const GATE_MODEL: &str = "default";
-const GATE_BACKEND_ID: &str = "backend-compaction-gate";
-const GATE_MARKER: &str = "compaction-gate-request";
-/// A distinctive slice of `compaction::summary::compaction_prompt()`. It only
-/// ever appears in a body the compactor sent.
+const MODEL: &str = "default";
+const BACKEND_ID: &str = "backend-compaction-gate";
+const REQUEST_MARKER: &str = "compaction-gate-request";
 const COMPACTION_MARKER: &str = "supplied structured-output schema";
-
-/// Roughly 30k estimated tokens of history — above the 20k `keep_recent_tokens`
-/// default, so `split_messages_for_summary` yields a non-empty prefix to
-/// summarize, and above the configured budget so the threshold is crossed.
+const REUSED_CALL_ID: &str = "provider-call-reused-across-turns";
 const SEEDED_TURNS: usize = 12;
 const SEEDED_TURN_BYTES: usize = 10_000;
-const GATE_CONTEXT_WINDOW: usize = 30_000;
-const GATE_COMPACTION_THRESHOLD: f64 = 0.5;
 
-pub(super) async fn compaction_gate_blocks_reduction_while_a_response_streams() {
+pub(super) async fn compaction_runtime_reduces_valid_canonical_history() {
     let db = test_db("compaction-gate").await;
-
-    // The compaction plan must come first: the compactor's body carries both the
-    // prompt and the seeded history, and the backend picks the first plan whose
-    // marker the body contains.
-    let backend = MockStreamingBackend::start(
-        GATE_MODEL,
+    let backend = MockStreamingBackend::start_with_plans(
+        MODEL,
         vec![
-            StreamScript::completes(
+            StreamPlan::new(
                 COMPACTION_MARKER,
-                [r#"{"goal": "continue the task", "completed_work": ["earlier turns inspected files"]}"#],
+                vec![StreamResponse::completes(
+                    COMPACTION_MARKER,
+                    [r#"{"goal":"continue","completed_work":["canonical history summarized"]}"#],
+                )],
             ),
-            StreamScript::completes(GATE_MARKER, ["ok"]),
+            StreamPlan::current_authored_user(
+                REQUEST_MARKER,
+                vec![
+                    StreamResponse::streams(
+                        REQUEST_MARKER,
+                        vec![StreamChunk::tool_call(
+                            REUSED_CALL_ID,
+                            "list_processes",
+                            r#"{}"#,
+                        )],
+                    ),
+                    StreamResponse::streams(
+                        REQUEST_MARKER,
+                        vec![StreamChunk::tool_call(
+                            REUSED_CALL_ID,
+                            "list_processes",
+                            r#"{}"#,
+                        )],
+                    ),
+                    StreamResponse::completes(REQUEST_MARKER, ["ok"]),
+                ],
+            ),
         ],
     )
-    .expect("start mock streaming backend");
-
-    let agent = boot_compaction_gate_agent(&db, backend.endpoint()).await;
+    .expect("start mock backend");
+    let agent = boot_agent(&db, backend.endpoint()).await;
     let session_id = format!("session-{}", uuid::Uuid::new_v4());
     seed_bulky_history(db.node.as_ref(), &agent.agent_did, &session_id).await;
 
-    // A concurrent request in this session is mid-stream. Its half-written turn
-    // is already in the transcript we just loaded, so reducing now could
-    // summarize away a turn that is still being written.
-    let live_request_id = format!("live-{}", uuid::Uuid::new_v4());
-    upsert_response_status(
-        db.node.as_ref(),
-        &agent.agent_did,
-        &session_id,
-        &live_request_id,
-        "streaming",
-    )
-    .await;
-
-    let blocked_request_id = format!("blocked-{}", uuid::Uuid::new_v4());
-    let blocked_doc_id = create_runtime_request(
-        db.node.as_ref(),
-        agent.agent_did.as_str(),
-        AGENT_NAME,
-        &blocked_request_id,
-        &session_id,
-        GATE_MARKER,
-    )
-    .await;
-    let blocked = wait_for_terminal_request(db.node.as_ref(), &blocked_doc_id).await;
-
+    let first = run_request(&db, &agent, &session_id, "first").await;
+    assert_eq!(first.lifecycle_state, RequestLifecycleState::Completed);
+    assert!(backend.observed_requests(COMPACTION_MARKER) >= 1);
     assert_eq!(
-        backend.observed_requests(COMPACTION_MARKER),
-        0,
-        "the daemon must not attempt compaction while a response in this session is streaming — \
-         removing the gate from BehaviorDaemon::handle_request fails here"
+        tool_call_count(db.node.as_ref(), &session_id, REUSED_CALL_ID).await,
+        2,
+        "the same provider call id is valid in two distinct request-local turns"
     );
+    let first_entries =
+        support::snapshots::fetch_compaction_entry_snapshots_for_session(&db.node, &session_id)
+            .await;
+    let checkpoint = first_entries
+        .last()
+        .expect("persisted compaction checkpoint");
+    let cursor = checkpoint
+        .compacted_through_sequence
+        .expect("runtime compaction must persist its canonical cursor");
+    assert!(checkpoint.messages_compacted > 0);
+    assert!(checkpoint.request_doc_id.is_some());
+    assert!(cursor < (SEEDED_TURNS as u32) * 2);
 
-    // The live response terminalizes; the very next request may reduce.
-    upsert_response_status(
-        db.node.as_ref(),
-        &agent.agent_did,
-        &session_id,
-        &live_request_id,
-        "complete",
-    )
-    .await;
-
-    let allowed_request_id = format!("allowed-{}", uuid::Uuid::new_v4());
-    let allowed_doc_id = create_runtime_request(
-        db.node.as_ref(),
-        agent.agent_did.as_str(),
-        AGENT_NAME,
-        &allowed_request_id,
-        &session_id,
-        GATE_MARKER,
-    )
-    .await;
-    let allowed = wait_for_terminal_request(db.node.as_ref(), &allowed_doc_id).await;
-
-    let after_allowed = backend.observed_requests(COMPACTION_MARKER);
+    // This request reconstructs authorized provider input from the checkpoint
+    // and the remaining canonical tail.
+    let second = run_request(&db, &agent, &session_id, "second").await;
+    assert_eq!(second.lifecycle_state, RequestLifecycleState::Completed);
+    assert!(backend.observed_requests(REQUEST_MARKER) >= 2);
     assert!(
-        after_allowed >= 1,
-        "with every response in the session terminal the gate opens and the daemon reduces; \
-         a gate that never opens would starve compaction entirely; \
-         blocked={blocked:?}, allowed={allowed:?}, backend_requests={}",
-        backend.observed_completion_requests(),
-    );
-
-    // A later turn reusing an earlier call id resurrects that earlier
-    // announcement in the provider view, so a count recorded now would stop
-    // naming the rows the next request drops
-    // (`Compaction.reused_call_id_breaks_prefix_stability`). The daemon must
-    // check `has_unique_call_ids` and decline rather than record a count it
-    // cannot honour.
-    seed_reused_call_id_turn(db.node.as_ref(), &agent.agent_did, &session_id).await;
-
-    let reused_request_id = format!("reused-{}", uuid::Uuid::new_v4());
-    let reused_doc_id = create_runtime_request(
-        db.node.as_ref(),
-        agent.agent_did.as_str(),
-        AGENT_NAME,
-        &reused_request_id,
-        &session_id,
-        GATE_MARKER,
-    )
-    .await;
-    wait_for_terminal_request(db.node.as_ref(), &reused_doc_id).await;
-
-    assert_eq!(
-        backend.observed_requests(COMPACTION_MARKER),
-        after_allowed,
-        "a reused tool-call id must stop the daemon reducing — removing the \
-         has_unique_call_ids check from BehaviorDaemon::handle_request fails here"
+        support::snapshots::fetch_compaction_entry_snapshots_for_session(&db.node, &session_id)
+            .await
+            .len()
+            >= first_entries.len()
     );
 
     agent.shutdown().await;
 }
 
-/// Appends two turns that announce the *same* call id.
-///
-/// Both live in the freshly-appended tail, so the duplicate survives wherever
-/// the compacted-prefix boundary happens to fall — reusing an id from an
-/// already-summarized turn would not, since that announcement is no longer in
-/// the view.
-async fn seed_reused_call_id_turn(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
-    // Past anything the daemon has appended for the requests already run, so
-    // these turns sort last in the loaded history.
-    let mut sequence = 10_000i64;
-    let call_id = "duplicated-call".to_string();
-
-    for round in 0..2 {
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "user",
-            &format!("reuse turn {round}: {}", "r".repeat(SEEDED_TURN_BYTES)),
-        )
+async fn tool_call_count(node: &EmbeddedNode, session_id: &str, tool_call_id: &str) -> usize {
+    let session_id = gents::graphql::escape_graphql_string(session_id);
+    let tool_call_id = gents::graphql::escape_graphql_string(tool_call_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session_id}" }}, tool_call_id: {{ _eq: "{tool_call_id}" }} }}) {{ _docID }} }}"#
+        ))
         .await;
-        sequence += 1;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    gents::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")
+        .expect("AgentToolCall rows")
+        .len()
+}
 
-        let announcement = Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::ToolCall(ToolCall {
-                id: call_id.clone(),
-                call_id: Some(call_id.clone()),
-                function: ToolFunction {
-                    name: "read_file".to_string(),
-                    arguments: json!({ "path": format!("/seed/reused-{round}.rs") }),
-                },
-                signature: None,
-                additional_params: None,
-            })],
-        };
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "assistant",
-            &serde_json::to_string(&announcement).expect("serialize reused announcement"),
-        )
-        .await;
-        sequence += 1;
+async fn run_request(
+    db: &support::TestDb,
+    agent: &BootedAgent,
+    session_id: &str,
+    suffix: &str,
+) -> LifecycleStateRow {
+    let request_id = format!("{suffix}-{}", uuid::Uuid::new_v4());
+    let doc_id = create_runtime_request(
+        db.node.as_ref(),
+        &agent.agent_did,
+        AGENT_NAME,
+        &request_id,
+        session_id,
+        REQUEST_MARKER,
+    )
+    .await;
+    wait_for_terminal_request(db.node.as_ref(), &doc_id).await
+}
 
-        let result = Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: call_id.clone(),
-                call_id: Some(call_id.clone()),
-                content: vec![ToolResultContent::Text(Text {
-                    text: format!("contents of reused-{round}.rs"),
-                })],
-            })],
-        };
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "user",
-            &serde_json::to_string(&result).expect("serialize reused result"),
-        )
-        .await;
-        sequence += 1;
+async fn seed_bulky_history(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
+    let mut sequence = 0u32;
+    for turn in 0..SEEDED_TURNS {
+        let payload = "h".repeat(SEEDED_TURN_BYTES);
+        for (role, content) in [
+            ("user", format!("turn {turn}: {payload}")),
+            ("assistant", format!("reply {turn}: {payload}")),
+        ] {
+            crate::support::create_agent_message_in_scope(
+                node,
+                agent_did,
+                Some(agent_did),
+                session_id,
+                sequence,
+                role,
+                &content,
+                &chrono::Utc::now().to_rfc3339(),
+            )
+            .await;
+            sequence += 1;
+        }
     }
 }
 
-async fn boot_compaction_gate_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
+async fn boot_agent(db: &support::TestDb, endpoint: &str) -> BootedAgent {
     let identity: Arc<dyn gents::AgentIdentity> = Arc::new(test_identity("compaction-gate"));
     support::fixtures::bind_behavior_backend(
         db.node.as_ref(),
         identity.did(),
         AGENT_NAME,
-        GATE_BACKEND_ID,
+        BACKEND_ID,
         endpoint,
-        GATE_MODEL,
+        MODEL,
     )
     .await;
-
     let agent = gents::Gents::builder()
         .node(db.node.clone())
         .identity(identity)
         .default_behavior_id(AGENT_NAME)
         .tool_ceiling(gents::ToolCeiling::meta_only())
         .behavior(AGENT_NAME)
-        .backend_id(GATE_BACKEND_ID)
-        .model_name(GATE_MODEL)
+        .backend_id(BACKEND_ID)
+        .model_name(MODEL)
         .stream_batch_ms(0)
-        .context_window(GATE_CONTEXT_WINDOW)
-        .compaction_threshold(GATE_COMPACTION_THRESHOLD)
+        .context_window(30_000)
+        .compaction_threshold(0.5)
         .done()
         .build()
         .await
-        .expect("build compaction-gate agent");
+        .expect("build compaction agent");
     let agent_did = agent.agent_did().to_string();
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
-
     BootedAgent::new(shutdown_tx, handle, agent_did)
 }
 
-/// Seeds turns that each carry a paired tool call and result.
-///
-/// The pairing matters: `safeToReduce` constrains *tool-result* rows, so a
-/// transcript with none is vacuously safe to reduce and the gate would never
-/// engage. The bulk lives in the surrounding text because `provider_view` stubs
-/// tool-result payloads before the threshold is measured.
-async fn seed_bulky_history(node: &EmbeddedNode, agent_did: &str, session_id: &str) {
-    let mut sequence = 0i64;
-    for turn in 0..SEEDED_TURNS {
-        let payload = "h".repeat(SEEDED_TURN_BYTES);
-        let call_id = format!("seeded-call-{turn}");
-
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "user",
-            &format!("turn {turn}: {payload}"),
-        )
-        .await;
-        sequence += 1;
-
-        let announcement = Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::ToolCall(ToolCall {
-                id: call_id.clone(),
-                call_id: Some(call_id.clone()),
-                function: ToolFunction {
-                    name: "read_file".to_string(),
-                    arguments: json!({ "path": format!("/seed/turn-{turn}.rs") }),
-                },
-                signature: None,
-                additional_params: None,
-            })],
-        };
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "assistant",
-            &serde_json::to_string(&announcement).expect("serialize announcement"),
-        )
-        .await;
-        sequence += 1;
-
-        let result = Message::User {
-            content: vec![UserContent::ToolResult(ToolResult {
-                id: call_id.clone(),
-                call_id: Some(call_id),
-                content: vec![ToolResultContent::Text(Text {
-                    text: format!("contents of turn-{turn}.rs"),
-                })],
-            })],
-        };
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "user",
-            &serde_json::to_string(&result).expect("serialize tool result"),
-        )
-        .await;
-        sequence += 1;
-
-        insert_message(
-            node,
-            agent_did,
-            session_id,
-            sequence,
-            "assistant",
-            &format!("reply {turn}: {payload}"),
-        )
-        .await;
-        sequence += 1;
-    }
-}
-
-async fn insert_message(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    session_id: &str,
-    sequence: i64,
-    role: &str,
-    content: &str,
-) {
-    // The daemon persists its own turns into this session while the test runs,
-    // so the key must not be derived from the sequence alone.
-    let escaped_key =
-        escape_graphql_string(&format!("{session_id}:{sequence}:{}", uuid::Uuid::new_v4()));
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_role = escape_graphql_string(role);
-    let escaped_content = escape_graphql_string(content);
-    let timestamp = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentMessage(input: {{
-                message_key: "{escaped_key}",
-                session_id: "{escaped_session_id}",
-                agent_did: "{escaped_agent_did}",
-                requester_did: "{escaped_agent_did}",
-                request_id: "",
-                sequence: {sequence},
-                role: "{escaped_role}",
-                content: "{escaped_content}",
-                timestamp: "{timestamp}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "seed AgentMessage failed: {:?}",
-        response.errors
-    );
-}
-
-async fn upsert_response_status(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    session_id: &str,
-    request_id: &str,
-    status: &str,
-) {
-    let escaped_key = escape_graphql_string(&format!("response:{request_id}"));
-    let escaped_request_id = escape_graphql_string(request_id);
-    let escaped_session_id = escape_graphql_string(session_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let escaped_status = escape_graphql_string(status);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            upsert_AgentResponse(
-                filter: {{ response_key: {{ _eq: "{escaped_key}" }} }},
-                add: {{
-                    response_key: "{escaped_key}",
-                    request_id: "{escaped_request_id}",
-                    agent_did: "{escaped_agent_did}",
-                    requester_did: "{escaped_agent_did}",
-                    behavior_id: "{AGENT_NAME}",
-                    session_id: "{escaped_session_id}",
-                    content: "partial",
-                    status: "{escaped_status}",
-                    error_message: "",
-                    token_count: 1,
-                    progress_seq: 1,
-                    created_at: "{created_at}"
-                }},
-                update: {{ status: "{escaped_status}" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "upsert AgentResponse status={status} failed: {:?}",
-        response.errors
-    );
-}
-
 async fn wait_for_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> LifecycleStateRow {
-    let escaped_doc_id = escape_graphql_string(request_doc_id);
+    let doc_id = gents::graphql::escape_graphql_string(request_doc_id);
     let started = std::time::Instant::now();
     loop {
-        let query = format!(
-            r#"{{
-                AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
-                    lifecycle_state
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ lifecycle_state }} }}"#
+            ))
+            .await;
         if let Some(row) = first_optional_row::<LifecycleStateRow>(&response, "AgentRequest") {
             if row.lifecycle_state.is_terminal() {
                 return row;
             }
         }
-        assert!(
-            started.elapsed() < Duration::from_secs(60),
-            "timed out waiting for request {request_doc_id} to reach a terminal lifecycle state"
-        );
+        assert!(started.elapsed() < Duration::from_secs(60));
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }

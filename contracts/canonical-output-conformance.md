@@ -139,6 +139,16 @@ is modeled by the payload-presentation fixture group.
 
 ## External premises to test
 
+ACP policy binding and per-dependency authorization are explicitly deferred by
+product scope to future work, not a desktop acceptance gate for this refactor.
+Preserve existing ownership, enrollment and requester/agent scoping. The ACP
+experiment below remains a future obligation, not evidence of implemented
+document-read enforcement or a reason to classify missing rows as denied.
+In the pinned DefraDB, a collection without `@policy` neither registers its
+documents as creator-owned ACP objects nor applies document-read ACP filtering.
+Gents ownership fields and signing provenance must not be described as an
+automatic per-document read restriction.
+
 | Premise / owner | Required native experiment and observation |
 | --- | --- |
 | Provider request projection and compaction admission | Reconstruct messages, build the real `CompletionRequest`, and project/serialize it through the configured `ProviderInputCounter`. Observe the actual request estimate passed to `ReductionAdmission::for_input`, including metadata, schemas, framing and escaping rather than a payload sum. Construct measured requests at the effective budget and one estimated token above it: equality does not trigger reduction; strictly greater does. Reproject after reduction and reject dispatch if still over budget. This is implementation-layer work, not an exported Lean input-size fixture. |
@@ -151,6 +161,13 @@ is modeled by the payload-presentation fixture group.
 These experiments are implementation-layer obligations until executable native
 consumers exist. They are not justified merely by the Lean build or by the
 fixture serializer accepting the data.
+
+`tests/defradb_genesis_identity.rs` now exercises concurrent identical canonical
+segment creates, duplicate-create rejection, and changed-content identity against
+the pinned embedded database. It verifies exact persisted records without an ID
+stub. This covers the database identity premise, not writer replay, lost commit
+acknowledgements, or projection of conflicting closures; the broader handoff
+entry remains pending.
 
 ## Remaining bridge breadth
 

@@ -4,7 +4,8 @@ use super::*;
 async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
     let db = test_db("coalesce").await;
     let session_id = "session-coalesced-wakeup";
-    let parent = parent_request(db.agent_did(), session_id);
+    let mut fixture = canonical_background_fixture(&db, session_id).await;
+    let parent = fixture.parent.clone();
     let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -14,38 +15,45 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
         background_completion_wake_version: None,
     };
 
-    let first = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "terminal notification 1",
-        "background-completion-notification:coalesce-1:tool",
-        "Process pending subagent completion notifications in this session.",
-        hints.clone(),
-        None,
-    )
-    .await
-    .unwrap()
-    .request
-    .expect("non-Goal wake");
-    let second = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "terminal notification 2",
-        "background-completion-notification:coalesce-2:tool",
-        "This duplicate wake-up should coalesce.",
-        hints,
-        None,
-    )
-    .await
-    .unwrap()
-    .request
-    .expect("non-Goal wake");
+    let first = fixture
+        .persist_notification(
+            "terminal notification 1",
+            "background-completion-notification:coalesce-1:tool",
+            "Process pending subagent completion notifications in this session.",
+            hints.clone(),
+            None,
+        )
+        .await
+        .unwrap()
+        .request
+        .expect("non-Goal wake");
+    let second = fixture
+        .persist_notification(
+            "terminal notification 2",
+            "background-completion-notification:coalesce-2:tool",
+            "This duplicate wake-up should coalesce.",
+            hints,
+            None,
+        )
+        .await
+        .unwrap()
+        .request
+        .expect("non-Goal wake");
 
     assert_eq!(second.doc_id, first.doc_id);
     assert_eq!(second.request_id, first.request_id);
     assert_eq!(second.session_id, session_id);
 
-    let rows = queue_rows(&db.node, session_id).await;
+    let rows = queue_rows(&db.node, session_id)
+        .await
+        .into_iter()
+        .filter(|row| {
+            row.input
+                .as_ref()
+                .and_then(|input| input.queue.as_ref())
+                .is_some_and(queue_is_automated_wakeup)
+        })
+        .collect::<Vec<_>>();
     assert_eq!(rows.len(), 1, "coalescing should leave one wake-up row");
     let row = &rows[0];
     assert_eq!(row.doc_id, first.doc_id);
@@ -56,14 +64,14 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
         "Process pending subagent completion notifications in this session."
     );
     assert_eq!(row.execution_origin, "scheduled");
-    assert_eq!(row.subagent_depth, Some(2));
+    assert_eq!(row.subagent_depth, Some(parent.subagent_depth));
     assert_eq!(
         row.caused_by_parent_request_id.as_deref(),
-        Some("parent-request")
+        Some(parent.request_id.as_str())
     );
     assert_eq!(
         row.caused_by_parent_request_doc_id.as_deref(),
-        Some("parent-doc")
+        Some(parent.doc_id.as_str())
     );
     assert_eq!(row.caused_by_parent_tool_call_id.as_deref(), None);
     assert_eq!(row.caused_by_parent_tool_call_doc_id.as_deref(), None);
@@ -74,7 +82,10 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
         .is_some_and(|queue| queue_is_automated_wakeup(queue)));
     let notifications = db
         .node
-        .execute("{ AgentMessage { request_id request_doc_id } }")
+        .execute(&format!(
+            r#"{{ AgentMessage(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ request_doc_id }} }}"#,
+            escape_graphql_string(&first.doc_id)
+        ))
         .await;
     assert!(!notifications.has_errors(), "{:?}", notifications.errors);
     let data = notifications.data.unwrap();
@@ -85,7 +96,6 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
         "coalescing preserves both durable inputs"
     );
     for message in messages {
-        assert_eq!(message["request_id"], first.request_id);
         assert_eq!(message["request_doc_id"], first.doc_id);
     }
 }
@@ -94,7 +104,8 @@ async fn atomic_background_completion_coalesces_keyed_subagent_wakeups() {
 async fn atomic_background_completion_ignores_append_row_with_same_source_and_key() {
     let db = test_db("coalesce-ignores-append").await;
     let session_id = "session-coalesce-ignores-append";
-    let parent = parent_request(db.agent_did(), session_id);
+    let mut fixture = canonical_background_fixture(&db, session_id).await;
+    let parent = fixture.parent.clone();
     let append_hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Append,
@@ -116,21 +127,35 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
         ..append_hints
     };
 
-    let enqueued = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "terminal notification 3",
-        "background-completion-notification:coalesce-3:tool",
-        "coalesced wake-up",
-        coalesce_hints,
-        None,
-    )
-    .await
-    .unwrap()
-    .request
-    .expect("non-Goal wake");
+    let enqueued = fixture
+        .persist_notification(
+            "terminal notification 3",
+            "background-completion-notification:coalesce-3:tool",
+            "coalesced wake-up",
+            coalesce_hints,
+            None,
+        )
+        .await
+        .unwrap()
+        .request
+        .expect("non-Goal wake");
 
-    let rows = queue_rows(&db.node, session_id).await;
+    // Include both policies: queue_is_automated_wakeup deliberately selects
+    // only coalesced wakes and would hide the append row under test.
+    let rows = queue_rows(&db.node, session_id)
+        .await
+        .into_iter()
+        .filter(|row| {
+            row.input
+                .as_ref()
+                .and_then(|input| input.queue.as_ref())
+                .is_some_and(|queue| {
+                    queue.source == QueueSource::BackgroundCompletion
+                        && queue.key.as_deref()
+                            == Some(format!("background_completion:{session_id}").as_str())
+                })
+        })
+        .collect::<Vec<_>>();
     assert_eq!(rows.len(), 2);
     assert!(rows
         .iter()
@@ -144,7 +169,8 @@ async fn atomic_background_completion_ignores_append_row_with_same_source_and_ke
 async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
     let db = test_db("coalesce-race-reconcile").await;
     let session_id = "session-coalesce-race-reconcile";
-    let parent = parent_request(db.agent_did(), session_id);
+    let mut fixture = canonical_background_fixture(&db, session_id).await;
+    let parent = fixture.parent.clone();
     let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -154,19 +180,18 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         background_completion_wake_version: None,
     };
     let key = hints.key.clone().unwrap();
-    let survivor = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "terminal notification 4",
-        "background-completion-notification:coalesce-4:tool",
-        "first wake-up",
-        hints.clone(),
-        None,
-    )
-    .await
-    .unwrap()
-    .request
-    .expect("non-Goal wake");
+    let survivor = fixture
+        .persist_notification(
+            "terminal notification 4",
+            "background-completion-notification:coalesce-4:tool",
+            "first wake-up",
+            hints.clone(),
+            None,
+        )
+        .await
+        .unwrap()
+        .request
+        .expect("non-Goal wake");
     let duplicate_doc_id = insert_raw_queue_request(
         &db.node,
         db.agent_did(),
@@ -215,19 +240,18 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
         Some(survivor.doc_id.as_str())
     );
 
-    let reused = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "notification after duplicate reconciliation",
-        "background-completion-notification:coalesce-reuse:tool",
-        "reuse the surviving wake",
-        hints,
-        None,
-    )
-    .await
-    .unwrap()
-    .request
-    .expect("non-Goal wake");
+    let reused = fixture
+        .persist_notification(
+            "notification after duplicate reconciliation",
+            "background-completion-notification:coalesce-reuse:tool",
+            "reuse the surviving wake",
+            hints,
+            None,
+        )
+        .await
+        .unwrap()
+        .request
+        .expect("non-Goal wake");
     assert_eq!(
         reused.doc_id, survivor.doc_id,
         "the enqueue owner must reuse the reconciled pending wake"
@@ -237,7 +261,8 @@ async fn reconcile_coalesced_pending_request_supersedes_duplicate_race_rows() {
 async fn atomic_background_completion_without_key_rejects_without_persisting_input() {
     let db = test_db("coalesce-without-key").await;
     let session_id = "session-unkeyed-wakeup";
-    let parent = parent_request(db.agent_did(), session_id);
+    let mut fixture = canonical_background_fixture(&db, session_id).await;
+    let parent = fixture.parent.clone();
     let hints = RequestQueue {
         source: QueueSource::BackgroundCompletion,
         policy: QueuePolicy::Coalesce,
@@ -246,18 +271,25 @@ async fn atomic_background_completion_without_key_rejects_without_persisting_inp
         interrupted_request_id: None,
         background_completion_wake_version: None,
     };
-    let result = persist_background_completion_with_message(
-        &db.node,
-        &parent,
-        "terminal notification",
-        "background-completion-notification:unkeyed:tool",
-        "review notifications",
-        hints,
-        None,
-    )
-    .await;
+    let result = fixture
+        .persist_notification(
+            "terminal notification",
+            "background-completion-notification:unkeyed:tool",
+            "review notifications",
+            hints,
+            None,
+        )
+        .await;
     assert!(result.is_err());
-    assert!(queue_rows(&db.node, session_id).await.is_empty());
+    assert!(queue_rows(&db.node, session_id)
+        .await
+        .into_iter()
+        .all(|row| {
+            !row.input
+                .as_ref()
+                .and_then(|input| input.queue.as_ref())
+                .is_some_and(queue_is_automated_wakeup)
+        }));
     let response = db.node.execute("{ AgentMessage {_docID} }").await;
     assert!(!response.has_errors(), "{:?}", response.errors);
     assert!(response.data.unwrap()["AgentMessage"]

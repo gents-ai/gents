@@ -7,6 +7,8 @@ mod canonical_rows;
 mod execution_policy;
 #[path = "../../gents/src/lean_vocab_test/request_execution_lease.rs"]
 mod runtime_contract;
+#[path = "../../gents/src/lifecycle/terminal_binding.rs"]
+mod terminal_binding;
 
 #[test]
 fn generated_active_lease_cases_drive_native_admission_and_renewal() {

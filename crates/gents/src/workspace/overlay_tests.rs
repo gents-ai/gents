@@ -1112,8 +1112,9 @@ async fn existing_workspace_cleanup_removes_artifacts_without_grant_drop_authori
     assert!(error.to_string().contains("Active binding"), "{error}");
     assert!(artifact_root.exists());
     owner
-        .terminalize_owned_without_stream(
+        .terminalize_owned(
             crate::lifecycle::RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
             Some("artifact cleanup fixture completed"),
         )
         .await

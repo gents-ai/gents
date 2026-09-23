@@ -25,6 +25,42 @@ namespace Conformance.ContractCases
 open PromptAssembly.Content (Item)
 open PromptAssembly.Provider (ProviderRow)
 
+/-- Native header ownership and authored-key class at the history boundary.
+The class is representation input, not a second filtering policy. -/
+structure CurrentInputHeaderCase where
+  request : String
+  kind : String
+  deriving Repr
+
+def CurrentInputHeaderCase.model (row : CurrentInputHeaderCase) :
+    PromptAssembly.CurrentInput.HistoryRow :=
+  { requestId := some row.request
+  , canonicalCurrentInput := row.kind == "prompt" || row.kind == "context" }
+
+structure CurrentInputCase where
+  name : String
+  currentRequest : String
+  headers : List CurrentInputHeaderCase
+  deriving Repr
+
+def currentInputCases : List CurrentInputCase :=
+  [ ⟨"redrive_preserves_owned_output", "current",
+      [⟨"older", "prompt"⟩, ⟨"current", "context"⟩, ⟨"current", "prompt"⟩,
+       ⟨"current", "tool_result"⟩, ⟨"current", "notification"⟩,
+       ⟨"current", "assistant"⟩]⟩
+  , ⟨"other_request_inputs_remain", "current",
+      [⟨"older", "context"⟩, ⟨"older", "prompt"⟩]⟩
+  , ⟨"only_rebuilt_input_is_removed", "current",
+      [⟨"current", "prompt"⟩, ⟨"current", "context"⟩]⟩
+  ]
+
+def CurrentInputCase.retainedIndices (witness : CurrentInputCase) : List Nat :=
+  (witness.headers.zipIdx.filter fun (row, _) =>
+    !(PromptAssembly.CurrentInput.belongsToCurrentInput witness.currentRequest row.model)).map Prod.snd
+
+example : currentInputCases[0]?.map CurrentInputCase.retainedIndices = some [0, 3, 4, 5] := by
+  native_decide
+
 /-- A content item, flattened for emission. `value` is the text/reasoning index
 for `text`/`other`, and the tool-call id for `call`. -/
 structure PromptAssemblyItemCase where

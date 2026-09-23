@@ -304,44 +304,6 @@ pub async fn wait_for_request_lifecycle_state(
     }
 }
 
-pub async fn insert_terminal_response(
-    graphql: &str,
-    request_id: &str,
-    agent_did: &str,
-    behavior_id: &str,
-    session_id: &str,
-    content: &str,
-) -> Result<()> {
-    let response_key = format!("response-{request_id}");
-    let now = chrono::Utc::now().to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{response_key}",
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                content: "{content}",
-                status: "complete",
-                token_count: 0,
-                progress_seq: 0,
-                created_at: "{now}",
-                completed_at: "{now}"
-            }}) {{ _docID }}
-        }}"#,
-        response_key = escape_graphql_string(&response_key),
-        request_id = escape_graphql_string(request_id),
-        agent_did = escape_graphql_string(agent_did),
-        behavior_id = escape_graphql_string(behavior_id),
-        session_id = escape_graphql_string(session_id),
-        content = escape_graphql_string(content),
-        now = escape_graphql_string(&now),
-    );
-    graphql_query(graphql, &mutation).await?;
-    Ok(())
-}
-
 pub async fn wait_for_connected_peer(
     home_dir: &std::path::Path,
     peer_id: &str,

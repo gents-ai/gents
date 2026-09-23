@@ -165,66 +165,6 @@ pub(crate) async fn require_session(
         .map(|_| ())
 }
 
-/// Whether any `AgentResponse` in this session is still streaming.
-///
-/// Backs the session-scope resolution of the modelled `safeToReduce` gate: a
-/// live response means a turn is still being written into this session's
-/// transcript, and compaction must not summarize a half-written turn. See
-/// `boundary.compaction.safe-to-reduce-session-scope`.
-pub(crate) async fn session_has_live_response(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-) -> Result<bool> {
-    session_has_other_live_response(node, agent_did, session_id, requester_did, None).await
-}
-
-/// At a completion-turn boundary, the current physical request's response is
-/// still streaming but its yielded messages are durable. Another live response
-/// in the same canonical session scope keeps the reduction gate closed.
-pub(crate) async fn session_has_other_live_response(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    session_id: &str,
-    requester_did: Option<&str>,
-    current_request_doc_id: Option<&str>,
-) -> Result<bool> {
-    let scope = session_scope_filter(agent_did, session_id, requester_did);
-    let query = format!(
-        r#"{{ AgentResponse(
-            filter: {{ {scope}, status: {{ _eq: "streaming" }} }}, limit: 2
-        ) {{ request_doc_id }} }}"#
-    );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "loading live responses for session_id={session_id}: {:?}",
-            resp.errors
-        );
-    }
-    let rows = resp
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(serde_json::Value::as_array)
-        .context("live response query omitted rows")?;
-    // Two streaming rows cannot both be the one owned response. Keep the gate
-    // closed even for malformed duplicate physical bindings; a bounded read
-    // must not hide a third, unrelated live response.
-    if rows.len() > 1 {
-        return Ok(true);
-    }
-    Ok(rows.iter().any(|row| match current_request_doc_id {
-        Some(current) => {
-            row.get("request_doc_id")
-                .and_then(serde_json::Value::as_str)
-                != Some(current)
-        }
-        None => true,
-    }))
-}
-
 pub(crate) async fn load_session_behavior_id(
     node: &EmbeddedNode,
     agent_did: &str,

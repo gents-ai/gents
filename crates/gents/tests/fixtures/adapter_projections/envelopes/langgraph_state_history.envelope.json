@@ -22,7 +22,7 @@
         {
           "from": "tool_call:call-search-1",
           "kind": "timeline_order",
-          "to": "response:req-langgraph-1"
+          "to": "message:thread-langgraph-1:2"
         }
       ],
       "nodes": [
@@ -45,10 +45,10 @@
           "status": "completed"
         },
         {
-          "id": "response:req-langgraph-1",
-          "kind": "response",
+          "id": "message:thread-langgraph-1:2",
+          "kind": "message",
           "request_id": "req-langgraph-1",
-          "status": "completed"
+          "status": "assistant"
         }
       ],
       "root_request_id": "req-langgraph-1",

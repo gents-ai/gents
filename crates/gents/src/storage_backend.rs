@@ -3,41 +3,55 @@ use std::path::Path;
 
 use anyhow::Result;
 
-/// Reject a data directory created by a retired runtime storage backend.
-///
-/// Regolith, Lark, and RocksDB use incompatible on-disk formats. Regolith
-/// would otherwise try to open legacy files as its own store, so callers must
-/// fail before opening the directory.
-pub fn reject_legacy_store(data_path: &Path) -> Result<()> {
-    let current = data_path.join("CURRENT");
-    if current.is_file() {
-        anyhow::bail!(
-            "{} contains a legacy RocksDB Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first",
-            data_path.display()
-        );
-    }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncompatibleStoreKind {
+    LegacyRocksDb,
+    LegacyLark,
+    UnsupportedOrCorrupt,
+}
 
-    let lark_path = data_path.join("data.lark");
-    if lark_path.exists() {
-        anyhow::bail!(
-            "{} contains a legacy Lark Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first",
-            data_path.display()
-        );
+/// Inspect the exact on-disk markers owned by the storage backend without
+/// opening or mutating the store.
+pub fn incompatible_store_kind(data_path: &Path) -> Result<Option<IncompatibleStoreKind>> {
+    if data_path.join("CURRENT").is_file() {
+        return Ok(Some(IncompatibleStoreKind::LegacyRocksDb));
     }
-
+    if data_path.join("data.lark").exists() {
+        return Ok(Some(IncompatibleStoreKind::LegacyLark));
+    }
     let manifest_path = data_path.join("MANIFEST");
     if manifest_path.is_file() {
         let mut manifest = std::fs::File::open(&manifest_path)?;
         let mut magic = [0_u8; 7];
         let read = manifest.read(&mut magic)?;
         if read != magic.len() || magic != *b"REGOMAN" {
-            anyhow::bail!(
-                "{} contains an unsupported or corrupt Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first",
-                data_path.display()
-            );
+            return Ok(Some(IncompatibleStoreKind::UnsupportedOrCorrupt));
         }
     }
-    Ok(())
+    Ok(None)
+}
+
+/// Reject a data directory created by a retired runtime storage backend.
+///
+/// Regolith, Lark, and RocksDB use incompatible on-disk formats. Regolith
+/// would otherwise try to open legacy files as its own store, so callers must
+/// fail before opening the directory.
+pub fn reject_legacy_store(data_path: &Path) -> Result<()> {
+    match incompatible_store_kind(data_path)? {
+        Some(IncompatibleStoreKind::LegacyRocksDb) => anyhow::bail!(
+            "{} contains a legacy RocksDB Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first",
+            data_path.display()
+        ),
+        Some(IncompatibleStoreKind::LegacyLark) => anyhow::bail!(
+            "{} contains a legacy Lark Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first",
+            data_path.display()
+        ),
+        Some(IncompatibleStoreKind::UnsupportedOrCorrupt) => anyhow::bail!(
+            "{} contains an unsupported or corrupt Gents store; this release uses Regolith and cannot open it. Reset the runtime state or use an older Gents release to export any data you need first",
+            data_path.display()
+        ),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -50,6 +64,11 @@ mod tests {
         std::fs::write(tempdir.path().join("CURRENT"), "MANIFEST-000005\n").unwrap();
 
         let error = reject_legacy_store(tempdir.path()).unwrap_err();
+
+        assert_eq!(
+            incompatible_store_kind(tempdir.path()).unwrap(),
+            Some(IncompatibleStoreKind::LegacyRocksDb)
+        );
 
         assert!(error.to_string().contains("legacy RocksDB Gents store"));
     }

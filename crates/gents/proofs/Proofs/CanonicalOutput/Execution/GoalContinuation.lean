@@ -164,7 +164,7 @@ def childAdmission (result : Result) : Handover.PhysicalRequestAdmission :=
   , requester := result.binding.childRequester
   , authenticated := result.binding.authenticated }
 
-def childActivation (result : Result) (configuredRoutes : List (DocId × Nat))
+def childActivation (result : Result) (configuredRoutes : List (DocId × Nat × Nat))
     (routesAuthenticated : Bool) (generation : Generation)
     (duration deadline : Time) : Handover.Activation :=
   let admission := childAdmission result

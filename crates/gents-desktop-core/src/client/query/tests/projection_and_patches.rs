@@ -15,18 +15,26 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
         create_AgentMessage(input: {
             message_key: "sess-1:1",
             session_id: "sess-1",
+            agent_did: "did:test:agent",
+            request_doc_id: "request-sess-1",
+            publication: {kind: "request_execution", execution_generation: "generation"},
+            outcome: "complete",
             sequence: 1,
             role: "user",
-            content: "hello",
-            timestamp: "2026-05-07T00:00:00Z"
+            blocks: [],
+            created_at: "2026-05-07T00:00:00Z"
         }) { _docID }
         second: create_AgentMessage(input: {
             message_key: "sess-1:2",
             session_id: "sess-1",
+            agent_did: "did:test:agent",
+            request_doc_id: "request-sess-1",
+            publication: {kind: "request_execution", execution_generation: "generation"},
+            outcome: "complete",
             sequence: 2,
             role: "assistant",
-            content: "hi",
-            timestamp: "2026-05-07T00:00:01Z"
+            blocks: [],
+            created_at: "2026-05-07T00:00:01Z"
         }) { _docID }
     }"#;
     let response = node.execute(mutation).await;
@@ -56,7 +64,11 @@ async fn fetch_doc_patch_returns_only_matching_rows() {
     let patch = fetch_doc_patch(node.as_ref(), AGENT_MESSAGE_NAME, &[&target_id])
         .await
         .expect("fetch_doc_patch");
-    assert_eq!(patch.messages.len(), 1, "expected exactly one row");
+    assert_eq!(
+        patch.transcript_messages.len(),
+        1,
+        "expected exactly one row"
+    );
 }
 
 #[tokio::test]
@@ -73,10 +85,13 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
                     session_id: "resident",
                     agent_did: "did:test:selected",
                     requester_did: "did:test:local",
+                    request_doc_id: "request-resident",
+                    publication: {kind: "request_execution", execution_generation: "generation"},
+                    outcome: "complete",
                     sequence: 1,
                     role: "user",
-                    content: "durable only",
-                    timestamp: "2026-08-26T00:00:00Z"
+                    blocks: [],
+                    created_at: "2026-08-26T00:00:00Z"
                 }) { _docID }
                 tool: create_AgentToolCall(input: {
                     tool_call_key: "resident:tool:1",
@@ -104,9 +119,8 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
     let observed = load_full_snapshot(node.as_ref())
         .await
         .expect("observer snapshot");
-    assert!(observed.messages.is_empty());
+    assert!(observed.transcript_messages.is_empty());
     assert!(observed.tool_calls.is_empty());
-    assert!(observed.tool_results.is_empty());
     assert!(observed.compaction_entries.is_empty());
 
     let context = load_session_context_store(
@@ -117,8 +131,7 @@ async fn observer_snapshot_excludes_transcript_while_context_read_stays_authorit
     )
     .await
     .expect("ephemeral context");
-    assert_eq!(context.messages.len(), 1);
-    assert_eq!(context.messages[0].content.as_deref(), Some("durable only"));
+    assert_eq!(context.transcript_messages.len(), 1);
     assert_eq!(context.compaction_entries.len(), 1);
     assert_eq!(
         context.compaction_entries[0].summary.as_deref(),
@@ -198,20 +211,7 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             session_id: "sess-selected",
             content: "selected",
             lifecycle_state: "processing",
-            created_at: "2026-07-24T00:00:00Z"
-        }) { _docID }
-        first_response: create_AgentResponse(input: {
-            response_key: "req-selected",
-            request_id: "req-selected",
-            agent_did: "did:test:agent",
-            behavior_id: "default",
-            session_id: "sess-selected",
-            content: "partial",
-            reasoning: "",
-            status: "streaming",
-            error_message: "",
-            token_count: 1,
-            progress_seq: 1,
+            execution_generation: "generation-selected",
             created_at: "2026-07-24T00:00:00Z"
         }) { _docID }
         second_request: create_AgentRequest(input: {
@@ -232,8 +232,10 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
         .expect("selected local chat patch");
     assert_eq!(patch.requests.len(), 1);
     assert_eq!(patch.requests[0].request_id, "req-selected");
-    assert_eq!(patch.responses.len(), 1);
-    assert_eq!(patch.responses[0].content.as_deref(), Some("partial"));
+    assert_eq!(
+        patch.requests[0].execution_generation.as_deref(),
+        Some("generation-selected")
+    );
     assert!(
         patch
             .requests
@@ -241,4 +243,27 @@ async fn load_chat_patch_reads_only_the_selected_local_session() {
             .all(|row| row.session_id.as_deref() == Some("sess-selected")),
         "unrelated session leaked into selected patch"
     );
+
+    let terminal = gents_protocol::output::TerminalOutput::Message {
+        message_doc_id: "bae-terminal-message".to_string(),
+    };
+    let terminal_literal = gents_protocol::graphql::graphql_input_literal(
+        &serde_json::to_value(&terminal).expect("serialize terminal output"),
+    )
+    .expect("render terminal output");
+    let response = node
+        .execute(&format!(
+            r#"mutation {{
+                update_AgentRequest(
+                    filter: {{request_id: {{_eq: "req-selected"}}}}
+                    input: {{lifecycle_state: "completed", terminal_output: {terminal_literal}}}
+                ) {{ _docID }}
+            }}"#,
+        ))
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let terminal_patch = load_chat_patch(node.as_ref(), "req-selected")
+        .await
+        .expect("terminal selected chat patch");
+    assert_eq!(terminal_patch.requests[0].terminal_output, Some(terminal));
 }

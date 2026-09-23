@@ -17,7 +17,7 @@
         "crates/gents/src/agent/stream_processor.rs"
       ],
       "consumer_paths": [
-        "crates/gents/tests/conformance/transcript.rs",
+        "crates/gents/src/hook/tests/transcript_native.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs",
         "crates/gents/src/background_tools.rs",
         "crates/gents/src/hook/tests.rs"
@@ -209,6 +209,7 @@
         "crates/gents-desktop-core/src/client/query/session_transcript.rs"
       ],
       "consumer_paths": [
+        "crates/gents/src/agent/p2p_reconcile/session_hydration_closure.rs",
         "crates/gents/tests/conformance/session_hydration.rs",
         "crates/gents/src/session/tests.rs",
         "crates/gents-desktop-core/src/client/query/tests/transcript_pagination.rs",
@@ -251,7 +252,7 @@
         "crates/gents/src/hook/persistence/subagent_bridge.rs"
       ],
       "consumer_paths": [
-        "crates/gents/tests/conformance/tool_execution_subagent.rs",
+        "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
         "crates/gents/tests/conformance/background.rs",
         "crates/gents/tests/e2e_subagent/r4_subagent_completion.rs",
         "crates/gents/src/background_tools.rs"
@@ -293,7 +294,6 @@
       ],
       "consumer_paths": [
         "crates/gents/tests/conformance/r5_cross_principal.rs",
-        "crates/gents/tests/conformance/tool_execution_subagent.rs",
         "crates/gents/tests/e2e_live/subagent_delegation_live.rs",
         "crates/gents/src/tool_call_lifecycle/query/cascade_scope_tests.rs"
       ],

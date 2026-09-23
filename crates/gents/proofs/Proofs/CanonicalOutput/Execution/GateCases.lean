@@ -255,7 +255,7 @@ def foreignProviderMessage : MessageEnvelope :=
       .toolCall 900 "native-call" none "child" ⟨⟨500, 1⟩, .full⟩ none none] }
 
 def foreignAdmission : ToolAdmission :=
-  ⟨900, { foregroundToolContext with callId := 900, requestId := 11 }⟩
+  ⟨900, { foregroundToolContext with callId := 900, requestId := 11 }, none⟩
 
 def foreignAccepted : World :=
   match acceptAndPublish { world 5 with requestId := 11 } 7 foreignProviderTurn

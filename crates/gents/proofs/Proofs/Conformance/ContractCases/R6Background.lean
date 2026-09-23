@@ -319,6 +319,30 @@ def r6WaitBoundaryCase
     1 (Subagent.ChildTerminal.toDefraDB observation.processState)
     none (some observation.reason)
 
+/-- The standalone wait observation describes why polling stopped, while the
+accepted foreground wait call remains owned by its caller request. Once that
+request's deadline is authoritative, the existing tool timeout transition
+terminalizes the wait call; it never changes the separately backgrounded
+process observed above. -/
+def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
+  let observation := Subagent.ProcessControl.observeBoundary
+    Subagent.ChildTerminal.running .callerDeadline
+  let waitCall := { r6NativeToolFixture .foreground with
+    deadline := 10, currentTime := 11 }
+  let base := r6Case
+    "caller_deadline_times_out_wait_call_preserves_background_process"
+    "wait_dispatch_boundary" "wait_process"
+    false 1 "rejected" none (some observation.reason)
+  match ToolExecution.ToolCallContext.step? waitCall .timeout with
+  | none => base
+  | some callerPost =>
+      { base with
+          legal := !observation.cancellationRequested
+          awaitMode := callerPost.awaitMode.toDefraDB
+          cancelPolicy := callerPost.cancelPolicy.toDefraDB
+          terminalState := callerPost.state.toDefraDB
+          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+
 def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6BudgetCase
       "background_tool_budget_count_7_admits_spawn"
@@ -333,15 +357,15 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       .background
   , r6NativeStepCase
       "tool_kind_bridge_complete_persists_result"
-      "bridge_complete"
+      "complete"
       r6NativeToolFixture
       .complete
       (some "done")
   , r6NativeStepCase
       "tool_kind_explicit_cancel_projects_explicit_cancel"
-      "bridge_failure"
+      "cancel_during_run"
       r6NativeToolFixture
-      (.cancelDuringRun .interrupted)
+      (.cancelDuringRun .userCancelled)
       none
       (some "explicit_cancel")
   , r6RestartCase
@@ -449,6 +473,7 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6WaitBoundaryCase
       "caller_deadline_preserves_running_process"
       .callerDeadline
+  , r6CallerDeadlineDispatchCase
   ]
 
 /-- Pin the concrete projections while keeping their construction executable:
@@ -547,6 +572,8 @@ theorem r6BackgroundingCases_pinned :
           "background", none, "running", none, none)
       , ("caller_deadline_preserves_running_process", true,
           "background", none, "running", none, none)
+      , ("caller_deadline_times_out_wait_call_preserves_background_process", true,
+          "foreground", none, "timedOut", none, none)
       ] := by
   rfl
 

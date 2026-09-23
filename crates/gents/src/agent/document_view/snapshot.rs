@@ -400,7 +400,7 @@ fn ensure_inference_available(
                 return Err(BehaviorResolutionError::new(
                     BehaviorReadinessUnavailableReason::CredentialsRequired,
                     anyhow!("provider has no principal OAuth adapter"),
-                ))
+                ));
             }
         };
         if !view.has_enabled_oauth_credential(provider) {

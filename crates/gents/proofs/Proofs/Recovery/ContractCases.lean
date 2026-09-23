@@ -81,22 +81,16 @@ def recoverySweepCases : List RecoverySweepCase :=
       "formal-coverage-audit-2026-05-13-gap-6"
   , recoveryCase
       requestRecoverySweep
-      "request_processing_terminal_response_recovery_to_completed"
-      "processing"
-      "completed"
-      "gents-664-durable-terminal-repair"
-  , recoveryCase
-      requestRecoverySweep
       "request_processing_recovery_to_failed"
       "processing"
       "failed"
       "formal-coverage-audit-2026-05-13-gap-6"
   , recoveryCase
       requestRecoverySweep
-      "request_processing_interrupted_response_recovery_to_interrupted"
+      "request_processing_interrupted_recovery_to_interrupted"
       "processing"
       "interrupted"
-      "gents-664-durable-terminal-repair"
+      "canonical-output-expired-generation-recovery"
   , recoveryCase
       toolCallRecoverySweep
       "tool_running_deadline_exceeded_to_timed_out"
@@ -144,8 +138,11 @@ def recoverySweepCases : List RecoverySweepCase :=
       "orphaned_background_tool_without_execution_to_cancelled"
       false false true false false false
   , orphanedBackgroundRecoveryCase
-      "orphaned_background_tool_expired_missing_parent_to_timed_out"
+      "orphaned_background_tool_expired_missing_parent_deferred"
       true false false false false false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_unclaimed_missing_parent_deferred"
+      false true false false false false
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_expired_terminal_parent_to_timed_out"
       true false false false true false
@@ -345,7 +342,17 @@ def restartDispositionCases : List RestartDispositionCase :=
   , restartDispositionCase
       "restart_subagent_missing_parent_left_running"
       .background .cascade true .missing
-      "Recovery.leave_running_iff_preserved_shapes"
+      "Recovery.missing_parent_never_terminalizes"
+  , restartDispositionCase
+      "restart_native_background_expired_missing_parent_deferred"
+      .background .cascade false .missing
+      "Recovery.missing_parent_never_terminalizes"
+      (deadlineExpired := true)
+  , restartDispositionCase
+      "restart_unclaimed_missing_parent_deferred"
+      .background .cascade true .missing
+      "Recovery.missing_parent_never_terminalizes"
+      (unclaimedExpired := true)
   , -- Unclaimed cross-principal spawn expiry outranks every leave-running
     -- exemption: an unclaimed bridge under a live parent still fails.
     restartDispositionCase
@@ -355,13 +362,11 @@ def restartDispositionCases : List RestartDispositionCase :=
       (unclaimedExpired := true)
   ]
 
-/-- The witness family covers both dispositions and pins the expected split:
-    five leave-running rows (background subagent + live parent, detached +
-    interrupted parent, clean-complete + child-linked, foreground + live
-    parent, missing parent), five terminalize rows. -/
+/-- The witness family covers both dispositions, including expired and
+    unclaimed rows whose missing physical parent defers classification. -/
 theorem restartDispositionCases_cover_both_dispositions :
     (restartDispositionCases.filter
-        (fun witness => witness.disposition = "leave_running")).length = 5 ∧
+        (fun witness => witness.disposition = "leave_running")).length = 7 ∧
       (restartDispositionCases.filter
         (fun witness => witness.disposition = "terminalize")).length = 5 := by
   native_decide
@@ -415,10 +420,12 @@ theorem recoverySweepCases_registered_sweeps :
       (witness.sweepId, witness.collection) ∈ registeredRecoverySweepContracts := by
   native_decide
 
-theorem recoverySweepCases_decrease_to_zero :
+theorem recoverySweepCases_decrease_or_defer :
     ∀ witness,
       witness ∈ recoverySweepCases →
-      witness.measureBefore > witness.measureAfter ∧ witness.measureAfter = 0 := by
+      (witness.measureBefore > witness.measureAfter ∧ witness.measureAfter = 0) ∨
+        (witness.measureBefore = 0 ∧ witness.measureAfter = 0 ∧
+          witness.preState = witness.terminalState) := by
   native_decide
 
 end Recovery

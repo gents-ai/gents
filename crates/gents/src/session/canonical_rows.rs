@@ -99,6 +99,11 @@ AgentOutputSegmentMutationInputArg!) { create_AgentOutputSegment(input: $input) 
 pub const CREATE_AGENT_MESSAGE_MUTATION: &str = "mutation($input: \
 AgentMessageMutationInputArg!) { create_AgentMessage(input: $input) { _docID } }";
 
+/// Shared immutable key for request-owned authored publications.
+pub(crate) fn authored_message_key(request_doc_id: &str, key: &str) -> String {
+    format!("authored:{request_doc_id}:{key}")
+}
+
 /// Build the `execute_with_variables` variables for one canonical
 /// `AgentOutputSegment` create: the strict protocol segment serialized as the
 /// `$input` variable, with no GraphQL-text rendering of the JSON.
@@ -201,6 +206,14 @@ mod tests {
         assert_eq!(decoded.message.sequence, 3);
         assert_eq!(decoded.message.outcome, OutputOutcome::Complete);
         assert_eq!(decoded.message.blocks.len(), 1);
+    }
+
+    #[test]
+    fn message_row_accepts_defra_null_for_empty_blocks() {
+        let mut row = transcript_message_row();
+        row["blocks"] = serde_json::Value::Null;
+        let decoded = decode_transcript_message_row(&row).unwrap();
+        assert!(decoded.message.blocks.is_empty());
     }
 
     #[test]

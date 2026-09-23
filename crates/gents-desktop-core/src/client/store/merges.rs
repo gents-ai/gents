@@ -266,9 +266,6 @@ impl ClientStore {
         replace_agent_rows(&mut rows.requests, remote.requests, agent_did, |row| {
             row.agent_did.as_deref().unwrap_or_default()
         });
-        replace_agent_rows(&mut rows.responses, remote.responses, agent_did, |row| {
-            row.agent_did.as_deref().unwrap_or_default()
-        });
         Self::from_rows(rows)
     }
 
@@ -294,14 +291,14 @@ impl ClientStore {
         upsert_rows_by_key(&mut rows.mailbox_items, incoming.mailbox_items, |row| {
             row.doc_id.clone()
         });
-        upsert_rows_by_key(&mut rows.responses, incoming.responses, response_merge_key);
-        upsert_rows_with_sources_by_key(
-            &mut rows.messages,
-            &mut rows.message_source_agent_dids,
-            incoming.messages,
-            incoming.message_source_agent_dids,
-            message_merge_key,
+        union_immutable_rows(
+            &mut rows.transcript_messages,
+            incoming.transcript_messages,
+            |row| row.doc_id.as_str(),
         );
+        union_immutable_rows(&mut rows.output_segments, incoming.output_segments, |row| {
+            row.doc_id.as_str()
+        });
         upsert_rows_with_sources_by_key(
             &mut rows.sessions,
             &mut rows.session_source_agent_dids,
@@ -316,13 +313,6 @@ impl ClientStore {
             incoming.tool_calls,
             incoming.tool_call_source_agent_dids,
             tool_call_merge_key,
-        );
-        upsert_rows_with_sources_by_key(
-            &mut rows.tool_results,
-            &mut rows.tool_result_source_agent_dids,
-            incoming.tool_results,
-            incoming.tool_result_source_agent_dids,
-            tool_result_merge_key,
         );
         upsert_rows_with_sources_by_key(
             &mut rows.compaction_entries,
@@ -495,24 +485,15 @@ impl ClientStore {
         rows.requests
             .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.mailbox_items.retain(|row| row.agent_did != agent_did);
-        rows.responses
-            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
         rows.goals.retain(|row| row.agent_did != agent_did);
-        rows.tool_results
-            .retain(|row| row.agent_did.as_deref() != Some(agent_did));
-
-        retain_rows_and_sources(
-            &mut rows.messages,
-            &mut rows.message_source_agent_dids,
-            |row, source| {
-                source != Some(agent_did)
-                    && !(source.is_none()
-                        && row
-                            .session_id
-                            .as_deref()
-                            .is_some_and(|session_id| agent_session_ids.contains(session_id)))
-            },
-        );
+        rows.transcript_messages.retain(|row| {
+            row.message.agent_did != agent_did
+                && !agent_session_ids.contains(&row.message.session_id)
+        });
+        rows.output_segments.retain(|row| {
+            row.segment.agent_did != agent_did
+                && !agent_session_ids.contains(&row.segment.session_id)
+        });
         retain_rows_and_sources(
             &mut rows.sessions,
             &mut rows.session_source_agent_dids,
@@ -698,28 +679,16 @@ impl ClientStore {
         rows.requests.retain(|row| {
             row.agent_did.is_some() || !scoped_request_ids.contains(row.request_id.as_str())
         });
-        let scoped_response_keys = patch_rows
-            .responses
-            .iter()
-            .filter(|row| row.agent_did.is_some())
-            .map(|row| row.response_key.clone())
-            .collect::<HashSet<_>>();
-        rows.responses.retain(|row| {
-            row.agent_did.is_some() || !scoped_response_keys.contains(row.response_key.as_str())
-        });
-
         upsert_rows_by_key(&mut rows.requests, patch_rows.requests, request_merge_key);
-        upsert_rows_by_key(
-            &mut rows.responses,
-            patch_rows.responses,
-            response_merge_key,
+        union_immutable_rows(
+            &mut rows.transcript_messages,
+            patch_rows.transcript_messages,
+            |row| row.doc_id.as_str(),
         );
-        upsert_rows_with_sources_by_key(
-            &mut rows.messages,
-            &mut rows.message_source_agent_dids,
-            patch_rows.messages,
-            patch_rows.message_source_agent_dids,
-            message_merge_key,
+        union_immutable_rows(
+            &mut rows.output_segments,
+            patch_rows.output_segments,
+            |row| row.doc_id.as_str(),
         );
         upsert_rows_with_sources_by_key(
             &mut rows.sessions,
@@ -735,13 +704,6 @@ impl ClientStore {
             patch_rows.tool_calls,
             patch_rows.tool_call_source_agent_dids,
             tool_call_merge_key,
-        );
-        upsert_rows_with_sources_by_key(
-            &mut rows.tool_results,
-            &mut rows.tool_result_source_agent_dids,
-            patch_rows.tool_results,
-            patch_rows.tool_result_source_agent_dids,
-            tool_result_merge_key,
         );
         upsert_rows_with_sources_by_key(
             &mut rows.compaction_entries,
@@ -762,17 +724,14 @@ impl ClientStore {
             behavior_readiness: self.behavior_readiness.clone(),
             requests: self.requests.clone(),
             mailbox_items: self.mailbox_items.clone(),
-            responses: self.responses.clone(),
-            messages: self.messages.clone(),
+            transcript_messages: self.transcript_messages.clone(),
+            output_segments: self.output_segments.clone(),
             sessions: self.sessions.clone(),
             goals: self.goals.clone(),
             tool_calls: self.tool_calls.clone(),
-            tool_results: self.tool_results.clone(),
             compaction_entries: self.compaction_entries.clone(),
-            message_source_agent_dids: self.message_source_agent_dids.clone(),
             session_source_agent_dids: self.session_source_agent_dids.clone(),
             tool_call_source_agent_dids: self.tool_call_source_agent_dids.clone(),
-            tool_result_source_agent_dids: self.tool_result_source_agent_dids.clone(),
             compaction_entry_source_agent_dids: self.compaction_entry_source_agent_dids.clone(),
             tasks: self.tasks.clone(),
             schedules: self.schedules.clone(),
@@ -1009,29 +968,21 @@ mod overlay_tests {
     fn scoped_chat_patch_replaces_unscoped_optimistic_rows() {
         let local = ClientStore::from_rows(ClientStoreRows {
             requests: vec![request(None, "processing")],
-            responses: vec![response(None, "streaming")],
             ..ClientStoreRows::default()
         });
         let remote = ClientStore::from_rows(ClientStoreRows {
             requests: vec![request(Some("did:test:agent"), "completed")],
-            responses: vec![response(Some("did:test:agent"), "complete")],
             ..ClientStoreRows::default()
         });
 
         let merged = local.merge_chat_patch(remote);
 
         assert_eq!(merged.requests.len(), 1);
-        assert_eq!(merged.responses.len(), 1);
         assert_eq!(
             merged.requests[0].agent_did.as_deref(),
             Some("did:test:agent")
         );
         assert!(merged.requests[0].is_terminal());
-        assert_eq!(
-            merged.responses[0].agent_did.as_deref(),
-            Some("did:test:agent")
-        );
-        assert_eq!(merged.responses[0].status.as_deref(), Some("complete"));
     }
 
     fn request(agent_did: Option<&str>, lifecycle_state: &str) -> AgentRequestRow {
@@ -1044,18 +995,5 @@ mod overlay_tests {
             "created_at": "2026-09-12T00:00:00Z",
         }))
         .expect("request")
-    }
-
-    fn response(agent_did: Option<&str>, status: &str) -> AgentResponseRow {
-        serde_json::from_value(serde_json::json!({
-            "response_key": "request",
-            "request_id": "request",
-            "agent_did": agent_did,
-            "session_id": "session",
-            "content": "hello",
-            "status": status,
-            "created_at": "2026-09-12T00:00:00Z",
-        }))
-        .expect("response")
     }
 }

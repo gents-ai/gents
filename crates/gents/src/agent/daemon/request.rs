@@ -208,6 +208,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .iter()
                         .map(|row| row.message.clone())
                         .collect::<Vec<_>>();
+                    // Check the exact reconstructed canonical rows before the
+                    // provider projection is allowed to remove an unfinished
+                    // tail. The projected view is intentionally a fixpoint;
+                    // checking only that view would make this gate vacuous.
+                    let canonical_prefix_is_stable =
+                        compaction::safe_to_reduce(&durable_history);
                     // One canonical reduction, shared with the compaction writer:
                     // `messages_compacted` is measured against this list, so the
                     // prefix drop below must index the same one (#993).
@@ -261,51 +267,17 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         self.behavior.compaction_threshold(),
                     );
                     let over_threshold = reduction_admission.is_some();
-                    // Runtime counterpart of Lean `PromptView.safeToReduce`,
-                    // resolved at session scope: while any response in this session
-                    // is still streaming, a turn is still being written into the
-                    // transcript and must not be summarized away. All-terminal at
-                    // session scope implies terminal for every row, so this can only
-                    // err toward skipping a compaction the next request retries
-                    // (`boundary.compaction.safe-to-reduce-session-scope`, #993).
                     let may_reduce = if over_threshold {
-                        let live_response =
-                            session::session_has_live_response(
-                                &self.node, &request.agent_did, &request.session_id,
-                                request.requester_did.as_deref(),
-                            ).await?;
-                        let gate_open = if live_response {
-                            compaction::safe_to_reduce(&history, &compaction::NoneKnown)
-                        } else {
-                            compaction::safe_to_reduce(&history, &compaction::AllTerminal)
-                        };
+                        let gate_open = canonical_prefix_is_stable;
                         if !gate_open {
                             tracing::info!(
                                 request_id = %request.request_id,
                                 session_id = %request.session_id,
                                 behavior_id = %behavior_name,
-                                "compaction skipped: a response in this session is still streaming"
+                                "compaction skipped: canonical provider prefix is not a stable turn boundary"
                             );
                         }
-                        // `Compaction.providerView_append` — the theorem that lets a
-                        // recorded count still name the same rows once the
-                        // transcript grows — assumes `UniqueCallIds`. Call ids come
-                        // from the provider and nothing enforces that, so it is
-                        // checked rather than assumed: a reused id resurrects an
-                        // earlier unpaired announcement and shifts the prefix under
-                        // the stored count
-                        // (`Compaction.reused_call_id_breaks_prefix_stability`).
-                        let unique_call_ids = compaction::has_unique_call_ids(&history);
-                        if gate_open && !unique_call_ids {
-                            tracing::warn!(
-                                request_id = %request.request_id,
-                                session_id = %request.session_id,
-                                behavior_id = %behavior_name,
-                                "compaction skipped: a tool-call id is announced by more than one turn, \
-                                 so a recorded compacted-prefix count would not stay valid"
-                            );
-                        }
-                        gate_open && unique_call_ids
+                        gate_open
                     } else {
                         false
                     };
@@ -465,7 +437,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             }
 
             let response_behavior_id = lifecycle.behavior_id().to_string();
-            let doc_id = lifecycle
+            lifecycle
                 .begin_owned_execution(&self.stream_writer)
                 .instrument(tracing::info_span!(
                     "request.begin_response",
@@ -477,6 +449,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     is_subagent = trace_attrs.is_subagent,
                 ))
                 .await?;
+            let doc_id = lifecycle.request().doc_id.clone();
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();
             let inference_backend_id = lifecycle.backend_id().to_string();
@@ -516,16 +489,21 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 if let Some(intent) = watched_interrupt {
                     Some(intent.at.to_rfc3339())
                 } else {
-                    crate::interrupt::fetch_interrupt_requested_at(&self.node, &request.request_id)
-                        .await?
+                    crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+                        &self.node,
+                        &request.doc_id,
+                    )
+                    .await?
                 }
             } else if let Some(intent) = watched_interrupt {
                 request_token.cancel();
                 Some(intent.at.to_rfc3339())
             } else {
-                let persisted =
-                    crate::interrupt::fetch_interrupt_requested_at(&self.node, &request.request_id)
-                        .await?;
+                let persisted = crate::interrupt::fetch_interrupt_requested_at_by_doc_id(
+                    &self.node,
+                    &request.doc_id,
+                )
+                .await?;
                 if persisted.is_some() {
                     request_token.cancel();
                 }

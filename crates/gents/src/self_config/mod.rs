@@ -137,7 +137,9 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
             });
         if protected {
             return Box::pin(async {
-                bail!("target behavior is the protected Setup configurator; select a working behavior")
+                bail!(
+                    "target behavior is the protected Setup configurator; select a working behavior"
+                )
             });
         }
         Box::pin(async move {
@@ -171,10 +173,10 @@ fn protect_working_behavior(mut request: ApplyRequest<'static>) -> ApplyRequest<
                     .and_then(Value::as_array)
                     .with_context(|| format!("{collection} reference query missing rows"))?;
                 anyhow::ensure!(
-                        rows.len() == 1
-                            && rows[0].get(unique).and_then(Value::as_str) == Some(expected),
-                        "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration"
-                    );
+                    rows.len() == 1
+                        && rows[0].get(unique).and_then(Value::as_str) == Some(expected),
+                    "targeted configuration requires an unshared Context and Tools; clone the working behavior before editing shared configuration"
+                );
                 Ok::<_, anyhow::Error>(())
             };
             if target == SelfConfigTarget::AgentContext || target == SelfConfigTarget::Tools {

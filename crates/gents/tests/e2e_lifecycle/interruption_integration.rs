@@ -3,23 +3,22 @@ use std::sync::Arc;
 use gents::graphql::escape_graphql_string;
 use gents::lifecycle::{ClaimOutcome, ExecutionOrigin};
 use gents::{interrupt_request, AgentIdentity, Gents, RequestLifecycle, ToolCeiling};
+use gents_protocol::output::{OutputOutcome, SourceClose, TerminalOutput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
-use gents_protocol::transcript::present_persisted_message;
+use gents_protocol::row::AgentRequestRow;
+use gents_protocol::transcript::present_message;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
-    create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
-    wait_for_response_content_contains, wait_for_response_doc_id, wait_for_runtime_ready,
+    create_runtime_request, fetch_output_segments_for_request, wait_for_inference_call_state,
+    wait_for_provider_output_contains, wait_for_request_lifecycle_state, wait_for_runtime_ready,
     BootedAgent,
 };
-use crate::support::snapshots::{
-    fetch_message_snapshots_for_session, fetch_request_snapshot, fetch_response_content,
-    fetch_response_interrupted_at, fetch_response_snapshot,
-};
+use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamScript};
 use crate::support::{
-    build_request, create_request_with_valid_until, create_retry_request, test_db, AGENT_DID,
-    AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
+    build_request, create_request_with_valid_until, create_retry_request, first_row, test_db,
+    AGENT_DID, AGENT_NAME, BACKEND_ID, DEADLINE_SECS,
 };
 
 const STREAM_MODEL: &str = "default";
@@ -39,6 +38,21 @@ fn run_on_production_runtime(future: impl std::future::Future<Output = ()>) {
         .build()
         .expect("build e2e lifecycle runtime")
         .block_on(future);
+}
+
+async fn fetch_terminal_request(
+    node: &gents::defra_node::EmbeddedNode,
+    request_doc_id: &str,
+) -> AgentRequestRow {
+    let request_doc_id = escape_graphql_string(request_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
+                request_id requester_did lifecycle_state interrupt_requested_at terminal_output
+            }} }}"#
+        ))
+        .await;
+    first_row(&response, "AgentRequest")
 }
 
 #[tokio::test]
@@ -237,9 +251,7 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         .await;
 
         backend.wait_for_chunks(TARGET_MARKER, 1).await;
-        let response_doc_id = wait_for_response_doc_id(db.node.as_ref(), request_id).await;
-        wait_for_response_content_contains(db.node.as_ref(), &response_doc_id, TARGET_PARTIAL)
-            .await;
+        wait_for_provider_output_contains(db.node.as_ref(), &request_doc_id, TARGET_PARTIAL).await;
 
         interrupt_request(db.node.as_ref(), request_id)
             .await
@@ -249,31 +261,50 @@ fn interrupt_mid_stream_preserves_partial_and_cancels_inference_call() {
         let call = wait_for_inference_call_state(db.node.as_ref(), request_id, "cancelled").await;
         assert_eq!(call.failure_reason.as_deref(), Some("Cancelled"));
 
-        let content = fetch_response_content(&db.node, &response_doc_id).await;
+        let terminal = fetch_terminal_request(db.node.as_ref(), &request_doc_id).await;
+        assert!(
+            terminal
+                .interrupt_requested_at
+                .as_deref()
+                .is_some_and(|at| !at.is_empty()),
+            "daemon interrupt must retain the accepted interrupt intent timestamp"
+        );
+        let TerminalOutput::Message { message_doc_id } = terminal
+            .terminal_output
+            .expect("interrupted request selects retained partial output")
+        else {
+            panic!("interrupted request must select its retained partial message")
+        };
+        let (header, native) = gents::session::load_canonical_message_from_node(
+            db.node.as_ref(),
+            &message_doc_id,
+            agent.agent_did.as_str(),
+            terminal.requester_did.as_deref(),
+        )
+        .await
+        .expect("reconstruct selected partial message");
         assert_eq!(
-            content, "",
-            "daemon interrupt must clear the live tail after persisting partial content"
+            header.request_doc_id.as_deref(),
+            Some(request_doc_id.as_str())
         );
-        let response = fetch_response_snapshot(&db.node, &response_doc_id).await;
-        assert_eq!(response.status, "error");
-        assert!(
-            response.completed_at_present,
-            "interrupted response must be terminalized"
+        assert_eq!(header.outcome, OutputOutcome::Partial);
+        assert_eq!(
+            present_message(&native).body_markdown,
+            TARGET_PARTIAL.trim()
         );
-        let messages = fetch_message_snapshots_for_session(&db.node, session_id).await;
+
+        let segments = fetch_output_segments_for_request(db.node.as_ref(), &request_doc_id).await;
         assert!(
-            messages.iter().any(|message| {
-                message.role == "assistant"
-                    && present_persisted_message(&message.role, &message.content).body_markdown
-                        == TARGET_PARTIAL.trim()
+            segments.iter().any(|row| {
+                matches!(
+                    &row.segment.close,
+                    Some(SourceClose::Closed {
+                        outcome: OutputOutcome::Partial,
+                        ..
+                    })
+                )
             }),
-            "daemon interrupt must preserve already streamed response content in AgentMessage"
-        );
-        assert!(
-            fetch_response_interrupted_at(&db.node, &response_doc_id)
-                .await
-                .is_some(),
-            "daemon interrupt must stamp AgentResponse.interrupted_at"
+            "interrupted provider source must be sealed Partial"
         );
 
         agent.shutdown().await;
@@ -328,22 +359,9 @@ fn interrupting_one_request_does_not_affect_another() {
         backend.wait_for_chunks(TARGET_MARKER, 1).await;
         backend.wait_for_chunks(SURVIVOR_MARKER, 1).await;
 
-        let target_response_doc_id =
-            wait_for_response_doc_id(db.node.as_ref(), target_request_id).await;
-        let survivor_response_doc_id =
-            wait_for_response_doc_id(db.node.as_ref(), survivor_request_id).await;
-        wait_for_response_content_contains(
-            db.node.as_ref(),
-            &target_response_doc_id,
-            TARGET_PARTIAL,
-        )
-        .await;
-        wait_for_response_content_contains(
-            db.node.as_ref(),
-            &survivor_response_doc_id,
-            SURVIVOR_PARTIAL,
-        )
-        .await;
+        wait_for_provider_output_contains(db.node.as_ref(), &target_doc_id, TARGET_PARTIAL).await;
+        wait_for_provider_output_contains(db.node.as_ref(), &survivor_doc_id, SURVIVOR_PARTIAL)
+            .await;
 
         interrupt_request(db.node.as_ref(), target_request_id)
             .await
@@ -367,28 +385,29 @@ fn interrupting_one_request_does_not_affect_another() {
             wait_for_inference_call_state(db.node.as_ref(), survivor_request_id, "completed").await;
         assert_eq!(survivor_call.failure_reason.as_deref(), None);
 
-        let survivor_response = fetch_response_snapshot(&db.node, &survivor_response_doc_id).await;
-        assert_eq!(survivor_response.status, "complete");
-        let survivor_content = fetch_response_content(&db.node, &survivor_response_doc_id).await;
+        let survivor = fetch_terminal_request(db.node.as_ref(), &survivor_doc_id).await;
+        assert!(
+            survivor.interrupt_requested_at.is_none(),
+            "unrelated request must not acquire interrupt intent"
+        );
+        let TerminalOutput::Message { message_doc_id } = survivor
+            .terminal_output
+            .expect("completed survivor selects canonical output")
+        else {
+            panic!("completed survivor must select its canonical message")
+        };
+        let (header, native) = gents::session::load_canonical_message_from_node(
+            db.node.as_ref(),
+            &message_doc_id,
+            agent.agent_did.as_str(),
+            survivor.requester_did.as_deref(),
+        )
+        .await
+        .expect("reconstruct survivor message");
+        assert_eq!(header.outcome, OutputOutcome::Complete);
         assert_eq!(
-            survivor_content, "",
-            "completed response must leave AgentResponse.content as an empty live tail"
-        );
-        let survivor_messages =
-            fetch_message_snapshots_for_session(&db.node, survivor_session_id).await;
-        assert!(
-            survivor_messages.iter().any(|message| {
-                message.role == "assistant"
-                    && present_persisted_message(&message.role, &message.content).body_markdown
-                        == SURVIVOR_PARTIAL.trim()
-            }),
-            "completed survivor response must be preserved in AgentMessage"
-        );
-        assert!(
-            fetch_response_interrupted_at(&db.node, &survivor_response_doc_id)
-                .await
-                .is_none(),
-            "unrelated response must not be stamped as interrupted"
+            present_message(&native).body_markdown,
+            SURVIVOR_PARTIAL.trim()
         );
 
         agent.shutdown().await;

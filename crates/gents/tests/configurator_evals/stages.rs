@@ -788,7 +788,7 @@ async fn native_stage_waits_for_exact_subscription_configuration() {
 /// Each stage uses a fresh session; configuration stages must await activation.
 pub async fn execute(
     activation: &ActivationFence,
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
     behavior: &str,
     stage: &str,
@@ -828,14 +828,25 @@ pub(super) async fn observed_request_outcome<'a>(
     request_id: &str,
 ) -> Result<Value> {
     let escaped = escape_graphql_string(request_id);
-    access.into().query(&format!(
+    let access = access.into();
+    let mut outcome = access.query(&format!(
         r#"{{
             AgentRequest(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{request_id lifecycle_state failure_reason session_id}}
-            AgentResponse(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{status error_message}}
             InferenceCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{call_seq call_state failure_reason queued_at started_at ended_at}}
-            AgentToolCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{tool_name status lifecycle_state tool_failure_class started_at completed_at}}
         }}"#
-    )).await
+    )).await?;
+    let calls = access
+        .timeline(request_id)
+        .await?
+        .tool_calls
+        .into_iter()
+        .map(serde_json::to_value)
+        .collect::<Result<Vec<_>, _>>()?;
+    outcome
+        .as_object_mut()
+        .context("request outcome response was not an object")?
+        .insert("AgentToolCall".to_owned(), Value::Array(calls));
+    Ok(outcome)
 }
 
 fn classify_request_outcome(
@@ -861,11 +872,6 @@ fn classify_request_outcome(
     let invalid_tool_call_budget_exhausted = rows("AgentRequest")
         .iter()
         .filter_map(|row| row["failure_reason"].as_str())
-        .chain(
-            rows("AgentResponse")
-                .iter()
-                .filter_map(|row| row["error_message"].as_str()),
-        )
         .any(|reason| reason.contains("invalid_tool_call_budget_exhausted"));
     if invalid_tool_call_budget_exhausted {
         return Some("tool");
@@ -876,10 +882,9 @@ fn classify_request_outcome(
                 .as_str()
                 .is_some_and(|reason| !reason.is_empty())
     });
-    let tool_failed = rows("AgentToolCall").iter().any(|row| {
-        matches!(row["lifecycle_state"].as_str(), Some("failed"))
-            || matches!(row["status"].as_str(), Some("failed" | "error"))
-    });
+    let tool_failed = rows("AgentToolCall")
+        .iter()
+        .any(|row| matches!(row["lifecycle_state"].as_str(), Some("failed")));
     // Failed tool execution can terminate an otherwise healthy provider stream.
     // Co-occurrence does not establish which boundary caused termination.
     if inference_failed && tool_failed {
@@ -931,10 +936,6 @@ fn request_failure_taxonomy_uses_structured_observations_and_preserves_unknown()
                 "AgentRequest":[{
                     "lifecycle_state":"failed",
                     "failure_reason":"agent stream failed: CompletionError: ProviderError: invalid_tool_call_budget_exhausted: limit=8, used=8"
-                }],
-                "AgentResponse":[{
-                    "status":"error",
-                    "error_message":"invalid_tool_call_budget_exhausted: limit=8, used=8"
                 }],
                 "InferenceCall":[{
                     "call_state":"failed",
@@ -1004,7 +1005,7 @@ fn request_failure_taxonomy_uses_structured_observations_and_preserves_unknown()
 
 async fn execute_inner(
     activation: &ActivationFence,
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     owner: &str,
     behavior: &str,
     stage: &str,
@@ -1134,22 +1135,7 @@ pub(super) async fn observe_request(
         Some(&terminal_state),
         &started_at,
     )?;
-    let response = access
-        .query(&format!(
-            r#"{{ AgentMessage(filter: {{request_id: {{_eq: "{escaped}"}}, role: {{_eq: "assistant"}}}}, order: {{sequence: ASC}}) {{content}} }}"#
-        ))
-        .await?;
-    let answer = response["AgentMessage"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|row| row["content"].as_str())
-        .map(|content| {
-            gents_protocol::transcript::present_persisted_message("assistant", content)
-                .body_markdown
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let answer = access.terminal_answer(&request_id).await?;
     let result = StageResult {
         stage: stage.to_owned(),
         request_id,
@@ -1185,11 +1171,9 @@ pub async fn retain_request_evidence<'a>(
     evidence: &Path,
 ) -> Result<()> {
     let access = access.into();
-    let escaped = escape_graphql_string(request_id);
-    // Tool evidence records concrete execution, including failures and recovery.
-    let calls = access.query(&format!(
-        r#"{{ AgentToolCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{tool_name status lifecycle_state tool_failure_class started_at completed_at args result}} }}"#
-    )).await?;
+    // Tool evidence is reconstructed through the same canonical timeline owner
+    // used by runtime clients; missing payloads are evidence failures.
+    let calls = access.timeline(request_id).await?.tool_calls;
     std::fs::write(
         evidence.join(format!("{stage}-tools.json")),
         serde_json::to_vec_pretty(&calls)?,
@@ -1205,10 +1189,7 @@ async fn retain_inference_evidence<'a>(
 ) -> Result<()> {
     let escaped = escape_graphql_string(request_id);
     let diagnostics = access.into().query(&format!(
-        r#"{{
-            AgentResponse(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{status error_message}}
-            InferenceCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{call_seq call_state failure_reason prompt_tokens completion_tokens queued_at started_at ended_at}}
-        }}"#
+        r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{escaped}"}}}}) {{call_seq call_state failure_reason prompt_tokens completion_tokens queued_at started_at ended_at}} }}"#
     )).await?;
     super::reporting::write_json(
         &evidence.join(format!("{stage}-inference.json")),

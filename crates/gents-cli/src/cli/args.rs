@@ -2843,7 +2843,7 @@ pub(crate) enum P2pCollectionProfileArg {
 #[derive(Subcommand)]
 pub(crate) enum RequestCommand {
     #[command(
-        about = "Create an AgentRequest document and optionally wait for the final AgentResponse"
+        about = "Create an AgentRequest document and optionally wait for its canonical terminal output"
     )]
     Submit(RequestSubmitArgs),
     #[command(about = "Show a stored AgentRequest document")]
@@ -3280,9 +3280,11 @@ pub(crate) struct SessionForkArgs {
 
 #[derive(Subcommand)]
 pub(crate) enum ResponseCommand {
-    #[command(about = "Show the latest AgentResponse for a request")]
+    #[command(about = "Show the selected canonical terminal output for a request")]
     Show(ResponseShowArgs),
-    #[command(about = "Wait until a request reaches a terminal AgentResponse")]
+    #[command(
+        about = "Wait until a request reaches terminal state with canonical terminal output"
+    )]
     Wait(ResponseWaitArgs),
 }
 

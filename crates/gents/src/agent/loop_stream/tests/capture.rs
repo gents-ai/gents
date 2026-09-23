@@ -1,6 +1,5 @@
 #[tokio::test]
 async fn rendered_request_sink_runs_before_provider_stream() {
-    let (_node, hook) = test_hook().await;
     let model = ScriptedModel::new(vec![
         RawStreamingChoice::Message("unreached".to_string()),
         RawStreamingChoice::FinalResponse(()),
@@ -22,7 +21,7 @@ async fn rendered_request_sink_runs_before_provider_stream() {
 
     let stream = run_loop_stream(
         model.clone(),
-        Some(hook),
+        None,
         Message::user("hi"),
         Vec::new(),
         Arc::new(Vec::new()),
@@ -517,7 +516,7 @@ async fn a_provider_response_with_the_capture_still_armed_fails_the_turn() {
         // uncaptured send as an ordinary empty completion.
         ("req-empty", "session-empty", Vec::new()),
     ] {
-        let model = ScriptedModel::new(choices);
+        let model = ScriptedModel::new(choices).without_capture();
         let context = RenderedRequestContext {
             request_doc_id: format!("doc-{request_id}"),
             request_commit_cid: "bafy-request-commit".to_string(),

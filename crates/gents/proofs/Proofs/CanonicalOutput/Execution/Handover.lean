@@ -46,7 +46,7 @@ def predecessorReady (world : World) : Bool :=
   | .terminal _ _ => world.terminalSelection.isSome
   | _ => false
 
-def freshRequestWorld (old : World) (physical : DocId) (routes : List (DocId × Nat))
+def freshRequestWorld (old : World) (physical : DocId) (routes : List (DocId × Nat × Nat))
     (now : Time) : World :=
   { old with
     requestId := physical

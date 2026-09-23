@@ -96,25 +96,16 @@ async fn load_head_in_txn(
             _docID request_id agent_did requester_did session_id behavior_id created_at lifecycle_state
             retry_parent_request superseded_by_request failure_reason content input
         }}
-        AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{doc_id}"}}}}) {{
-            response_key request_id status content error_message materialized_message_sequence materialized_at interrupted_at
-        }}
     }}"#)).await?;
     let requests = rows(&response, "AgentRequest")?;
-    let responses = rows(&response, "AgentResponse")?;
     anyhow::ensure!(
-        requests.len() == 1 && responses.len() <= 1,
-        "thread head has missing or ambiguous physical request/response"
+        requests.len() == 1,
+        "thread head has missing or ambiguous physical request"
     );
     let request =
         serde_json::from_value(requests[0].clone()).context("decode exact thread head")?;
     Ok(Some(GraphqlTurnState {
         request: Some(request),
-        response: responses
-            .first()
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?,
     }))
 }
 

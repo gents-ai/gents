@@ -224,7 +224,6 @@ pub async fn build_client_snapshot_with_grants(
         grants,
     ))
 }
-
 #[cfg(test)]
 #[path = "snapshot/tests.rs"]
 mod tests;

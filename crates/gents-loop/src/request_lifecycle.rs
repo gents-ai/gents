@@ -2,8 +2,7 @@
 //!
 //! `gents`'s `RequestLifecycle` (native) owns the full claim/generation/
 //! terminal state machine over DefraDB; `StreamProcessor` only ever calls
-//! these two methods on it (validate the execution is still owned, and
-//! advance the durable progress marker), so only they move here as a trait.
+//! ownership validation on it, so only that operation crosses this seam.
 
 #[async_trait::async_trait]
 pub trait RequestLifecycleControl: Send + Sync {
@@ -12,6 +11,4 @@ pub trait RequestLifecycleControl: Send + Sync {
     /// it writes anything else.
     async fn validate_owned_execution(&self) -> anyhow::Result<()>;
 
-    /// Advance the durable progress marker by one step.
-    async fn advance(&mut self) -> anyhow::Result<()>;
 }

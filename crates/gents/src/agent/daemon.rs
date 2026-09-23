@@ -12,6 +12,9 @@ mod request;
 mod title;
 
 use super::runtime::StartupBarrier;
+use crate::agent::worker_capacity::{
+    bind_current_claim, current_slot_capacity, scope_request_capacity, WorkerTicket,
+};
 use crate::compaction::{ProviderReductionEngine, ReductionEngine, ReductionOptions};
 use crate::config::ResolvedBehavior;
 use crate::hook::FailurePolicy;
@@ -32,8 +35,11 @@ async fn terminalize_request(
     outcome: RequestTerminalOutcome,
     reason: Option<&str>,
 ) -> Result<bool> {
+    let selection = stream_writer
+        .terminal_output(&lifecycle.request().doc_id)
+        .await;
     match lifecycle
-        .terminalize_owned(stream_writer, outcome, reason)
+        .terminalize_owned(outcome, selection, reason)
         .await?
     {
         TerminalizeResult::Won => Ok(true),
@@ -330,31 +336,58 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             let behavior_id = self.behavior.behavior_id.clone();
             let backend_id = self.behavior.backend_id.clone().unwrap_or_default();
 
-            self.process_request(request, shutdown.clone())
-                .instrument(tracing::info_span!(
-                    "agent.request",
-                    request_doc_id = %trace_attrs.request_doc_id,
-                    request_id = %trace_attrs.request_id,
-                    session_id = %trace_attrs.session_id,
-                    agent_did = %trace_attrs.agent_did,
-                    behavior_id = %behavior_id,
-                    requested_behavior_id = %trace_attrs.requested_behavior_id,
-                    backend_id = %backend_id,
-                    execution_origin = %trace_attrs.execution_origin,
-                    persisted_execution_origin = %trace_attrs.execution_origin,
-                    deadline_at = %trace_attrs.deadline_at,
-                    has_deadline = trace_attrs.has_deadline,
-                    subagent_depth = trace_attrs.subagent_depth,
-                    is_subagent = trace_attrs.is_subagent,
-                    parent_request_id = %trace_attrs.parent_request_id,
-                    parent_tool_call_id = %trace_attrs.parent_tool_call_id,
-                    selected_skill_count = trace_attrs.selected_skill_count,
-                    workspace_cwd_set = trace_attrs.workspace_cwd_set,
-                    claim_outcome = tracing::field::Empty,
-                    request_outcome = tracing::field::Empty,
-                    failure_class = tracing::field::Empty,
-                ))
-                .await;
+            // The slot's fixed workers may be idle or waiting on this shared
+            // active semaphore. Dequeue happens first; no idle worker holds
+            // active capacity. The unbound guard is retained across the whole
+            // process future and bound to the generation only after claim.
+            let active_guard = if let Some(capacity) = current_slot_capacity() {
+                let cancellation = tokio_util::sync::CancellationToken::new();
+                let guard = tokio::select! {
+                    biased;
+                    _ = shutdown.changed() => return Ok(()),
+                    guard = capacity.acquire_unbound(&cancellation) => guard,
+                };
+                match guard {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        tracing::warn!(behavior_id, error = %error, "request worker capacity admission stopped");
+                        return Ok(());
+                    }
+                }
+            } else {
+                None
+            };
+
+            let process =
+                self.process_request(request, shutdown.clone())
+                    .instrument(tracing::info_span!(
+                        "agent.request",
+                        request_doc_id = %trace_attrs.request_doc_id,
+                        request_id = %trace_attrs.request_id,
+                        session_id = %trace_attrs.session_id,
+                        agent_did = %trace_attrs.agent_did,
+                        behavior_id = %behavior_id,
+                        requested_behavior_id = %trace_attrs.requested_behavior_id,
+                        backend_id = %backend_id,
+                        execution_origin = %trace_attrs.execution_origin,
+                        persisted_execution_origin = %trace_attrs.execution_origin,
+                        deadline_at = %trace_attrs.deadline_at,
+                        has_deadline = trace_attrs.has_deadline,
+                        subagent_depth = trace_attrs.subagent_depth,
+                        is_subagent = trace_attrs.is_subagent,
+                        parent_request_id = %trace_attrs.parent_request_id,
+                        parent_tool_call_id = %trace_attrs.parent_tool_call_id,
+                        selected_skill_count = trace_attrs.selected_skill_count,
+                        workspace_cwd_set = trace_attrs.workspace_cwd_set,
+                        claim_outcome = tracing::field::Empty,
+                        request_outcome = tracing::field::Empty,
+                        failure_class = tracing::field::Empty,
+                    ));
+            if let Some(guard) = active_guard {
+                scope_request_capacity(guard, process).await;
+            } else {
+                process.await;
+            }
         }
     }
 
@@ -402,6 +435,35 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         match claim_result {
             Ok(ClaimOutcome::Claimed) => {
                 record_current_claim_outcome("claimed");
+                let generation = match lifecycle.execution_generation() {
+                    Ok(generation) => generation.to_owned(),
+                    Err(error) => {
+                        record_current_request_outcome("worker_ticket_missing");
+                        record_current_failure_class(&error);
+                        let _ = finalize_request_failure(
+                            &mut lifecycle,
+                            &self.stream_writer,
+                            &error.to_string(),
+                            &request.request_id,
+                        )
+                        .await;
+                        return;
+                    }
+                };
+                let ticket = WorkerTicket::new(lifecycle.request().doc_id.clone(), generation);
+                if let Err(error) = bind_current_claim(ticket) {
+                    let error = anyhow::Error::new(error);
+                    record_current_request_outcome("worker_ticket_refused");
+                    record_current_failure_class(&error);
+                    let _ = finalize_request_failure(
+                        &mut lifecycle,
+                        &self.stream_writer,
+                        &error.to_string(),
+                        &request.request_id,
+                    )
+                    .await;
+                    return;
+                }
             }
             Ok(ClaimOutcome::Queued) => {
                 record_current_claim_outcome("queued");

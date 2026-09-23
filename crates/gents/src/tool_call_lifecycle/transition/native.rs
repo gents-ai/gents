@@ -1,15 +1,8 @@
 use super::*;
+use crate::tool_call_lifecycle::delivery::TerminalFields;
 
 impl ToolCallLifecycle {
-    fn requester_did_fragment(&self) -> String {
-        crate::session::requester_did_create_field(self.requester_did.as_deref())
-    }
-
-    fn request_doc_id_fragment(&self) -> String {
-        crate::session::request_doc_id_create_field(self.request_doc_id.as_deref())
-    }
-
-    fn selected_tool_fields_fragment(&self) -> String {
+    pub(crate) fn selected_tool_fields_fragment(&self) -> String {
         match self.selected_tool_identity.as_ref() {
             Some(selected) => format!(
                 "selected_service_id: \"{}\",\n                    selected_tool_name: \"{}\",",
@@ -21,176 +14,217 @@ impl ToolCallLifecycle {
         }
     }
 
-    /// Pending → Running. Creates the DefraDB row if missing; idempotent if
-    /// already in Running. Sets `started_at` to `now`.
+    /// Pending → Running for the exact row admitted with the accepted provider
+    /// header. Admission owns create-only identity and native intent; dispatch
+    /// only wins this lifecycle CAS after that publication has committed.
     pub async fn start_running(&mut self) -> Result<()> {
+        self.start_running_with_time(None, None).await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn start_running_at(
+        &mut self,
+        now: chrono::DateTime<chrono::Utc>,
+        expected_generation: &str,
+    ) -> Result<()> {
+        self.start_running_with_time(Some(now), Some(expected_generation))
+            .await
+    }
+
+    async fn start_running_with_time(
+        &mut self,
+        fixture_now: Option<chrono::DateTime<chrono::Utc>>,
+        expected_generation: Option<&str>,
+    ) -> Result<()> {
+        if let Some(expected) = expected_generation {
+            anyhow::ensure!(
+                self.execution_generation.as_deref() == Some(expected),
+                "dispatch generation differs from accepted physical tool"
+            );
+        }
         if self.state == ToolCallState::Running {
-            // Idempotent re-entry (retry path).
-            return Ok(());
+            anyhow::bail!(
+                "start_running cannot re-dispatch an already-running physical tool; recover its registered executor instead"
+            );
         }
         self.ensure_state(&[ToolCallState::Pending], "start_running")?;
-
-        let now = Utc::now();
-        let started_at_str = now.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let escaped_request_id = escape_graphql_string(&self.request_id);
-        let escaped_session_id = escape_graphql_string(&self.session_id);
-        let escaped_agent_did = escape_graphql_string(&self.agent_did);
-        let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
-        let escaped_tool_name = escape_graphql_string(&self.tool_name);
-        let escaped_args = escape_graphql_string(&self.args);
-        let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
-        let message_sequence = self.message_sequence;
-
-        // Persist await_mode / cancel_policy for every tool call so composites
-        // and native calls are not projected as `unknown` (#837). Child link,
-        // spawn target, and unclaimed deadline remain bridge-only fields.
-        let await_mode_str = self.await_mode.as_str();
-        let cancel_policy_str = self.cancel_policy.as_str();
-        let child_field = self
-            .child_request_id
-            .as_ref()
-            .map(|crid| {
-                let escaped_crid = escape_graphql_string(crid);
-                format!(r#"child_request_id: "{escaped_crid}","#)
-            })
-            .unwrap_or_default();
-        let spawn_target_field = self
-            .spawn_target_did
-            .as_ref()
-            .map(|did| {
-                let escaped_did = escape_graphql_string(did);
-                format!(r#"spawn_target_did: "{escaped_did}","#)
-            })
-            .unwrap_or_default();
-        let unclaimed_deadline_field = self
-            .unclaimed_deadline_at
-            .map(|deadline| {
-                let escaped_deadline = escape_graphql_string(
-                    &deadline.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                );
-                format!(r#"unclaimed_deadline_at: "{escaped_deadline}","#)
-            })
-            .unwrap_or_default();
-        let bridge_fields = format!(
-            r#"{child_field}
-                    {spawn_target_field}
-                    {unclaimed_deadline_field}
-                    await_mode: "{await_mode_str}",
-                    cancel_policy: "{cancel_policy_str}","#
-        );
-        let requester_did_field = self.requester_did_fragment();
-        let request_doc_id_field = self.request_doc_id_fragment();
-        let selected_tool_fields = self.selected_tool_fields_fragment();
-
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{tool_call_key}",
-                    request_id: "{escaped_request_id}",
-                    {request_doc_id_field}
-                    session_id: "{escaped_session_id}",
-                    agent_did: "{escaped_agent_did}",
-                    {requester_did_field}
-                    message_sequence: {message_sequence},
-                    tool_name: "{escaped_tool_name}",
-                    tool_call_id: "{escaped_tool_call_id}",
-                    args: "{escaped_args}",
-                    result: "",
-                    status: "called",
-                    lifecycle_state: "running",
-                    started_at: "{started_at_str}",
-                    deadline_at: "{deadline_at_str}",
-                    {bridge_fields}
-                    {selected_tool_fields}
-                    tool_failure_class: null,
-                    latency_ms: null
-                }}) {{ _docID }}
-            }}"#
-        );
-
-        let resp = execute_mutation_with_retry(&self.node, &mutation, "start_running")
-            .await
-            .context("start_running mutation")?;
-
-        let doc_id = extract_doc_id_from_create_response(&resp)
-            .ok_or_else(|| anyhow!("create_AgentToolCall returned no _docID"))?;
-
-        self.doc_id = Some(doc_id);
-        self.state = ToolCallState::Running;
-        self.started_at = Some(now);
-        Ok(())
+        if self.is_spawned_background() {
+            return self.start_running_spawned_with_time(fixture_now).await;
+        }
+        self.start_running_canonical_with_time(fixture_now).await
     }
 
     /// Running → Completed. Writes the tool result; sets completed_at,
     /// latency_ms.
     pub async fn complete(&mut self, result: &str) -> Result<()> {
+        let _ = self.complete_owned(result, None).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn complete_with_presentation(
+        &mut self,
+        result: &str,
+        presentation: Option<gents_protocol::output::PayloadPresentation>,
+    ) -> Result<()> {
+        let _ = self.complete_owned(result, presentation).await?;
+        Ok(())
+    }
+
+    /// Running -> Completed while atomically persisting `raw` and exposing
+    /// exactly `rendered` through the supplied presentation.
+    pub(crate) async fn complete_raw_with_presentation(
+        &mut self,
+        raw: &str,
+        rendered: &str,
+        presentation: gents_protocol::output::PayloadPresentation,
+    ) -> Result<bool> {
+        self.complete_raw_with_presentation_with_time(raw, rendered, presentation, None)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn complete_raw_with_presentation_at(
+        &mut self,
+        raw: &str,
+        rendered: &str,
+        presentation: gents_protocol::output::PayloadPresentation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool> {
+        self.complete_raw_with_presentation_with_time(raw, rendered, presentation, Some(now))
+            .await
+    }
+
+    async fn complete_raw_with_presentation_with_time(
+        &mut self,
+        raw: &str,
+        rendered: &str,
+        presentation: gents_protocol::output::PayloadPresentation,
+        fixture_now: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::Running], "complete")?;
+        if self.is_bridge() {
+            return Err(IllegalToolCallTransition::NativeCompleteOnSubagentTool.into());
+        }
+        let fields = TerminalFields {
+            state: ToolCallState::Completed,
+            failure: None,
+            cancel: None,
+            remote_cancel_intent_at: None,
+            completion_reason: None,
+        };
+        let updated = if let Some(now) = fixture_now {
+            self.terminalize_raw_with_presentation_at(
+                ToolCallState::Running,
+                fields,
+                raw,
+                rendered,
+                presentation,
+                "tool_call.complete_raw_with_presentation",
+                now,
+            )
+            .await?
+        } else {
+            self.terminalize_raw_with_presentation(
+                ToolCallState::Running,
+                fields,
+                raw,
+                rendered,
+                presentation,
+                "tool_call.complete_raw_with_presentation",
+            )
+            .await?
+        };
+        if updated {
+            self.state = ToolCallState::Completed;
+        } else {
+            self.sync_after_lost_running_compare("complete").await?;
+        }
+        Ok(updated)
+    }
+
+    pub(crate) async fn complete_owned(
+        &mut self,
+        result: &str,
+        presentation: Option<gents_protocol::output::PayloadPresentation>,
+    ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "complete")?;
         if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeCompleteOnSubagentTool.into());
         }
 
-        let doc_id = self
-            .doc_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("complete called before start_running persisted a row"))?;
-        let now = Utc::now();
-        let started_at = self
-            .started_at
-            .ok_or_else(|| anyhow!("complete called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_result = escape_graphql_string(result);
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let now_str = now.to_rfc3339();
-        // DefraDB requires DateTime fields to be re-supplied on update to
-        // avoid a type-mismatch error when re-validating the document.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "completed",
-                        lifecycle_state: "completed",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "complete")
-            .await
-            .context("complete mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
+        if !self
+            .terminalize_with_presentation(
+                ToolCallState::Running,
+                super::super::delivery::TerminalFields {
+                    state: ToolCallState::Completed,
+                    failure: None,
+                    cancel: None,
+                    remote_cancel_intent_at: None,
+                    completion_reason: None,
+                },
+                result,
+                presentation,
+                "tool_call.complete_delivery",
+            )
+            .await?
         {
             // Interrupt/timeout won the race — adopt the durable terminal.
             self.sync_after_lost_running_compare("complete").await?;
-            return Ok(());
+            return Ok(false);
         }
-
-        self.state = ToolCallState::Completed;
-        Ok(())
+        Ok(true)
     }
 
     /// Running → Failed. For tool errors during execution. Sets failure_class.
     pub async fn fail(&mut self, result: &str, failure: super::FailureClass) -> Result<()> {
-        self.fail_with_details(result, failure, None).await
+        let _ = self.fail_owned(result, failure, None).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fail_with_presentation(
+        &mut self,
+        result: &str,
+        failure: super::FailureClass,
+        presentation: Option<gents_protocol::output::PayloadPresentation>,
+    ) -> Result<()> {
+        let _ = self.fail_owned(result, failure, presentation).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn fail_raw_with_presentation(
+        &mut self,
+        raw: &str,
+        rendered: &str,
+        failure: super::FailureClass,
+        presentation: gents_protocol::output::PayloadPresentation,
+    ) -> Result<bool> {
+        self.ensure_state(&[ToolCallState::Running], "fail")?;
+        if self.is_bridge() {
+            return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
+        }
+        let updated = self
+            .terminalize_raw_with_presentation(
+                ToolCallState::Running,
+                TerminalFields {
+                    state: ToolCallState::Failed,
+                    failure: Some(failure),
+                    cancel: None,
+                    remote_cancel_intent_at: None,
+                    completion_reason: None,
+                },
+                raw,
+                rendered,
+                presentation,
+                "tool_call.fail_raw_with_presentation",
+            )
+            .await?;
+        if updated {
+            self.state = ToolCallState::Failed;
+            self.failure_class = Some(failure);
+        } else {
+            self.sync_after_lost_running_compare("fail").await?;
+        }
+        Ok(updated)
     }
 
     pub(crate) async fn fail_with_command_denial(
@@ -198,81 +232,45 @@ impl ToolCallLifecycle {
         result: &str,
         denial: &CommandPolicyDenial,
     ) -> Result<()> {
-        self.fail_with_details(result, FailureClass::PolicyDenied, Some(denial))
-            .await
+        let _ = denial;
+        let _ = self
+            .fail_owned(result, FailureClass::PolicyDenied, None)
+            .await?;
+        Ok(())
     }
 
-    async fn fail_with_details(
+    pub(crate) async fn fail_owned(
         &mut self,
         result: &str,
         failure: super::FailureClass,
-        command_denial: Option<&CommandPolicyDenial>,
-    ) -> Result<()> {
+        presentation: Option<gents_protocol::output::PayloadPresentation>,
+    ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "fail")?;
         if self.is_bridge() {
             return Err(IllegalToolCallTransition::NativeFailOnSubagentTool.into());
         }
 
-        let doc_id = self
-            .doc_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("fail called before start_running persisted a row"))?;
-        let now = Utc::now();
-        let started_at = self
-            .started_at
-            .ok_or_else(|| anyhow!("fail called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_result = escape_graphql_string(result);
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let now_str = now.to_rfc3339();
-        let failure_class_str = failure.as_str();
-        // DefraDB requires DateTime fields to be re-supplied on update.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-        let command_denial_fields = command_denial_fields_fragment(command_denial);
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "completed",
-                        lifecycle_state: "failed",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        tool_failure_class: "{failure_class_str}",
-                        {command_denial_fields}
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "fail")
-            .await
-            .context("fail mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
+        if !self
+            .terminalize_with_presentation(
+                ToolCallState::Running,
+                super::super::delivery::TerminalFields {
+                    state: ToolCallState::Failed,
+                    failure: Some(failure),
+                    cancel: None,
+                    remote_cancel_intent_at: None,
+                    completion_reason: None,
+                },
+                result,
+                presentation,
+                "tool_call.fail_delivery",
+            )
+            .await?
         {
             // Interrupt/timeout won the race — adopt the durable terminal.
             self.sync_after_lost_running_compare("fail").await?;
-            return Ok(());
+            return Ok(false);
         }
-
-        self.state = ToolCallState::Failed;
-        self.failure_class = Some(failure);
-        Ok(())
+        Ok(true)
     }
 
     /// Pending → Failed. Used when the dispatcher cannot start the call
@@ -287,7 +285,8 @@ impl ToolCallLifecycle {
         reason: &str,
         denial: &CommandPolicyDenial,
     ) -> Result<()> {
-        self.spawn_failed_with_details(FailureClass::PolicyDenied, reason, Some(denial))
+        let _ = denial;
+        self.spawn_failed_with_details(FailureClass::PolicyDenied, reason, None)
             .await
     }
 
@@ -299,63 +298,21 @@ impl ToolCallLifecycle {
     ) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "spawn_failed")?;
 
-        // Pending means the row hasn't been created yet. We create it
-        // directly in Failed state.
-        let now = Utc::now();
-        let started_at_str = now.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let escaped_request_id = escape_graphql_string(&self.request_id);
-        let escaped_session_id = escape_graphql_string(&self.session_id);
-        let escaped_agent_did = escape_graphql_string(&self.agent_did);
-        let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
-        let escaped_tool_name = escape_graphql_string(&self.tool_name);
-        let escaped_args = escape_graphql_string(&self.args);
-        let escaped_result = escape_graphql_string(reason);
-        let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
-        let message_sequence = self.message_sequence;
-        let failure_class_str = failure.as_str();
-        let command_denial_fields = command_denial_fields_fragment(command_denial);
-        let requester_did_field = self.requester_did_fragment();
-        let request_doc_id_field = self.request_doc_id_fragment();
-        let selected_tool_fields = self.selected_tool_fields_fragment();
-
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{tool_call_key}",
-                    request_id: "{escaped_request_id}",
-                    {request_doc_id_field}
-                    session_id: "{escaped_session_id}",
-                    agent_did: "{escaped_agent_did}",
-                    {requester_did_field}
-                    message_sequence: {message_sequence},
-                    tool_name: "{escaped_tool_name}",
-                    tool_call_id: "{escaped_tool_call_id}",
-                    args: "{escaped_args}",
-                    result: "{escaped_result}",
-                    status: "completed",
-                    lifecycle_state: "failed",
-                    started_at: null,
-                    deadline_at: "{deadline_at_str}",
-                    completed_at: "{started_at_str}",
-                    tool_failure_class: "{failure_class_str}",
-                    {command_denial_fields}
-                    {selected_tool_fields}
-                    latency_ms: 0
-                }}) {{ _docID }}
-            }}"#
-        );
-
-        let resp = execute_mutation_with_retry(&self.node, &mutation, "spawn_failed")
-            .await
-            .context("spawn_failed mutation")?;
-
-        let doc_id = extract_doc_id_from_create_response(&resp)
-            .ok_or_else(|| anyhow!("create_AgentToolCall returned no _docID"))?;
-
-        self.doc_id = Some(doc_id);
-        self.state = ToolCallState::Failed;
-        self.failure_class = Some(failure);
+        let _ = command_denial;
+        let _ = self
+            .terminalize_with_delivery(
+                ToolCallState::Pending,
+                super::super::delivery::TerminalFields {
+                    state: ToolCallState::Failed,
+                    failure: Some(failure),
+                    cancel: None,
+                    remote_cancel_intent_at: None,
+                    completion_reason: None,
+                },
+                reason,
+                "tool_call.spawn_failed_delivery",
+            )
+            .await?;
         Ok(())
     }
 
@@ -367,71 +324,62 @@ impl ToolCallLifecycle {
     /// interrupt, recovery sweep, or the tool itself — terminalized first),
     /// preserving that terminal's state and recorded cause.
     pub async fn timeout(&mut self) -> Result<bool> {
+        self.timeout_inner(None).await
+    }
+
+    pub(crate) async fn timeout_with_presentation(
+        &mut self,
+        rendered: &str,
+        presentation: gents_protocol::output::PayloadPresentation,
+    ) -> Result<bool> {
+        self.timeout_inner(Some((rendered, presentation))).await
+    }
+
+    async fn timeout_inner(
+        &mut self,
+        presented: Option<(&str, gents_protocol::output::PayloadPresentation)>,
+    ) -> Result<bool> {
         self.ensure_state(&[ToolCallState::Running], "timeout")?;
-
-        let doc_id = self
-            .doc_id
-            .as_ref()
-            .ok_or_else(|| anyhow!("timeout called before start_running persisted a row"))?;
-        let now = Utc::now();
-        let started_at = self
-            .started_at
-            .ok_or_else(|| anyhow!("timeout called without started_at set"))?;
-        let latency_ms = (now - started_at).num_milliseconds();
-
-        let escaped_doc_id = escape_graphql_string(doc_id);
-        let escaped_result = escape_graphql_string(&format!(
+        let message = format!(
             "tool call deadline exceeded at {}",
             self.deadline_at.to_rfc3339()
-        ));
-        let now_str = now.to_rfc3339();
-        // DefraDB requires DateTime fields to be re-supplied on update.
-        let started_at_str = started_at.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let failure_class = FailureClass::External.as_str();
-        let cancel_cause = CancelCause::Deadline.as_str();
-        let unclaimed_deadline_clear = self.clear_unclaimed_deadline_fragment();
-
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{
-                        _docID: {{ _eq: "{escaped_doc_id}" }},
-                        lifecycle_state: {{ _eq: "running" }}
-                    }},
-                    input: {{
-                        result: "{escaped_result}",
-                        status: "completed",
-                        lifecycle_state: "timedOut",
-                        tool_failure_class: "{failure_class}",
-                        cancel_cause: "{cancel_cause}",
-                        started_at: "{started_at_str}",
-                        deadline_at: "{deadline_at_str}",
-                        completed_at: "{now_str}",
-                        latency_ms: {latency_ms}
-                        {unclaimed_deadline_clear}
-                    }}
-                ) {{ _docID }}
-            }}"#
         );
-
-        let response = execute_mutation_with_retry(&self.node, &mutation, "timeout")
-            .await
-            .context("timeout mutation")?;
-        if !response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("update_AgentToolCall"))
-            .is_some_and(response_has_documents)
-        {
+        let fields = super::super::delivery::TerminalFields {
+            state: ToolCallState::TimedOut,
+            failure: Some(FailureClass::External),
+            cancel: Some(CancelCause::Deadline),
+            remote_cancel_intent_at: None,
+            completion_reason: None,
+        };
+        let updated = match presented {
+            Some((rendered, presentation)) => {
+                self.terminalize_raw_with_presentation(
+                    ToolCallState::Running,
+                    fields,
+                    &message,
+                    rendered,
+                    presentation,
+                    "tool_call.timeout_delivery",
+                )
+                .await?
+            }
+            None => {
+                self.terminalize_raw_with_presentation(
+                    ToolCallState::Running,
+                    fields,
+                    &message,
+                    &message,
+                    gents_protocol::output::PayloadPresentation::Full,
+                    "tool_call.timeout_delivery",
+                )
+                .await?
+            }
+        };
+        if !updated {
             // Another actor terminalized first — adopt the durable terminal.
             self.sync_after_lost_running_compare("timeout").await?;
             return Ok(false);
         }
-
-        self.state = ToolCallState::TimedOut;
-        self.failure_class = Some(FailureClass::External);
-        self.cancel_cause = Some(CancelCause::Deadline);
         Ok(true)
     }
 
@@ -440,61 +388,20 @@ impl ToolCallLifecycle {
     ///
     pub async fn cancel_before_dispatch(&mut self, cause: CancelCause) -> Result<()> {
         self.ensure_state(&[ToolCallState::Pending], "cancel_before_dispatch")?;
-
-        // Pending: row may not exist yet. Create directly in Cancelled.
-        let now = Utc::now();
-        let started_at_str = now.to_rfc3339();
-        let deadline_at_str = self.deadline_at.to_rfc3339();
-        let escaped_request_id = escape_graphql_string(&self.request_id);
-        let escaped_session_id = escape_graphql_string(&self.session_id);
-        let escaped_agent_did = escape_graphql_string(&self.agent_did);
-        let escaped_tool_call_id = escape_graphql_string(&self.tool_call_id);
-        let escaped_tool_name = escape_graphql_string(&self.tool_name);
-        let escaped_args = escape_graphql_string(&self.args);
-        let tool_call_key = format!("{escaped_session_id}:{escaped_tool_call_id}");
-        let message_sequence = self.message_sequence;
-        let cancel_cause = cause.as_str();
-        let requester_did_field = self.requester_did_fragment();
-        let request_doc_id_field = self.request_doc_id_fragment();
-        let selected_tool_fields = self.selected_tool_fields_fragment();
-
-        let escaped_result = escape_graphql_string("tool call cancelled before dispatch");
-
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{tool_call_key}",
-                    request_id: "{escaped_request_id}",
-                    {request_doc_id_field}
-                    session_id: "{escaped_session_id}",
-                    agent_did: "{escaped_agent_did}",
-                    {requester_did_field}
-                    message_sequence: {message_sequence},
-                    tool_name: "{escaped_tool_name}",
-                    tool_call_id: "{escaped_tool_call_id}",
-                    args: "{escaped_args}",
-                    result: "{escaped_result}",
-                    status: "completed",
-                    lifecycle_state: "cancelled",
-                    cancel_cause: "{cancel_cause}",
-                    started_at: null,
-                    deadline_at: "{deadline_at_str}",
-                    completed_at: "{started_at_str}",
-                    {selected_tool_fields}
-                    latency_ms: 0
-                }}) {{ _docID }}
-            }}"#
-        );
-
-        let resp = execute_mutation_with_retry(&self.node, &mutation, "cancel_before_dispatch")
-            .await
-            .context("cancel_before_dispatch mutation")?;
-        let doc_id = extract_doc_id_from_create_response(&resp)
-            .ok_or_else(|| anyhow!("create_AgentToolCall returned no _docID"))?;
-
-        self.doc_id = Some(doc_id);
-        self.state = ToolCallState::Cancelled;
-        self.cancel_cause = Some(cause);
+        let _ = self
+            .terminalize_with_delivery(
+                ToolCallState::Pending,
+                super::super::delivery::TerminalFields {
+                    state: ToolCallState::Cancelled,
+                    failure: None,
+                    cancel: Some(cause),
+                    remote_cancel_intent_at: None,
+                    completion_reason: None,
+                },
+                "tool call cancelled before dispatch",
+                "tool_call.cancel_before_dispatch_delivery",
+            )
+            .await?;
         Ok(())
     }
 }

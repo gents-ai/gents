@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::{EmbeddedNode, EventName};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -26,7 +26,6 @@ use crate::background_tools::{
 };
 use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{QueuePolicy, QueueSource, RequestQueue};
-use crate::session;
 use crate::tool_call_lifecycle::{AwaitMode, FailureClass, ToolCallLifecycle};
 
 const AGENT_REQUEST_COLLECTION: &str = "AgentRequest";
@@ -98,7 +97,6 @@ mod reconciliation;
 mod rendering;
 mod side_effects;
 
-pub(crate) use datetime_fields::push_datetime_field;
 pub(crate) use notification_delivery::append_background_tool_completion;
 pub(crate) use observer::run_background_completion_observer;
 pub(crate) use projection::ensure_background_subagent_completion_side_effects;
@@ -115,7 +113,7 @@ use reconciliation::request_is_locally_owned;
 #[cfg(test)]
 use rendering::first_row;
 use rendering::{
-    compact_summary, non_empty, render_notification, render_tool_completion, xml_escape_attr,
+    compact_summary, non_empty, subagent_notification_presentation, tool_completion_presentation,
 };
 use side_effects::{
     bridge_state_is_terminal, ensure_projection_side_effects, existing_tool_completion_notification,

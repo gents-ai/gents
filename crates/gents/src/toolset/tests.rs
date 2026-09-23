@@ -1437,7 +1437,9 @@ fn generated_command_sandbox_cases_match_rust_selection() {
                     case.name
                 );
                 assert!(
-                    error.contains("workspace_write") || error.contains("artifact_write") || error.contains("sandbox-exec"),
+                    error.contains("workspace_write")
+                        || error.contains("artifact_write")
+                        || error.contains("sandbox-exec"),
                     "Lean CommandPolicy sandbox case {} expected workspace_write denial, got: {error}",
                     case.name
                 );
@@ -1788,8 +1790,7 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
         Duration::from_secs(1),
         CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
     );
-    let command =
-        "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
+    let command = "trap '' TERM; while :; do sleep 1; done & child=$!; printf '%s' \"$child\" > descendant.pid; wait";
 
     let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
     let call = crate::tool_call_lifecycle::runtime::call_tool_managed(

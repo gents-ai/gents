@@ -41,15 +41,6 @@ pub(in crate::commands::codex_shim) struct InferenceUsageObservation {
 struct RequestUsageAccumulator {
     input_tokens: i64,
     output_tokens: i64,
-    has_real_output: bool,
-    proxy_output_tokens: i64,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentResponseUsageRow {
-    request_id: String,
-    #[serde(default)]
-    token_count: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,11 +64,7 @@ async fn requests_token_usage_scoped(
         .into_values()
         .fold(TokenTotals::default(), |mut totals, usage| {
             totals.input_tokens += usage.input_tokens;
-            totals.output_tokens += if usage.has_real_output {
-                usage.output_tokens
-            } else {
-                usage.proxy_output_tokens
-            };
+            totals.output_tokens += usage.output_tokens;
             totals
         }))
 }
@@ -153,11 +140,7 @@ pub(in crate::commands::codex_shim) async fn thread_record_token_usage(
         .into_values()
         .fold(TokenTotals::default(), |mut totals, usage| {
             totals.input_tokens += usage.input_tokens;
-            totals.output_tokens += if usage.has_real_output {
-                usage.output_tokens
-            } else {
-                usage.proxy_output_tokens
-            };
+            totals.output_tokens += usage.output_tokens;
             totals
         });
     let last = latest_requests_token_usage_scoped(state, &request_ids, scope).await?;
@@ -277,16 +260,6 @@ async fn gather_request_usage(
     let escaped_behavior_id = escape_graphql_string(scope.behavior_id);
     let query = format!(
         r#"{{
-            AgentResponse(
-                filter: {{
-                    request_doc_id: {{ _in: [{id_list}] }},
-                    agent_did: {{ _eq: "{escaped_agent_did}" }},
-                    behavior_id: {{ _eq: "{escaped_behavior_id}" }}
-                }}
-            ) {{
-                request_id
-                token_count
-            }}
             InferenceCall(
                 filter: {{
                     request_doc_id: {{ _in: [{id_list}] }},
@@ -309,15 +282,6 @@ async fn gather_request_usage(
         .map(|request_id| (request_id.to_string(), RequestUsageAccumulator::default()))
         .collect::<BTreeMap<_, _>>();
 
-    for row in rows::<AgentResponseUsageRow>(&response, "AgentResponse")
-        .context("decoding AgentResponse rows for token usage")?
-    {
-        if let Some(tokens) = row.token_count.and_then(nonnegative_i64) {
-            let usage = usage.entry(row.request_id).or_default();
-            usage.proxy_output_tokens = usage.proxy_output_tokens.max(tokens);
-        }
-    }
-
     for row in rows::<InferenceCallUsageRow>(&response, "InferenceCall")
         .context("decoding InferenceCall rows for token usage")?
     {
@@ -327,7 +291,6 @@ async fn gather_request_usage(
         }
         if let Some(tokens) = row.completion_tokens.and_then(nonnegative_i64) {
             usage.output_tokens += tokens;
-            usage.has_real_output = true;
         }
     }
 

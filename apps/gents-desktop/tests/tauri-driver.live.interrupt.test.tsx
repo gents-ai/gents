@@ -1,4 +1,5 @@
 import { screen, waitFor } from "@testing-library/react";
+import { isTerminalTurnState } from "@source-inc/gents-desktop-client";
 import { expect, it } from "vitest";
 
 import { expectLatestSendResult, withLiveDesktop } from "./tauri-driver-live/harness";
@@ -53,9 +54,10 @@ describeLive("Tauri app live interrupt flow", () => {
                 runner.agentDid,
                 submitted.requestId,
               );
-              expect(session?.turnState).toBe("streaming");
-              const response =
-                session?.activeResponseOverlay ?? session?.latestResponse;
+              expect(session?.turnState).toBe("running");
+              const response = session?.timelineItems.find(
+                (item) => item.kind === "liveAssistant",
+              );
               expect(
                 (response?.content ?? "").length + (response?.reasoning ?? "").length,
               ).toBeGreaterThan(0);
@@ -70,18 +72,31 @@ describeLive("Tauri app live interrupt flow", () => {
 
         const finalSession = await runner.waitForRequestCompletion(submitted);
         const terminalObservedAt = performance.now();
-        if (phase === "streaming") {
-          expect(finalSession.latestResponse?.cancelCause?.cause).toBe("interrupted");
-        }
-        if (finalSession?.latestResponse?.cancelCause) {
-          const cause = finalSession.latestResponse.cancelCause;
-          logTurn(`interrupt latched: cause=${cause.cause}`);
+        const cancelCause = finalSession?.latestRequestOutcome?.cancelCause;
+        if (cancelCause) {
+          // Interrupt accepted: the canonical contract requires an actually
+          // terminal interrupted turn, not just an acknowledged bridge call.
+          expect(finalSession.turnState).toBe("interrupted");
+          if (phase === "streaming") {
+            expect(cancelCause.cause).toBe("interrupted");
+            // Partial provider output published before the interrupt stays
+            // observable in the terminal snapshot: the published turn remains
+            // history (contracts/canonical-output.md cancellation boundary).
+            const retained = finalSession.timelineItems.find(
+              (item) => item.kind === "liveAssistant",
+            );
+            expect(
+              (retained?.content ?? "").length +
+                (retained?.reasoning ?? "").length,
+            ).toBeGreaterThan(0);
+          }
+          logTurn(`interrupt latched: cause=${cancelCause.cause}`);
           await waitFor(
             () => {
               expect(
                 screen.getByText(
                   new RegExp(
-                    `^Interrupted · ${cancelCauseLabel(cause.cause)}(?: \\(|$)`,
+                    `^Interrupted · ${cancelCauseLabel(cancelCause.cause)}(?: \\(|$)`,
                   ),
                 ),
               ).toBeInTheDocument();
@@ -89,9 +104,15 @@ describeLive("Tauri app live interrupt flow", () => {
             { timeout: 30_000 },
           );
         } else {
+          // Completion race, documented rather than silently passing: the
+          // turn reached a terminal state before the interrupt could affect
+          // it, so the interrupt is a no-op: the turn must be terminal
+          // (never "interrupted") and no cancel cause may be latched.
+          expect(isTerminalTurnState(finalSession.turnState)).toBe(true);
+          expect(finalSession.turnState).not.toBe("interrupted");
           logTurn(
             "turn finished before interrupt could affect it — " +
-              "bridge call succeeded without error (race outcome: turn completed first)",
+              "bridge call succeeded without error (race outcome: turn completed first, no cancelCause latched)",
           );
         }
 
@@ -133,7 +154,9 @@ describeLive("Tauri app live interrupt flow", () => {
         expectCompletedSession("interrupt follow-up", followUpSession);
         expect(followUpSession.latestRequestId).toBe(followUp.requestId);
         expect(followUpSession.pendingTurn).toBeNull();
-        expect(followUpSession.activeResponseOverlay).toBeNull();
+        expect(
+          followUpSession.timelineItems.some((item) => item.kind === "liveAssistant"),
+        ).toBe(false);
 
         await waitFor(
           () => {

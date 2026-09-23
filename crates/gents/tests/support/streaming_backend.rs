@@ -7,7 +7,7 @@
 //! `StreamScript` pause/release semantics, and the chunk-count accounting are
 //! preserved exactly so existing consumers are unchanged.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -63,6 +63,7 @@ impl StreamChunk {
 pub struct StreamScript {
     marker: String,
     chunks: Vec<StreamChunk>,
+    pause_before_chunks: bool,
     pause_after_chunks: bool,
 }
 
@@ -74,6 +75,7 @@ impl StreamScript {
         Self {
             marker: marker.into(),
             chunks: chunks.into_iter().map(StreamChunk::text).collect(),
+            pause_before_chunks: false,
             pause_after_chunks: true,
         }
     }
@@ -85,6 +87,7 @@ impl StreamScript {
         Self {
             marker: marker.into(),
             chunks: chunks.into_iter().map(StreamChunk::text).collect(),
+            pause_before_chunks: false,
             pause_after_chunks: false,
         }
     }
@@ -94,6 +97,19 @@ impl StreamScript {
         Self {
             marker: marker.into(),
             chunks,
+            pause_before_chunks: false,
+            pause_after_chunks: false,
+        }
+    }
+
+    /// Hold a matched provider request before publishing its first chunk.
+    /// Callers can mutate external state only after runtime startup and then
+    /// release the exact provider turn with [`MockStreamingBackend::release`].
+    pub fn paused_before(marker: impl Into<String>, chunks: Vec<StreamChunk>) -> Self {
+        Self {
+            marker: marker.into(),
+            chunks,
+            pause_before_chunks: true,
             pause_after_chunks: false,
         }
     }
@@ -103,6 +119,13 @@ impl StreamScript {
 pub struct StreamPlan {
     marker: String,
     responses: Vec<StreamResponse>,
+    selector: PlanSelector,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PlanSelector {
+    WholeBody,
+    CurrentAuthoredUser,
 }
 
 impl StreamPlan {
@@ -110,13 +133,31 @@ impl StreamPlan {
         Self {
             marker: marker.into(),
             responses,
+            selector: PlanSelector::WholeBody,
         }
+    }
+
+    pub fn current_authored_user(
+        marker: impl Into<String>,
+        responses: Vec<StreamResponse>,
+    ) -> Self {
+        Self {
+            marker: marker.into(),
+            responses,
+            selector: PlanSelector::CurrentAuthoredUser,
+        }
+    }
+
+    pub fn with_current_authored_user(mut self) -> Self {
+        self.selector = PlanSelector::CurrentAuthoredUser;
+        self
     }
 
     fn repeat_stream(script: StreamScript) -> Self {
         Self {
             marker: script.marker.clone(),
             responses: vec![StreamResponse::Stream(script)],
+            selector: PlanSelector::WholeBody,
         }
     }
 }
@@ -231,6 +272,38 @@ impl MockStreamingBackend {
         self.state.request_count(marker)
     }
 
+    /// Make provider responses after the first accepted turn caller-driven.
+    ///
+    /// This is useful when a later tool call needs an identifier returned by
+    /// the first one (for example a durable background-process handle). The
+    /// request handler waits until [`Self::enqueue_response`] supplies that
+    /// response instead of replaying the plan's final static response.
+    pub fn enable_dynamic_followups(&self, marker: &str) {
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .expect("streaming backend mutex poisoned");
+        inner.dynamic_followups.insert(marker.to_string());
+        drop(inner);
+        self.state.notify.notify_waiters();
+    }
+
+    pub fn enqueue_response(&self, marker: &str, response: StreamResponse) {
+        let mut inner = self
+            .state
+            .inner
+            .lock()
+            .expect("streaming backend mutex poisoned");
+        inner
+            .dynamic_responses
+            .entry(marker.to_string())
+            .or_default()
+            .push_back(response);
+        drop(inner);
+        self.state.notify.notify_waiters();
+    }
+
     /// Every completion body this backend was posted, matched plan or not.
     ///
     /// Marker-scoped counts cannot answer "was anything sent at all?", which is
@@ -286,6 +359,8 @@ struct StreamingStateInner {
     /// Every completion body posted to this backend, in arrival order.
     completion_bodies: Vec<serde_json::Value>,
     releases: HashSet<String>,
+    dynamic_followups: HashSet<String>,
+    dynamic_responses: HashMap<String, VecDeque<StreamResponse>>,
 }
 
 impl StreamingState {
@@ -310,20 +385,81 @@ impl StreamingState {
         self.notify.notify_waiters();
     }
 
-    fn next_response(&self, body: &str) -> StreamResponse {
-        let Some(plan) = self.plans.iter().find(|plan| body.contains(&plan.marker)) else {
+    async fn next_response(&self, body: &str) -> StreamResponse {
+        // Session-title inference is auxiliary to the authored agent turn. It
+        // may contain the same latest user text, but has no tool surface and
+        // must never consume that turn's scripted tool response.
+        if request_is_session_title(body) {
+            return StreamResponse::Stream(StreamScript::completes(
+                "__session_title__",
+                ["mock-title"],
+            ));
+        }
+        let matching_plans = match matching_plans(&self.plans, body) {
+            Ok(plans) => plans,
+            Err(diagnostic) => return StreamResponse::bad_request(diagnostic),
+        };
+        let Some(plan) = matching_plans.into_iter().next() else {
+            let dynamic_markers = {
+                let inner = self.inner.lock().expect("streaming backend mutex poisoned");
+                match matching_dynamic_markers(&inner.dynamic_followups, body) {
+                    Ok(markers) => markers,
+                    Err(diagnostic) => return StreamResponse::bad_request(diagnostic),
+                }
+            };
+            if let Some(marker) = dynamic_markers.into_iter().next() {
+                self.reserve_response_index(&marker);
+                self.notify.notify_waiters();
+                loop {
+                    if let Some(response) = self
+                        .inner
+                        .lock()
+                        .expect("streaming backend mutex poisoned")
+                        .dynamic_responses
+                        .get_mut(&marker)
+                        .and_then(VecDeque::pop_front)
+                    {
+                        return response;
+                    }
+                    if self.stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    let _ = tokio::time::timeout(Duration::from_millis(25), self.notify.notified())
+                        .await;
+                }
+            }
             return StreamResponse::Stream(StreamScript::completes(
                 "__default__",
                 ["mock streamed response"],
             ));
         };
 
-        let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
-        let count = inner.request_counts.entry(plan.marker.clone()).or_default();
-        let response_index = *count;
-        *count += 1;
-        drop(inner);
+        let response_index = self.reserve_response_index(&plan.marker);
         self.notify.notify_waiters();
+
+        if response_index > 0 {
+            loop {
+                let dynamic = {
+                    let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
+                    if !inner.dynamic_followups.contains(&plan.marker) {
+                        None
+                    } else if let Some(response) = inner
+                        .dynamic_responses
+                        .get_mut(&plan.marker)
+                        .and_then(VecDeque::pop_front)
+                    {
+                        return response;
+                    } else {
+                        Some(())
+                    }
+                };
+                if dynamic.is_none() || self.stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let _ =
+                    tokio::time::timeout(Duration::from_millis(25), self.notify.notified()).await;
+            }
+        }
 
         plan.responses
             .get(response_index)
@@ -335,6 +471,14 @@ impl StreamingState {
                     ["mock streamed response"],
                 ))
             })
+    }
+
+    fn reserve_response_index(&self, marker: &str) -> usize {
+        let mut inner = self.inner.lock().expect("streaming backend mutex poisoned");
+        let count = inner.request_counts.entry(marker.to_string()).or_default();
+        let response_index = *count;
+        *count += 1;
+        response_index
     }
 
     fn record_chunk(&self, marker: &str) {
@@ -404,6 +548,107 @@ impl StreamingState {
     }
 }
 
+fn request_is_session_title(body: &str) -> bool {
+    let Ok(body) = serde_json::from_str::<serde_json::Value>(body) else {
+        return false;
+    };
+    body.get("max_tokens").and_then(serde_json::Value::as_u64) == Some(24)
+        && body.get("tools").is_none()
+        && body
+            .get("messages")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|messages| messages.first())
+            .is_some_and(|message| {
+                message.get("role").and_then(serde_json::Value::as_str) == Some("system")
+                    && message
+                        .get("content")
+                        .is_some_and(|content| content.to_string().contains(
+                            "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title.",
+                        ))
+            })
+}
+
+fn current_authored_user_input(body: &str) -> Result<String, String> {
+    let body = serde_json::from_str::<serde_json::Value>(body)
+        .map_err(|error| format!("invalid mock provider request JSON: {error}"))?;
+    body.get("messages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "mock provider request is missing messages array".to_string())?
+        .iter()
+        .rev()
+        .filter(|message| message.get("role").and_then(serde_json::Value::as_str) == Some("user"))
+        .find_map(|message| match message.get("content")? {
+            serde_json::Value::String(text) => Some(text.clone()),
+            serde_json::Value::Array(blocks) => {
+                let text = blocks
+                    .iter()
+                    .filter(|block| {
+                        block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                    })
+                    .filter_map(|block| block.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!text.is_empty()).then_some(text)
+            }
+            _ => None,
+        })
+        .ok_or_else(|| "mock provider request has no authored user input".to_string())
+}
+
+fn matching_plans<'a>(plans: &'a [StreamPlan], body: &str) -> Result<Vec<&'a StreamPlan>, String> {
+    let current_input = current_authored_user_input(body);
+    let current_matches = plans
+        .iter()
+        .filter(|plan| matches!(plan.selector, PlanSelector::CurrentAuthoredUser))
+        .filter(|plan| {
+            current_input
+                .as_ref()
+                .is_ok_and(|input| input.contains(&plan.marker))
+        })
+        .collect::<Vec<_>>();
+    if current_matches.is_empty()
+        && plans
+            .iter()
+            .any(|plan| matches!(plan.selector, PlanSelector::CurrentAuthoredUser))
+    {
+        current_input?;
+    }
+    if current_matches.len() > 1 {
+        return Err(format!(
+            "ambiguous mock provider plan for current user input: {:?}",
+            current_matches
+                .iter()
+                .map(|plan| plan.marker.as_str())
+                .collect::<Vec<_>>()
+        ));
+    }
+    if !current_matches.is_empty() {
+        return Ok(current_matches);
+    }
+    Ok(plans
+        .iter()
+        .find(|plan| {
+            matches!(plan.selector, PlanSelector::WholeBody) && body.contains(&plan.marker)
+        })
+        .into_iter()
+        .collect())
+}
+
+fn matching_dynamic_markers(markers: &HashSet<String>, body: &str) -> Result<Vec<String>, String> {
+    let current_input = current_authored_user_input(body)?;
+    let matched = markers
+        .iter()
+        .filter(|marker| current_input.contains(marker.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if matched.len() > 1 {
+        return Err(format!(
+            "ambiguous dynamic mock provider plan for current user input: {matched:?}"
+        ));
+    }
+    Ok(matched)
+}
+
 fn request_is_streaming(body: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(body)
         .ok()
@@ -423,7 +668,7 @@ async fn handle_models(State(state): State<Arc<StreamingState>>) -> Response {
 async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> Response {
     state.record_completion_body(&body);
     if request_is_streaming(&body) {
-        return match state.next_response(&body) {
+        return match state.next_response(&body).await {
             StreamResponse::Stream(script) => streaming_response(script, state),
             StreamResponse::HttpStatus { status, body } => (
                 StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -475,6 +720,7 @@ async fn handle_fallback() -> Response {
 fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Response {
     #[derive(Clone, Copy)]
     enum Phase {
+        AwaitInitialRelease,
         Chunk(usize),
         AwaitRelease,
         Usage,
@@ -482,11 +728,23 @@ fn streaming_response(script: StreamScript, state: Arc<StreamingState>) -> Respo
         Finished,
     }
 
-    let init = (Phase::Chunk(0), script, state);
+    let initial_phase = if script.pause_before_chunks {
+        Phase::AwaitInitialRelease
+    } else {
+        Phase::Chunk(0)
+    };
+    let init = (initial_phase, script, state);
     let stream = futures::stream::unfold(init, |(phase, script, state)| async move {
         let mut phase = phase;
         loop {
             match phase {
+                Phase::AwaitInitialRelease => {
+                    state.wait_for_release_or_stop(&script.marker).await;
+                    if state.stop.load(Ordering::Relaxed) {
+                        return None;
+                    }
+                    phase = Phase::Chunk(0);
+                }
                 Phase::Chunk(index) => {
                     if state.stop.load(Ordering::Relaxed) {
                         return None;
@@ -581,4 +839,124 @@ fn usage_payload() -> String {
         }
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    fn plan(marker: &str) -> StreamPlan {
+        StreamPlan::current_authored_user(marker, Vec::new())
+    }
+
+    #[test]
+    fn current_user_selector_ignores_child_prompt_in_parent_tool_arguments() {
+        let body = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "parent prompt"}]},
+            {"role": "assistant", "content": [{"type": "toolcall", "arguments": {"prompt": "child prompt"}}]}
+        ]}).to_string();
+        let plans = [plan("parent prompt"), plan("child prompt")];
+        let matched = matching_plans(&plans, &body).unwrap();
+        assert_eq!(matched[0].marker, "parent prompt");
+    }
+
+    #[test]
+    fn current_user_selector_uses_child_authored_input_not_parent_history() {
+        let body = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "parent prompt"}]},
+            {"role": "user", "content": [{"type": "toolresult", "content": [{"type": "text", "text": "spawned child prompt"}]}]},
+            {"role": "user", "content": [{"type": "text", "text": "child prompt"}]}
+        ]}).to_string();
+        let plans = [plan("parent prompt"), plan("child prompt")];
+        let matched = matching_plans(&plans, &body).unwrap();
+        assert_eq!(matched[0].marker, "child prompt");
+    }
+
+    #[test]
+    fn current_user_selector_rejects_ambiguous_markers() {
+        let body = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "alpha beta"}]}
+        ]})
+        .to_string();
+        let plans = [plan("alpha"), plan("beta")];
+        let error = matching_plans(&plans, &body).unwrap_err();
+        assert!(error.contains("ambiguous mock provider plan"));
+    }
+
+    #[test]
+    fn whole_body_selector_preserves_first_match_for_intentional_overlap() {
+        let body = json!({"messages": [
+            {"role": "system", "content": "structured-output schema"},
+            {"role": "user", "content": "history marker"}
+        ]})
+        .to_string();
+        let plans = [
+            StreamPlan::new("structured-output schema", Vec::new()),
+            StreamPlan::new("history marker", Vec::new()),
+        ];
+        let matched = matching_plans(&plans, &body).unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].marker, "structured-output schema");
+    }
+
+    #[test]
+    fn dynamic_followup_selects_new_authored_marker_not_prior_tool_arguments() {
+        let body = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "initial request"}]},
+            {"role": "assistant", "content": [{"type": "toolcall", "arguments": {"prompt": "old dynamic marker"}}]},
+            {"role": "user", "content": [{"type": "text", "text": "new dynamic marker"}]}
+        ]}).to_string();
+        let markers = HashSet::from([
+            "old dynamic marker".to_string(),
+            "new dynamic marker".to_string(),
+        ]);
+        assert_eq!(
+            matching_dynamic_markers(&markers, &body).unwrap(),
+            vec!["new dynamic marker"]
+        );
+    }
+
+    #[test]
+    fn dynamic_followup_rejects_ambiguous_new_authored_markers() {
+        let body = json!({"messages": [
+            {"role": "user", "content": [{"type": "text", "text": "new alpha beta request"}]}
+        ]})
+        .to_string();
+        let markers = HashSet::from(["alpha".to_string(), "beta".to_string()]);
+        let error = matching_dynamic_markers(&markers, &body).unwrap_err();
+        assert!(error.contains("ambiguous dynamic mock provider plan"));
+    }
+
+    #[tokio::test]
+    async fn session_title_request_does_not_consume_authored_turn_plan() {
+        let marker = "nested child prompt";
+        let state = StreamingState::new(
+            "model".into(),
+            vec![StreamPlan::current_authored_user(
+                marker,
+                vec![StreamResponse::completes(marker, ["authored turn"])],
+            )],
+            Arc::new(AtomicBool::new(false)),
+        );
+        let title = json!({
+            "max_tokens": 24,
+            "messages": [
+                {"role":"system","content":[{"type":"text","text":"Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain."}]},
+                {"role":"user","content":format!("First user request:\n{marker}")}
+            ],
+            "stream": true
+        }).to_string();
+        let _ = state.next_response(&title).await;
+        assert_eq!(state.request_count(marker), 0);
+
+        let authored = json!({
+            "max_tokens": 32768,
+            "messages": [{"role":"user","content":marker}],
+            "tools": [],
+            "stream": true
+        })
+        .to_string();
+        let _ = state.next_response(&authored).await;
+        assert_eq!(state.request_count(marker), 1);
+    }
 }

@@ -1,8 +1,19 @@
 import Proofs.StreamingResponse.Properties
+import Proofs.StreamingResponse.TargetSelection
 
 namespace StreamingResponse
 
 open CanonicalOutput
+
+structure TargetSelectionCase where
+  name : String
+  request : Nat
+  generation : Nat
+  inferenceScopes : List Nat
+  records : List Segment
+  messages : List MessageEnvelope
+  expected : TargetSelection
+  deriving Repr
 
 def sampleCoordinate : Coordinate := ⟨10, .provider 0 0 0⟩
 def sampleText : Declaration := { block := 0, part := 0, kind := .text }
@@ -160,6 +171,11 @@ def outputProjectionCases : List OutputProjectionCase :=
         (messages := [sampleNativeMessage]) (messageId := some 210))
   , case "malformed_sealed_payload_is_invalid"
       (baseObservation (records := [sampleMalformedSealed]))
+  , case "conflicting_physical_segment_identity_is_invalid"
+      (baseObservation
+        (records := [sampleOpen, { sampleOpen with
+          flush := some ⟨1, [⟨0, 1, none⟩], [67]⟩, createdAt := 6 }])
+        (messages := []) (messageId := none))
   , case "raw_exact_record_replay_is_idempotent"
       (baseObservation (records := [sampleComplete, sampleComplete]))
   , case "fork_projection_uses_exact_child_session_and_origin_without_request_membership"
@@ -213,11 +229,11 @@ def outputProjectionCases : List OutputProjectionCase :=
         (messages := []) (messageId := none))
   ]
 
-theorem outputProjectionCases_count : outputProjectionCases.length = 22 := by decide
+theorem outputProjectionCases_count : outputProjectionCases.length = 23 := by decide
 
 theorem projection_cases_pin_boundaries :
     outputProjectionCases.map (fun witness => viewName witness.expected) =
-       ["published", "published", "invalid", "published", "published", "loading",
+       ["published", "published", "invalid", "invalid", "published", "published", "loading",
        "conflicted", "loading", "denied",
        "live", "absent", "loading", "retained_partial", "loading",
        "retracted", "absent", "settling", "loading", "settling", "published", "conflicted",
@@ -237,6 +253,75 @@ def sampleWaitingClose : Segment :=
 
 def sampleWrongWaitingClose : Segment :=
   { sampleWaitingClose with coordinate := ⟨11, .provider 0 0 0⟩ }
+
+private def targetCase (name : String) (records : List Segment)
+    (messages : List MessageEnvelope := []) (request : Nat := 10)
+    (generation : Nat := 7) (inferenceScopes : List Nat := [0]) : TargetSelectionCase :=
+  { name, request, generation, inferenceScopes, records, messages
+    expected := selectTarget request generation inferenceScopes records messages }
+
+def laterAttempt : Segment :=
+  { sampleOpen with id := 120, coordinate := ⟨10, .provider 0 0 1⟩ }
+
+def laterAttemptClose : Segment :=
+  { laterAttempt with id := 121, flush := none, close := some (.closed .complete 1 [1, 1]) }
+
+def laterAttemptMessage : MessageEnvelope :=
+  { sampleMessage with
+    header := { sampleMessage.header with id := 220, refs := [⟨121, 0⟩] }
+    key := "later", sequence := 1 }
+
+def conflictingLaterAttemptMessage : MessageEnvelope :=
+  { laterAttemptMessage with
+    header := { laterAttemptMessage.header with id := 221 }
+    key := "later-conflict", sequence := 2 }
+
+def laterInferenceScope : Segment :=
+  { sampleOpen with id := 122, coordinate := ⟨10, .provider 2 0 0⟩ }
+
+def staleWriterClose : Segment :=
+  { laterAttemptClose with id := 123, writer := .request 8 }
+
+def staleWriterMessage : MessageEnvelope :=
+  { laterAttemptMessage with
+    header := { laterAttemptMessage.header with id := 222, refs := [⟨123, 0⟩] }
+    key := "stale-writer", sequence := 3 }
+
+def targetSelectionCases : List TargetSelectionCase :=
+  [ targetCase "target_absent_without_current_inference_source" []
+  , targetCase "target_ignores_stale_generation"
+      [{ sampleOpen with writer := .request 8 }]
+  , targetCase "target_ignores_foreign_request"
+      [{ sampleOpen with coordinate := ⟨11, .provider 0 0 0⟩ }]
+  , targetCase "target_ignores_non_inference_scope"
+      [{ sampleOpen with coordinate := ⟨10, .provider 1 0 0⟩ }]
+  , targetCase "target_selects_latest_attempt_order_independently"
+      [laterAttempt, sampleOpen]
+  , targetCase "target_selects_latest_inference_scope"
+      [sampleOpen, laterInferenceScope] (inferenceScopes := [0, 2])
+  , targetCase "target_exact_replay_is_inert" [laterAttempt, laterAttempt]
+  , targetCase "target_selects_unique_referencing_header"
+      [laterAttempt, laterAttemptClose] [laterAttemptMessage]
+  , targetCase "target_rejects_ambiguous_referencing_headers"
+      [laterAttempt, laterAttemptClose]
+      [laterAttemptMessage, conflictingLaterAttemptMessage]
+  , targetCase "target_does_not_attach_stale_writer_close"
+      [laterAttempt, staleWriterClose] [staleWriterMessage]
+  ]
+
+theorem targetSelectionCases_count : targetSelectionCases.length = 10 := by decide
+
+
+theorem target_selection_boundaries :
+    targetSelectionCases.map (fun witness => witness.expected) =
+      [.absent, .absent, .absent, .absent,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, none⟩,
+       .selected ⟨laterInferenceScope.coordinate, laterInferenceScope.writer, none⟩,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, none⟩,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, some 220⟩,
+       .conflicted,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, none⟩] := by
+  native_decide
 
 theorem header_arrival_preserves_valid_open_prefix_as_settling :
     project (baseObservation (records := [sampleOpen, sampleWaitingClose])) =

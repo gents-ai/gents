@@ -4,7 +4,7 @@ use crate::lean_vocab_test::lean_request_execution_lease_cases;
 #[test]
 fn generated_request_execution_lease_contract_decodes_current_inventory() {
     let cases = lean_request_execution_lease_cases();
-    assert_eq!(cases.len(), 45);
+    assert_eq!(cases.len(), 48);
 
     let kinds: std::collections::BTreeSet<_> =
         cases.iter().map(|case| case.action.kind()).collect();
@@ -24,6 +24,7 @@ fn generated_request_execution_lease_contract_decodes_current_inventory() {
             "recover_dropped_and_fail",
             "recover_expired",
             "recover_expired_and_fail",
+            "recover_expired_terminal",
             "renew",
             "socket_traffic",
         ]

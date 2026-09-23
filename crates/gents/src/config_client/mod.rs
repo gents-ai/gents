@@ -63,6 +63,8 @@ pub use schema_install::{
     preview_schema_install, SchemaInstallPlan,
 };
 pub use tools::write_tools_document;
+#[cfg(test)]
+pub(crate) use txn::ReentrantEmbeddedWrite;
 pub(crate) use txn::TransactionOutcome;
 pub use txn::{ConfigApplyTxn, IdempotentTransactionRetry};
 

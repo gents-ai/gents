@@ -60,6 +60,100 @@ def hydrationCatalog (w : SessionHydrationDecisionCase) : SessionHydration.Catal
 def hydrationTwin : SessionHydration.Request :=
   { hydrationRequest with key := "peer-2:session-1", peer := "peer-2" }
 
+def hydrationCollectionName : CanonicalOutput.Hydration.Collection → String
+  | .agentRequest => "AgentRequest"
+  | .agentMessage => "AgentMessage"
+  | .agentToolCall => "AgentToolCall"
+  | .agentOutputSegment => "AgentOutputSegment"
+  | .compactionEntry => "CompactionEntry"
+
+def hydrationDocumentKeyJson (key : CanonicalOutput.Hydration.DocumentKey) : String :=
+  "{" ++ "\"collection\":" ++ jsonString (hydrationCollectionName key.collection) ++ "," ++
+    "\"id\":" ++ toString key.id ++ "}"
+
+def optionalNatJson : Option Nat → String
+  | none => "null"
+  | some value => toString value
+
+def payloadRefJson (reference : CanonicalOutput.PayloadRef) : String :=
+  "{" ++ "\"close_id\":" ++ toString reference.closeId ++ "," ++
+    "\"stream\":" ++ toString reference.stream ++ "}"
+
+def hydrationMessageJson (message : CanonicalOutput.MessageEnvelope) : String :=
+  "{" ++ "\"id\":" ++ toString message.header.id ++ "," ++
+    "\"session\":" ++ toString message.header.session ++ "," ++
+    "\"request\":" ++ optionalNatJson message.header.request ++ "," ++
+    "\"origin\":" ++ optionalNatJson message.header.origin ++ "," ++
+    "\"refs\":" ++ jsonArray (message.header.refs.map payloadRefJson) ++ "}"
+
+def sourceJson : CanonicalOutput.Source → String
+  | .provider scope turn attempt =>
+      "{\"kind\":\"provider\",\"scope\":" ++ toString scope ++
+        ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
+  | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
+  | .authored key => "{\"kind\":\"authored\",\"owner\":" ++ toString key ++ "}"
+
+def writerJson : CanonicalOutput.Writer → String
+  | .request generation => "{\"kind\":\"request\",\"owner\":" ++ toString generation ++ "}"
+  | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"
+
+def byteListJson (bytes : List UInt8) : String := jsonArray (bytes.map (toString ·.toNat))
+
+def hydrationSegmentJson (segment : CanonicalOutput.Segment) : String :=
+  "{" ++ "\"id\":" ++ toString segment.id ++ "," ++
+    "\"request\":" ++ toString segment.coordinate.request ++ "," ++
+    "\"source\":" ++ sourceJson segment.coordinate.source ++ "," ++
+    "\"writer\":" ++ writerJson segment.writer ++ "," ++
+    "\"payload\":" ++ byteListJson (segment.flush.map (·.payload) |>.getD []) ++ "}"
+
+def accessStateName : CanonicalOutput.Hydration.AccessState → String
+  | .authorized => "authorized" | .missing => "missing" | .denied => "denied"
+
+def hydrationAccessJson (access : CanonicalOutput.Hydration.ProvenanceAccess) : String :=
+  "{" ++ "\"key\":" ++ hydrationDocumentKeyJson access.key ++ "," ++
+    "\"state\":" ++ jsonString (accessStateName access.state) ++ "," ++
+    "\"peer\":" ++ jsonString access.scope.peer ++ "," ++
+    "\"requester\":" ++ jsonString access.scope.requester ++ "," ++
+    "\"agent\":" ++ jsonString access.scope.agent ++ "," ++
+    "\"session\":" ++ jsonString access.scope.session ++ "," ++
+    "\"native_session\":" ++ toString access.scope.nativeSession ++ "}"
+
+def hydrationRequestJson (request : SessionHydration.Request) : String :=
+  "{" ++ "\"key\":" ++ jsonString request.key ++ "," ++
+    "\"peer\":" ++ jsonString request.peer ++ "," ++
+    "\"requester\":" ++ jsonString request.requester ++ "," ++
+    "\"agent\":" ++ jsonString request.agent ++ "," ++
+    "\"session\":" ++ jsonString request.session ++ "," ++
+    "\"native_session\":" ++ toString request.nativeSession ++ "}"
+
+def hydrationClosureInputJson (input : SessionHydration.ClosureInput) : String :=
+  "{" ++
+    "\"request\":" ++ hydrationRequestJson input.request ++ "," ++
+    "\"roots\":" ++ jsonArray (input.roots.map toString) ++ "," ++
+    "\"messages\":" ++ jsonArray (input.messages.map hydrationMessageJson) ++ "," ++
+    "\"segments\":" ++ jsonArray (input.segments.map hydrationSegmentJson) ++ "," ++
+    "\"access\":" ++ jsonArray (input.access.map hydrationAccessJson) ++ "," ++
+    "\"denied_headers\":" ++ jsonArray (input.deniedHeaders.map toString) ++ "," ++
+    "\"denied_segments\":" ++ jsonArray (input.deniedSegments.map toString) ++ "}"
+
+def selectedDocumentsJson (cat : SessionHydration.Catalog) (request : SessionHydration.Request) : String :=
+  match SessionHydration.closureInputFor cat.closureInputs request with
+  | none => "null"
+  | some input =>
+      match CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
+          input.request.nativeSession input.bases input.roots input.requirements input.messages
+          input.segments input.access input.deniedHeaders input.deniedSegments
+          input.dependencyDenials with
+      | .error _ => "null"
+      | .ok manifest => jsonArray (manifest.map hydrationDocumentKeyJson)
+
+def closureDocumentsJson (input : SessionHydration.ClosureInput) : String :=
+  match CanonicalOutput.Hydration.buildManifest input.request.authorizationScope
+      input.request.nativeSession input.bases input.roots input.requirements input.messages
+      input.segments input.access input.deniedHeaders input.deniedSegments input.dependencyDenials with
+  | .error _ => "null"
+  | .ok manifest => jsonArray (manifest.map hydrationDocumentKeyJson)
+
 
 def sessionHydrationDecisionCases : List SessionHydrationDecisionCase :=
   [ { name := "admitted", paired := true,
@@ -106,7 +200,9 @@ def sessionHydrationDecisionCaseJson (w : SessionHydrationDecisionCase) : String
     ++ "\"owns_session\":" ++ boolString w.ownsSession ++ ","
     ++ "\"expected_admit\":" ++ boolString (SessionHydration.decideAdmits cat hydrationRequest) ++ ","
     ++ "\"expected_selected_count\":" ++
-      toString ((SessionHydration.selectedDocuments cat hydrationRequest).getD ∅).card
+      toString ((SessionHydration.selectedDocuments cat hydrationRequest).getD ∅).card ++ ","
+    ++ "\"closure_input\":" ++ hydrationClosureInputJson hydrationClosureInput ++ ","
+    ++ "\"expected_selected_documents\":" ++ selectedDocumentsJson cat hydrationRequest
     ++ "}"
 
 def sessionHydrationDecisionCasesJson : String :=
@@ -116,7 +212,11 @@ def closureCaseJson (name : String) (input : SessionHydration.ClosureInput)
     (request : SessionHydration.Request := hydrationRequest) : String :=
   let cat := { hydrationCatalog hydrationTwinCase with closureInputs := [input] }
   "{" ++ "\"name\":" ++ jsonString name ++ "," ++
-    "\"expected_selected\":" ++ boolString (SessionHydration.selectedDocuments cat request).isSome ++ "}"
+    "\"expected_selected\":" ++ boolString (SessionHydration.selectedDocuments cat request).isSome ++ "," ++
+    "\"selection_request\":" ++ hydrationRequestJson request ++ "," ++
+    "\"closure_input\":" ++ hydrationClosureInputJson input ++ "," ++
+    "\"expected_closure_documents\":" ++ closureDocumentsJson input ++ "," ++
+    "\"expected_selected_documents\":" ++ selectedDocumentsJson cat request ++ "}"
 
 def deniedClosureInput (key : CanonicalOutput.Hydration.DocumentKey) :
     SessionHydration.ClosureInput :=
@@ -182,7 +282,9 @@ def sessionHydrationApplyCaseJson (w : SessionHydrationApplyCase) : String :=
   let rejected := SessionHydration.terminal hydrationRequest .rejected ∅ ∈ next.terminals
   "{"
     ++ "\"name\":" ++ jsonString w.name ++ ","
-    ++ "\"admitted\":" ++ boolString w.admitted ++ ","
+    ++ "\"admitted\":" ++ boolString (SessionHydration.decideAdmits cat hydrationRequest) ++ ","
+    ++ "\"request\":" ++ hydrationRequestJson hydrationRequest ++ ","
+    ++ "\"input_documents\":" ++ selectedDocumentsJson cat hydrationRequest ++ ","
     ++ "\"delivery_confirmed\":" ++ boolString w.deliveryConfirmed ++ ","
     ++ "\"terminal_write\":" ++ jsonString (terminalWriteString w.terminalWrite) ++ ","
     ++ "\"expected_served\":" ++ boolString served ++ ","

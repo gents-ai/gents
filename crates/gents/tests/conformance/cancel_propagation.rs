@@ -1,17 +1,11 @@
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gents::agent::p2p_reconcile::{
-    equality_filter, resolve_template, EmbeddedRemoteP2pAdmin, PairingFilters, RemoteP2pAdmin,
-};
 use gents::background_completion::{observe_cancel_cascade_ack, CancelAckOutcome};
+use gents::default_behavior_id_for_agent;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::{
     AwaitMode, CancelCause, CancelPolicy, CascadeDispatch, ToolCallLifecycle,
-};
-use gents::{
-    default_behavior_id_for_agent, AgentIdentity, DocumentRuntimeOptions, Gents, ToolCeiling,
 };
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
@@ -19,17 +13,10 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::lean_vocab_test::lean_cancel_propagation_cases;
-use crate::support::enrollment::{authorize_enrollment_peer, wait_for_peer_identity};
-use crate::support::fixtures::bind_default_behavior_backend;
-use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
-use crate::support::mock_endpoint::MockModelEndpoint;
-use crate::support::{first_optional_row, set_request_lifecycle_state, test_p2p_db, TestDb};
-
-struct RunningAgent {
-    db: TestDb,
-    booted: BootedAgent,
-    _endpoint: MockModelEndpoint,
-}
+use crate::support::r5_cross_principal_runtime::{
+    boot_cross_principal_accepted_turn, R5AcceptedSpec,
+};
+use crate::support::{first_optional_row, set_request_lifecycle_state, test_p2p_db};
 
 #[derive(Debug, Deserialize)]
 struct BridgeRow {
@@ -70,163 +57,44 @@ pub(super) async fn cancel_propagation_cases_drive_production_interrupt() {
 }
 
 async fn drive_declarative_cancel_propagation() {
-    let coord_db = test_p2p_db("cancel-propagation-coord").await;
-    let host_db = test_p2p_db("cancel-propagation-host").await;
-    let coord_identity = coord_db.node_identity.clone();
-    let host_identity = host_db.node_identity.clone();
-    let coord_did = coord_identity.did().to_string();
-    let host_did = host_identity.did().to_string();
-    let coord_behavior_id = default_behavior_id_for_agent(&coord_did);
-    let host_behavior_id = default_behavior_id_for_agent(&host_did);
-    let (coord_peer, coord_addr) = wait_for_peer_identity(coord_db.node.as_ref()).await;
-    let (host_peer, host_addr) = wait_for_peer_identity(host_db.node.as_ref()).await;
-
-    // Construct both runtimes first so each P2P responder serves the same
-    // agent DID that signs its enrollment request.
-    let host = boot_agent(host_db, host_identity.clone(), "cancel-propagation-host").await;
-    let coord = boot_agent(coord_db, coord_identity.clone(), "cancel-propagation-coord").await;
-
-    authorize_enrollment_peer(
-        coord.db.node.clone(),
-        "cancel-propagation-coord-network",
-        "Cancel Propagation Coordinator Network",
-        coord_identity.clone(),
-        host_identity.clone(),
-        &host_peer,
-        &host_addr,
-    )
-    .await;
-    authorize_enrollment_peer(
-        host.db.node.clone(),
-        "cancel-propagation-host-network",
-        "Cancel Propagation Host Network",
-        host_identity.clone(),
-        coord_identity.clone(),
-        &coord_peer,
-        &coord_addr,
-    )
-    .await;
-    write_data_plane_pairing(
-        coord.db.node.as_ref(),
-        &host_peer,
-        &coord_did,
-        "subagent-coordinator",
-        &host_addr,
-    )
-    .await;
-    write_data_plane_pairing(
-        host.db.node.as_ref(),
-        &coord_peer,
-        &host_did,
-        "subagent-host",
-        &coord_addr,
-    )
-    .await;
-
-    wait_for_replicator_installed(
-        coord.db.node.as_ref(),
-        &coord_did,
-        &host_peer,
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_replicator_installed(
-        host.db.node.as_ref(),
-        &host_did,
-        &coord_peer,
-        Duration::from_secs(180),
-    )
-    .await;
-    wait_for_connected_peer(coord.db.node.as_ref(), Duration::from_secs(60)).await;
-    wait_for_connected_peer(host.db.node.as_ref(), Duration::from_secs(60)).await;
-    let RunningAgent {
-        db: coord_db,
-        booted: coord_booted,
-        _endpoint: _coord_endpoint,
-    } = coord;
-    coord_booted.shutdown().await;
-    let coord_node = coord_db.node.clone();
-
     let parent_request_id = "cancel-propagation-parent";
     let parent_session_id = "cancel-propagation-parent-session";
     let parent_tool_call_id = "cancel-propagation-bridge";
-    let child_request_id = "cancel-propagation-child";
-    create_processing_request(
-        coord_node.as_ref(),
+    let runtime = boot_cross_principal_accepted_turn(R5AcceptedSpec {
+        name: "cancel-propagation",
         parent_request_id,
         parent_session_id,
-        &coord_did,
-        &coord_behavior_id,
-        "parent work",
-        0,
-        None,
-        None,
-        None,
-    )
+        parent_tool_call_id,
+        target_behavior_id: "cancel-propagation-worker",
+        prompt: "parent work",
+        parent_subagent_depth: 0,
+    })
     .await;
-    let parent_request_doc_id = fetch_request(coord_node.as_ref(), parent_request_id)
-        .await
-        .expect("created parent AgentRequest")
-        .doc_id
-        .expect("created AgentRequest._docID");
-
-    create_processing_request(
-        host.db.node.as_ref(),
-        child_request_id,
-        "cancel-propagation-child-session",
-        &host_did,
-        &host_behavior_id,
-        "child work",
-        1,
-        Some(parent_request_id),
-        Some(parent_tool_call_id),
-        Some(&coord_did),
-    )
-    .await;
-
-    let mut bridge = ToolCallLifecycle::new_subagent(
-        coord_node.clone(),
-        parent_request_id.to_string(),
-        parent_session_id.to_string(),
-        coord_did.clone(),
-        parent_tool_call_id.to_string(),
-        1,
-        "spawn_subagent".to_string(),
-        json!({
-            "agent_did": host_did.as_str(),
-            "behavior_id": host_behavior_id.as_str(),
-            "prompt": "child work",
-            "await_mode": AwaitMode::Background.as_str(),
-        })
-        .to_string(),
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        child_request_id.to_string(),
-        host_did.clone(),
-    )
-    .with_request_doc_id(Some(parent_request_doc_id));
-    bridge.start_running().await.expect("persist bridge");
-
-    let replicated_bridge = replay_and_wait_for_bridge(
-        host.db.node.as_ref(),
-        coord_node.clone(),
-        &host_addr,
-        &host_did,
+    let coord_node = runtime.parent_db.node.clone();
+    let host_node = runtime.child_db.node.clone();
+    let coord_did = runtime.parent_db.node_identity.did().to_owned();
+    let host_did = runtime.child_agent_did.clone();
+    let replicated_bridge = wait_for_bridge(
+        host_node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
+        Duration::from_secs(120),
     )
     .await;
+    let child_request_id = replicated_bridge
+        .child_request_id
+        .clone()
+        .expect("accepted bridge must bind its physical child request");
     assert_eq!(
         replicated_bridge.spawn_target_did.as_deref(),
         Some(host_did.as_str())
     );
     assert_eq!(
         replicated_bridge.child_request_id.as_deref(),
-        Some(child_request_id)
+        Some(child_request_id.as_str())
     );
     assert!(
-        fetch_request(host.db.node.as_ref(), parent_request_id)
+        fetch_request(host_node.as_ref(), parent_request_id)
             .await
             .is_none(),
         "coordinator parent request must not replicate to the host"
@@ -243,6 +111,11 @@ async fn drive_declarative_cancel_propagation() {
         Some("running")
     );
 
+    let mut bridge =
+        ToolCallLifecycle::load(coord_node.clone(), parent_session_id, parent_tool_call_id)
+            .await
+            .expect("load accepted bridge")
+            .expect("accepted bridge exists");
     let dispatch = bridge
         .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &coord_did)
         .await
@@ -255,7 +128,7 @@ async fn drive_declarative_cancel_propagation() {
     );
 
     let host_bridge = wait_for_bridge_cancel_intent(
-        host.db.node.as_ref(),
+        host_node.as_ref(),
         parent_session_id,
         parent_tool_call_id,
         Duration::from_secs(120),
@@ -266,8 +139,8 @@ async fn drive_declarative_cancel_propagation() {
     assert_eq!(host_bridge.cancel_pending_remote_ack, Some(true));
 
     let interrupted_on_host = wait_for_interrupt_requested_at(
-        host.db.node.as_ref(),
-        child_request_id,
+        host_node.as_ref(),
+        &child_request_id,
         Duration::from_secs(30),
     )
     .await;
@@ -275,14 +148,18 @@ async fn drive_declarative_cancel_propagation() {
         interrupted_on_host.agent_did.as_deref(),
         Some(host_did.as_str())
     );
-    assert_eq!(
-        interrupted_on_host.lifecycle_state,
-        Some(RequestLifecycleState::Processing)
+    assert!(
+        matches!(
+            interrupted_on_host.lifecycle_state,
+            Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing)
+        ),
+        "host must latch interruption while the accepted child remains owned and nonterminal; observed {:?}",
+        interrupted_on_host.lifecycle_state
     );
 
     let interrupted_on_coord = wait_for_interrupt_requested_at(
         coord_node.as_ref(),
-        child_request_id,
+        &child_request_id,
         Duration::from_secs(30),
     )
     .await;
@@ -314,11 +191,9 @@ async fn drive_declarative_cancel_propagation() {
     assert_eq!(acked_bridge.cancel_pending_remote_ack, Some(false));
 
     assert_no_third_party_rows(coord_node.as_ref(), &coord_did, &host_did).await;
-    assert_no_third_party_rows(host.db.node.as_ref(), &coord_did, &host_did).await;
+    assert_no_third_party_rows(host_node.as_ref(), &coord_did, &host_did).await;
 
-    host.booted.shutdown().await;
-    coord_db.node.shutdown().await;
-    host.db.node.shutdown().await;
+    runtime.shutdown().await;
 }
 
 /// The end-to-end propagation above only ever observes the terminal `Acked`
@@ -603,89 +478,6 @@ async fn fetch_ack_tool_row(node: &EmbeddedNode, tool_call_id: &str) -> AckToolR
         .expect("cancel-pending bridge fixture row")
 }
 
-async fn boot_agent(db: TestDb, identity: Arc<dyn AgentIdentity>, name: &str) -> RunningAgent {
-    let did = identity.did().to_string();
-    let endpoint = MockModelEndpoint::start("default").expect("mock endpoint");
-    bind_default_behavior_backend(
-        db.node.as_ref(),
-        &did,
-        &format!("{name}-backend"),
-        endpoint.endpoint(),
-    )
-    .await;
-    let agent = Gents::from_default_behavior_documents(
-        db.node.clone(),
-        identity,
-        DocumentRuntimeOptions {
-            tool_ceiling: ToolCeiling::meta_only(),
-            ..Default::default()
-        },
-    )
-    .await
-    .expect("document agent");
-    let did = agent.agent_did().to_string();
-    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
-    let handle = tokio::spawn(agent.run(shutdown_rx));
-    wait_for_runtime_ready(db.node.as_ref(), &did).await;
-    RunningAgent {
-        db,
-        booted: BootedAgent::new(shutdown_tx, handle, did),
-        _endpoint: endpoint,
-    }
-}
-
-async fn write_data_plane_pairing(
-    node: &EmbeddedNode,
-    peer_id: &str,
-    self_did: &str,
-    template: &str,
-    peer_addr: &str,
-) {
-    let collections = resolve_template(template)
-        .unwrap_or_else(|| panic!("template {template} should resolve"))
-        .collections
-        .iter()
-        .map(|collection| format!("\"{}\"", escape_graphql_string(collection)))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let peer_id = escape_graphql_string(peer_id);
-    let self_did = escape_graphql_string(self_did);
-    let template = escape_graphql_string(template);
-    let peer_addr = escape_graphql_string(peer_addr);
-    let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            upsert_DataPlanePairingDesired(
-                filter: {{ peer_id: {{ _eq: "{peer_id}" }} }},
-                add: {{
-                    peer_id: "{peer_id}",
-                    agent_did: "{self_did}",
-                    collections: [{collections}],
-                    replicator_addresses: ["{peer_addr}"],
-                    template: "{template}",
-                    source: "test-authenticated-subagent",
-                    created_at: "{now}",
-                    updated_at: "{now}"
-                }},
-                update: {{
-                    agent_did: "{self_did}",
-                    collections: [{collections}],
-                    replicator_addresses: ["{peer_addr}"],
-                    template: "{template}",
-                    source: "test-authenticated-subagent",
-                    updated_at: "{now}"
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    exec(
-        node,
-        &mutation,
-        "write enrollment-gated DataPlanePairingDesired",
-    )
-    .await;
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn create_processing_request(
     node: &EmbeddedNode,
@@ -754,112 +546,6 @@ fn graphql_nullable_string(value: Option<&str>) -> String {
     }
 }
 
-async fn wait_for_connected_peer(node: &EmbeddedNode, timeout: Duration) {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let peers = node
-            .p2p()
-            .expect("p2p should be enabled")
-            .connected_peers()
-            .await
-            .expect("connected peers");
-        if !peers.is_empty() {
-            return;
-        }
-        if Instant::now() >= deadline {
-            panic!("timed out waiting for a connected P2P peer; last_peers={peers:?}");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-}
-
-async fn wait_for_replicator_installed(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    peer_id: &str,
-    timeout: Duration,
-) {
-    let deadline = Instant::now() + timeout;
-    let escaped_peer_id = escape_graphql_string(peer_id);
-    let mut last = String::from("<none>");
-    loop {
-        let query = format!(
-            r#"{{
-                PeerPairingApplied(filter: {{ peer_id: {{ _eq: "{escaped_peer_id}" }} }}, limit: 1) {{
-                    peer_id
-                    collections
-                    replicator_addresses
-                    replicator_filter
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        if let Some(row) = first_optional_row::<serde_json::Value>(&response, "PeerPairingApplied")
-        {
-            last = serde_json::to_string(&row).unwrap_or_else(|_| format!("{row:?}"));
-            let installed = row
-                .get("replicator_addresses")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|addresses| {
-                    addresses
-                        .iter()
-                        .any(|address| address.as_str().is_some_and(|s| !s.trim().is_empty()))
-                });
-            if installed {
-                return;
-            }
-        }
-        if Instant::now() >= deadline {
-            let runtime = runtime_diagnostic(node, agent_did).await;
-            let p2p = p2p_diagnostic(node).await;
-            panic!(
-                "timed out waiting for PeerPairingApplied({peer_id}) to install a replicator; \
-                 last row={last}; runtime={runtime}; p2p={p2p}"
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-}
-
-async fn runtime_diagnostic(node: &EmbeddedNode, agent_did: &str) -> String {
-    let agent_did = escape_graphql_string(agent_did);
-    let query = format!(
-        r#"{{
-            AgentBehaviorReadiness(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
-                limit: 1
-            ) {{ snapshot_json updated_at }}
-            AgentRuntime(
-                filter: {{ agent_did: {{ _eq: "{agent_did}" }} }},
-                limit: 1
-            ) {{
-                reconcile_phase
-                last_reconcile_result
-                last_reconcile_error
-            }}
-        }}"#
-    );
-    let response = match tokio::time::timeout(Duration::from_secs(2), node.execute(&query)).await {
-        Ok(response) => response,
-        Err(_) => return "<timed out after 2s>".to_string(),
-    };
-    let data = response
-        .data
-        .as_ref()
-        .map(serde_json::Value::to_string)
-        .unwrap_or_else(|| "<none>".to_string());
-    format!("data={data}, errors={:?}", response.errors)
-}
-
-async fn p2p_diagnostic(node: &EmbeddedNode) -> String {
-    let Some(p2p) = node.p2p() else {
-        return "<disabled>".to_string();
-    };
-    let peers = tokio::time::timeout(Duration::from_secs(2), p2p.connected_peers()).await;
-    let replicators = tokio::time::timeout(Duration::from_secs(2), p2p.get_replicators()).await;
-    format!("connected_peers={peers:?}, replicators={replicators:?}")
-}
-
 async fn wait_for_interrupt_requested_at(
     node: &EmbeddedNode,
     request_id: &str,
@@ -917,57 +603,6 @@ async fn wait_for_bridge(
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-async fn replay_and_wait_for_bridge(
-    receiver: &EmbeddedNode,
-    sender: Arc<EmbeddedNode>,
-    receiver_addr: &str,
-    receiver_did: &str,
-    session_id: &str,
-    tool_call_id: &str,
-) -> BridgeRow {
-    // The pinned DefraDB selective-CAR path can strand the initial targeted
-    // push (#1101). Production pairing recovery repairs that state by
-    // reinstalling the replicator, which triggers a bounded full replay. Make
-    // that recovery deterministic here: ordinary initial delivery is covered
-    // by the R5 and filtered-replay suites, while this fixture must isolate
-    // application-level cancellation from #1101. The coordinator daemon is
-    // deliberately stopped so its background-completion loop cannot consume
-    // the synthetic remote child.
-    let admin = EmbeddedRemoteP2pAdmin::new(sender);
-    let collections = vec!["AgentToolCall".to_string()];
-    let replicators = admin
-        .list_replicators()
-        .await
-        .expect("list coordinator replicators for bridge replay");
-    if let Some(existing) = replicators
-        .into_iter()
-        .find(|replicator| replicator.address.as_deref() == Some(receiver_addr))
-    {
-        let id = existing.id.unwrap_or_else(|| receiver_addr.to_string());
-        let old_collections = if existing.collections.is_empty() {
-            collections.clone()
-        } else {
-            existing.collections
-        };
-        admin
-            .delete_replicator(&id, &old_collections)
-            .await
-            .expect("remove coordinator replicator for bridge replay");
-    }
-
-    let mut filters = PairingFilters::new();
-    filters.insert(
-        "AgentToolCall".to_string(),
-        equality_filter("spawn_target_did", receiver_did),
-    );
-    admin
-        .add_replicator(&[receiver_addr.to_string()], &collections, &filters)
-        .await
-        .expect("reinstall coordinator replicator for bridge replay");
-
-    wait_for_bridge(receiver, session_id, tool_call_id, Duration::from_secs(60)).await
 }
 
 async fn wait_for_bridge_cancel_intent(

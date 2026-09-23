@@ -21,8 +21,10 @@ async fn resolve_behavior_rejects_missing_or_blank_explicit_selection() {
         for behavior in [None, Some(""), Some("   ")] {
             match resolve_behavior_for_request(node.as_ref(), &request(behavior, session)).await {
                 Err(_) => {}
-                Ok(resolved) => assert!(resolved.rejection_reason.is_some(),
-                    "missing/blank selection must not inherit default or session behavior: {session}, {behavior:?}"),
+                Ok(resolved) => assert!(
+                    resolved.rejection_reason.is_some(),
+                    "missing/blank selection must not inherit default or session behavior: {session}, {behavior:?}"
+                ),
             }
         }
     }
