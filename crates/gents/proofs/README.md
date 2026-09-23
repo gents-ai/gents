@@ -627,6 +627,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/RuntimeReconcile.lean` | Barrel for runtime reconcile state, relational transitions, and executable semantics |
 | `Proofs/RuntimeReconcile/StartupReadiness.lean` | Startup/readiness projection and semantic publication predicate. Generated `readiness_publication_cases` drive publisher process-state transitions and require no writes during idle time; document age is not a connectivity lease. |
 | `Proofs/ApplyReconcile.lean` | Barrel for atomic publication, model-driven witnesses, runtime bridge, and convergence |
+| `Proofs/Eval.lean` | Eval core contract (#1515): closed outcome-kind vocabulary, provider reasons, the projection onto evidence classes, the theorem that no subject-causable outcome is excluded from the denominator, and monotone case-class reduction. Checks, numeric reducers and the runner are refinement boundaries |
 | `Proofs/SelfConfig.lean` | Barrel for agent self-configuration patch semantics: field partitions, merge, write step, and guardrails (#654) |
 | `Proofs/Triggers.lean` | Barrel for trigger types, dispatch, reachability, serial, latest-only, and lineage proofs |
 | `Proofs/Workspace.lean` | Isolated workspace lifecycle, append-only bindings, seal/owner routing, and authority meet |
