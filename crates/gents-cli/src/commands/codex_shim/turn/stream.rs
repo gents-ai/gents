@@ -1352,8 +1352,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reasoning_cursor_oversized_no_overlap_segment_terminally_completes_with_durable_text()
-    {
+    async fn reasoning_cursor_oversized_no_overlap_tail_terminally_completes_with_durable_text() {
         use std::sync::{atomic::AtomicU64, Arc};
         use std::time::Duration;
 
@@ -1406,17 +1405,15 @@ mod tests {
             .await
             .expect("project first reasoning delta");
 
-        // A poll gap larger than the bounded preview has no overlap. This is
-        // existing segment behavior: the partial first item is completed and
-        // the new segment streams the latest tail. The final thread can thus
-        // show that partial prefix plus the full durable segment (a duplicate
-        // prefix). Terminal materialization, however, must complete the new
-        // segment with the exact durable text.
-        let second = cursor
-            .observe("request-1", &second_tail, &source)
-            .delta
-            .expect("unrecoverable bounded-tail delta");
-        assert_eq!(second.item_id, "gents-reasoning-request-1-segment-1");
+        // A poll gap larger than the bounded preview has no overlap. The
+        // source is still the same provider turn, so the latest tail extends
+        // its existing item. Terminal materialization replaces that item's
+        // incomplete streamed text with the exact durable text.
+        let observation = cursor.observe("request-1", &second_tail, &source);
+        assert!(observation.completed_item_id.is_none());
+        let second = observation.delta.expect("unrecoverable bounded-tail delta");
+        assert_eq!(second.item_id, first.item_id);
+        assert_eq!(second.text, second_tail);
         projection
             .append_reasoning_delta(&outbound, &second.item_id, &second.text)
             .await
@@ -1441,16 +1438,7 @@ mod tests {
                 completed.push((id, content.concat()));
             }
         }
-        assert_eq!(
-            completed,
-            vec![
-                ("gents-reasoning-request-1".to_string(), first_tail),
-                (
-                    "gents-reasoning-request-1-segment-1".to_string(),
-                    durable_text,
-                ),
-            ]
-        );
+        assert_eq!(completed, vec![(first.item_id, durable_text)]);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
+use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH;
 use gents_codex_protocol as codex;
@@ -171,6 +172,8 @@ struct ToolLinkRow {
     request_id: String,
     session_id: String,
     agent_did: String,
+    #[serde(default)]
+    requester_did: Option<String>,
     tool_call_id: String,
     tool_name: String,
     #[serde(default)]
@@ -221,11 +224,11 @@ const TOOL_LINK_ROW_FIELDS: &str = r#"
     request_id
     session_id
     agent_did
+    requester_did
     tool_call_id
     tool_name
     child_request_id
     spawn_target_did
-    args
 "#;
 
 /// Load the subagent request graph reachable from a Codex-shim-owned root.
@@ -330,9 +333,24 @@ async fn load_authorized_subagent_threads_for_roots(
                 &spawn_tools_for_requests_query(&parent_request_ids),
             )
             .await?;
-            for tool in decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
+            let access = ConfigAccess::Local(state.node.clone());
+            for mut tool in decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
                 .context("decoding scoped spawn AgentToolCall rows")?
             {
+                tool.args = gents::tool_call_lifecycle::load_tool_call_arguments(
+                    &access,
+                    &tool.doc_id,
+                    &tool.agent_did,
+                    &tool.session_id,
+                    tool.requester_did.as_deref(),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "reconstructing accepted spawn arguments for {}",
+                        tool.doc_id
+                    )
+                })?;
                 if let Some(child_request_id) = nonempty(tool.child_request_id.as_deref()) {
                     child_request_ids.push(child_request_id.to_string());
                 }
@@ -1099,6 +1117,7 @@ mod tests {
             request_id: "root-request".to_string(),
             session_id: root_session.clone(),
             agent_did: "did:root".to_string(),
+            requester_did: None,
             tool_call_id: "spawn-call".to_string(),
             tool_name: "spawn_subagent".to_string(),
             child_request_id: Some("child-request".to_string()),
@@ -1126,6 +1145,7 @@ mod tests {
             request_id: "parent".into(),
             session_id: root_session,
             agent_did: "did:root".into(),
+            requester_did: None,
             tool_call_id: "spawn".into(),
             tool_name: "spawn_subagent".into(),
             child_request_id: Some("child".into()),
@@ -1171,6 +1191,7 @@ mod tests {
             request_id: "parent".into(),
             session_id: root_session.clone(),
             agent_did: "did:root".into(),
+            requester_did: None,
             tool_call_id: tool_id.into(),
             tool_name: "spawn_subagent".into(),
             child_request_id: Some(child_id.into()),
@@ -1220,6 +1241,7 @@ mod tests {
                 request_id: "root-request".to_string(),
                 session_id: root_session.clone(),
                 agent_did: "did:root".to_string(),
+                requester_did: None,
                 tool_call_id: "spawn-call".to_string(),
                 tool_name: "spawn_subagent".to_string(),
                 child_request_id: Some("child-request".to_string()),
@@ -1232,6 +1254,7 @@ mod tests {
                 request_id: "child-followup".to_string(),
                 session_id: child_session.clone(),
                 agent_did: "did:child".to_string(),
+                requester_did: None,
                 tool_call_id: "nested-spawn-call".to_string(),
                 tool_name: "spawn_subagent".to_string(),
                 child_request_id: Some("grandchild-request".to_string()),
@@ -1276,6 +1299,7 @@ mod tests {
             request_id: "root-request".to_string(),
             session_id: root_session,
             agent_did: "did:root".to_string(),
+            requester_did: None,
             tool_call_id: "spawn-call".to_string(),
             tool_name: "spawn_subagent".to_string(),
             child_request_id: Some("child-request".to_string()),
@@ -1323,7 +1347,28 @@ mod tests {
         assert!(tool_query.contains("request_doc_id: { _in:"));
         assert!(tool_query.contains(r#"tool_name: { _eq: "spawn_subagent" }"#));
         assert!(tool_query.contains(r#"child_request_id: { _ne: "" }"#));
+        assert!(tool_query.contains("requester_did"));
+        assert!(!tool_query.lines().any(|line| line.trim() == "args"));
         assert!(tool_query.contains(r#""request-\"b""#));
+    }
+
+    #[tokio::test]
+    async fn spawn_tool_query_is_valid_against_current_canonical_schema() {
+        let node = gents::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node");
+        gents::ensure_runtime_schemas(&node)
+            .await
+            .expect("runtime schemas");
+        let query = spawn_tools_for_requests_query(&["physical-parent".into()]);
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "spawn link query must use current AgentToolCall fields: {:?}",
+            response.errors
+        );
+        node.shutdown().await;
     }
 
     #[test]
