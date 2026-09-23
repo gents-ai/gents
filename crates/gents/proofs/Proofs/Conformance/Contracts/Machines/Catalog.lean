@@ -12,6 +12,7 @@ import Proofs.Conformance.Contracts.Machines.Goal
 import Proofs.Conformance.Contracts.Machines.Mailbox
 import Proofs.Conformance.Contracts.Machines.EthSubmission
 import Proofs.CompletionRetry.Contracts
+import Proofs.Eval
 
 namespace Conformance.Contracts
 
@@ -58,6 +59,9 @@ def vocabularies : List VocabularyContract :=
   , { domain := "MailboxKind", values := Mailbox.kindVocabulary }
   , { domain := "MailboxHandling", values := Mailbox.handlingVocabulary }
   , { domain := "MailboxSourceKind", values := Mailbox.sourceKindVocabulary }
+  , { domain := "EvalOutcomeKind", values := Eval.allKinds.map Eval.OutcomeKind.toDefraDB }
+  , { domain := "EvalProviderReason", values := Eval.allReasons.map Eval.ProviderReason.toDefraDB }
+  , { domain := "EvalEvidenceClass", values := Eval.allClasses.map Eval.EvidenceClass.toDefraDB }
   ]
 
 def stateMachines : List StateMachineContract :=
