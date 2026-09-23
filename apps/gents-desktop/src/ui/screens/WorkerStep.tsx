@@ -20,6 +20,7 @@ import { href } from "@/lib/router";
 import { ToolBody } from "./tool-views";
 import { duration } from "./tool-summary";
 import { when } from "./time";
+import { isLive } from "@/lib/live";
 import type { WorkerState, Workers } from "./workers";
 import { WorkerStop } from "./WorkerActions";
 
@@ -29,56 +30,60 @@ const firstLine = (s: string | null | undefined) => s?.trim().split("\n")[0] ?? 
 const since = (iso: string | null | undefined) =>
   iso ? duration(Math.max(0, Date.now() - Date.parse(iso))) : null;
 
-/* the worker's state, in order of what the runtime knows best: the child
-   session's own turn, then the lineage node, then the edge, then the tool */
-function workerNow(
+/* the worker's state, from the bridge's own facts in order of freshness:
+   the child session's turn (turn_state_label), then the lineage node's
+   request lifecycle, then the edge's, then the tool call. Nothing here
+   guesses at replication: a worker with no summary yet reads as its
+   lifecycle says. */
+const WAITING = new Set([
+  "waitingforclaim",
+  "pending",
+  "claimed",
+  "workspace_binding_pending",
+  "workspacebindingpending",
+]);
+
+export function workerNow(
   tool: RenderedToolCallView,
   w: WorkerState | null,
 ): { tone: Tone; text: string; detail?: string | null } {
   const turn = w?.summary?.turnState ?? null;
   const node = w?.node?.lifecycleState ?? null;
   const edge = w?.edge?.lifecycleState ?? null;
-  if (w?.unreplicated)
-    return { tone: "unknown", text: "not synced to this desktop yet" };
-  /* the child's own turn is the freshest fact; the lineage node only speaks when there is no summary */
-  const busy = turn ? turn === "processing" : node === "processing";
-  /* the request the parent spawned ended, yet the session works on: both
-     facts, side by side (gents#1541) */
-  if (busy && edge === "failed")
-    return {
-      tone: "running",
-      text: "request failed · session still working",
-      detail: firstLine(
-        tool.presentation.kind === "subagent" ? tool.presentation.output : null,
-      ),
-    };
-  if (busy) {
+  const state = turn ?? node ?? edge ?? tool.statusKind ?? null;
+  const failure = firstLine(
+    tool.presentation.kind === "subagent" ? tool.presentation.output : null,
+  );
+  if (state && WAITING.has(state.toLowerCase()))
+    return { tone: "running", text: "waiting for the agent to pick it up" };
+  if (isLive(state)) {
+    /* the request the parent spawned ended, yet the session works on: both
+       facts, side by side (gents#1541) */
+    if (edge === "failed")
+      return {
+        tone: "running",
+        text: "request failed · session still working",
+        detail: failure,
+      };
     const s = when(w?.summary?.updatedAt ?? null);
     return {
       tone: "running",
       text: s && s !== "now" ? `working · last change ${s}` : "working",
     };
   }
-  const state = turn ?? node ?? edge ?? tool.statusKind;
   switch (state) {
     case "completed":
       return { tone: "done", text: "finished" };
     case "failed":
     case "error":
-      return {
-        tone: "failed",
-        text: "failed",
-        detail: firstLine(
-          tool.presentation.kind === "subagent" ? tool.presentation.output : null,
-        ),
-      };
+    case "dead":
+      return { tone: "failed", text: "failed", detail: failure };
     case "cancelled":
     case "interrupted":
+    case "superseded":
       return { tone: "stopped", text: state };
-    case "running":
-      return { tone: "running", text: "working" };
     default:
-      return { tone: "unknown", text: state };
+      return { tone: "unknown", text: state ?? "unknown" };
   }
 }
 
@@ -256,8 +261,8 @@ export function WorkerStep({
   const name = w?.summary?.title ?? p.name ?? p.childRequestId ?? "a worker";
   const sessionId = w?.sessionId ?? null;
   /* the same mark the gathered rows and the session list use, so a worker
-     looks like itself wherever it appears. A worker this desktop has not
-     replicated has no behavior yet, and keeps the tone's glyph. */
+     looks like itself wherever it appears. A worker with no summary has no
+     behavior to wear, and keeps the tone's glyph. */
   const behaviorId = w?.summary?.behaviorId ?? null;
   const mark = behaviorId ? (
     <BehaviorAvatar

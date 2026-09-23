@@ -566,9 +566,9 @@ function WorkerRunStep({
     (t) => t.statusKind === "error" || t.statusKind === "failed",
   );
   /* the row is about one agent, so it wears that agent's mark: the same
-     avatar the session list and the parent's turns use. A worker the
-     desktop has not replicated yet has no behavior to wear, and falls
-     back to the kind's glyph. */
+     avatar the session list and the parent's turns use. A worker with
+     no session summary has no behavior to wear, and falls back to the
+     kind's glyph. */
   const child = p.kind === "subagent" && p.childRequestId;
   const behaviorId =
     (child && workers.byChildRequest(child)?.summary?.behaviorId) || null;
@@ -813,19 +813,6 @@ export const TranscriptPanel = memo(function TranscriptPanel({
         >
           {loadingOlder ? "Loading older messages…" : "Load older messages"}
         </Button>
-      )}
-      {!session && parentWork.parent && (
-        <p className="px-2 text-sm text-muted-foreground">
-          The runtime lists this session under{" "}
-          <a
-            href={href({ name: "session", sessionId: parentWork.parent.sessionId })}
-            className="text-foreground underline decoration-border underline-offset-4"
-          >
-            {parentWork.parent.title ?? "its parent"}
-          </a>
-          {parentWork.summary?.turnState ? ` as ${parentWork.summary.turnState}` : ""}.
-          Its transcript has not replicated to this desktop yet.
-        </p>
       )}
       <DeploymentContext.Provider value={deployment}>
         <WorkersContext.Provider value={workers}>

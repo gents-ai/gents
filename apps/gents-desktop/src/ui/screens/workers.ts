@@ -22,8 +22,6 @@ export type WorkerState = {
   edge: SubagentEdgeView | null;
   /* the parent's tool call for this child, if this desktop has it */
   background: BackgroundedToolView | null;
-  /* the runtime lists the session but this desktop has no transcript for it */
-  unreplicated: boolean;
 };
 
 export type Workers = {
@@ -108,14 +106,6 @@ export function useWorkers(shell: Shell): Workers {
           edge,
           background:
             backgrounded.find((b) => b.childRequestId === childRequestId) ?? null,
-          /* the runtime resolved the request by gossip rather than from
-             documents held here, or the summary has no counted messages:
-             the transcript has not replicated to this desktop */
-          unreplicated:
-            (node != null &&
-              node.resolvedVia != null &&
-              node.resolvedVia !== "canonical") ||
-            (summary != null && summary.messageCount == null),
         };
       },
       byToolCall: (tool) =>
