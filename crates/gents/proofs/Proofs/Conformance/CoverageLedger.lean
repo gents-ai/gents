@@ -208,6 +208,10 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.operatorCli]
     , deferred := [(Surface.operatorUi, "#1515")]
     }
+  , { feature := "optimization"
+    , required := [Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#1455")]
+    }
   , { feature := "event-delivery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -738,15 +742,20 @@ def caseCoverage : List CoverageEntry :=
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
   , tagged (consumerCoverage
-      "eval_outcome_cases"
-      "EvalOutcomeCases"
-      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
-      "eval" [Surface.operatorCli]
-  , tagged (consumerCoverage
       "publish_if_cases"
       "PublishIfCases"
       "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases")
       "apply-reconcile" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "eval_outcome_cases"
+      "EvalOutcomeCases"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (followUpCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "Consumed by optimization::policy::tests once PolicyV2 lands in the next stacked PR.")
+      "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"

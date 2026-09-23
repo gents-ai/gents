@@ -63,6 +63,7 @@ import Proofs.Conformance.Contracts.Json.WorkerCapacity
 import Proofs.Conformance.Contracts.Json.PayloadPresentation
 import Proofs.Conformance.Contracts.Json.R5Scenarios
 import Proofs.Conformance.Eval
+import Proofs.Conformance.Optimization
 
 namespace Conformance.Contracts
 
@@ -230,6 +231,8 @@ def snapshotJson : String :=
       ++ ApplyReconcile.ContractCases.applyReconcileCasesJson ++ ","
     ++ "\"eval_outcome_cases\":"
       ++ Conformance.Eval.evalOutcomeCasesJson ++ ","
+    ++ "\"optimization_cases\":"
+      ++ Conformance.Optimization.optimizationCasesJson ++ ","
     ++ "\"publish_if_cases\":"
       ++ ApplyReconcile.ContractCases.publishIfCasesJson ++ ","
     ++ "\"tool_policy_cases\":"
