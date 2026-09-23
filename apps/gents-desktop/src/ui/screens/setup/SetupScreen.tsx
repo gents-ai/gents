@@ -305,10 +305,29 @@ export function providerSignInState(accounts: ProviderAccountView[]) {
   const next: Partial<Record<ProviderId, string>> = {};
   for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
     const account = accounts.find(
-      (entry) => entry.enabled && entry.provider === credentialKind,
+      (entry) =>
+        entry.enabled && !entry.pendingSave && entry.provider === credentialKind,
     );
     if (account) next[providerId as OauthProvider] = account.credentialId;
   }
+  return next;
+}
+
+/** Providers whose completed sign-in the bridge holds after a failed save. */
+export function providerPendingSaveState(accounts: ProviderAccountView[]) {
+  const next: Partial<Record<ProviderId, true>> = {};
+  for (const [providerId, credentialKind] of Object.entries(PROVIDER_CREDENTIAL_KIND)) {
+    if (
+      accounts.some((entry) => entry.pendingSave && entry.provider === credentialKind)
+    )
+      next[providerId as OauthProvider] = true;
+  }
+  return next;
+}
+
+function withoutProvider<T>(state: Partial<Record<ProviderId, T>>, id: ProviderId) {
+  const next = { ...state };
+  delete next[id];
   return next;
 }
 
@@ -404,36 +423,34 @@ export function SetupScreen({
     void checkManagedRuntime();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, requiresManagedRuntime, runtimeGate]);
-  /* A sign-in whose issued credential the bridge holds after a failed save. */
-  const [unsavedSignIn, setUnsavedSignIn] = useState<{
-    agentDid: string;
-    provider: ProviderId;
-    credentialKind: string;
-  } | null>(null);
-  useEffect(() => {
-    setUnsavedSignIn((current) =>
-      current && current.agentDid !== setupAgentDid ? null : current,
-    );
-  }, [setupAgentDid]);
-  useEffect(() => {
+  const [pendingSave, setPendingSave] = useState<Partial<Record<ProviderId, true>>>({});
+  const observeAccounts = (agentDid: string) => {
     const revision = ++accountRevision.current;
-    setSignedIn({});
-    if (!setupAgentDid || !api.listProviderAccounts) {
-      return;
-    }
-    let cancelled = false;
-    void api
-      .listProviderAccounts(setupAgentDid)
+    if (!api.listProviderAccounts) return Promise.resolve();
+    return api
+      .listProviderAccounts(agentDid)
       .then((accounts) => {
-        if (cancelled || accountRevision.current !== revision) return;
+        if (
+          accountRevision.current !== revision ||
+          setupAgentDidRef.current !== agentDid
+        )
+          return;
         setSignedIn(providerSignInState(accounts));
+        setPendingSave(providerPendingSaveState(accounts));
       })
       .catch(() => {
         /* Sign-in remains available if account lookup fails. */
       });
-    return () => {
-      cancelled = true;
-    };
+  };
+  useEffect(() => {
+    setSignedIn({});
+    setPendingSave({});
+    if (!setupAgentDid) {
+      accountRevision.current += 1;
+      return;
+    }
+    void observeAccounts(setupAgentDid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, setupAgentDid]);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const root = shell.snapshot?.bootstrap.defaultAgentHome ?? "~/.gents";
@@ -592,17 +609,13 @@ export function SetupScreen({
       if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
       setSignedIn((current) => ({ ...current, [provider]: result.credentialId }));
-      setUnsavedSignIn(null);
+      setPendingSave((current) => withoutProvider(current, provider));
       invalidateDiscovery();
       setAuthUrl(null);
     } catch (cause) {
       if (agentDid && bridgeErrorCode(cause) === CREDENTIAL_NOT_SAVED) {
-        setUnsavedSignIn({
-          agentDid,
-          provider,
-          credentialKind: PROVIDER_CREDENTIAL_KIND[oauthProvider],
-        });
         setAuthUrl(null);
+        void observeAccounts(agentDid);
       }
       setError(setupErrorMessage(cause));
     } finally {
@@ -612,8 +625,10 @@ export function SetupScreen({
   };
 
   const retrySaveSignIn = async () => {
-    const pending = unsavedSignIn;
-    if (!pending || !api.retrySaveProviderAccount) return;
+    const agentDid = setupAgentDid;
+    const oauthProvider = connection ? oauthProviderFor(connection.authMethod) : null;
+    if (!agentDid || !oauthProvider || !api.retrySaveProviderAccount) return;
+    const pendingProvider = provider;
     setBusy(true);
     setError(null);
     try {
@@ -622,19 +637,19 @@ export function SetupScreen({
         setRuntimeGate("ready");
       }
       const account = await api.retrySaveProviderAccount(
-        pending.agentDid,
-        pending.credentialKind,
+        agentDid,
+        PROVIDER_CREDENTIAL_KIND[oauthProvider],
       );
-      if (setupAgentDidRef.current !== pending.agentDid) return;
+      if (setupAgentDidRef.current !== agentDid) return;
       accountRevision.current += 1;
       setSignedIn((current) => ({
         ...current,
-        [pending.provider]: account.credentialId,
+        [pendingProvider]: account.credentialId,
       }));
-      setUnsavedSignIn(null);
+      setPendingSave((current) => withoutProvider(current, pendingProvider));
       invalidateDiscovery();
     } catch (cause) {
-      if (bridgeErrorCode(cause) === "notFound") setUnsavedSignIn(null);
+      if (bridgeErrorCode(cause) === "notFound") void observeAccounts(agentDid);
       setError(setupErrorMessage(cause));
     } finally {
       setBusy(false);
@@ -1027,7 +1042,7 @@ export function SetupScreen({
     step === "inference" &&
     requiresManagedRuntime &&
     runtimeGate !== "ready" &&
-    !unsavedSignIn
+    Object.keys(pendingSave).length === 0
   ) {
     return (
       <Frame embedded={purpose === "add-backend"}>
@@ -1133,19 +1148,13 @@ export function SetupScreen({
                       Cancel
                     </Button>
                   ) : null}
-                  {!busy &&
-                  unsavedSignIn?.provider === provider &&
-                  api.retrySaveProviderAccount ? (
+                  {!busy && pendingSave[provider] && api.retrySaveProviderAccount ? (
                     <Button variant="brand" onClick={retrySaveSignIn}>
                       Retry save
                     </Button>
                   ) : null}
                   <Button
-                    variant={
-                      unsavedSignIn?.provider === provider && !busy
-                        ? "outline"
-                        : "brand"
-                    }
+                    variant={pendingSave[provider] && !busy ? "outline" : "brand"}
                     disabled={busy}
                     onClick={signIn}
                   >

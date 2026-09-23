@@ -171,7 +171,10 @@ function AccountRows({
   reload: () => Promise<void>;
 }) {
   const sub = SUBSCRIPTION[kind]!;
-  const account = accounts.find((a) => a.provider === sub.provider && a.enabled);
+  const account = accounts.find(
+    (a) => a.provider === sub.provider && a.enabled && !a.pendingSave,
+  );
+  const unsaved = accounts.some((a) => a.provider === sub.provider && a.pendingSave);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60_000);
@@ -180,9 +183,6 @@ function AccountRows({
   const expired = account ? Date.parse(account.accessTokenExpiresAt) < now : false;
   const [busy, setBusy] = useState(false);
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
-  /* The bridge holds a completed sign-in whose save failed; retry saves it
-     without another browser login. */
-  const [unsaved, setUnsaved] = useState(false);
   const api = shell.api;
   const signIn = async () => {
     setBusy(true);
@@ -190,12 +190,11 @@ function AccountRows({
       if (sub.login === "codex") await api.codexLogin(deployment.agentDid);
       else if (sub.login === "claude") await api.claudeLogin(deployment.agentDid);
       else await api.grokLogin(deployment.agentDid);
-      setUnsaved(false);
       toast("Signed in");
       await reload();
     } catch (error) {
-      setUnsaved(bridgeErrorCode(error) === CREDENTIAL_NOT_SAVED);
       toast(`Sign in failed: ${setupErrorMessage(error)}`);
+      if (bridgeErrorCode(error) === CREDENTIAL_NOT_SAVED) await reload();
     } finally {
       setBusy(false);
     }
@@ -205,12 +204,11 @@ function AccountRows({
     setBusy(true);
     try {
       await api.retrySaveProviderAccount(deployment.agentDid, sub.provider);
-      setUnsaved(false);
       toast("Signed in");
       await reload();
     } catch (error) {
-      if (bridgeErrorCode(error) === "notFound") setUnsaved(false);
       toast(`Save failed: ${setupErrorMessage(error)}`);
+      await reload();
     } finally {
       setBusy(false);
     }
@@ -719,7 +717,8 @@ export function InferencePanel({
   const rowMeta = (b: InferenceBackendView) => {
     const sub = SUBSCRIPTION[b.providerKind ?? ""];
     const account =
-      sub && accounts.find((a) => a.provider === sub.provider && a.enabled);
+      sub &&
+      accounts.find((a) => a.provider === sub.provider && a.enabled && !a.pendingSave);
     const cred = sub
       ? account
         ? "signed in"

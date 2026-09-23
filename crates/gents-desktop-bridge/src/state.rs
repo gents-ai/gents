@@ -50,39 +50,163 @@ pub struct DesktopAppState {
     /// OAuth credentials issued by a completed provider sign-in whose save to
     /// the agent's canonical configuration failed. Held only in memory so the
     /// user can retry the save without repeating the browser login.
-    pub pending_oauth_credentials: Mutex<PendingOAuthCredentials>,
+    pub pending_oauth_credentials: PendingOAuthCredentials,
+}
+
+type CredentialKey = (String, String);
+
+/// A credential issued by a completed sign-in, ordered by issuance for its
+/// (agent DID, credential provider) key.
+pub struct IssuedOAuthCredential {
+    sequence: u64,
+    credential: gents::oauth_credential::OAuthCredential,
+}
+
+impl IssuedOAuthCredential {
+    pub fn credential(&self) -> &gents::oauth_credential::OAuthCredential {
+        &self.credential
+    }
+
+    fn key(&self) -> CredentialKey {
+        (
+            self.credential.agent_did.clone(),
+            self.credential.provider.clone(),
+        )
+    }
+}
+
+pub enum CredentialSave<T> {
+    Saved(T),
+    /// A newer sign-in for the same key was already saved or held.
+    Superseded,
+    Failed(anyhow::Error),
+}
+
+#[derive(Default)]
+struct CredentialSlot {
+    write_gate: Arc<tokio::sync::Mutex<()>>,
+    newest: u64,
+    held: Option<IssuedOAuthCredential>,
 }
 
 /// Issued-but-unsaved OAuth credentials, keyed by agent DID and credential
 /// provider. Never serialized, never written to disk, and never returned to
-/// the webview; a successful save or a newer sign-in for the same key
-/// replaces the entry, and the process exit discards it.
+/// the webview; the process exit discards them. Saves and retries for one key
+/// run one at a time in issuance order, so an older credential can neither
+/// overwrite a newer one in the store nor discard a newer held one.
 #[derive(Default)]
 pub struct PendingOAuthCredentials {
-    entries: std::collections::HashMap<(String, String), gents::oauth_credential::OAuthCredential>,
+    issued: std::sync::atomic::AtomicU64,
+    slots: Mutex<std::collections::HashMap<CredentialKey, CredentialSlot>>,
 }
 
 impl PendingOAuthCredentials {
-    pub fn hold(&mut self, credential: gents::oauth_credential::OAuthCredential) {
-        self.entries.insert(
-            (credential.agent_did.clone(), credential.provider.clone()),
+    pub fn issue(
+        &self,
+        credential: gents::oauth_credential::OAuthCredential,
+    ) -> IssuedOAuthCredential {
+        IssuedOAuthCredential {
+            sequence: self
+                .issued
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1,
             credential,
-        );
+        }
     }
 
-    pub fn get(
+    fn slots(
+        &self,
+    ) -> std::sync::MutexGuard<'_, std::collections::HashMap<CredentialKey, CredentialSlot>> {
+        self.slots
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_gate(&self, key: &CredentialKey) -> Arc<tokio::sync::Mutex<()>> {
+        self.slots()
+            .entry(key.clone())
+            .or_default()
+            .write_gate
+            .clone()
+    }
+
+    /// Writes `issued` unless a newer credential for its key was already saved
+    /// or held. A failed write holds it for retry; a successful one releases
+    /// any older held credential.
+    pub async fn save<T, F, Fut>(
+        &self,
+        issued: IssuedOAuthCredential,
+        write: F,
+    ) -> CredentialSave<T>
+    where
+        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<T>>,
+    {
+        let key = issued.key();
+        let gate = self.write_gate(&key);
+        let _ordered = gate.lock().await;
+        {
+            let mut slots = self.slots();
+            let slot = slots.entry(key.clone()).or_default();
+            if issued.sequence < slot.newest {
+                return CredentialSave::Superseded;
+            }
+            slot.newest = issued.sequence;
+        }
+        let written = write(issued.credential.clone()).await;
+        let mut slots = self.slots();
+        let slot = slots.entry(key).or_default();
+        match written {
+            Ok(value) => {
+                slot.held = None;
+                CredentialSave::Saved(value)
+            }
+            Err(error) => {
+                slot.held = Some(issued);
+                CredentialSave::Failed(error)
+            }
+        }
+    }
+
+    /// Writes the credential held for this key, if any, and releases it once
+    /// stored. Returns `None` when nothing is held.
+    pub async fn retry<T, F, Fut>(
         &self,
         agent_did: &str,
         provider: &str,
-    ) -> Option<gents::oauth_credential::OAuthCredential> {
-        self.entries
-            .get(&(agent_did.to_string(), provider.to_string()))
-            .cloned()
+        write: F,
+    ) -> Option<(gents::oauth_credential::OAuthCredential, anyhow::Result<T>)>
+    where
+        F: FnOnce(gents::oauth_credential::OAuthCredential) -> Fut,
+        Fut: std::future::Future<Output = anyhow::Result<T>>,
+    {
+        let key = (agent_did.to_string(), provider.to_string());
+        let gate = self.write_gate(&key);
+        let _ordered = gate.lock().await;
+        let credential = self
+            .slots()
+            .get(&key)?
+            .held
+            .as_ref()
+            .map(|held| held.credential.clone())?;
+        let written = write(credential.clone()).await;
+        if written.is_ok() {
+            if let Some(slot) = self.slots().get_mut(&key) {
+                slot.held = None;
+            }
+        }
+        Some((credential, written))
     }
 
-    pub fn discard(&mut self, agent_did: &str, provider: &str) {
-        self.entries
-            .remove(&(agent_did.to_string(), provider.to_string()));
+    pub fn held_for(&self, agent_did: &str) -> Vec<gents::oauth_credential::OAuthCredential> {
+        let mut held: Vec<_> = self
+            .slots()
+            .iter()
+            .filter(|((agent, _), _)| agent == agent_did)
+            .filter_map(|(_, slot)| slot.held.as_ref().map(|held| held.credential.clone()))
+            .collect();
+        held.sort_by(|left, right| left.provider.cmp(&right.provider));
+        held
     }
 }
 
@@ -124,7 +248,7 @@ impl DesktopAppState {
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
-            pending_oauth_credentials: Mutex::new(PendingOAuthCredentials::default()),
+            pending_oauth_credentials: PendingOAuthCredentials::default(),
         }
     }
 }

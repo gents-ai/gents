@@ -70,7 +70,32 @@ const account = {
   accessTokenExpiresAt: "2099-01-01T00:00:00Z",
   lastRefresh: null,
   enabled: true,
+  pendingSave: false,
 };
+
+const NOT_SAVED = new BridgeInvokeError({
+  code: "credentialNotSaved",
+  message:
+    "You are signed in to Claude, but Gents could not save the sign-in to the agent. Make sure the agent is running, then retry saving.",
+  retryable: true,
+  endpoint: null,
+});
+
+/* The bridge's held sign-in, observed through the provider account list. */
+function holdFailedSignIn(api: MockApi) {
+  let held = false;
+  api.listProviderAccounts.mockImplementation(async () =>
+    held ? [{ ...account, pendingSave: true }] : [],
+  );
+  api.claudeLogin.mockImplementation(async () => {
+    held = true;
+    throw NOT_SAVED;
+  });
+  api.retrySaveProviderAccount.mockImplementation(async () => {
+    held = false;
+    return account;
+  });
+}
 
 function harness() {
   const api: MockApi = {
@@ -159,16 +184,7 @@ describe("setup re-entry at the provider step", () => {
     api.managedServerStatus.mockResolvedValue(
       status({ state: "running", pairingReady: true }),
     );
-    api.claudeLogin.mockRejectedValue(
-      new BridgeInvokeError({
-        code: "credentialNotSaved",
-        message:
-          "You are signed in to Claude, but Gents could not save the sign-in to the agent. Make sure the agent is running, then retry saving.",
-        retryable: true,
-        endpoint: null,
-      }),
-    );
-    api.retrySaveProviderAccount.mockResolvedValue(account);
+    holdFailedSignIn(api);
     reenter(shell);
     const user = userEvent.setup();
 
@@ -187,6 +203,40 @@ describe("setup re-entry at the provider step", () => {
     expect(
       screen.queryByRole("button", { name: "Retry save" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("offers Retry save again after leaving and re-entering setup", async () => {
+    const { api, shell } = harness();
+    api.managedServerStatus.mockResolvedValue(
+      status({ state: "running", pairingReady: true }),
+    );
+    holdFailedSignIn(api);
+    const first = reenter(shell);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Sign in" }));
+    expect(await screen.findByRole("button", { name: "Retry save" })).toBeVisible();
+    first.unmount();
+
+    reenter(shell);
+    await user.click(await screen.findByRole("button", { name: "Retry save" }));
+    expect(await screen.findByText("Account connected")).toBeVisible();
+    expect(api.claudeLogin).toHaveBeenCalledTimes(1);
+    expect(api.retrySaveProviderAccount).toHaveBeenCalledWith(
+      AGENT,
+      "claude-subscription",
+    );
+  });
+
+  it("shows a held sign-in on re-entry while the runtime is still down", async () => {
+    const { api, shell } = harness();
+    api.managedServerStatus.mockResolvedValue(status({ state: "failed" }));
+    api.startManagedServer.mockRejectedValue(new Error(RAW_FAILURE));
+    api.listProviderAccounts.mockResolvedValue([{ ...account, pendingSave: true }]);
+    reenter(shell);
+
+    expect(await screen.findByRole("button", { name: "Retry save" })).toBeVisible();
+    expect(screen.queryByText("Account connected")).not.toBeInTheDocument();
+    expect(api.claudeLogin).not.toHaveBeenCalled();
   });
 
   it("skips the runtime gate for a remote agent", async () => {
