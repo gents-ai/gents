@@ -480,123 +480,6 @@ async fn execute_graphql_async_with_tx(
     Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
 }
 
-/// Execute a blocking GraphQL read. Mutation documents are rejected before
-/// network I/O.
-#[cfg(feature = "native")]
-pub fn execute_graphql_blocking(
-    graphql: &str,
-    query: &str,
-    options: GraphqlRequestOptions,
-) -> Result<serde_json::Value> {
-    ensure_query_document(query)?;
-    let client = reqwest::blocking::Client::builder()
-        .timeout(options.timeout)
-        .pool_max_idle_per_host(0)
-        .build()?;
-    let mut last_error = None;
-
-    for attempt in 0..options.max_attempts.max(1) {
-        let response = client
-            .post(graphql)
-            .json(&serde_json::json!({ "query": query }))
-            .send();
-        let response = match response {
-            Ok(response) => response,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying blocking GraphQL request after transport error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}")),
-                );
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-            Err(error) => {
-                return Err(
-                    anyhow::Error::new(error).context(format!("posting GraphQL to {graphql}"))
-                );
-            }
-        };
-
-        let response = match response.error_for_status() {
-            Ok(response) => response,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying blocking GraphQL request after response status error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("reading GraphQL response from {graphql}")),
-                );
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("reading GraphQL response from {graphql}")));
-            }
-        };
-
-        let value = match response.json() {
-            Ok(value) => value,
-            Err(error)
-                if graphql_transport_error_is_retryable(&error)
-                    && attempt + 1 < options.max_attempts =>
-            {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error,
-                    "retrying blocking GraphQL request after decode error"
-                );
-                last_error = Some(
-                    anyhow::Error::new(error)
-                        .context(format!("decoding GraphQL response body from {graphql}")),
-                );
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-            Err(error) => {
-                return Err(anyhow::Error::new(error)
-                    .context(format!("decoding GraphQL response body from {graphql}")));
-            }
-        };
-
-        if let Some(error_message) = retryable_graphql_error_message(&value) {
-            if attempt + 1 < options.max_attempts {
-                tracing::warn!(
-                    attempt,
-                    graphql,
-                    error = %error_message,
-                    "retrying blocking GraphQL request after retryable GraphQL error"
-                );
-                last_error = Some(anyhow!(
-                    "graphql returned retryable errors from {graphql}: {error_message}"
-                ));
-                std::thread::sleep(scale_backoff(options.retry_backoff, attempt));
-                continue;
-            }
-        }
-
-        return finish_graphql_response(graphql, value);
-    }
-
-    Err(last_error.unwrap_or_else(|| anyhow!("GraphQL request retries exhausted for {graphql}")))
-}
-
 #[cfg(feature = "native")]
 fn ensure_query_document(document: &str) -> Result<()> {
     let document = document.trim_start();
@@ -1375,28 +1258,19 @@ mod tx_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn public_transports_reject_mutations_before_network_io() {
-        for result in [
-            execute_graphql_async(
-                "http://127.0.0.1:1/api/v0/graphql",
-                "mutation { create_X(input: {}) { _docID } }",
-                GraphqlRequestOptions::default(),
-            )
-            .await
-            .map_err(|error| error.to_string()),
-            execute_graphql_blocking(
-                "http://127.0.0.1:1/api/v0/graphql",
-                "mutation { create_X(input: {}) { _docID } }",
-                GraphqlRequestOptions::default(),
-            )
-            .map_err(|error| error.to_string()),
-        ] {
-            let error = result.expect_err("public transport is query-only");
-            assert!(
-                error.contains("GraphQL read transport requires a query document"),
-                "unexpected error: {error}"
-            );
-        }
+    async fn public_transport_rejects_mutations_before_network_io() {
+        let error = execute_graphql_async(
+            "http://127.0.0.1:1/api/v0/graphql",
+            "mutation { create_X(input: {}) { _docID } }",
+            GraphqlRequestOptions::default(),
+        )
+        .await
+        .expect_err("public transport is query-only")
+        .to_string();
+        assert!(
+            error.contains("GraphQL read transport requires a query document"),
+            "unexpected error: {error}"
+        );
     }
 
     // One transport-level retry proof: a wrapped retryable error text triggers a
