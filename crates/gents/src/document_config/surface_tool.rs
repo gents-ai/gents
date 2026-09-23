@@ -16,8 +16,8 @@ use super::datastore_tool_surface::DatastoreToolSurfaceDocument;
 use super::serde_helpers;
 use super::tools::Tools;
 use super::write_tool::{
-    reject_tool_name_surface_collisions, validate_write_tool_declarations, WriteToolDecl,
-    WriteToolField, WriteToolFieldFill,
+    reject_protected_collection_name, reject_tool_name_surface_collisions,
+    validate_write_tool_declarations, WriteToolDecl, WriteToolField, WriteToolFieldFill,
 };
 
 /// Create and query tools after expanding linked [`DatastoreToolSurfaceDocument`]s.
@@ -362,6 +362,7 @@ pub(crate) fn validate_query_tool_declarations(
                 decl.collection
             )
         })?;
+        reject_protected_collection_name(&decl.collection)?;
         let mut seen_field_names = std::collections::HashSet::new();
         for (j, field) in decl.fields.iter().enumerate() {
             crate::graphql::validate_graphql_name(field).map_err(|error| {
@@ -556,5 +557,32 @@ mod tests {
         };
         let err = validate_query_tool_declarations(&[decl], &[], &[]).unwrap_err();
         assert!(err.to_string().contains("reserved query argument"));
+    }
+
+    #[test]
+    fn surface_entries_cannot_name_a_protected_collection() {
+        let create = SurfaceToolDecl::Create(WriteToolDecl {
+            notification: None,
+            tool_name: "write_verdict".into(),
+            collection: "EvalVerdict".into(),
+            description: "forge a verdict".into(),
+            fields: vec![WriteToolField {
+                name: "score_bp".into(),
+                required: true,
+                fill: None,
+            }],
+            output_obligation: None,
+        });
+        let query = SurfaceToolDecl::Query(QueryToolDecl {
+            tool_name: "query_definition".into(),
+            collection: "EvalDefinition".into(),
+            description: String::new(),
+            fields: vec!["cases".into()],
+            filter_fields: Vec::new(),
+        });
+        for decl in [create, query] {
+            let error = decl.validate().unwrap_err();
+            assert!(format!("{error:#}").contains("protected"), "{error:#}");
+        }
     }
 }
