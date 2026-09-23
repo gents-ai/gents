@@ -230,13 +230,12 @@ pub async fn fire_task_now(
         id = escape_graphql_string(behavior_id),
         agent_did = escape_graphql_string(agent_did),
     );
-    let behavior_response = node.execute(&behavior_query).await;
-    if behavior_response.has_errors() {
-        bail!(
-            "fetch behavior for task {task_id} failed: {:?}",
-            behavior_response.errors
-        );
-    }
+    let behavior_response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &behavior_query,
+        &format!("fetch behavior for task {task_id}"),
+    )
+    .await?;
     let behavior_row = behavior_response
         .data
         .as_ref()
@@ -621,13 +620,12 @@ pub async fn fire_schedule_now(
         }}"#,
         agent_did = escape_graphql_string(agent_did),
     );
-    let trigger_response = node.execute(&trigger_query).await;
-    if trigger_response.has_errors() {
-        bail!(
-            "fetch triggers for schedule {schedule_id} failed: {:?}",
-            trigger_response.errors
-        );
-    }
+    let trigger_response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &trigger_query,
+        &format!("fetch triggers for schedule {schedule_id}"),
+    )
+    .await?;
     let mut matching = trigger_response
         .data
         .as_ref()
@@ -672,13 +670,12 @@ pub async fn fire_schedule_now(
         }}"#,
         id = escape_graphql_string(task_id),
     );
-    let task_response = node.execute(&task_query).await;
-    if task_response.has_errors() {
-        bail!(
-            "fetch task for schedule {schedule_id} failed: {:?}",
-            task_response.errors,
-        );
-    }
+    let task_response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &task_query,
+        &format!("fetch task for schedule {schedule_id}"),
+    )
+    .await?;
     let task_row_json = task_response
         .data
         .as_ref()
