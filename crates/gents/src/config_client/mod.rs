@@ -48,12 +48,11 @@ pub use common::{mint_recreate_identity, mint_recreate_identity_timestamp};
 pub(crate) use desired_state::canonical_struct_fields;
 pub use desired_state::read_record as read_desired_state_record_in_txn;
 pub use desired_state::{
-    apply_desired_state_plan, config_projection, DesiredStateApplyCounts,
-    DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, config_projection, desired_state_document_digest, stale_expectation,
+    DesiredStateApplyCounts, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    DesiredStateExpectation, DriftedDocument, StaleExpectation,
 };
-pub(crate) use desired_state::{
-    desired_state_document_digest, read_desired_state_document_in_txn, validate_desired_state_plan,
-};
+pub(crate) use desired_state::{read_desired_state_document_in_txn, validate_desired_state_plan};
 pub use inference_backend::{load_inference_backend_in_txn, write_inference_backend_document};
 pub use inference_profile::write_inference_profile_document;
 pub(crate) use schema_contract::collection_schema_contract_digest;

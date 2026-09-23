@@ -123,7 +123,7 @@ pub fn config_projection(
 
 /// Commit canonical desired values, never reinterpret strings as legacy JSON.
 /// Callers compare normalized plan/read projections, excluding runtime observations.
-pub(crate) fn desired_state_document_digest(value: &Value) -> Result<String> {
+pub fn desired_state_document_digest(value: &Value) -> Result<String> {
     let mut value = value.clone();
     let root = value
         .as_object_mut()
@@ -204,26 +204,30 @@ pub(crate) async fn read_desired_state_document_in_txn(
         .map(|(_, value)| value))
 }
 
-/// Immutable revision checks remain separate from ordinary config replacement.
+/// Expect every document this plan writes that already exists to still match
+/// the plan's authored create form. Absent documents carry no expectation.
 #[cfg(test)]
-pub(crate) async fn verify_existing_desired_state_plan(
+pub(crate) async fn expect_existing_documents_unchanged(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
 ) -> Result<()> {
+    let mut expected = Vec::new();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
-        if let Some(live) =
-            read_desired_state_document_in_txn(txn, document.collection, owner, id).await?
+        if read_desired_state_document_in_txn(txn, document.collection, owner, id)
+            .await?
+            .is_some()
         {
-            anyhow::ensure!(
-                desired_state_document_digest(&document.add)?
-                    == desired_state_document_digest(&live)?,
-                "immutable package resource {} {owner:?}/{id:?} drifted",
-                document.collection.graphql_type()
-            );
+            expected.push(DesiredStateExpectation {
+                collection: document.collection,
+                owner: owner.to_owned(),
+                id: id.to_owned(),
+                digest: Some(desired_state_document_digest(&document.add)?),
+            });
         }
     }
-    Ok(())
+    let guarded = DesiredStateApplyPlan::new(Vec::new())?.with_expected(expected)?;
+    ensure_expectations_hold(txn, &guarded).await
 }
 
 /// Read-only preview of the same retained configuration checked at publication.
@@ -283,10 +287,70 @@ pub struct DesiredStateApplyDocument {
     pub update: Value,
 }
 
+/// A digest precondition checked inside the publishing transaction. `digest:
+/// None` requires the document to be absent. Digests come from
+/// [`desired_state_document_digest`] over the normalized live projection.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DesiredStateExpectation {
+    pub collection: Collection,
+    pub owner: String,
+    pub id: String,
+    /// Compute this from a live read of the document's normalized projection
+    /// (`read_desired_state_document_in_txn` then
+    /// [`desired_state_document_digest`]), never from an authored form. The
+    /// two forms diverge wherever the update path strips fields: a
+    /// `ChainKeyBinding` replacement always drops the authored `created_at`,
+    /// and drops a blank `revoked_at`, keeping the live values instead, so an
+    /// authored digest would never match there.
+    pub digest: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriftedDocument {
+    pub collection: Collection,
+    pub owner: String,
+    pub id: String,
+    pub expected: Option<String>,
+    pub found: Option<String>,
+}
+
+/// Refinement of `ApplyReconcile.publishIf`: a stale expectation leaves desired
+/// and live state unchanged. Recover it with [`stale_expectation`].
+#[derive(Debug)]
+pub struct StaleExpectation {
+    pub drifted: Vec<DriftedDocument>,
+}
+
+impl std::fmt::Display for StaleExpectation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "desired configuration changed since it was read:"
+        )?;
+        for document in &self.drifted {
+            write!(
+                formatter,
+                " {} {:?}/{:?}",
+                document.collection.graphql_type(),
+                document.owner,
+                document.id
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for StaleExpectation {}
+
+pub fn stale_expectation(error: &anyhow::Error) -> Option<&StaleExpectation> {
+    error.downcast_ref::<StaleExpectation>()
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DesiredStateApplyPlan {
     documents: Vec<DesiredStateApplyDocument>,
     removals: Vec<(Collection, String, String)>,
+    expected: Vec<DesiredStateExpectation>,
 }
 impl DesiredStateApplyPlan {
     /// Ordinary and graph packs share the canonical collection mapping and
@@ -357,6 +421,7 @@ impl DesiredStateApplyPlan {
         Ok(Self {
             documents,
             removals: Vec::new(),
+            expected: Vec::new(),
         })
     }
     /// Remove exact owner/logical identities in the same atomic publication.
@@ -389,6 +454,37 @@ impl DesiredStateApplyPlan {
 
     pub fn documents(&self) -> &[DesiredStateApplyDocument] {
         &self.documents
+    }
+
+    /// Guard this publication with digest preconditions. Expectations may name
+    /// documents the plan does not write: promotion freezes a whole closure
+    /// and writes only its targets. A second call replaces the previous
+    /// expectation set, the same convention [`Self::with_removals`] follows.
+    /// An expectation may also name a document this plan removes
+    /// (delete-if-unchanged); it is checked exactly like any other, and is
+    /// outside the Lean `publishIf` model, which has no removals.
+    pub fn with_expected(mut self, expected: Vec<DesiredStateExpectation>) -> Result<Self> {
+        let mut identities = BTreeSet::new();
+        for expectation in &expected {
+            reference_filter(expectation.collection, &expectation.owner, &expectation.id)?;
+            anyhow::ensure!(
+                identities.insert((
+                    expectation.collection,
+                    expectation.owner.clone(),
+                    expectation.id.clone()
+                )),
+                "duplicate expectation {} {:?}/{:?}",
+                expectation.collection.graphql_type(),
+                expectation.owner,
+                expectation.id
+            );
+        }
+        self.expected = expected;
+        Ok(self)
+    }
+
+    pub fn expected(&self) -> &[DesiredStateExpectation] {
+        &self.expected
     }
 }
 
@@ -426,12 +522,47 @@ impl DesiredStateApplyCounts {
     }
 }
 
+async fn ensure_expectations_hold(
+    txn: &ConfigApplyTxn<'_>,
+    plan: &DesiredStateApplyPlan,
+) -> Result<()> {
+    let mut drifted = Vec::new();
+    for expectation in plan.expected() {
+        let found = read_desired_state_document_in_txn(
+            txn,
+            expectation.collection,
+            &expectation.owner,
+            &expectation.id,
+        )
+        .await?
+        .map(|live| desired_state_document_digest(&live))
+        .transpose()?;
+        if found != expectation.digest {
+            drifted.push(DriftedDocument {
+                collection: expectation.collection,
+                owner: expectation.owner.clone(),
+                id: expectation.id.clone(),
+                expected: expectation.digest.clone(),
+                found,
+            });
+        }
+    }
+    if drifted.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::Error::new(StaleExpectation { drifted }))
+    }
+}
+
 /// All writes remain in the caller's transaction. Reference checks run after
 /// staged writes so valid cyclic configurations do not depend on write order.
+/// Digest expectations are checked first, in the same transaction; a mismatch
+/// returns [`StaleExpectation`] before any write.
 pub async fn apply_desired_state_plan(
     txn: &ConfigApplyTxn<'_>,
     plan: &DesiredStateApplyPlan,
 ) -> Result<DesiredStateApplyCounts> {
+    ensure_expectations_hold(txn, plan).await?;
     let mut counts = DesiredStateApplyCounts::default();
     for document in plan.documents() {
         let (owner, id) = document_identity(document.collection, &document.add)?;
