@@ -162,3 +162,18 @@ pair for good, and resume determinism held only at run boundaries.
 |---|---|---|
 | 4 | `eval/53-watch-gc` on `eval/52-optimization-cli` | `progress.json` in the loop; `eval watch`; `eval gc` and the size column; tests |
 | 5 | `eval/54-compare-breakdowns` on `eval/53-watch-gc` | `by_check`, `by_stage`, `case_view` and the flags; tests |
+
+## Amendments at planning (2026-09-22)
+
+- `report::{build, compare, by_check, by_stage, case_view}` are pure; `report::store` is the module's
+  one I/O boundary (loading rows for an owner), beside the projection M6b landed.
+- Freeze materializes the definition as `<run dir>/definition.json`; `build` reads it, so a report
+  survives a later edit of the live definition. Runs frozen before this fall back to the live
+  definition when its digest matches and are refused otherwise.
+- `optimization revert <job_id> --digest D` (M6b's `revert` requires the checkpoint digest).
+- `optimization rm <job_id> [--force]` deletes the job directory; `eval gc --jobs` lists such
+  directories too. Documents stay.
+- `progress.json` entries carry `pid` and `written_at`; the watcher marks stale entries.
+- The loop checks the cancel marker on a timer while a batch is in flight, so a long trial is
+  interrupted rather than run to completion.
+- The M4 base is M6b's final `optimization/23-promote` tip; all five PRs stack on it.
