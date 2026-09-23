@@ -72,13 +72,11 @@ impl RegistryClient {
         }
     }
 
-    fn curl_equivalent(url: &str, authenticated: bool) -> String {
-        let auth = if authenticated {
-            " -H \"Authorization: Bearer $GENTS_REGISTRY_TOKEN\""
-        } else {
-            ""
-        };
-        format!("curl -fsSL{auth} {url}")
+    fn unreachable(&self) -> String {
+        format!(
+            "could not reach the registry at {}; check the network, or choose another registry with --registry",
+            self.base_url
+        )
     }
 
     fn api(&self, path: &str) -> String {
@@ -102,12 +100,12 @@ impl RegistryClient {
 
     async fn get_json(&self, path: &str) -> Result<Value> {
         let url = self.api(path);
-        let response = self.http.get(&url).send().await.with_context(|| {
-            format!(
-                "requesting {url}; if this machine cannot reach the registry, the same request by hand is: {}",
-                Self::curl_equivalent(&url, false)
-            )
-        })?;
+        let response = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| self.unreachable())?;
         Self::json_or_error(response, &url).await
     }
 
@@ -132,12 +130,7 @@ impl RegistryClient {
             .query(&[("q", query)])
             .send()
             .await
-            .with_context(|| {
-                format!(
-                    "requesting {url}; if this machine cannot reach the registry, the same request by hand is: {}",
-                    Self::curl_equivalent(&url, false)
-                )
-            })?;
+            .with_context(|| self.unreachable())?;
         Self::json_or_error(response, &url).await
     }
 
@@ -146,12 +139,12 @@ impl RegistryClient {
             "/{}/{namespace}/{name}/{version}/download",
             self.kind.path()
         ));
-        let mut response = self.http.get(&url).send().await.with_context(|| {
-            format!(
-                "downloading {url}; if this machine cannot reach the registry, fetch it by hand with `{} -o {name}-{version}.tar.gz` and install that file",
-                Self::curl_equivalent(&url, false)
-            )
-        })?;
+        let mut response = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| self.unreachable())?;
         let status = response.status();
         anyhow::ensure!(
             status.is_success(),
@@ -373,5 +366,28 @@ pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(error.error)
             .with_context(|| format!("saving the downloaded pack to {}", dest.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn an_unreachable_registry_says_what_to_do_in_gents_terms() {
+        let client = RegistryClient::new("http://127.0.0.1:1".to_string());
+        for error in [
+            client.package("acme", "demo").await.unwrap_err(),
+            client.search("demo").await.unwrap_err(),
+            client.download("acme", "demo", "1.0.0").await.unwrap_err(),
+        ] {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains("could not reach the registry at http://127.0.0.1:1"),
+                "{message}"
+            );
+            assert!(message.contains("--registry"), "{message}");
+            assert!(!message.contains("curl"), "{message}");
+        }
     }
 }
