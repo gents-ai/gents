@@ -88,11 +88,11 @@ Everything else below talks to it.
 In another terminal:
 
 ```bash
-gents chat "what can you see in this directory?"
+gents chat --session-id my-first-session "what can you see in this directory?"
 ```
 
-This starts a new session, sends one message, and prints the reply. To keep
-talking in the same session:
+This starts a session named `my-first-session`, sends one message, and prints
+the reply. To keep talking in the same session, pass the same session ID:
 
 ```bash
 gents chat --session-id my-first-session "and what does the README say?"
