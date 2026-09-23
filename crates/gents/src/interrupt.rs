@@ -16,7 +16,7 @@ use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queu
 /// current timestamp is preserved and this call is a no-op.
 ///
 /// The runtime's per-request observer (see `spawn_request_interrupt_observer`)
-/// polls this field and signals the daemon to cancel in-flight inference and
+/// watches this field and signals the daemon to cancel in-flight inference and
 /// transition the request to `interrupted`. Writing this field on a terminal
 /// request is harmless — the lifecycle state machine filters terminal statuses.
 ///
@@ -424,11 +424,12 @@ pub struct InterruptIntent {
 
 const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Spawn an observer task that polls `interrupt_requested_at` for a single
+/// Spawn an observer task that reads `interrupt_requested_at` for a single
 /// request and signals the channel when the field flips to non-null.
 ///
-/// Polls rather than subscribes because DefraDB lacks per-field watchpoints;
-/// the 2s interval is a compromise between Esc UX latency and DB load.
+/// The field is re-read whenever the node reports a change to this request
+/// document (local write or replicated merge), and on a slower fallback tick
+/// in case the change subscription overflows or closes.
 ///
 /// The task exits when:
 ///   - the channel has been signaled once (idempotent latch), OR
@@ -440,12 +441,36 @@ pub fn spawn_request_interrupt_observer(
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
+    let mut changes = Some(node.subscribe_document_changes());
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(OBSERVER_POLL_INTERVAL);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
+                biased;
                 _ = shutdown.changed() => return,
+                batch = async {
+                    match changes.as_mut() {
+                        Some(changes) => changes.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => match batch {
+                    Some(batch)
+                        if batch.resync_required
+                            || batch
+                                .changes
+                                .iter()
+                                .any(|change| change.doc_id == request_doc_id) => {}
+                    Some(_) => continue,
+                    None => {
+                        tracing::warn!(
+                            doc_id = %request_doc_id,
+                            "interrupt observer change subscription closed; polling only"
+                        );
+                        changes = None;
+                        continue;
+                    }
+                },
                 _ = ticker.tick() => {}
             }
             if interrupt_tx.borrow().is_some() {
