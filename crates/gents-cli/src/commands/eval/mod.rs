@@ -78,6 +78,9 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     if let EvalCommand::Cancel(args) = &command {
         return cancel_without_context(args).await.map_err(surface_refusal);
     }
+    if let EvalCommand::Watch(args) = &command {
+        return watch_while_held(args).await.map_err(surface_refusal);
+    }
     let ctx = EvalContext::resolve(command.scope()).await?;
     let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
     let registry = CheckRegistry::builtin();
@@ -117,6 +120,16 @@ pub(crate) async fn execute(
         EvalCommand::Cancel(args) => manage::cancel_run(ctx, &args, out).await,
         EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
         EvalCommand::Rm(args) => manage::rm(ctx, &args, out).await,
+        EvalCommand::Watch(args) => {
+            watch::watch(
+                &ctx.runs_dir(),
+                &args,
+                || async { Ok(watch::Documents::Open(ctx)) },
+                out,
+            )
+            .await
+        }
+        EvalCommand::Gc(args) => manage::gc(ctx, &args, out).await,
     };
     result.map_err(surface_refusal)
 }
@@ -134,6 +147,41 @@ async fn cancel_without_context(args: &crate::cli::EvalRunIdArgs) -> Result<()> 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await
+}
+
+/// `gents eval watch` from argv. The process hosting the run may hold the
+/// home's embedded node; then the watch reads `progress.json` alone and
+/// tries the node again at each render. Only the store's lock degrades it:
+/// any other failure to open the home fails the command.
+async fn watch_while_held(args: &crate::cli::EvalWatchArgs) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    match EvalContext::resolve(&args.scope).await {
+        Ok(ctx) => {
+            watch::watch(
+                &ctx.runs_dir(),
+                args,
+                || async { Ok(watch::Documents::Open(&ctx)) },
+                &mut out,
+            )
+            .await
+        }
+        Err(error) if watch::store_locked(&error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "the home's node is held by another process; eval watch shows in-flight slots until it can read the report"
+            );
+            let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            watch::watch(
+                &runs_dir(&home_dir),
+                args,
+                || watch::reopen(|| EvalContext::resolve(&args.scope)),
+                &mut out,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// A token Ctrl-C cancels. The loop then stops launching, leaves in-flight
@@ -281,6 +329,7 @@ pub(crate) mod render;
 mod run;
 #[cfg(test)]
 pub(crate) mod testing;
+mod watch;
 #[cfg(test)]
 mod tests {
     use clap::Parser;

@@ -27,6 +27,10 @@ pub(crate) struct ListRow {
     pub(crate) purpose: String,
     pub(crate) created_at: String,
     pub(crate) invalidated: Option<Invalidation>,
+    /// The run directory's size; `None` once `rm` or `gc` removed it, or
+    /// when it could not be read (`size_error` then says why).
+    pub(crate) size_bytes: Option<u64>,
+    pub(crate) size_error: Option<String>,
     pub(crate) cells: Vec<ListCell>,
     /// Why the run's report could not be built, when it could not.
     pub(crate) report_error: Option<String>,
@@ -78,6 +82,7 @@ pub(super) async fn list(
                     None => return Err(error),
                 },
             };
+        let (size_bytes, size_error) = run_size(ctx, &record.run_id);
         rows.push(ListRow {
             run_id: record.run_id.clone(),
             definition_id: record.origin.definition.definition_id.clone(),
@@ -86,6 +91,8 @@ pub(super) async fn list(
             purpose: record.origin.purpose.clone(),
             created_at: record.created_at.clone(),
             invalidated: record.invalidated.clone(),
+            size_bytes,
+            size_error,
             cells,
             report_error,
         });
@@ -94,6 +101,29 @@ pub(super) async fn list(
         write_json(out, &rows)
     } else {
         Ok(render::list_table(&rows, out)?)
+    }
+}
+
+/// The run directory's size: `(None, None)` when there is no directory,
+/// `(None, Some(why))` when it could not be read.
+fn run_size(ctx: &EvalContext, run_id: &str) -> (Option<u64>, Option<String>) {
+    let Some(dir) = gents::eval::runner::run_dir(&ctx.runs_dir(), run_id)
+        .ok()
+        .filter(|dir| dir.is_dir())
+    else {
+        return (None, None);
+    };
+    match super::manage::dir_size(&dir) {
+        Ok(size) => (Some(size), None),
+        Err(error) => {
+            tracing::warn!(
+                run_id,
+                dir = %dir.display(),
+                error = %format!("{error:#}"),
+                "eval list could not measure a run directory"
+            );
+            (None, Some(format!("{error:#}")))
+        }
     }
 }
 

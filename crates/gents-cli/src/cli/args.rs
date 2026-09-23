@@ -3369,6 +3369,15 @@ pub(crate) enum EvalCommand {
     Rm(EvalRmArgs),
     #[command(about = "Paired statistics between two cells; a policy verdict only with --policy")]
     Compare(EvalCompareArgs),
+    #[command(
+        about = "Re-render a run's report and its in-flight slots until no process runs it",
+        after_help = EVAL_WATCH_AFTER_HELP
+    )]
+    Watch(EvalWatchArgs),
+    #[command(
+        about = "Delete the directories of old, finished runs no optimization job references; their documents stay"
+    )]
+    Gc(EvalGcArgs),
 }
 
 impl EvalCommand {
@@ -3383,6 +3392,8 @@ impl EvalCommand {
             Self::Invalidate(args) => &args.scope,
             Self::Rm(args) => &args.scope,
             Self::Compare(args) => &args.scope,
+            Self::Watch(args) => &args.scope,
+            Self::Gc(args) => &args.scope,
         }
     }
 }
@@ -3447,6 +3458,81 @@ pub(crate) struct EvalRmArgs {
     /// a job that is not settled still needs it.
     #[arg(long)]
     pub(crate) force: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `--interval`: at least 250 ms, so a watcher never spins, and at most an
+/// hour, so every wait the watch derives from it is representable. Takes
+/// `ms` as well as the `s`, `m`, `h` and `d` suffixes.
+pub(crate) fn parse_interval(raw: &str) -> Result<std::time::Duration, String> {
+    let interval = match raw.trim().strip_suffix("ms") {
+        Some(millis) => millis
+            .parse::<u64>()
+            .map(std::time::Duration::from_millis)
+            .map_err(|_| format!("invalid duration number in {raw}"))?,
+        None => {
+            crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?
+        }
+    };
+    if interval < std::time::Duration::from_millis(250) {
+        return Err(format!("--interval {raw:?} is under 250ms"));
+    }
+    if interval > std::time::Duration::from_secs(3600) {
+        return Err(format!("--interval {raw:?} is over 1h"));
+    }
+    Ok(interval)
+}
+
+/// `gents eval watch`'s exit statuses: scripts must not read a stopped run
+/// as a success.
+const EVAL_WATCH_AFTER_HELP: &str = "Exit status: 0 when the run ends finished, or after the one render of --once; 1 when it ends stopped (slots still owed, as after a cancel, or the report unavailable) or the watch fails; 2 on a usage error.";
+
+#[derive(clap::Args)]
+pub(crate) struct EvalWatchArgs {
+    pub(crate) run_id: String,
+    /// How long to wait between renders; at least 250ms, at most 1h.
+    #[arg(long, value_parser = parse_interval, default_value = "2s")]
+    pub(crate) interval: std::time::Duration,
+    /// Render once and return.
+    #[arg(long)]
+    pub(crate) once: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `--older-than`: any duration, zero included, that a cutoff can be taken
+/// from: one that reaches back no further than the earliest representable
+/// time from the Unix epoch, so it does from any later now.
+pub(crate) fn parse_age(raw: &str) -> Result<std::time::Duration, String> {
+    let age =
+        crate::request_helpers::parse_duration_suffix(raw).map_err(|error| error.to_string())?;
+    chrono::Duration::from_std(age)
+        .ok()
+        .and_then(|age| chrono::DateTime::UNIX_EPOCH.checked_sub_signed(age))
+        .ok_or_else(|| {
+            format!("--older-than {raw:?} reaches before the earliest representable time")
+        })?;
+    Ok(age)
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalGcArgs {
+    /// Only runs created at least this long ago (`30m`, `14d`; `0s` for any).
+    #[arg(long, value_parser = parse_age, default_value = "14d")]
+    pub(crate) older_than: std::time::Duration,
+    /// Only runs of this eval definition.
+    #[arg(long)]
+    pub(crate) definition: Option<String>,
+    /// List what would be removed; remove nothing.
+    #[arg(long)]
+    pub(crate) dry_run: bool,
+    /// Also remove the directories of this home's settled optimization jobs
+    /// (nothing to promote, exhausted, failed, stale, promoted or reverted)
+    /// last modified before the threshold; with --definition, only that
+    /// definition's.
+    #[arg(long)]
+    pub(crate) jobs: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }
@@ -3723,7 +3809,8 @@ pub(crate) struct OptimizationRmArgs {
     pub(crate) job_id: String,
     /// Delete even while the job is running or waiting to be promoted; a
     /// job waiting to be promoted can no longer be promoted afterwards, since
-    /// its retained checkpoint pack is gone.
+    /// its retained checkpoint pack is gone. A job whose directory is not
+    /// under this home is never removed.
     #[arg(long)]
     pub(crate) force: bool,
     #[command(flatten)]

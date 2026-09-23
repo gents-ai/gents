@@ -30,7 +30,7 @@ pub use plan::{
     PlannedTrial, MAX_ABANDONED_ATTEMPTS,
 };
 pub use progress::{
-    host_alive, is_fresh, read_progress, InFlight, Progress, StageProgress, PROGRESS_FILE,
+    host_alive, is_fresh, read_progress, Holder, InFlight, Progress, StageProgress, PROGRESS_FILE,
 };
 pub use record::{DocumentRecorder, Recorder};
 pub use scripted::{ScriptKey, ScriptedExecutor};
@@ -209,14 +209,19 @@ pub fn slots_owed(record: &RunRecord, trials: &[TrialRecord]) -> usize {
     .len()
 }
 
-/// A live process refreshed one of the run's `progress.json` entries within
-/// [`STALE_WINDOW`]. An absent or unreadable file holds nothing.
+/// A live process refreshed the run's `progress.json` holder, or one of its
+/// slot entries, within [`STALE_WINDOW`]. An absent or unreadable file holds
+/// nothing.
 pub fn running_elsewhere(run_dir: &Path) -> bool {
     read_progress(run_dir).is_some_and(|progress| {
         progress
-            .slots
-            .values()
-            .any(|slot| is_fresh(slot, STALE_WINDOW))
+            .holder
+            .as_ref()
+            .is_some_and(|holder| holder.is_fresh(STALE_WINDOW))
+            || progress
+                .slots
+                .values()
+                .any(|slot| is_fresh(slot, STALE_WINDOW))
     })
 }
 
@@ -321,11 +326,20 @@ pub(crate) async fn execute_frozen(
         ..RunOutcome::default()
     };
     let mut consecutive = 0u32;
-    // One writer per pass: a resumed run starts from an empty file, which
-    // also clears whatever a crashed process left in flight.
+    // One writer per `execute_frozen` call: a resumed run starts from an
+    // empty file, which also clears whatever a crashed process left in
+    // flight.
     let progress = ProgressWriter::new(&frozen.run_dir);
+    // This process holds the run from here, between passes and through a
+    // backoff too; the guard clears it on every way out, after the last
+    // trial documents are written.
+    let _held = progress.hold();
+    // The file is rewritten at most this often, however fast the marker
+    // timer runs.
+    let heartbeat_gap = marker_poll(options).max(Duration::from_millis(250));
 
     loop {
+        progress.heartbeat(heartbeat_gap);
         if cancel_requested(&frozen.run_dir, &cancel) {
             break;
         }
@@ -352,12 +366,18 @@ pub(crate) async fn execute_frozen(
             let mut observed_cancel = false;
             let mut watch = tokio::time::interval(marker_poll(options));
             watch.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            // The file is rewritten at most this often, however fast the
-            // marker timer runs.
-            let heartbeat_gap = marker_poll(options).max(Duration::from_millis(250));
             loop {
                 let next = if observed_cancel {
-                    running.next().await
+                    // Draining: the in-flight trials wind down and are still
+                    // this process's, so their entries and the holder stay
+                    // fresh. The marker no longer matters.
+                    tokio::select! {
+                        _ = watch.tick() => {
+                            progress.heartbeat(heartbeat_gap);
+                            continue;
+                        }
+                        next = running.next() => next,
+                    }
                 } else {
                     tokio::select! {
                         biased;
@@ -441,6 +461,7 @@ pub(crate) async fn execute_frozen(
                 tokio::select! {
                     _ = cancel.cancelled() => break,
                     _ = watch.tick() => {
+                        progress.heartbeat(heartbeat_gap);
                         if cancel_requested(&frozen.run_dir, &cancel) {
                             break;
                         }
@@ -2464,8 +2485,12 @@ mod tests {
             ),
             ("base", "case-a", 0, 1, Some("check"))
         );
+        let holder = during.holder.as_ref().expect("the loop holds the run");
+        assert_eq!(holder.pid, std::process::id());
         let after = read_progress(&run_dir).expect("the file stays after the run");
         assert!(after.slots.is_empty(), "{after:?}");
+        assert_eq!(after.holder, None, "the loop released the run: {after:?}");
+        assert!(!running_elsewhere(&run_dir));
     }
 
     /// Writes its run's marker, then waits inside the trial for its own
@@ -2506,6 +2531,86 @@ mod tests {
         ) -> Option<TrialEvidence> {
             None
         }
+    }
+
+    /// Cancels its run, then keeps running past the interrupt for a second,
+    /// reading the holder as the loop drains: a trial that winds down slowly.
+    struct DrainsSlowly {
+        runs_dir: PathBuf,
+        run_id: String,
+        seen: Mutex<Vec<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl TrialExecutor for DrainsSlowly {
+        fn isolation(&self) -> Isolation {
+            Isolation::Embedded
+        }
+
+        async fn provision(&self, _spec: &TrialSpec) -> TrialLocator {
+            TrialLocator {
+                trial_agent_did: "did:key:trial".into(),
+                session_id: "session".into(),
+                home_hint: None,
+            }
+        }
+
+        async fn execute(&self, _spec: &TrialSpec, cancel: CancellationToken) -> TrialEvidence {
+            request_cancel(&self.runs_dir, &self.run_id).unwrap();
+            tokio::time::timeout(Duration::from_secs(10), cancel.cancelled())
+                .await
+                .expect("the loop saw the marker");
+            let holder = || {
+                read_progress(&self.runs_dir.join(&self.run_id))
+                    .and_then(|progress| progress.holder)
+                    .map(|holder| holder.written_at)
+            };
+            let first = holder();
+            tokio::time::sleep(Duration::from_millis(1_000)).await;
+            let second = holder();
+            self.seen.lock().unwrap().extend([first, second]);
+            passed()
+        }
+
+        async fn recollect(
+            &self,
+            _at: &TrialLocator,
+            _captures: &[Capture],
+        ) -> Option<TrialEvidence> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn the_holder_stays_fresh_while_a_cancelled_pass_drains() {
+        let (launching, pack) = launching("captured_rows_count").await;
+        let mut request = request(&launching, &pack, "run-drain");
+        one_slot(&mut request);
+        let executor = DrainsSlowly {
+            runs_dir: launching.runs_dir(),
+            run_id: "run-drain".into(),
+            seen: Mutex::new(Vec::new()),
+        };
+        run(
+            &launching.access,
+            &request,
+            &executor,
+            &CheckRegistry::builtin(),
+            CancellationToken::new(),
+            &options(),
+        )
+        .await
+        .unwrap();
+        let seen = executor.seen.lock().unwrap().clone();
+        let (Some(first), Some(second)) = (&seen[0], &seen[1]) else {
+            panic!("the loop held the run while it drained: {seen:?}");
+        };
+        assert!(
+            second > first,
+            "the 250 ms heartbeat refreshed the holder during the drain: {seen:?}"
+        );
+        let after = read_progress(&launching.runs_dir().join("run-drain")).unwrap();
+        assert_eq!(after.holder, None);
     }
 
     #[tokio::test]
@@ -2625,11 +2730,26 @@ mod tests {
             poll_backoff_cap: Duration::from_secs(30),
         };
         let runs_dir = launching.runs_dir();
+        let run_dir = runs_dir.join("run-backoff");
+        let held = || {
+            read_progress(&run_dir)
+                .and_then(|progress| progress.holder)
+                .map(|holder| holder.written_at)
+        };
         let operator = async {
             tokio::time::timeout(Duration::from_secs(20), began.notified())
                 .await
                 .expect("the loop began its backoff after the not-evidence attempt");
-            tokio::time::sleep(Duration::from_millis(50)).await;
+            // No slot is in flight during the backoff; the holder says the
+            // loop is alive, and its one-second heartbeat keeps it fresh.
+            let first = held().expect("the loop holds the run during its backoff");
+            assert!(running_elsewhere(&run_dir));
+            tokio::time::sleep(Duration::from_millis(2_500)).await;
+            let second = held().expect("still held");
+            assert!(
+                second > first,
+                "refreshed during the backoff: {first} {second}"
+            );
             request_cancel(&runs_dir, "run-backoff").unwrap();
             std::time::Instant::now()
         };
@@ -2663,6 +2783,8 @@ mod tests {
             1,
             "the retry the backoff waited for never launched"
         );
+        assert_eq!(held(), None, "a cancelled loop releases the run");
+        assert!(!running_elsewhere(&run_dir));
     }
 
     #[tokio::test]
@@ -2765,6 +2887,23 @@ mod tests {
         });
         assert!(!running_elsewhere(&frozen.run_dir));
         assert!(run_finished(&record, &trials, &frozen.run_dir));
+
+        // A loop between passes holds the run without a slot in flight; a
+        // holder that stopped refreshing does not.
+        let idle = ProgressWriter::new(&frozen.run_dir);
+        let held = idle.hold();
+        assert!(running_elsewhere(&frozen.run_dir));
+        assert!(!run_finished(&record, &trials, &frozen.run_dir));
+        let mut progress = read_progress(&frozen.run_dir).unwrap();
+        progress.holder.as_mut().unwrap().written_at = "2026-01-01T00:00:00.000Z".into();
+        std::fs::write(
+            frozen.run_dir.join(PROGRESS_FILE),
+            serde_json::to_vec(&progress).unwrap(),
+        )
+        .unwrap();
+        assert!(!running_elsewhere(&frozen.run_dir));
+        drop(held);
+        assert!(!running_elsewhere(&frozen.run_dir));
 
         assert_eq!(STALE_WINDOW, marker_poll(&RunOptions::default()) * 3);
         assert!(

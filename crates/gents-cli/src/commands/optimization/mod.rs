@@ -342,7 +342,7 @@ async fn revert(
 }
 
 /// Delete `<jobs_dir>/<job_id>/`, the job's own jobs directory as its origin
-/// recorded it. Its documents and runs stay.
+/// recorded it, when that is under this home. Its documents and runs stay.
 async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -> Result<()> {
     validate_job_id(ctx, &args.job_id)?;
     let job = load_job(&ctx.access, &ctx.owner, &args.job_id)
@@ -355,6 +355,9 @@ async fn rm(ctx: &EvalContext, args: &OptimizationRmArgs, out: &mut dyn Write) -
         args.job_id,
         dir.display()
     );
+    // Another home's directory is never this home's to delete, --force or
+    // not: the path comes from the job's document.
+    let dir = crate::commands::eval::manage::job_dir_in_this_home(ctx, &job)?;
     let state = derive_state(&job.journal);
     if !args.force && !removable(&state) {
         anyhow::bail!(
@@ -989,6 +992,40 @@ mod tests {
             panic!("not run");
         };
         assert_eq!(args.max_tokens, None);
+    }
+
+    /// Another home sharing the documents never removes this home's job
+    /// directory, even with --force: the path comes from the document.
+    #[tokio::test]
+    async fn rm_refuses_a_job_directory_that_is_not_under_this_home() {
+        let fixture = Fixture::new().await;
+        accepted_job(&fixture, "job-1").await;
+        let gents::ConfigAccess::Local(node) = &fixture.ctx.access else {
+            panic!("the fixture is embedded");
+        };
+        let elsewhere = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(elsewhere.path().join("eval").join("jobs")).unwrap();
+        let other_home = crate::commands::eval::EvalContext {
+            access: gents::ConfigAccess::Local(node.clone()),
+            home_dir: elsewhere.path().to_path_buf(),
+            owner: fixture.ctx.owner.clone(),
+        };
+        for argv in [&["rm", "job-1"][..], &["rm", "job-1", "--force"][..]] {
+            let crate::cli::OptimizationCommand::Rm(args) =
+                super::testing::optimization_command(argv)
+            else {
+                panic!("not rm");
+            };
+            let error = super::rm(&other_home, &args, &mut Vec::new())
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "job job-1: its directory is not under this home",
+                "{argv:?}"
+            );
+            assert!(fixture.ctx.jobs_dir().join("job-1").is_dir(), "{argv:?}");
+        }
     }
 
     #[tokio::test]

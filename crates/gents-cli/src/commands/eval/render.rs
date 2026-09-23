@@ -4,6 +4,7 @@
 use std::io::{self, Write};
 
 use gents::eval::report::{Comparison, EvalReport, SlotCounts};
+use gents::eval::runner::{is_fresh, Progress, STALE_WINDOW};
 use gents::eval::TrialUsage;
 use gents::optimization::Decision;
 use serde::Serialize;
@@ -147,11 +148,26 @@ pub(crate) fn report_table(report: &EvalReport, out: &mut dyn Write) -> io::Resu
     )
 }
 
+/// A byte count for a person: `512B`, `1.5KiB`, `3.0MiB`.
+pub(crate) fn human_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["KiB", "MiB", "GiB", "TiB"];
+    if bytes < 1024 {
+        return format!("{bytes}B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1}{}", UNITS[unit])
+}
+
 pub(crate) fn list_table(rows: &[ListRow], out: &mut dyn Write) -> io::Result<()> {
     writeln!(
         out,
-        "{:<28} {:<24} {:<11} {:<24} {:<21} {:<11} cells",
-        "run_id", "definition", "split", "purpose", "created", "invalidated"
+        "{:<28} {:<24} {:<11} {:<24} {:<21} {:<11} {:<9} cells",
+        "run_id", "definition", "split", "purpose", "created", "invalidated", "size"
     )?;
     for row in rows {
         let cells = match &row.report_error {
@@ -165,7 +181,7 @@ pub(crate) fn list_table(rows: &[ListRow], out: &mut dyn Write) -> io::Result<()
         };
         writeln!(
             out,
-            "{:<28} {:<24} {:<11} {:<24} {:<21} {:<11} {}",
+            "{:<28} {:<24} {:<11} {:<24} {:<21} {:<11} {:<9} {}",
             row.run_id,
             format!("{}@v{}", row.definition_id, row.comparability_version),
             wire(&row.split),
@@ -175,6 +191,11 @@ pub(crate) fn list_table(rows: &[ListRow], out: &mut dyn Write) -> io::Result<()
                 "yes"
             } else {
                 "no"
+            },
+            match (row.size_bytes, &row.size_error) {
+                (Some(bytes), _) => human_bytes(bytes),
+                (None, Some(_)) => "?".to_owned(),
+                (None, None) => "-".to_owned(),
             },
             cells
         )?;
@@ -352,11 +373,105 @@ pub(crate) fn comparison_table(comparison: &Comparison, out: &mut dyn Write) -> 
     Ok(())
 }
 
+/// Seconds since `timestamp`, or `None` when it does not parse.
+fn age(timestamp: &str, now: chrono::DateTime<chrono::Utc>) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(timestamp)
+        .ok()
+        .map(|then| {
+            (now - then.with_timezone(&chrono::Utc))
+                .num_seconds()
+                .max(0)
+        })
+}
+
+/// Why an entry written by `pid` at `written_at` is stale, or `None` while
+/// it is fresh: one window, the runner's (`STALE_WINDOW`, via `is_fresh`'s
+/// rule).
+fn staleness(
+    fresh: bool,
+    pid: u32,
+    written_at: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> String {
+    if fresh {
+        String::new()
+    } else if !gents::eval::runner::host_alive(pid) {
+        format!(" stale: pid {pid} is not running")
+    } else {
+        format!(
+            " stale: pid {pid} has not refreshed it for {}",
+            age(written_at, now).map_or_else(
+                || "an unknown time".to_owned(),
+                |seconds| format!("{seconds}s")
+            )
+        )
+    }
+}
+
+/// The in-flight lines under a watched report: which process holds the run,
+/// and each slot in flight.
+pub(crate) fn in_flight(
+    progress: Option<&Progress>,
+    now: chrono::DateTime<chrono::Utc>,
+    out: &mut dyn Write,
+) -> io::Result<()> {
+    let Some(progress) = progress else {
+        return writeln!(out, "no progress file: showing finished slots only");
+    };
+    if let Some(holder) = &progress.holder {
+        writeln!(
+            out,
+            "held by pid {}{}",
+            holder.pid,
+            staleness(
+                holder.is_fresh(STALE_WINDOW),
+                holder.pid,
+                &holder.written_at,
+                now
+            )
+        )?;
+    }
+    if progress.slots.is_empty() {
+        return writeln!(out, "in flight: none");
+    }
+    writeln!(out, "in flight:")?;
+    for (trial_id, slot) in &progress.slots {
+        let elapsed = age(&slot.started_at, now)
+            .map_or_else(|| "?".to_owned(), |seconds| format!("{seconds}s"));
+        writeln!(
+            out,
+            "  {} {} #{} attempt {} stage {} for {} ({trial_id}){}",
+            slot.cell_id,
+            slot.case_id,
+            slot.trial_index,
+            slot.attempt,
+            slot.stage_id.as_deref().unwrap_or("-"),
+            elapsed,
+            staleness(
+                is_fresh(slot, STALE_WINDOW),
+                slot.pid,
+                &slot.written_at,
+                now
+            )
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use gents::optimization::{Decision, InconclusiveReason, RejectReason};
 
-    use super::{decision_label, signed_percent, yes_or};
+    use super::{decision_label, human_bytes, signed_percent, yes_or};
+
+    #[test]
+    fn human_bytes_reads_in_binary_units() {
+        assert_eq!(human_bytes(0), "0B");
+        assert_eq!(human_bytes(512), "512B");
+        assert_eq!(human_bytes(1_536), "1.5KiB");
+        assert_eq!(human_bytes(3 * 1024 * 1024), "3.0MiB");
+        assert_eq!(human_bytes(u64::MAX), "16777216.0TiB");
+    }
 
     #[test]
     fn an_undetermined_min_effect_gate_reads_undetermined() {

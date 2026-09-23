@@ -1,7 +1,9 @@
 //! `<run dir>/progress.json`: which slots are in flight and at which stage
 //! (spec 4b §6). Ephemeral and advisory: the loop and, through
-//! [`StageProgress`], an executor write it; only `gents eval watch` reads it.
-//! It is never evidence, never an anchor or digest input and never a
+//! [`StageProgress`], an executor write it. `gents eval watch` reads it to
+//! show what is in flight, and [`super::running_elsewhere`] reads it for
+//! `gents eval rm`, `gents eval gc` and `gents eval cancel` to tell whether a
+//! live process holds the run. It is never evidence, never an anchor or digest input and never a
 //! document. Every write replaces the file atomically, so a reader sees one
 //! whole state or the previous one.
 
@@ -36,9 +38,28 @@ pub struct InFlight {
     pub written_at: String,
 }
 
-/// The whole file: the in-flight slots, keyed by trial id.
+/// The process running the loop over a run, whether or not a slot is in
+/// flight: between passes, during a backoff and before the first launch.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holder {
+    pub pid: u32,
+    /// RFC 3339 with milliseconds: when the loop last refreshed it.
+    pub written_at: String,
+}
+
+impl Holder {
+    /// Refreshed within `window` by a live process, by [`is_fresh`]'s rule.
+    pub fn is_fresh(&self, window: Duration) -> bool {
+        fresh(self.pid, &self.written_at, window)
+    }
+}
+
+/// The whole file: the loop's holder and the in-flight slots, keyed by trial
+/// id. A file written before the holder existed reads with none.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Progress {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub holder: Option<Holder>,
     pub slots: BTreeMap<String, InFlight>,
 }
 
@@ -73,11 +94,15 @@ pub fn host_alive(_pid: u32) -> bool {
 /// An entry a live process refreshed within `window`.
 /// An unreadable `written_at` is not fresh; one from the future is.
 pub fn is_fresh(slot: &InFlight, window: Duration) -> bool {
-    let Ok(written) = chrono::DateTime::parse_from_rfc3339(&slot.written_at) else {
+    fresh(slot.pid, &slot.written_at, window)
+}
+
+fn fresh(pid: u32, written_at: &str, window: Duration) -> bool {
+    let Ok(written) = chrono::DateTime::parse_from_rfc3339(written_at) else {
         return false;
     };
     let age = chrono::Utc::now().signed_duration_since(written.with_timezone(&chrono::Utc));
-    host_alive(slot.pid) && age.to_std().map_or(true, |age| age <= window)
+    host_alive(pid) && age.to_std().map_or(true, |age| age <= window)
 }
 
 fn now() -> String {
@@ -88,7 +113,8 @@ fn now_millis() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-/// The loop's writer: one per pass over a run, shared by its trials.
+/// The loop's writer: one per `execute_frozen` call over a run, shared by
+/// its trials.
 #[derive(Debug)]
 pub(crate) struct ProgressWriter {
     path: PathBuf,
@@ -97,7 +123,7 @@ pub(crate) struct ProgressWriter {
 }
 
 impl ProgressWriter {
-    /// Start the pass with an empty file.
+    /// Start the `execute_frozen` call with an empty file.
     pub(crate) fn new(run_dir: &Path) -> Arc<Self> {
         let writer = Arc::new(Self {
             path: run_dir.join(PROGRESS_FILE),
@@ -106,6 +132,19 @@ impl ProgressWriter {
         });
         writer.update(|_| {});
         writer
+    }
+
+    /// Mark this process as the run's holder until the guard drops. The loop
+    /// takes it at entry, before its first plan; dropping the guard, on every
+    /// exit path, rewrites the file without it.
+    pub(crate) fn hold(self: &Arc<Self>) -> HolderGuard {
+        self.update(|progress| {
+            progress.holder = Some(Holder {
+                pid: std::process::id(),
+                written_at: now_millis(),
+            });
+        });
+        HolderGuard(self.clone())
     }
 
     /// Record a slot this process now hosts; stamps `pid` and `written_at`.
@@ -117,32 +156,37 @@ impl ProgressWriter {
         });
     }
 
-    /// Refresh every entry's `written_at`: the loop is alive and its slots
-    /// are still in flight. Called on the loop's marker timer; it writes at
-    /// most once per `min_gap`, so a fast timer does not rewrite the file on
-    /// every tick.
+    /// Refresh the holder's and every entry's `written_at`: the loop is
+    /// alive and its slots are still in flight. Called on the loop's marker
+    /// timer, in a batch and in a backoff alike; it writes at most about
+    /// once per `min_gap`, so a fast timer does not rewrite the file on every
+    /// tick. The throttle is three quarters of the gap: a timer ticking once
+    /// per gap arrives a little early as often as late, and a full-gap
+    /// throttle would skip about every other tick.
     pub(crate) fn heartbeat(&self, min_gap: Duration) {
+        let throttle = min_gap - min_gap / 4;
         {
             let mut last = self
                 .last_heartbeat
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner);
-            if last.is_some_and(|at| at.elapsed() < min_gap) {
+            if last.is_some_and(|at| at.elapsed() < throttle) {
                 return;
             }
             *last = Some(Instant::now());
         }
-        let idle = self
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .slots
-            .is_empty();
+        let idle = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            state.holder.is_none() && state.slots.is_empty()
+        };
         if idle {
             return;
         }
         self.update(|progress| {
             let written_at = now_millis();
+            if let Some(holder) = progress.holder.as_mut() {
+                holder.written_at = written_at.clone();
+            }
             for slot in progress.slots.values_mut() {
                 slot.written_at = written_at.clone();
             }
@@ -177,6 +221,16 @@ impl ProgressWriter {
                 "eval run progress was not recorded"
             );
         }
+    }
+}
+
+/// Holds the run for the loop; dropping it clears the holder.
+#[derive(Debug)]
+pub(crate) struct HolderGuard(Arc<ProgressWriter>);
+
+impl Drop for HolderGuard {
+    fn drop(&mut self) {
+        self.0.update(|progress| progress.holder = None);
     }
 }
 
@@ -333,6 +387,36 @@ mod tests {
     }
 
     #[test]
+    fn the_holder_is_written_refreshed_and_cleared_and_an_old_file_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = ProgressWriter::new(dir.path());
+        let held = writer.hold();
+        let holder = || read_progress(dir.path()).unwrap().holder;
+        let first = holder().expect("held");
+        assert_eq!(first.pid, std::process::id());
+        assert!(first.is_fresh(Duration::from_secs(3)));
+        std::thread::sleep(Duration::from_millis(5));
+        writer.heartbeat(Duration::ZERO);
+        assert!(
+            holder().unwrap().written_at > first.written_at,
+            "an idle loop's heartbeat refreshes its holder"
+        );
+        writer.slot_started("t1", in_flight(None));
+        writer.slot_ended("t1");
+        assert!(holder().is_some(), "slot writes keep the holder");
+        drop(held);
+        assert_eq!(read_progress(dir.path()), Some(Progress::default()));
+
+        std::fs::write(dir.path().join(PROGRESS_FILE), br#"{"slots":{}}"#).unwrap();
+        assert_eq!(read_progress(dir.path()), Some(Progress::default()));
+        let stale = Holder {
+            pid: std::process::id(),
+            written_at: "2026-01-01T00:00:00.000Z".into(),
+        };
+        assert!(!stale.is_fresh(Duration::from_secs(3)));
+    }
+
+    #[test]
     fn a_heartbeat_writes_at_most_once_per_gap() {
         let dir = tempfile::tempdir().unwrap();
         let writer = ProgressWriter::new(dir.path());
@@ -349,5 +433,28 @@ mod tests {
         assert_eq!(written(), first, "inside the gap nothing is written");
         writer.heartbeat(Duration::ZERO);
         assert!(written() > first);
+    }
+
+    /// A tick that comes a little early still writes: the throttle is three
+    /// quarters of the gap, so a timer ticking once per gap is not halved.
+    #[test]
+    fn a_heartbeat_a_little_early_still_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = ProgressWriter::new(dir.path());
+        writer.slot_started("t1", in_flight(None));
+        let written = || {
+            read_progress(dir.path()).unwrap().slots["t1"]
+                .written_at
+                .clone()
+        };
+        let gap = Duration::from_secs(2);
+        writer.heartbeat(gap);
+        let first = written();
+        std::thread::sleep(Duration::from_millis(1_600));
+        writer.heartbeat(gap);
+        assert!(
+            written() > first,
+            "past three quarters of the gap it writes"
+        );
     }
 }
