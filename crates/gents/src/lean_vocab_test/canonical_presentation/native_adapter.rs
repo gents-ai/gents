@@ -527,7 +527,11 @@ impl PayloadPresentationAdapter for NativePayloadPresentationAdapter {
                         .context("presented payload length overflow")?;
                     Ok(Some(bytes))
                 }
-                Err(_) => Ok(None),
+                Err(
+                    gents_protocol::output::ReconstructionError::UnresolvedClose { .. }
+                    | gents_protocol::output::ReconstructionError::MissingSegment { .. },
+                ) => Ok(None),
+                Err(error) => Err(error.into()),
             }
         })
     }
@@ -546,4 +550,26 @@ async fn generated_payload_presentation_cases_use_native_reconstruction() {
             .await
             .unwrap_or_else(|error| panic!("{error}"));
     }
+}
+
+#[tokio::test]
+async fn native_payload_adapter_does_not_misreport_integrity_errors_as_missing_data() {
+    let cases = super::super::lean_canonical_payload_presentation_cases();
+    let case = cases
+        .iter()
+        .find(|case| case.expected.is_some())
+        .expect("generated complete presentation case");
+    let mut malformed = case.segments.clone();
+    let flush = malformed
+        .iter_mut()
+        .find_map(|segment| segment.flush.as_mut())
+        .expect("generated complete case contains payload");
+    flush.payload.push(b'x');
+    let result = NativePayloadPresentationAdapter
+        .presented_payload_bytes(&malformed, &case.message)
+        .await;
+    assert!(
+        result.is_err(),
+        "integrity errors must fail the native adapter"
+    );
 }
