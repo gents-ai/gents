@@ -339,10 +339,9 @@ where
 
     pub async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
         self.flush_pending().await?;
-        let Some(message) = self.assistant_turn.take_message() else {
+        let Some(_message) = self.assistant_turn.take_message() else {
             return Ok(false);
         };
-        let _ = (message, context);
         if let Some((turn, attempt)) = self.active_provider_attempt.take() {
             self.stream_writer
                 .close_provider_attempt(
@@ -351,9 +350,13 @@ where
                     attempt,
                     crate::stream_writer::ProviderAttemptClose::Partial,
                 )
-                .await?;
+                .await
+                .with_context(|| format!("{context}: closing partial provider attempt"))?;
         }
-        self.stream_writer.reset_tail(self.doc_id).await?;
+        self.stream_writer
+            .reset_tail(self.doc_id)
+            .await
+            .with_context(|| format!("{context}: resetting partial assistant tail"))?;
 
         Ok(true)
     }

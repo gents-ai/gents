@@ -182,8 +182,7 @@ the active assistant segment. They are reset to empty whenever a partial
 assistant turn or a tool-result is persisted as an `AgentMessage`, and again
 on finalize. They are **not** a transcript record — the transcript is
 `AgentMessage`. `token_count` is cumulative across the turn (metering, not
-rendering). `progress_seq` is a strict-monotonic version cursor that bumps at
-lifecycle boundaries (`RequestLifecycle::advance`).
+rendering).
 
 A compliant client renders an active turn with this algorithm:
 
