@@ -9,6 +9,12 @@ use crate::eval::OutcomeKind;
 
 /// Params: `{ "name": "<capture name>", "min": <u64>, "max": <u64 | absent> }`.
 /// Passes when `min <= rows <= max`, with no upper bound when `max` is absent.
+///
+/// The `reason_code` in `raw` is the contract on the pass path: `in_range`
+/// when the count satisfies the params, `below_min` under `min`, `above_max`
+/// over `max`. Those three are the only outcomes that say anything about the
+/// subject; everything else this check emits (`missing_capture`,
+/// `bad_params`) is about the grader.
 pub struct CapturedRowsCount;
 
 #[derive(Deserialize)]
@@ -34,6 +40,19 @@ impl Check for CapturedRowsCount {
             Ok(params) => params,
             Err(error) => return grader("bad_params", error.to_string(), None),
         };
+        // A range no count can satisfy is a mistake in the case, not a failure
+        // of the subject: every trial would score zero and read as evidence
+        // that the subject did the wrong thing.
+        if let Some(max) = params.max.filter(|max| *max < params.min) {
+            return grader(
+                "bad_params",
+                format!(
+                    "max {max} is below min {}, so no row count can pass",
+                    params.min
+                ),
+                None,
+            );
+        }
         let rows = match stage.captures.get(&params.name) {
             Some(CaptureResult::Documents { rows }) => rows.len() as u64,
             Some(CaptureResult::Files { .. }) => {
@@ -165,6 +184,30 @@ mod tests {
         );
         assert_eq!(verdict.raw["reason_code"], "missing_capture");
         assert_eq!(verdict.raw["count"], Value::Null);
+    }
+
+    /// A range no count can satisfy would otherwise fail the subject on every
+    /// trial of the case, which is evidence about the case's author.
+    #[test]
+    fn a_max_below_the_min_is_bad_params_and_never_a_model_failure() {
+        for rows in [vec![], vec![json!({})], vec![json!({}), json!({})]] {
+            let verdict = CapturedRowsCount.evaluate(
+                &json!({"name": "items", "min": 2, "max": 1}),
+                &stage(rows.clone()),
+            );
+            assert_eq!(
+                (verdict.kind, verdict.score_bp),
+                (OutcomeKind::Grader, None),
+                "{rows:?}"
+            );
+            assert_eq!(verdict.raw["reason_code"], "bad_params");
+        }
+        // The boundary is still a usable range: exactly `min` rows pass.
+        let verdict = CapturedRowsCount.evaluate(
+            &json!({"name": "items", "min": 1, "max": 1}),
+            &stage(vec![json!({})]),
+        );
+        assert_eq!(verdict.raw["reason_code"], "in_range");
     }
 
     #[test]

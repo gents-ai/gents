@@ -4593,6 +4593,7 @@ dependencies = [
  "gents-loop",
  "gents-migration",
  "gents-protocol",
+ "glob",
  "hmac",
  "hostname",
  "identity",

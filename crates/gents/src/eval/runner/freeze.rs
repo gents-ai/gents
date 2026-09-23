@@ -54,6 +54,12 @@ pub struct CellRequest {
 pub struct RunRequest {
     pub run_id: String,
     pub owner: String,
+    /// The DID of the home that launched the run, recorded on the `EvalRun`
+    /// unchanged. It is who asked, which is not always who owns the run, so it
+    /// is supplied rather than defaulted to [`Self::owner`]; an empty value is
+    /// refused rather than guessed at. It is not comparability data and takes
+    /// no part in [`RunOrigin`].
+    pub evaluator_did: String,
     pub definition_id: String,
     pub split: EvalSplit,
     /// `None` selects every case on the split.
@@ -127,6 +133,9 @@ fn refused(reason: impl Into<String>) -> anyhow::Error {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct RunSidecar {
     breaker_threshold: u32,
+    /// Defaulted, so a `run.json` written by a run that captured nothing still
+    /// parses into the empty list it meant.
+    #[serde(default)]
     captures: Vec<Capture>,
 }
 
@@ -140,6 +149,7 @@ pub async fn freeze(
     isolation: Isolation,
 ) -> Result<FrozenRun> {
     validate_purpose(&request.purpose)?;
+    validate_evaluator(&request.evaluator_did)?;
     validate_cell_identity(request)?;
     let definition = load_definition(access, request).await?;
     let case_ids = select_cases(request, &definition)?;
@@ -197,7 +207,7 @@ pub async fn freeze(
                 access,
                 &request.run_id,
                 &request.owner,
-                &request.owner,
+                &request.evaluator_did,
                 &origin,
             )
             .await?
@@ -283,7 +293,7 @@ pub(crate) async fn thaw(
         }
         let inference =
             inference_binding(access, owner, &spec.cell_id, &spec.inference_profile_id).await?;
-        let unrestricted = refuse_unrestricted_bash(&pack.config, isolation)?;
+        let unrestricted = refuse_host_bash(&pack.config, isolation)?;
         cells.push(FrozenCell {
             spec: spec.clone(),
             pack_dir,
@@ -328,6 +338,17 @@ fn validate_purpose(purpose: &str) -> Result<()> {
     Err(refused(format!(
         "purpose {purpose:?} must be \"eval\" or \"optimization:<job_id>\""
     )))
+}
+
+/// The launching home's DID reaches the `EvalRun` row unchanged, so there is
+/// nothing sensible to record when the caller supplies nothing.
+fn validate_evaluator(evaluator_did: &str) -> Result<()> {
+    if evaluator_did.trim().is_empty() {
+        return Err(refused(
+            "the run request names no evaluator DID; the launching home's own DID is required",
+        ));
+    }
+    Ok(())
 }
 
 /// A run id and a cell id each name one directory the run owns, so each has to
@@ -563,7 +584,7 @@ fn copyable_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
 
 /// Everything one cell has to satisfy before the run exists: its pack resolves
 /// and carries the behavior, its inference documents exist, its backend is not
-/// a borrowed subscription, and an embedded trial is not handed the host shell.
+/// a borrowed subscription, and an embedded trial is not handed host bash.
 async fn validate_cell(
     access: &ConfigAccess,
     request: &RunRequest,
@@ -594,7 +615,7 @@ async fn validate_cell(
     )
     .await?;
 
-    let unrestricted = refuse_unrestricted_bash(&pack.config, isolation)?;
+    let unrestricted = refuse_host_bash(&pack.config, isolation)?;
 
     Ok((
         FrozenCell {
@@ -683,19 +704,39 @@ async fn inference_binding(
 }
 
 /// The id of the tools document granting unrestricted host bash, if the pack
-/// grants it at all — and a refusal when the trial would run on this host.
+/// grants it at all — and a refusal when the trial would run host bash of any
+/// kind on this host.
+///
+/// An embedded trial runs in this process, on this machine. `Unrestricted` is
+/// plainly the host's shell; `ReadOnly` is an argv allowlist (`cat`, `find`,
+/// `ls`, `grep`, `stat`, `git`) with this host's network and no confining
+/// root, which is an argument about what the subject is likely to do rather
+/// than a boundary the executor can enforce. So under
+/// [`Isolation::Embedded`] the only host bash mode a pack may grant is
+/// [`BashMode::Off`]; [`Isolation::Process`] is unchanged, because there the
+/// trial has a process boundary of its own.
 ///
 /// Freezing and resuming both go through here, so a run frozen under a
 /// sandboxed executor cannot be resumed into an embedded one and quietly lose
 /// the guarantee it was frozen with.
-fn refuse_unrestricted_bash(config: &PackConfig, isolation: Isolation) -> Result<Option<String>> {
-    let unrestricted = unrestricted_bash(config);
-    if let (Some(tools_id), Isolation::Embedded) = (&unrestricted, isolation) {
-        return Err(refused(format!(
-            "tools {tools_id:?} grants unrestricted bash; an embedded trial shares this host"
-        )));
+fn refuse_host_bash(config: &PackConfig, isolation: Isolation) -> Result<Option<String>> {
+    if isolation == Isolation::Embedded {
+        if let Some((tools_id, mode)) = host_bash(config) {
+            return Err(refused(format!(
+                "tools {tools_id:?} grants host bash (mode {mode:?}); an embedded trial shares \
+                 this host, so only Off is allowed"
+            )));
+        }
     }
-    Ok(unrestricted)
+    Ok(unrestricted_bash(config))
+}
+
+/// The first tools document granting any host bash, with the mode it grants.
+fn host_bash(config: &PackConfig) -> Option<(String, BashMode)> {
+    config.tools.iter().find_map(|tools| {
+        let bash = tools.host.as_ref().and_then(|host| host.bash.as_ref())?;
+        (bash.mode != BashMode::Off).then(|| (tools.tools_id.clone(), bash.mode))
+    })
 }
 
 /// The id of the first tools document granting unrestricted host bash, if any.
@@ -778,6 +819,11 @@ fn write_sidecar(run_dir: &Path, sidecar: &RunSidecar) -> Result<()> {
 
 /// A `run_id` means one run. The same request reuses it; anything else about
 /// it is refused rather than reinterpreted.
+///
+/// What is compared is what would change the run's result: its origin, and the
+/// settings frozen beside it. The evaluator DID is neither — it records who
+/// asked, so a second caller re-freezing the same run keeps the first one's
+/// row rather than being refused over it.
 fn reuse_or_refuse(
     record: &RunRecord,
     origin: &RunOrigin,
@@ -820,7 +866,7 @@ pub(crate) mod tests {
     /// A launching home with an eval definition, a profile, its sampling and a
     /// usable backend already installed.
     pub(crate) struct Launching {
-        _home: EmbeddedHome,
+        home: EmbeddedHome,
         pub(crate) access: ConfigAccess,
         dirs: TempDir,
     }
@@ -833,7 +879,7 @@ pub(crate) mod tests {
                 .await
                 .unwrap();
             let launching = Self {
-                _home: home,
+                home,
                 access,
                 dirs: tempfile::tempdir().unwrap(),
             };
@@ -909,6 +955,13 @@ pub(crate) mod tests {
             self.dirs.path().join("eval/runs")
         }
 
+        /// The launching home's own DID, which every request records as its
+        /// evaluator. It is not [`OWNER`]: the home that runs an eval is not
+        /// necessarily the principal the run belongs to.
+        pub(crate) fn evaluator_did(&self) -> String {
+            self.home.did().to_string()
+        }
+
         /// A fixture pack written under this home's scratch directory.
         pub(crate) fn pack(&self, name: &str, bash_mode: &str) -> PathBuf {
             let root = self.dirs.path().join(name);
@@ -920,6 +973,7 @@ pub(crate) mod tests {
             RunRequest {
                 run_id: run_id.into(),
                 owner: OWNER.into(),
+                evaluator_did: self.evaluator_did(),
                 definition_id: "monitor-findings".into(),
                 split: EvalSplit::Validation,
                 case_ids: None,
@@ -1067,7 +1121,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_writes_the_run_materializes_the_pack_and_is_idempotent() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         let request = launching.request("run-1", &pack);
 
         let frozen = freeze(&launching.access, &request, Isolation::Embedded)
@@ -1114,12 +1168,43 @@ pub(crate) mod tests {
         assert_eq!(again.record, frozen.record, "a frozen run is reused whole");
     }
 
-    /// A cell id is a directory the run owns and a row in its origin, so two
-    /// cells cannot share one and neither may step outside the run directory.
+    /// The evaluator is who launched the run. It reaches the `EvalRun` row
+    /// unchanged, it is never the owner by default, and a request that names
+    /// none is refused rather than attributed to the owner.
+    #[tokio::test]
+    async fn freeze_records_the_requested_evaluator_and_refuses_an_empty_one() {
+        let launching = Launching::new().await;
+        let pack = launching.pack("pack", "Off");
+        let request = launching.request("run-1", &pack);
+
+        let frozen = freeze(&launching.access, &request, Isolation::Embedded)
+            .await
+            .unwrap();
+        assert_eq!(frozen.record.evaluator_did, request.evaluator_did);
+        assert_ne!(
+            frozen.record.evaluator_did, frozen.record.owner,
+            "the launching home is not the owning principal in this fixture"
+        );
+        let stored = load_run(&launching.access, OWNER, "run-1")
+            .await
+            .unwrap()
+            .expect("the frozen run");
+        assert_eq!(stored.evaluator_did, request.evaluator_did);
+
+        for empty in ["", "   "] {
+            let mut anonymous = launching.request("run-2", &pack);
+            anonymous.evaluator_did = empty.into();
+            let error = freeze(&launching.access, &anonymous, Isolation::Embedded)
+                .await
+                .unwrap_err();
+            assert!(refusal(&error).contains("evaluator DID"), "{error:#}");
+        }
+    }
+
     #[tokio::test]
     async fn freeze_refuses_a_duplicate_or_unsafe_cell_id() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
 
         let mut duplicate = launching.request("run-1", &pack);
         duplicate.cells.push(duplicate.cells[0].clone());
@@ -1166,7 +1251,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_materializes_only_the_declared_assets() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         std::fs::write(pack.join("scratch.txt"), "not declared\n").unwrap();
         std::fs::create_dir_all(pack.join(".git")).unwrap();
         std::fs::write(pack.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
@@ -1194,7 +1279,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_refuses_a_changed_origin_for_an_existing_run_id() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         let request = launching.request("run-1", &pack);
         freeze(&launching.access, &request, Isolation::Embedded)
             .await
@@ -1211,7 +1296,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_refuses_an_unknown_case_and_a_case_off_the_split() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
 
         let mut unknown = launching.request("run-1", &pack);
         unknown.case_ids = Some(vec!["nope".into()]);
@@ -1232,28 +1317,68 @@ pub(crate) mod tests {
         );
     }
 
+    /// An embedded trial runs on this host, so the only host bash mode it may
+    /// be handed is `Off`. `ReadOnly` is an argv allowlist with this host's
+    /// network and no confining root, not an isolation boundary the executor
+    /// can enforce, so it is refused with the rest.
     #[tokio::test]
-    async fn freeze_refuses_unrestricted_bash_under_embedded_but_not_under_process() {
+    async fn freeze_refuses_any_host_bash_under_embedded_but_not_under_process() {
         let launching = Launching::new().await;
-        let pack = launching.pack("unrestricted", "Unrestricted");
 
-        let error = freeze(
+        for (run_id, mode) in [("embedded-ro", "ReadOnly"), ("embedded-rw", "Unrestricted")] {
+            let pack = launching.pack(&format!("bash-{mode}"), mode);
+            let error = freeze(
+                &launching.access,
+                &launching.request(run_id, &pack),
+                Isolation::Embedded,
+            )
+            .await
+            .unwrap_err();
+            let reason = refusal(&error);
+            assert!(
+                reason.contains("monitor-tools") && reason.contains(mode),
+                "{mode}: {reason}"
+            );
+            assert!(
+                !launching.runs_dir().join(run_id).exists(),
+                "a refused request leaves no run directory behind: {run_id}"
+            );
+        }
+
+        // Off is what an embedded trial may have, and a process-isolated trial
+        // may have the rest.
+        let off = launching.pack("pack", "Off");
+        let frozen = freeze(
             &launching.access,
-            &launching.request("embedded", &pack),
+            &launching.request("embedded-off", &off),
             Isolation::Embedded,
         )
         .await
-        .unwrap_err();
-        assert!(refusal(&error).contains("monitor-tools"), "{error:#}");
+        .unwrap();
+        assert!(!frozen.cells[0].tools_unrestricted_bash);
 
+        let unrestricted = launching.pack("bash-Unrestricted", "Unrestricted");
         let frozen = freeze(
             &launching.access,
-            &launching.request("process", &pack),
+            &launching.request("process", &unrestricted),
             Isolation::Process,
         )
         .await
         .unwrap();
         assert!(frozen.cells[0].tools_unrestricted_bash);
+
+        let read_only = launching.pack("bash-ReadOnly", "ReadOnly");
+        let frozen = freeze(
+            &launching.access,
+            &launching.request("process-read-only", &read_only),
+            Isolation::Process,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !frozen.cells[0].tools_unrestricted_bash,
+            "read-only bash is host bash, but it is not unrestricted bash"
+        );
     }
 
     #[tokio::test]
@@ -1275,7 +1400,7 @@ pub(crate) mod tests {
                 ),
             ])
             .await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         let mut request = launching.request("run-1", &pack);
         request.cells[0].inference_profile_id = "borrowed".into();
 
@@ -1306,7 +1431,7 @@ pub(crate) mod tests {
         launching
             .delete(Collection::InferenceSampling, "spare")
             .await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         let mut request = launching.request("run-1", &pack);
         request.cells[0].inference_profile_id = "dangling".into();
 
@@ -1319,7 +1444,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_refuses_an_invalidated_run() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         let request = launching.request("run-1", &pack);
         let origin = RunOrigin {
             definition: crate::eval::DefinitionRef {
@@ -1359,7 +1484,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_refuses_a_malformed_purpose() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         for malformed in ["optimization:", "other"] {
             let mut request = launching.request("run-1", &pack);
             request.purpose = malformed.into();
@@ -1381,7 +1506,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn freeze_persists_request_captures_and_refuses_a_changed_list() {
         let launching = Launching::new().await;
-        let pack = launching.pack("pack", "ReadOnly");
+        let pack = launching.pack("pack", "Off");
         let mut request = launching.request("run-1", &pack);
         request.captures = vec![Capture::Documents {
             name: "findings".into(),

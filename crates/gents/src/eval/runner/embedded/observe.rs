@@ -75,7 +75,7 @@ pub struct ResponseEvidence {
     pub error_message: Option<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RequestEvidence {
     pub messages: Vec<MessageEvidence>,
     pub tool_calls: Vec<ToolCallEvidence>,
@@ -548,6 +548,114 @@ mod tests {
         );
         let response = home.node.execute(&mutation).await;
         assert!(response.errors.is_empty(), "{:?}", response.errors);
+    }
+
+    /// Every collection the evidence query reads, mapped out of a real home.
+    ///
+    /// A whole canary run exercises messages and inference calls; it never
+    /// produces a tool call or an error response, and a field read out of the
+    /// wrong column would be invisible there. This pins all four vectors
+    /// against rows written by hand.
+    #[tokio::test]
+    async fn request_evidence_maps_every_collection_the_query_reads() {
+        let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
+        insert_request(&home, "req-evidence", "failed").await;
+        let did = crate::graphql::escape_graphql_string(home.did());
+        for mutation in [
+            format!(
+                r#"mutation {{ create_AgentToolCall(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", tool_call_id: "call-1", tool_name: "fs_read", args: "path=x", result: "denied", status: "failed", lifecycle_state: "failed", tool_failure_class: "argumentInvalid", started_at: "2026-01-01T00:00:01Z", completed_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", agent_did: "{did}", call_id: "call-1", call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentResponse(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", behavior_id: "observe", status: "error", error_message: "invalid_tool_call_budget_exhausted: limit=8, used=8", created_at: "2026-01-01T00:00:03Z" }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentMessage(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", sequence: 2, role: "assistant", content: "second", timestamp: "2026-01-01T00:00:05Z" }}) {{ _docID }} }}"#
+            ),
+            format!(
+                r#"mutation {{ create_AgentMessage(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", sequence: 1, role: "assistant", content: "first", timestamp: "2026-01-01T00:00:04Z" }}) {{ _docID }} }}"#
+            ),
+        ] {
+            let response = home.node.execute(&mutation).await;
+            assert!(response.errors.is_empty(), "{:?}", response.errors);
+        }
+
+        let evidence = collect_request_evidence(&home.node, "req-evidence")
+            .await
+            .unwrap();
+
+        assert_eq!(evidence.tool_calls.len(), 1, "{:?}", evidence.tool_calls);
+        let tool_call = &evidence.tool_calls[0];
+        assert_eq!(tool_call.tool_name, "fs_read");
+        assert_eq!(tool_call.status.as_deref(), Some("failed"));
+        assert_eq!(tool_call.lifecycle_state.as_deref(), Some("failed"));
+        assert_eq!(
+            tool_call.tool_failure_class.as_deref(),
+            Some("argumentInvalid")
+        );
+        assert_eq!(tool_call.args.as_str(), Some("path=x"));
+        assert_eq!(tool_call.result.as_str(), Some("denied"));
+        for (field, at) in [
+            ("started_at", tool_call.started_at.as_deref()),
+            ("completed_at", tool_call.completed_at.as_deref()),
+        ] {
+            assert!(
+                at.is_some_and(|at| at.starts_with("2026-01-01T00:00:0")),
+                "{field}: {at:?}"
+            );
+        }
+
+        assert_eq!(evidence.inference_calls.len(), 1);
+        let call = &evidence.inference_calls[0];
+        assert_eq!(
+            (call.call_seq, call.prompt_tokens, call.completion_tokens),
+            (3, Some(11), Some(7))
+        );
+        assert_eq!(call.call_state.as_deref(), Some("failed"));
+        assert_eq!(call.failure_reason.as_deref(), Some("HTTP 503"));
+        assert_eq!(call.queued_at.as_deref(), Some("2026-01-01T00:00:00Z"));
+        assert_eq!(call.started_at.as_deref(), Some("2026-01-01T00:00:01Z"));
+        assert_eq!(call.ended_at.as_deref(), Some("2026-01-01T00:00:02Z"));
+
+        assert_eq!(evidence.responses.len(), 1, "{:?}", evidence.responses);
+        assert_eq!(evidence.responses[0].status.as_deref(), Some("error"));
+        assert!(
+            evidence.responses[0]
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("invalid_tool_call_budget_exhausted")),
+            "{:?}",
+            evidence.responses[0]
+        );
+
+        assert_eq!(
+            evidence
+                .messages
+                .iter()
+                .map(|message| (message.role.as_str(), message.content.as_str()))
+                .collect::<Vec<_>>(),
+            [("assistant", "first"), ("assistant", "second")],
+            "assistant messages arrive in sequence order, not insertion order"
+        );
+        assert!(
+            evidence.messages[0]
+                .created_at
+                .as_deref()
+                .is_some_and(|at| at.starts_with("2026-01-01T00:00:04")),
+            "a message's created_at is read from its timestamp column: {:?}",
+            evidence.messages[0]
+        );
+
+        // These are exactly the rows the classifier reads, so the mapping is
+        // pinned against what it is for: the tool budget wins over the failed
+        // inference call.
+        assert_eq!(
+            classify_request_outcome(RequestLifecycleState::Failed, false, &evidence),
+            Some("tool")
+        );
+        home.node.shutdown().await;
     }
 
     #[tokio::test]

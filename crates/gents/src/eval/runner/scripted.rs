@@ -177,15 +177,7 @@ fn evidence(locator: TrialLocator, stages: Vec<StageEvidence>) -> TrialEvidence 
         requests: stages.len() as u32,
         inference_calls: 0,
     };
-    let usage = TrialUsage::default();
-    let evidence_digest = TrialEvidence::digest(&stages, &usage, &anchor);
-    TrialEvidence {
-        locator,
-        stages,
-        usage,
-        anchor,
-        evidence_digest,
-    }
+    TrialEvidence::new(locator, stages, TrialUsage::default(), anchor)
 }
 
 #[cfg(test)]
