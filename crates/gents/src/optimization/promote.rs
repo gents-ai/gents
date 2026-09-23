@@ -833,4 +833,73 @@ mod tests {
             dir.display()
         );
     }
+
+    /// Ruling F12: cancelling, invalidating and deleting runs, and collecting
+    /// their directories, are the operator's verbs; no agent tool reaches the
+    /// functions behind `gents eval cancel | invalidate | rm | gc`.
+    #[test]
+    fn no_agent_tool_surface_reaches_the_eval_operator_verbs() {
+        fn sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    sources(&path, found);
+                } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+                    found.push(path);
+                }
+            }
+        }
+        for name in crate::self_config::SELF_CONFIG_TOOL_NAMES {
+            for verb in ["cancel", "invalidate", "rm", "gc"] {
+                assert!(
+                    !(name.contains("eval") && name.contains(verb)),
+                    "the self-config tool set names {name}"
+                );
+            }
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        for surface in [
+            "self_config",
+            "toolset",
+            "meta_tools",
+            "background_tools",
+            "tool_surface",
+        ] {
+            sources(&root.join(surface), &mut files);
+        }
+        for module in [
+            "toolset.rs",
+            "meta_tools.rs",
+            "background_tools.rs",
+            "tool_control.rs",
+        ] {
+            files.push(root.join(module));
+        }
+        assert!(
+            files.len() > 10,
+            "expected the agent tool surfaces under {}",
+            root.display()
+        );
+        // Qualified where a bare name is ordinary tool vocabulary: the
+        // toolset's own processes have a `request_cancel`.
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            for word in [
+                "runner::request_cancel",
+                "CANCEL_MARKER",
+                "invalidate_run",
+                "eval::runner::run_dir",
+                "run_finished",
+                "held_runs",
+                "referenced_run_ids",
+            ] {
+                assert!(
+                    !source.contains(word),
+                    "{} mentions {word}; the eval operator verbs are not an agent's",
+                    path.display()
+                );
+            }
+        }
+    }
 }

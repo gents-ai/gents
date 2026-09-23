@@ -10,6 +10,7 @@ pub(crate) mod codex_login;
 pub(crate) mod codex_shim;
 pub(crate) mod config;
 pub(crate) mod diagnose;
+pub(crate) mod eval;
 pub(crate) mod fleet;
 pub(crate) mod goal;
 pub(crate) mod graph;
