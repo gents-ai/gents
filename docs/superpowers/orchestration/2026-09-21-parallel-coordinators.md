@@ -127,3 +127,13 @@ Filled in by the orchestrator at spin-up.
   `551a4ce9f`, `02` `918ccf21f`, `03` `254444088`, `10` `d6fbc8b61`, `11` `a9401c9d2`, `12` `eca2d79a5`.
   In-progress branches (`eval/40`, `41`, `optimization/19..22`) still sit on the old commits and are
   rebased onto the rewritten bases at the end of their plans; new commits carry no trailer.
+- `m3` complete 2026-09-22: Tasks 1–12 done, Tasks 13–14 (live calibration + fix pass) DEFERRED
+  pending a live provider (handoff brief `deferred-task-13-14-dispatch.md` in its ledger directory;
+  workspace retained). Branches rebased onto the rewritten `eval/13` @ `38c95e8de` and trailer-stripped
+  (trees identical): `eval/40-capture` `7754e429a`, `eval/41-checks` `4d7e54d6f`,
+  `eval/42-definition` `aa57d0f13`. Gates: lib 2588, definition pack tests, conversion reproduces the
+  20 cases byte for byte (30 stages, 188 refs, 8/6/6). Subject digest moved (workspace-root resolver);
+  definition pack digest `sha256:7cefb0af…8785`; `comparability_version` 1 PROVISIONAL until
+  calibration. Residuals for issues: the gents-cli scenario sidecar closure lacks a `../` check
+  (predates this stack; eval sidecars now pass through it); subject README line 36 half stale.
+  Unproven until calibration: `requester_did == $trial` end to end.
