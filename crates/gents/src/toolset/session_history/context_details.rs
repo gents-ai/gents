@@ -24,8 +24,9 @@ pub async fn load_session_context_details(
     let requester = requester
         .map(|did| format!("\"{}\"", escape_graphql_string(did)))
         .unwrap_or_else(|| "null".into());
-    let response = node
-        .execute(&format!(
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ AgentRequest(filter: {{
         agent_did: {{_eq: "{}"}}, requester_did: {{_eq: {requester}}},
         session_id: {{_eq: "{}"}}, request_id: {{_eq: "{}"}}
@@ -33,9 +34,10 @@ pub async fn load_session_context_details(
             escape_graphql_string(agent),
             escape_graphql_string(session),
             escape_graphql_string(&context.request_id)
-        ))
-        .await;
-    crate::graphql::ensure_no_errors(&response, "context detail ownership")?;
+        ),
+        "context detail ownership",
+    )
+    .await?;
     let owners = response
         .data
         .as_ref()
@@ -47,8 +49,9 @@ pub async fn load_session_context_details(
     let doc = owner["_docID"]
         .as_str()
         .context("context detail owner lacks physical identity")?;
-    let response = node
-        .execute(&format!(
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ RenderedRequest(filter: {{
         request_doc_id: {{_eq: "{}"}}, agent_did: {{_eq: "{}"}},
         session_id: {{_eq: "{}"}}, capture_scope: {{_like: "inference.%"}},
@@ -59,9 +62,10 @@ pub async fn load_session_context_details(
             escape_graphql_string(session),
             context.accounting.turn_index,
             context.accounting.attempt
-        ))
-        .await;
-    crate::graphql::ensure_no_errors(&response, "context detail capture")?;
+        ),
+        "context detail capture",
+    )
+    .await?;
     let captures = response
         .data
         .as_ref()

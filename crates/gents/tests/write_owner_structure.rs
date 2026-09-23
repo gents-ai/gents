@@ -83,10 +83,6 @@ const NODE_EXECUTE_ALLOWLIST: &[(&str, usize)] = &[
     ("crates/gents/src/tool_call_lifecycle/recovery.rs", 9),
     ("crates/gents/src/tool_call_lifecycle/subagent_request.rs", 2),
     ("crates/gents/src/tool_surface/root_admission.rs", 1),
-    ("crates/gents/src/toolset/context_budget.rs", 2),
-    ("crates/gents/src/toolset/memory.rs", 1),
-    ("crates/gents/src/toolset/session_history.rs", 9),
-    ("crates/gents/src/toolset/session_history/context_details.rs", 2),
     ("crates/gents/src/watcher/query.rs", 3),
 ];
 
