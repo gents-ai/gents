@@ -1,5 +1,6 @@
 import type {
   RenderedToolCallView,
+  ToolDiffLineKind,
   ToolPresentationView,
 } from "@source-inc/gents-desktop-client";
 import { CopyButton } from "@source-inc/gents-desktop-ui";
@@ -7,6 +8,12 @@ import { memo } from "react";
 
 import { CancelCauseBadge, CancelCauseDetails } from "../cancelUx/index.js";
 import { CommandDenialToolItem } from "../commandDenial/index.js";
+
+const DIFF_MARK: Record<ToolDiffLineKind, string> = {
+  added: "+",
+  removed: "-",
+  context: " ",
+};
 
 function statusClass(statusKind: string) {
   switch (statusKind.toLowerCase()) {
@@ -307,10 +314,7 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
                 className="tool-payload-copy"
                 getText={() =>
                   view.diff
-                    .map(
-                      (line) =>
-                        `${line.kind === "add" ? "+" : "-"}${line.text}`,
-                    )
+                    .map((line) => `${DIFF_MARK[line.kind]}${line.text}`)
                     .join("\n")
                 }
               />
@@ -320,9 +324,7 @@ function ToolBody({ tool }: { tool: RenderedToolCallView }) {
                     className={`tool-diff-line is-${line.kind}`}
                     key={`${line.kind}-${index}`}
                   >
-                    <span aria-hidden="true">
-                      {line.kind === "add" ? "+" : "-"}
-                    </span>
+                    <span aria-hidden="true">{DIFF_MARK[line.kind]}</span>
                     <span>{line.text}</span>
                   </span>
                 ))}

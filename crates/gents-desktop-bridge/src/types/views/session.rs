@@ -105,8 +105,16 @@ pub struct CommandDenialView {
 #[derive(Debug, Clone, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDiffLineView {
-    pub kind: String,
+    pub kind: ToolDiffLineKind,
     pub text: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolDiffLineKind {
+    Added,
+    Removed,
+    Context,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]

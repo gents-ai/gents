@@ -152,8 +152,7 @@ fn render_reasoning_summary(reasoning: &Reasoning) -> String {
     for item in &reasoning.content {
         let piece = match item {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
-            ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
-            ReasoningContent::Redacted { .. } => "[redacted reasoning]",
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => continue,
         };
         if !out.is_empty() {
             out.push('\n');
@@ -181,6 +180,34 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
 mod tests {
     use super::*;
     use crate::message::Text;
+
+    #[test]
+    fn opaque_reasoning_is_not_presented() {
+        let message = Message::Assistant {
+            id: None,
+            content: vec![
+                AssistantContent::Reasoning(Reasoning {
+                    id: None,
+                    content: vec![
+                        ReasoningContent::Encrypted("ciphertext".to_string()),
+                        ReasoningContent::Summary("Checked the config".to_string()),
+                        ReasoningContent::Redacted {
+                            data: "opaque".to_string(),
+                        },
+                    ],
+                }),
+                AssistantContent::Reasoning(Reasoning {
+                    id: None,
+                    content: vec![ReasoningContent::Encrypted("ciphertext".to_string())],
+                }),
+            ],
+        };
+
+        assert_eq!(
+            present_message(&message).reasoning_markdown.as_deref(),
+            Some("Checked the config")
+        );
+    }
 
     #[test]
     fn tool_result_messages_present_as_tool_rows() {

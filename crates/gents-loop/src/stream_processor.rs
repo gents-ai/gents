@@ -447,8 +447,7 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
     for part in &reasoning.content {
         let piece = match part {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
-            ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
-            ReasoningContent::Redacted { .. } => "[redacted reasoning]",
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => continue,
         };
 
         if piece.is_empty() {
@@ -461,4 +460,36 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
     }
 
     rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use gents_protocol::message::ReasoningContent;
+
+    use super::{render_reasoning_text, AssistantReasoning};
+
+    #[test]
+    fn opaque_reasoning_is_not_streamed_as_text() {
+        let reasoning = AssistantReasoning {
+            id: None,
+            content: vec![
+                ReasoningContent::Encrypted("ciphertext".to_string()),
+                ReasoningContent::Text {
+                    text: "Planning the edit".to_string(),
+                    signature: None,
+                },
+                ReasoningContent::Redacted {
+                    data: "opaque".to_string(),
+                },
+            ],
+        };
+        assert_eq!(render_reasoning_text(&reasoning), "Planning the edit");
+        assert_eq!(
+            render_reasoning_text(&AssistantReasoning {
+                id: None,
+                content: vec![ReasoningContent::Encrypted("ciphertext".to_string())],
+            }),
+            ""
+        );
+    }
 }
