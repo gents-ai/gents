@@ -2,8 +2,8 @@
 
 Stack: [specification #1585](https://github.com/gents-ai/gents/pull/1585) →
 [Lean #1586](https://github.com/gents-ai/gents/pull/1586) → generated conformance →
-native implementation and consumers. The foundation remains intentionally red;
-do not merge it without the validated implementation stack.
+native implementation and consumers. That stack merged in #1612; follow-through
+binding work is tracked in #1629 and the handoff inventory below.
 
 ## Adapter contract
 
@@ -14,12 +14,14 @@ authorization and bounded renewal. This is pure-helper coverage, not transaction
 timer, recovery or tool-handoff coverage. The full generated snapshot is decoded
 by `runtime_snapshot`; successful decoding alone is not native execution.
 
-The protocol now has a sealed-stream reconstruction primitive and request-only
-client projections. Its unit regressions do not yet bind the generated complete
-message/live-output projection cases. Those adapters, the segment publication
-owner, terminalization/recovery and canonical history consumers remain required
-before integrated validation. Do not restore deleted response/progress helpers
-to bridge those remaining compiler errors.
+The protocol has a sealed-stream reconstruction primitive and request-only
+client projections. Unit regressions alone do not bind the generated complete
+message/live-output projection cases. The embedded-database execution adapter
+exercises publication, terminalization, recovery and tool operations through
+their native owners for its exported native scripts. This does not establish
+coverage of every projection, history consumer or external premise. The handoff
+inventory records the remaining obligations; retired response/progress helpers
+must not be restored to fill them.
 
 Generate inputs and expected observations from the executable Lean owners, not
 from a second Rust state machine. Native adapters receive only the inputs; the
@@ -53,19 +55,28 @@ not just a successful return code.
 
 ## Exported execution scripts
 
-`canonical_execution_gate_cases` carries sixteen native scripts beside its
-summary witnesses. Every expectation is computed by folding the inputs through
+`canonical_execution_gate_cases` carries native scripts, explicitly model-only
+scripts with binding gaps, and summary witnesses. The native runner executes
+every exported `native_execution` script through every step; it does not execute
+`model_execution` scripts. Every script expectation is computed by folding the inputs through
 the modeled gate (`acquire`, `commit`, release through the scheduling owner) and
 projecting the resulting world; none is a literal.
 
-| Family | Scripts |
+| Family | Exported scenarios (not all natively bound) |
 | --- | --- |
 | Tool seam | pending remote recovery cancels before dispatch; running recovery records handoff; completion rejected while a foreground tool runs; close, deliver, then complete |
 | Lease ordering | renewal wins before recovery; output does not renew; stale writer loses after recovery; dispatched tool wait renews explicitly |
-| Publication and tools | a short Complete closure cannot truncate committed flushes; a background tool closes after its parent is terminal; spawned admission replays inertly and rejects a conflicting child |
+| Publication and tools | a short Complete closure cannot truncate committed flushes; a background tool closes after its parent is terminal; spawned admission replays inertly; conflicting child-document admission is model-only because the native owner derives child identity rather than accepting it |
 | Integrity | a distinct replicated twin, then revocation with a pending tool and with a running tool |
 | Compaction join | cursor eligibility; a late foreground result rejected after a background receipt |
 | Scheduling | a suspended same-task holder publishes nothing |
+
+Compaction cursor scripts remain model-only. The adapter reads the cursor through
+the native prompt-compaction owner, but observing no cursor in uncompacted
+fixtures is not evidence of cursor-transition conformance. Likewise, a symbolic-ID
+mapping failure is an adapter error, not a native admission rejection. The
+execution map records the remaining binding obligations, including conflicting
+children claiming the same parent tool after recovery.
 
 A script step is either a gate commit or `deliver_replicated_segment`. The second
 models a remote merge: it bypasses the local mutation gate, so a native fixture
@@ -104,6 +115,11 @@ inline metadata, URLs, escaping, request structure and tool schemas. The adapter
 observes payload lengths at the native reconstruction boundary; it must not bind
 this assertion to the output or input size of `provider_input::estimate_request`.
 Missing dependencies yield no measurement, not a smaller fallback.
+`generated_payload_presentation_cases_use_native_reconstruction` runs all four
+generated cases through native canonical message reconstruction and compares the
+presented payload-field bytes (or absent measurement) with Lean expectations.
+The stored-byte values remain model expectations; this binding does not exercise
+provider serialization, its estimator, or a compaction threshold decision.
 
 The existing `provider_input` owner projects complete native messages into the
 provider-specific body and estimates its serialized JSON. Keep that owner:

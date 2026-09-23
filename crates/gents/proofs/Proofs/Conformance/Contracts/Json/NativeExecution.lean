@@ -430,11 +430,16 @@ def publicationCases : List Case :=
       (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
         .terminalizeCompleted, .closeForeground]
       "The split close after background receipt has no direct native transaction; bind the bridge-specific receipt and terminal callback scenario separately."
-  , mkCaseFor "spawned_admission_replays_and_rejects_conflicting_child" (world 5) 601
+  , mkCaseFor "spawned_admission_replays_inertly" (world 5) 601
+      [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
+        .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
+        .admitSpawned spawnedAdmission]
+  , { mkCaseFor "spawned_admission_conflicting_child_document_rejected" (world 5) 601
       [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
         .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
         .admitSpawned spawnedAdmission,
-        .admitSpawned { spawnedAdmission with document := 602 }] ]
+        .admitSpawned { spawnedAdmission with document := 602 }] with
+      nativeGap := some "The native spawned-child owner derives the child document from the parent and has no candidate child-document argument; it cannot execute the modeled conflicting-document admission." } ]
 
 example : (run (routedWorld 5) 600 [.realSpawnAccept, .realSpawnAccept]).map
     (List.map (·.accepted)) = some [true, true] := by

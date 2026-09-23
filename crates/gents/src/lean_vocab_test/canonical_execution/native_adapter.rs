@@ -9,7 +9,10 @@ use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadPresentation, PayloadRef,
     PresentedPayload, SourceClose, TranscriptMessage,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
+
+use crate::identity::AgentIdentity;
 
 use crate::lean_vocab_test::{
     CanonicalExecutionAdapter, ExecutionFuture, LeanCanonicalExecutionObservation,
@@ -101,7 +104,7 @@ impl NativeCanonicalExecution {
         );
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
@@ -125,7 +128,7 @@ impl NativeCanonicalExecution {
             return self.observe(false).await;
         }
         let response = self.node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} terminal_output }} }}"#,
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state terminal_output }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
@@ -223,7 +226,7 @@ impl NativeCanonicalExecution {
             &physical,
             &self.principal,
             &self.session_id,
-            None,
+            Some(&self.principal),
         )
         .await?
         .context("modeled tool disappeared before atomic completion")?;
@@ -313,13 +316,13 @@ impl NativeCanonicalExecution {
                 &self.node,
                 &self.request_doc_id,
                 &self.principal,
-                None,
+                Some(&self.principal),
             )
             .await?;
         }
         let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
         let response = self.node.execute(&format!(
-            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
             crate::watcher::AGENT_REQUEST_FIELDS,
         )).await;
         anyhow::ensure!(
@@ -1000,6 +1003,18 @@ impl NativeCanonicalExecution {
             .map_or(0, |value| value + 1);
         self.tool_state = tool_state;
         self.physical_tool_request = physical_tool_request;
+        let compaction = crate::session::load_prompt_compaction_state(
+            &self.node,
+            &self.session_id,
+            &self.principal,
+            Some(&self.principal),
+            None,
+        )
+        .await?;
+        let compaction_cursor = compaction
+            .compacted_through_sequence
+            .map(|sequence| modeled_sequence(u64::from(sequence)))
+            .transpose()?;
         Ok(LeanCanonicalExecutionObservation {
             accepted,
             generation: active_lease.then_some(persisted_generation).flatten(),
@@ -1016,7 +1031,7 @@ impl NativeCanonicalExecution {
             accepted_sequence,
             physical_tool_request: self.physical_tool_request,
             lease_deadline: active_lease.then_some(lease_deadline).flatten(),
-            compaction_cursor: None,
+            compaction_cursor,
             segments: self.segments.clone(),
             messages: self.messages.clone(),
         })
@@ -1044,8 +1059,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 seed.next_sequence == 0,
                 "nonzero sequence without seeded durable facts is not implemented"
             );
-            let node = Arc::new(EmbeddedNode::builder().build().await?);
-            crate::ensure_runtime_schemas(&node).await?;
+            anyhow::ensure!(
+                seed.lease.request == RequestLifecycleState::Processing
+                    && seed.lease.lease.status
+                        == crate::lean_vocab_test::LeanRequestExecutionLeaseStatus::Active,
+                "native fixture only supports an active processing request"
+            );
             let generation = seed
                 .lease
                 .lease
@@ -1056,31 +1075,155 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 .lease
                 .duration
                 .context("native fixture requires a lease duration")?;
+            anyhow::ensure!(
+                duration > 0
+                    && seed.lease.now.checked_add(duration) == Some(seed.lease.effective_expiry)
+                    && seed.lease.used_generations == [generation]
+                    && seed.lease.lease.explicit_deadline == Some(seed.lease.effective_expiry)
+                    && seed.lease.lease.outcome.is_none()
+                    && !seed.lease.continuation_required
+                    && !seed.lease.token_charge_required
+                    && seed.lease.continuation_count == 0
+                    && seed.lease.token_charge_count == 0,
+                "native fixture does not support this seeded lease history"
+            );
             let expiry = fixture_time(seed.lease.effective_expiry)?;
             let now = fixture_time(seed.lease.now)?;
             let request_id = format!("lean-request-{}", seed.request_id);
             let session_id = format!("lean-session-{}", seed.session_id);
-            let principal = format!("did:test:lean:principal-{}", seed.principal);
-            crate::session::create_session_with_behavior_id(
-                &node,
-                &session_id,
-                "general",
-                &principal,
-                "general",
+            let key_dir = tempfile::tempdir().context("native fixture identity directory")?;
+            let identity =
+                crate::KeyIdentity::load_or_create(key_dir.path().join("agent.key"), None)?;
+            let principal = identity.did().to_owned();
+            let node = Arc::new(EmbeddedNode::builder().build().await?);
+            crate::ensure_runtime_schemas(&node).await?;
+            crate::test_support::install_test_behavior(&node, &principal, "general").await;
+            let create = crate::lifecycle::build_signed_request(
+                crate::lifecycle::RequestSpec::new(
+                    crate::lifecycle::RequestIdentity {
+                        requester_did: None,
+                        request_id: request_id.clone(),
+                        agent_did: principal.clone(),
+                        behavior_id: "general".to_owned(),
+                        session_id: session_id.clone(),
+                        content: "lean native execution".to_owned(),
+                        execution_origin: crate::lifecycle::ExecutionOrigin::Interactive,
+                        created_at: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    },
+                    gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(
+                        &principal,
+                    ),
+                ),
+                crate::lifecycle::RequestSigner::Identity(&identity),
             )
             .await?;
-            let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", agent_did: "{}", behavior_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "lean native execution", lifecycle_state: "{}", backend_id: "", execution_origin: "interactive", execution_generation: "{}", execution_lease_expires_at: "{}", execution_lease_secs: {}, created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#,
-                crate::graphql::escape_graphql_string(&request_id), crate::graphql::escape_graphql_string(&principal), crate::graphql::escape_graphql_string(&session_id), crate::graphql::escape_graphql_string(&request_id), seed.lease.request.as_str(), symbolic_generation(generation), expiry.to_rfc3339(), duration, now.to_rfc3339())).await;
+            let response = node
+                .execute(&create.graphql_mutation().map_err(anyhow::Error::msg)?)
+                .await;
             anyhow::ensure!(
                 !response.has_errors(),
                 "initialize native request: {:?}",
                 response.errors
             );
-            let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#, crate::graphql::escape_graphql_string(&request_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
             let request_doc_id =
-                crate::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
-                    .and_then(|row| row.doc_id)
-                    .context("native request omitted physical identity")?;
+                crate::graphql::single_mutation_document(&response, "create_AgentRequest")?
+                    .and_then(|row| row.get("_docID"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|id| !id.trim().is_empty())
+                    .context("native request create omitted its physical identity")?
+                    .to_owned();
+            let lookup = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
+            anyhow::ensure!(
+                !lookup.has_errors(),
+                "read native pending request: {:?}",
+                lookup.errors
+            );
+            let row = crate::graphql::first_row::<AgentRequestRow>(&lookup, "AgentRequest")?
+                .context("native signed request disappeared")?;
+            anyhow::ensure!(
+                row.lifecycle_state == Some(RequestLifecycleState::Pending),
+                "native signed request was not pending"
+            );
+            let queued: crate::watcher::AgentRequest = row.try_into()?;
+            let verified = crate::request_admission::verify_fresh_local_self_request(
+                &node, &identity, &queued, "general",
+            )
+            .await
+            .map_err(anyhow::Error::from)?;
+            let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+                node.clone(),
+                "general",
+                &principal,
+                verified,
+                duration,
+            );
+            lifecycle.set_execution_lease_duration(std::time::Duration::from_secs(duration));
+            let claimed_at = now;
+            let claim_generation = symbolic_generation(generation);
+            let durable_claim = lifecycle
+                .claim_pending_durable_with_inputs(|| now, || (claimed_at, claim_generation))
+                .await?;
+            anyhow::ensure!(
+                durable_claim.was_claimed(),
+                "native signed request was not claimable"
+            );
+            // The durable claim owner performed its exact CAS, mailbox claim,
+            // and session projection. Do not install a process-local renewal
+            // task or execution lease on this fixture-only lifecycle wrapper.
+            drop(lifecycle);
+            crate::lifecycle::RequestLifecycle::begin_owned_execution_durable_with_clock(
+                &node,
+                &request_doc_id,
+                &symbolic_generation(generation),
+                || now,
+            )
+            .await?;
+            let claimed = node.execute(&format!(r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#, crate::graphql::escape_graphql_string(&request_doc_id), crate::watcher::AGENT_REQUEST_FIELDS)).await;
+            anyhow::ensure!(
+                !claimed.has_errors(),
+                "read native owned request: {:?}",
+                claimed.errors
+            );
+            let claimed = crate::graphql::first_row::<AgentRequestRow>(&claimed, "AgentRequest")?
+                .context("native owned request disappeared")?;
+            anyhow::ensure!(
+                claimed.lifecycle_state == Some(RequestLifecycleState::Processing)
+                    && claimed.execution_generation.as_deref()
+                        == Some(symbolic_generation(generation).as_str())
+                    && claimed.execution_lease_expires_at.as_deref()
+                        == Some(expiry.to_rfc3339().as_str()),
+                "native claim/begin did not preserve modeled execution authority"
+            );
+            let scoped_session = node.execute(&format!(
+                r#"{{ AgentSession(filter: {{ session_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}, requester_did: {{ _eq: "{}" }} }}, limit: 2) {{ session_id agent_did requester_did behavior_id created_at observation }} }}"#,
+                crate::graphql::escape_graphql_string(&session_id),
+                crate::graphql::escape_graphql_string(&principal),
+                crate::graphql::escape_graphql_string(&principal),
+            )).await;
+            anyhow::ensure!(
+                !scoped_session.has_errors(),
+                "read claimed requester session: {:?}",
+                scoped_session.errors
+            );
+            let sessions: Vec<gents_protocol::session::AgentSession> =
+                crate::graphql::rows(&scoped_session, "AgentSession")?;
+            let [session] = sessions.as_slice() else {
+                anyhow::bail!("real claim did not create one exact requester-scoped session")
+            };
+            anyhow::ensure!(
+                session.session_id == session_id
+                    && session.agent_did == principal
+                    && session.requester_did.as_deref() == Some(principal.as_str())
+                    && session.behavior_id == "general"
+                    && session
+                        .observation
+                        .as_ref()
+                        .and_then(|observation| observation.latest_request.as_ref())
+                        .is_some_and(|head| head.request_doc_id == request_doc_id
+                            && head.request_id == request_id
+                            && head.lifecycle_state == RequestLifecycleState::Claimed),
+                "real claim did not project the signed request into its exact session"
+            );
             Ok(NativeCanonicalExecution {
                 node,
                 request_doc_id,
@@ -1268,7 +1411,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
                             native.node.clone(),
                             native.principal.clone(),
-                            None,
+                            Some(native.principal.clone()),
                             accepted.clone(),
                             fixture_time(*deadline)?,
                             *await_mode,
@@ -1280,7 +1423,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                             &physical,
                             &native.principal,
                             &native.session_id,
-                            None,
+                            Some(&native.principal),
                         )
                         .await?
                         .context("accepted physical tool disappeared before dispatch")?
@@ -1402,7 +1545,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         &physical_parent,
                         &native.principal,
                         &native.session_id,
-                        None,
+                        Some(&native.principal),
                     )
                     .await?
                     .context("spawned admission parent disappeared")?;
@@ -1425,9 +1568,11 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .context("spawned admission child omitted physical identity")?
                         .to_owned();
                     if let Some(existing_symbolic) = native.tool_ids.get(&physical_child) {
-                        if *existing_symbolic != admission.document {
-                            return native.observe(false).await;
-                        }
+                        anyhow::ensure!(
+                            *existing_symbolic == admission.document,
+                            "native spawned child maps to symbolic document {existing_symbolic}, not requested {}",
+                            admission.document
+                        );
                     } else {
                         native.tool_ids.insert(physical_child, admission.document);
                     }
@@ -1841,7 +1986,7 @@ impl NativeCanonicalExecution {
             &self.node,
             &published.message_doc_id,
             &self.principal,
-            None,
+            Some(&self.principal),
         )
         .await?;
         anyhow::ensure!(
@@ -2032,7 +2177,7 @@ impl NativeCanonicalExecution {
             message_key: message.key.clone(),
             session_id: self.session_id.clone(),
             agent_did: self.principal.clone(),
-            requester_did: None,
+            requester_did: Some(self.principal.clone()),
             request_doc_id: Some(self.request_doc_id.clone()),
             publication: match message.header.publication {
                 LeanMessagePublication::RequestExecution { .. } => {
@@ -2136,7 +2281,7 @@ impl NativeCanonicalExecution {
             .collect::<Result<Vec<_>>>()?;
         Ok(gents_protocol::output::OutputSegment {
             agent_did: self.principal.clone(),
-            requester_did: None,
+            requester_did: Some(self.principal.clone()),
             session_id: self.session_id.clone(),
             request_doc_id: self.request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ProviderTurn {
@@ -2231,7 +2376,7 @@ impl NativeCanonicalExecution {
             .unwrap_or_default();
         Ok(gents_protocol::output::OutputSegment {
             agent_did: self.principal.clone(),
-            requester_did: None,
+            requester_did: Some(self.principal.clone()),
             session_id: self.session_id.clone(),
             request_doc_id: self.request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ToolCall {
@@ -2302,6 +2447,59 @@ async fn every_generated_native_execution_script_runs_to_completion() {
         "native execution contract gaps:\n{}",
         failures.join("\n")
     );
+}
+
+#[tokio::test]
+async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejection() {
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::ModelExecution { name, .. }
+                    if name == "spawned_admission_conflicting_child_document_rejected")
+        })
+        .expect("Lean exports the conflicting spawned-child document as model-only");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::ModelExecution {
+        seed,
+        query_document,
+        operations,
+        expected_observations,
+        ..
+    } = case
+    else {
+        unreachable!()
+    };
+    assert_eq!(operations.len(), expected_observations.len());
+    assert!(operations.len() > 1);
+    assert!(
+        !expected_observations.last().unwrap().accepted,
+        "Lean must reject the conflicting child document"
+    );
+
+    let mut adapter = NativeCanonicalExecutionAdapter;
+    let mut native = adapter.initialize(seed).await.unwrap();
+    for (operation, expected) in operations[..operations.len() - 1]
+        .iter()
+        .zip(&expected_observations[..expected_observations.len() - 1])
+    {
+        let observed = adapter
+            .apply(&mut native, *query_document, operation)
+            .await
+            .unwrap();
+        assert_eq!(&observed, expected);
+    }
+    let error = adapter
+        .apply(&mut native, *query_document, operations.last().unwrap())
+        .await
+        .expect_err("the native API cannot take a conflicting candidate child document");
+    assert!(
+        error
+            .to_string()
+            .contains("native spawned child maps to symbolic document"),
+        "unexpected adapter error: {error}"
+    );
+    native.node.shutdown().await;
 }
 
 #[tokio::test]
@@ -2437,7 +2635,7 @@ async fn canonical_tool_output_uses_modeled_physical_source_facts() {
             &native.request_doc_id,
             &native.session_id,
             &native.principal,
-            None,
+            Some(&native.principal),
         )
         .await;
         match &case.expected_payload {

@@ -1278,10 +1278,11 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalExecutionGateCases"
       "Composed lease, publication, tool lifecycle, recovery, delivery and gate witnesses require native transactional owners. The application Trace separately proves sequence bounds, claim coherence, full tool coherence and closure uniqueness inductively; finite generated cases do not establish these universal invariants in Rust. Typed adapter fixtures and success summaries are not native consumer coverage.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
       "CanonicalPayloadPresentationCases"
-      "Stored and presented payload lengths are derived by reconstruction, not provider request sizing. Neither payload length bounds the other; missing dependencies yield no measurement. The compaction projection join has a separate fixture group. The real serialized-request/threshold experiment remains native.external-projected-request-threshold for implementation; this group is reconstruction-only, not compaction or native consumer coverage.")
+      "lean_vocab_test::support::canonical_presentation::native_adapter::generated_payload_presentation_cases_use_native_reconstruction"
+      "The four generated cases bind presented payload-field bytes and missing-dependency failure to native canonical reconstruction; stored-byte quantities remain Lean expectations. Provider serialization, estimator output, and compaction threshold remain unbound here; the real serialized-request/threshold experiment is native.external-projected-request-threshold.")
       "canonical-output" [Surface.agentFacing]
   , tagged (followUpCoverage
       "compaction_projection_join_cases"
