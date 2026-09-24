@@ -202,8 +202,9 @@ private def claudeStreamEventJson : PromptAssembly.ClaudeMap.StreamEvent → Str
   | .delta fragment =>
       "{\"kind\":\"toolDelta\",\"fragment\":" ++ jsonString fragment ++ "}"
   | .stop => "{\"kind\":\"toolStop\"}"
-  | .thinkingStart index =>
-      "{\"kind\":\"thinkingStart\",\"index\":" ++ toString index ++ "}"
+  | .thinkingStart index initialText =>
+      "{\"kind\":\"thinkingStart\",\"index\":" ++ toString index ++
+      ",\"value\":" ++ jsonString initialText ++ "}"
   | .thinkingDelta index fragment =>
       "{\"kind\":\"thinkingDelta\",\"index\":" ++ toString index ++
       ",\"fragment\":" ++ jsonString fragment ++ "}"
@@ -269,8 +270,8 @@ private def claudeReplayBlockJson : PromptAssembly.ClaudeMap.ReplayBlock → Str
       ",\"signature\":" ++ jsonString signature ++ "}"
   | .redactedThinking payload =>
       "{\"kind\":\"redactedThinking\",\"payload\":" ++ claudeBytesJson payload ++ "}"
-  | .toolUse callId name arguments =>
-      "{\"kind\":\"toolUse\",\"call_id\":" ++ jsonString callId ++
+  | .toolUse id name arguments =>
+      "{\"kind\":\"toolUse\",\"id\":" ++ jsonString id ++
       ",\"name\":" ++ jsonString name ++
       ",\"arguments\":" ++ claudeBytesJson arguments ++ "}"
 

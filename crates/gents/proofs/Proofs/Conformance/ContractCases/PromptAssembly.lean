@@ -785,7 +785,7 @@ private def streamEventTag : PromptAssembly.ClaudeMap.StreamEvent → String
   | .start id name input => s!"start:{id}:{name}:{input.getD ""}"
   | .delta fragment => "delta:" ++ fragment
   | .stop => "stop"
-  | .thinkingStart index => s!"thinking-start:{index}"
+  | .thinkingStart index initialText => s!"thinking-start:{index}:{initialText}"
   | .thinkingDelta index fragment => s!"thinking-delta:{index}:{fragment}"
   | .signatureDelta index fragment => s!"signature-delta:{index}:{fragment}"
   | .redactedStart index data => s!"redacted-start:{index}:{data}"
@@ -843,28 +843,31 @@ private def claudeThinkingStreamCase (name : String) (surface : List String)
 
 def promptAssemblyClaudeThinkingStreamCases : List PromptAssemblyClaudeThinkingStreamCase :=
   [ claudeThinkingStreamCase "unicode-fragmented-signature" []
-      [.thinkingStart 0, .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
+      [.thinkingStart 0 "", .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
        .signatureDelta 0 "署", .signatureDelta 0 "名", .contentStop 0]
+  , claudeThinkingStreamCase "initial-text-then-delta" []
+      [.thinkingStart 0 "初", .thinkingDelta 0 "続",
+       .signatureDelta 0 "sig", .contentStop 0]
   , claudeThinkingStreamCase "empty-text-signed" []
-      [.thinkingStart 0, .signatureDelta 0 "signature", .contentStop 0]
+      [.thinkingStart 0 "", .signatureDelta 0 "signature", .contentStop 0]
   , claudeThinkingStreamCase "redacted-before-tool" ["echo"]
       [.redactedStart 0 "opaque", .contentStop 0,
        .start 1 "echo" none, .delta "{}", .stop]
   , claudeThinkingStreamCase "missing-signature" []
-      [.thinkingStart 0, .thinkingDelta 0 "thinking", .contentStop 0]
+      [.thinkingStart 0 "", .thinkingDelta 0 "thinking", .contentStop 0]
   , claudeThinkingStreamCase "wrong-index" []
-      [.thinkingStart 0, .signatureDelta 1 "sig"]
+      [.thinkingStart 0 "", .signatureDelta 1 "sig"]
   , claudeThinkingStreamCase "reused-block-index" []
-      [.thinkingStart 0, .signatureDelta 0 "sig", .contentStop 0,
+      [.thinkingStart 0 "", .signatureDelta 0 "sig", .contentStop 0,
        .redactedStart 0 "opaque"]
   , claudeThinkingStreamCase "interleaved-text" []
-      [.thinkingStart 0, .text "not-this-block"]
+      [.thinkingStart 0 "", .text "not-this-block"]
   , claudeThinkingStreamCase "text-during-tool" ["echo"]
       [.start 1 "echo" none, .text "not-this-block"]
   , claudeThinkingStreamCase "thinking-after-signature" []
-      [.thinkingStart 0, .signatureDelta 0 "sig", .thinkingDelta 0 "late"]
+      [.thinkingStart 0 "", .signatureDelta 0 "sig", .thinkingDelta 0 "late"]
   , claudeThinkingStreamCase "unterminated-thinking" []
-      [.thinkingStart 0, .signatureDelta 0 "sig"]
+      [.thinkingStart 0 "", .signatureDelta 0 "sig"]
   ]
 
 structure PromptAssemblyClaudeReplayCase where
@@ -888,9 +891,16 @@ def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
   [ claudeReplayCase "ordered-signed-redacted-tool"
       [.reasoning none [.text (utf8Bytes "考慮") (some "署名"),
                         .redacted (utf8Bytes "opaque")],
-       .toolCall 1 "tool" (some "call-1") "echo" (utf8Bytes "{}") none none]
+       .toolCall 1 "call-1" none "echo" (utf8Bytes "{}") none none]
   , claudeReplayCase "empty-text-with-signature"
       [.reasoning none [.text [] (some "signature")]]
+  , claudeReplayCase "empty-ordinary-text-omitted"
+      [.text []]
+  , claudeReplayCase "assistant-image-rejected"
+      [.media { kind := .image, data := .unknown }]
+  , claudeReplayCase "provider-tool-id-over-call-id"
+      [.toolCall 1 "provider-tool-id" (some "internal-call-id") "echo"
+        (utf8Bytes "{}") none none]
   , claudeReplayCase "two-signed-parts-in-order"
       [.reasoning none [.text (utf8Bytes "first") (some "sig-1"),
                         .text (utf8Bytes "second") (some "sig-2")]]
