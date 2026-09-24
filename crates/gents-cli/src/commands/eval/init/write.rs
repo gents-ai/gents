@@ -124,6 +124,62 @@ pub(crate) fn commit(staged: Staged, out: &Path, force: bool) -> Result<Written>
     })
 }
 
+/// Refuses an `--out` that is the subject's directory, lies inside it, or
+/// contains it: `--force` replaces `--out` wholesale, and the pack goes into
+/// it, so either way the subject would be overwritten. Both paths are
+/// compared canonically; a `--out` that does not exist yet is resolved
+/// through its nearest existing ancestor.
+pub(crate) fn refuse_subject_overlap(out: &Path, subject_dir: &Path) -> Result<()> {
+    let subject = subject_dir
+        .canonicalize()
+        .with_context(|| format!("resolving the subject directory {}", subject_dir.display()))?;
+    let out_resolved = resolve_through_existing_ancestor(out)
+        .with_context(|| format!("resolving --out {}", out.display()))?;
+    anyhow::ensure!(
+        !out_resolved.starts_with(&subject) && !subject.starts_with(&out_resolved),
+        "--out {} overlaps the subject pack at {}; write the eval pack somewhere outside the subject",
+        out.display(),
+        subject.display()
+    );
+    Ok(())
+}
+
+/// `path` made absolute and canonical as far as it exists; the missing tail
+/// is appended with `.` dropped and `..` popped.
+fn resolve_through_existing_ancestor(path: &Path) -> std::io::Result<PathBuf> {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let mut existing = absolute.as_path();
+    let mut missing = Vec::new();
+    loop {
+        if existing.symlink_metadata().is_ok() {
+            break;
+        }
+        match (existing.parent(), existing.file_name()) {
+            (Some(parent), Some(name)) => {
+                missing.push(name.to_owned());
+                existing = parent;
+            }
+            // `..` or the root: nothing left to strip.
+            _ => break,
+        }
+    }
+    let mut resolved = existing.canonicalize()?;
+    for name in missing.into_iter().rev() {
+        match name.to_str() {
+            Some(".") => {}
+            Some("..") => {
+                resolved.pop();
+            }
+            _ => resolved.push(name),
+        }
+    }
+    Ok(resolved)
+}
+
 /// [`stage`] then [`commit`], with the stage's messages as one error.
 #[cfg(test)]
 pub(crate) async fn write_pack(
@@ -579,6 +635,31 @@ mod tests {
             .unwrap();
         assert!(!out.join("stale.txt").exists());
         assert!(out.join("manifest.json").exists());
+    }
+
+    #[test]
+    fn an_out_that_overlaps_the_subject_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let subject = root.path().join("packs/subject");
+        std::fs::create_dir_all(subject.join("agent_behaviors")).unwrap();
+        let refused = |out: &Path| {
+            let error = refuse_subject_overlap(out, &subject)
+                .expect_err("an overlapping --out is refused")
+                .to_string();
+            assert!(error.contains("subject"), "{error}");
+        };
+        // The subject itself, through a detour the canonical path removes.
+        refused(&subject);
+        refused(&root.path().join("packs/../packs/subject"));
+        // Inside it, existing or not.
+        refused(&subject.join("agent_behaviors"));
+        refused(&subject.join("evals/new"));
+        // Containing it.
+        refused(&root.path().join("packs"));
+        refused(root.path());
+        // Beside it is fine, existing or not.
+        refuse_subject_overlap(&root.path().join("packs/subject-eval"), &subject).unwrap();
+        refuse_subject_overlap(&root.path().join("evals/subject"), &subject).unwrap();
     }
 
     #[tokio::test]

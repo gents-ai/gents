@@ -3662,6 +3662,18 @@ pub(crate) fn parse_assignment(raw: &str) -> Result<(String, String), String> {
     }
 }
 
+/// `gents eval run --purpose`: anything but `pilot`, which leaves a run out
+/// of exposure and so belongs to `gents eval init --pilot` alone.
+pub(crate) fn parse_run_purpose(raw: &str) -> Result<String, String> {
+    let purpose = raw.trim();
+    if purpose == gents::eval::scoring::PILOT_PURPOSE {
+        return Err(format!(
+            "{purpose:?} is recorded only by `gents eval init --pilot`; a pilot run is left out of exposure"
+        ));
+    }
+    Ok(raw.to_owned())
+}
+
 pub(crate) fn parse_split(raw: &str) -> Result<gents::document_config::EvalSplit, String> {
     serde_json::from_value(serde_json::Value::String(raw.trim().to_owned()))
         .map_err(|_| format!("unknown split {raw:?}; expected train, validation or held_out"))
@@ -3689,7 +3701,9 @@ pub(crate) struct EvalRunArgs {
     pub(crate) seed_base: i64,
     #[arg(long, default_value_t = 1)]
     pub(crate) concurrency: u32,
-    #[arg(long, default_value = "eval")]
+    /// Why the run exists: `eval` by default, or `optimization:<job_id>`.
+    /// `pilot` is refused; only `gents eval init --pilot` records a pilot.
+    #[arg(long, default_value = "eval", value_parser = parse_run_purpose)]
     pub(crate) purpose: String,
     /// Defaults to `<definition_id>-<unix ms>-<4 random hex>`, fresh every
     /// time; name a run with `--run-id` to reuse it (the idempotent freeze).
@@ -3709,7 +3723,7 @@ pub(crate) struct EvalRunArgs {
 }
 
 /// `gents eval init`'s exit statuses.
-const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it, and an --out that is, lies inside, or contains the subject's directory always refuses. --validation-min (default 6) is the floor the author drafts the validation split against; lower it when the operator wants fewer validation cases. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, an --out overlapping the subject, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
 pub(crate) struct EvalInitArgs {

@@ -411,7 +411,14 @@ async fn revise(
         run_ids: run_ids.to_vec(),
         revised: true,
     };
-    match checked(parsed, init, &drafted.summary, Some(&note)).await {
+    // The revision keeps the first draft's id: the home, `--out` and the
+    // pilot's run ids already carry it.
+    let definition_id = drafted
+        .assembled
+        .as_ref()
+        .map(|assembled| assembled.definition.definition_id.as_str())
+        .or(init.definition_id.as_deref());
+    match checked(parsed, init, definition_id, &drafted.summary, Some(&note)).await {
         Ok((assembled, staged)) => {
             let written = drafted
                 .written
@@ -498,6 +505,7 @@ mod tests {
             subject: fixture.pack_arg(),
             subject_dir: fixture.pack.clone(),
             profile: "local".into(),
+            scope: EvalScopeArgs::default(),
         }
     }
 
@@ -656,7 +664,10 @@ mod tests {
         let executor = failing_val_a();
         let mut revised = cases();
         revised[1]["case_id"] = json!("val-renamed");
-        let mut turn = ScriptedTurn::new([block(&revised)]);
+        // The revision renames the definition; the pack keeps the first
+        // draft's id, which the home and the pilot's runs already carry.
+        let mut turn =
+            ScriptedTurn::new([block(&revised).replace(DEFINITION, "renamed-by-author")]);
         let piloted = pilot(
             &fixture.ctx,
             &deps(&executor, &registry, CancellationToken::new()),
@@ -671,6 +682,9 @@ mod tests {
         assert!(piloted.revised);
         assert!(init.out.join("cases/val_renamed.json").is_file());
         assert!(!init.out.join("cases/val_a.json").exists());
+        let config = std::fs::read_to_string(init.out.join("pack_config.json")).unwrap();
+        assert!(config.contains(&format!("\"{DEFINITION}\"")), "{config}");
+        assert!(!config.contains("renamed-by-author"), "{config}");
         let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
         assert!(readme.contains(&piloted.run_ids[0]), "{readme}");
         assert!(readme.contains("revised after the pilot"), "{readme}");

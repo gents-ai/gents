@@ -396,6 +396,50 @@ mod tests {
         assert!(Probe::try_parse_from(["probe", "init", "./subject"]).is_err());
     }
 
+    #[test]
+    fn init_help_names_the_validation_floor_flag() {
+        use clap::CommandFactory;
+        let mut cli = crate::cli::Cli::command();
+        let help = cli
+            .find_subcommand_mut("eval")
+            .and_then(|eval| eval.find_subcommand_mut("init"))
+            .expect("eval init")
+            .render_long_help()
+            .to_string();
+        let after = &help[help.find("Needs a terminal").expect("the after-help")..];
+        for said in ["--validation-min", "default 6", "fewer validation cases"] {
+            assert!(after.contains(said), "{said}: {after}");
+        }
+    }
+
+    /// Only `gents eval init --pilot` records a pilot: its runs are left out
+    /// of exposure, so `run` may not claim the purpose.
+    #[test]
+    fn run_refuses_the_pilot_purpose() {
+        let error =
+            Probe::try_parse_from(["probe", "run", "d", "--cell", "a=p", "--purpose", "pilot"])
+                .err()
+                .expect("pilot is refused")
+                .to_string();
+        assert!(error.contains("gents eval init --pilot"), "{error}");
+        let probe = Probe::try_parse_from(["probe", "run", "d", "--cell", "a=p"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::Run(args) = &probe.command else {
+            panic!("not run");
+        };
+        assert_eq!(args.purpose, "eval");
+        assert!(Probe::try_parse_from([
+            "probe",
+            "run",
+            "d",
+            "--cell",
+            "a=p",
+            "--purpose",
+            "optimization:job-9",
+        ])
+        .is_ok());
+    }
+
     /// `checks` reads no home, so it takes no scope flags.
     #[test]
     fn checks_takes_no_scope() {

@@ -53,6 +53,9 @@ pub(crate) struct InitContext<'a> {
     pub(crate) subject_dir: PathBuf,
     /// The inference profile the author and the pilot run on.
     pub(crate) profile: String,
+    /// The operator's `--home` and `--graphql`, carried into every printed
+    /// command.
+    pub(crate) scope: crate::cli::EvalScopeArgs,
 }
 
 /// How an interview ended. The session is the turn's: an interview that
@@ -107,7 +110,7 @@ pub(crate) async fn interview(
         }
         rounds += 1;
         let summary = said.join("\n");
-        match checked(parsed, ctx, &summary, None).await {
+        match checked(parsed, ctx, ctx.definition_id.as_deref(), &summary, None).await {
             Ok((assembled, staged)) => {
                 let written = commit(staged, &ctx.out, ctx.force)?;
                 print_written(ctx, &assembled, &written, out)?;
@@ -149,12 +152,14 @@ fn next_line(lines: &mut dyn Iterator<Item = String>) -> Option<String> {
 }
 
 /// Validation steps 1 to 7 over a reply that carries a draft: parsed,
-/// assembled, held to the contract, catalog and subject, then staged
-/// through the loader round trip, its README recording `pilot`. Every
-/// failure is messages for the author.
+/// assembled (`definition_id` overriding the draft's), held to the
+/// contract, catalog and subject, then staged through the loader round
+/// trip, its README recording `pilot`. Every failure is messages for the
+/// author.
 async fn checked(
     parsed: Result<Option<draft::Draft>, String>,
     ctx: &InitContext<'_>,
+    definition_id: Option<&str>,
     summary: &str,
     pilot: Option<&write::PilotNote>,
 ) -> Result<(Assembled, Staged), Vec<String>> {
@@ -163,12 +168,7 @@ async fn checked(
         Ok(None) => return Err(vec!["the reply carries no fenced json draft".to_owned()]),
         Err(message) => return Err(vec![message]),
     };
-    let assembled = assemble(
-        &draft,
-        ctx.definition_id.as_deref(),
-        &ctx.owner,
-        &ctx.dossier.slot,
-    )?;
+    let assembled = assemble(&draft, definition_id, &ctx.owner, &ctx.dossier.slot)?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
     let staged = stage(&assembled, summary, &ctx.dossier, pilot).await?;
     Ok((assembled, staged))
@@ -190,15 +190,35 @@ fn print_written(
         written.out.display()
     )?;
     write!(out, "{}", case_table(definition))?;
+    let scope = scope_flags(&ctx.scope);
     writeln!(
         out,
-        "\nnext:\n  gents config apply --root {} --bind-agent-did home\n  gents eval run {} --cell baseline={}:{}",
+        "\nnext:\n  gents config apply --root {} --bind-agent-did home{scope}\n  gents eval run {} --cell baseline={}:{} --profile baseline={}{scope}",
         written.out.display(),
         definition.definition_id,
         ctx.subject,
-        ctx.dossier.behavior_id
+        ctx.dossier.behavior_id,
+        ctx.profile,
     )?;
     Ok(())
+}
+
+/// The operator's `--home` and `--graphql`, as flags for a printed command:
+/// without them, the printed commands would target the default home.
+fn scope_flags(scope: &crate::cli::EvalScopeArgs) -> String {
+    let mut flags = String::new();
+    if let Some(home) = &scope.home {
+        flags.push_str(&format!(" --home {}", home.display()));
+    }
+    if let Some(graphql) = scope
+        .graphql
+        .as_deref()
+        .map(str::trim)
+        .filter(|graphql| !graphql.is_empty())
+    {
+        flags.push_str(&format!(" --graphql {graphql}"));
+    }
+    flags
 }
 
 /// Refused before anything is read or installed: an existing `--out`
@@ -263,6 +283,8 @@ pub(crate) async fn run(
         .directory()
         .ok_or_else(|| anyhow!("subject {} resolved to no directory", args.subject))?
         .to_path_buf();
+    // Before any turn: `--force` would otherwise replace the subject.
+    write::refuse_subject_overlap(&args.out, &subject_dir)?;
     let dossier = dossier::render(&subject_dir, args.behavior.as_deref())?;
     writeln!(
         out,
@@ -289,6 +311,7 @@ pub(crate) async fn run(
         subject: args.subject.clone(),
         subject_dir,
         profile,
+        scope: args.scope.clone(),
     };
     let mut turn = turn::LiveTurn {
         graphql: graphql.clone(),
@@ -437,6 +460,7 @@ mod tests {
             subject: "./canary".into(),
             subject_dir: PathBuf::from("./canary"),
             profile: "local".into(),
+            scope: crate::cli::EvalScopeArgs::default(),
         }
     }
 
@@ -452,7 +476,11 @@ mod tests {
     async fn an_interview_ends_when_the_author_drafts_and_the_pack_is_written() {
         let registry = CheckRegistry::builtin();
         let root = tempfile::tempdir().unwrap();
-        let ctx = context(&registry, root.path().join("out"));
+        let mut ctx = context(&registry, root.path().join("out"));
+        ctx.scope = crate::cli::EvalScopeArgs {
+            home: Some(PathBuf::from("/operator/home")),
+            graphql: Some("http://127.0.0.1:9181/api/v0/graphql".into()),
+        };
         let mut turn = ScriptedTurn::new(["What must it get right?".to_owned(), good_block()]);
         let mut out = Vec::new();
         let outcome = interview(
@@ -485,11 +513,39 @@ mod tests {
             printed.contains("| val-a | validation | 1 | captured_rows_count |"),
             "{printed}"
         );
-        assert!(printed.contains("gents config apply --root"), "{printed}");
+        // Every printed command targets the operator's home, and the run
+        // uses the profile the author drafted on.
+        let scope = " --home /operator/home --graphql http://127.0.0.1:9181/api/v0/graphql";
         assert!(
-            printed.contains("gents eval run canary-quality"),
+            printed.contains(&format!(
+                "gents config apply --root {} --bind-agent-did home{scope}\n",
+                ctx.out.display()
+            )),
             "{printed}"
         );
+        assert!(
+            printed.contains(&format!(
+                "gents eval run canary-quality --cell baseline=./canary:{} --profile baseline=local{scope}\n",
+                ctx.dossier.behavior_id
+            )),
+            "{printed}"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_a_scope_the_printed_commands_name_no_home() {
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(&registry, root.path().join("out"));
+        let mut turn = ScriptedTurn::new([good_block()]);
+        let mut out = Vec::new();
+        interview(&mut turn, &mut lines(&[]), &ctx, &mut out)
+            .await
+            .unwrap();
+        let printed = String::from_utf8(out).unwrap();
+        assert!(!printed.contains("--home"), "{printed}");
+        assert!(!printed.contains("--graphql"), "{printed}");
+        assert!(printed.contains("--profile baseline=local\n"), "{printed}");
     }
 
     #[tokio::test]
@@ -636,9 +692,21 @@ mod tests {
         assert!(!ctx.out.exists());
     }
 
+    /// The live smoke's subject: a pack whose schemas give the author
+    /// collections to capture.
+    const SMOKE_SUBJECT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packs/pipeline");
+    const SMOKE_BEHAVIOR: &str = "exp-stage1";
+
+    #[test]
+    fn the_live_smokes_subject_shows_collections_to_capture() {
+        let dossier =
+            dossier::render(std::path::Path::new(SMOKE_SUBJECT), Some(SMOKE_BEHAVIOR)).unwrap();
+        assert!(!dossier.collections.is_empty(), "{}", dossier.text);
+    }
+
     /// A live smoke test: the author runs as a real request on a served
-    /// home, `gents eval init eval_canary`-style against the canary fixture
-    /// pack the eval runner's own tests share. Needs `GENTS_EVAL_INIT_HOME`
+    /// home, `gents eval init pipeline --behavior exp-stage1`-style, the
+    /// operator answering every question with "draft". Needs `GENTS_EVAL_INIT_HOME`
     /// pointing at a home `gents server` already serves, with a backend the
     /// resolved profile can reach. It asserts only that a pack was written
     /// and validated; everything else about the draft is the author's.
@@ -655,11 +723,8 @@ mod tests {
         let access = gents::ConfigAccess::Graphql(state.graphql.clone());
         let owner = state.agent_did.clone();
 
-        let subject_dir = PathBuf::from(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../gents/tests/fixtures/eval_runner/canary_pack"
-        ));
-        let dossier = dossier::render(&subject_dir, None).unwrap();
+        let subject_dir = PathBuf::from(SMOKE_SUBJECT);
+        let dossier = dossier::render(&subject_dir, Some(SMOKE_BEHAVIOR)).unwrap();
         let registry = CheckRegistry::builtin();
         let profile = gents::default_inference_profile_id_for_behavior(
             &gents::default_behavior_id_for_agent(&owner),
@@ -675,9 +740,13 @@ mod tests {
             owner: owner.clone(),
             out: root.path().join("out"),
             force: false,
-            subject: "eval_canary".into(),
+            subject: "pipeline".into(),
             subject_dir,
             profile,
+            scope: crate::cli::EvalScopeArgs {
+                home: Some(home_dir.clone()),
+                graphql: None,
+            },
         };
         let mut turn = turn::LiveTurn {
             graphql: state.graphql,
@@ -686,7 +755,9 @@ mod tests {
             timeout_secs: 300,
             poll_secs: 1,
         };
-        let mut lines = std::iter::empty::<String>();
+        // The author's first replies are questions; the operator asks for
+        // the draft each time.
+        let mut lines = lines(&["draft", "draft", "draft"]);
         let outcome = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
             .await
             .unwrap();
