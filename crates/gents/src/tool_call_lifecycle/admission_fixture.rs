@@ -682,7 +682,7 @@ mod lifecycle_tests {
     async fn row(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
         let session = crate::graphql::escape_graphql_string(session_id);
         let response = node
-            .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode cancel_policy child_request_id }} }}"#))
+            .execute(&format!(r#"{{ AgentToolCall(filter: {{ session_id: {{ _eq: "{session}" }} }}) {{ _docID request_id request_doc_id lifecycle_state tool_failure_class cancel_cause deadline_at await_mode cancel_policy child_request_id }} }}"#))
             .await;
         assert!(!response.has_errors(), "{:#?}", response.errors);
         let data = response.data.unwrap();
@@ -797,6 +797,64 @@ mod lifecycle_tests {
             row(&node, "session-native-duplicate").await["lifecycle_state"],
             "running"
         );
+        teardown(node, path).await;
+    }
+
+    #[tokio::test]
+    async fn native_dispatch_lost_commit_receipt_leaves_running_row_unacknowledged() {
+        let (admission, owner) = published_admission_with_owner(PublishedAdmissionOptions {
+            name: "dispatch-own-receipt-loss".into(),
+            start_running: false,
+            ..Default::default()
+        })
+        .await
+        .expect("publish pending tool with live request owner");
+        let PublishedAdmission {
+            node,
+            path,
+            mut tool,
+            ..
+        } = admission;
+        let physical_id = tool.doc_id().expect("admitted tool ID").to_owned();
+        let (first, fault_fired) =
+            crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
+                tool.start_running(),
+            )
+            .await;
+        assert!(
+            fault_fired,
+            "the dispatch transaction must lose its own commit receipt"
+        );
+        let error = first.expect_err("current dispatch owner cannot acknowledge committed CAS");
+        assert!(
+            format!("{error:#}")
+                .contains("accepted tool lifecycle binding was altered or is no longer pending"),
+            "expected a failed pending-to-running acknowledgement, got: {error:#}"
+        );
+        assert_eq!(
+            tool.state,
+            crate::tool_call_lifecycle::ToolCallState::Pending
+        );
+
+        let durable = row(&node, "session-dispatch-own-receipt-loss").await;
+        assert_eq!(durable["_docID"], physical_id);
+        assert_eq!(durable["lifecycle_state"], "running");
+        let second = tool
+            .start_running()
+            .await
+            .expect_err("a second dispatch must not win");
+        assert!(
+            format!("{second:#}")
+                .contains("accepted tool lifecycle binding was altered or is no longer pending"),
+            "expected the durable pending CAS to reject replay, got: {second:#}"
+        );
+        assert_eq!(
+            row(&node, "session-dispatch-own-receipt-loss").await,
+            durable
+        );
+        // This records the current acknowledgement gap, not any external tool
+        // effect or a general exactly-once guarantee.
+        drop(owner);
         teardown(node, path).await;
     }
 
