@@ -120,6 +120,11 @@ async fn run_generated_case(name: &str) -> Vec<Observation> {
         .run_modeled(&case)
         .await
         .expect("execute modeled R5 actions");
+    assert_eq!(
+        harness.observed_cancel_ack_events(),
+        case.expected_cancel_ack_events.as_slice(),
+        "native cancel-ack owner events differ from the generated R5 trace"
+    );
     let history = harness.observation_history();
     for snapshot in &history {
         invariants::assert_all_safety(snapshot);

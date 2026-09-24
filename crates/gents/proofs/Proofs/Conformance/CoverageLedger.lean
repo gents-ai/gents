@@ -79,6 +79,9 @@ def consumerWithFollowUp
   , acceptedFollowUp := acceptedFollowUp
   }
 
+def r5ScenarioFollowUp : String :=
+  "Six finite generated traces exercise physical two-principal P2P rows, signed child admission, lease/bridge recovery, cancel acknowledgment and keyed delivery through native owners. Model checkpoints cover only selected post-action states and pending queue coalescing; clock scheduling, ACP outcomes and atomic canonical publication remain external premises, not universal native proofs."
+
 def tagged (entry : CoverageEntry)
     (feature : String) (surfaces : List Surface) : CoverageEntry :=
   { entry with feature := feature, surfaces := surfaces }
@@ -1123,6 +1126,37 @@ def caseCoverage : List CoverageEntry :=
       "R5CrossPrincipalCases"
       "gents_desktop_bridge::snapshot::tests::subagent_lineage::subagent_tree_view_consumes_generated_r5_cross_principal_contract_cases")
       "subagents-cross-principal" [Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases"
+      "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_happy_path_uses_native_owners_and_physical_p2p_docs"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_b_crash_mid_execution_uses_native_recovery"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_a_crash_mid_wait_uses_native_recovery"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_partition_during_cancel_uses_native_mirror"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_multi_completion_coalesces_native_wake"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "r5_scenario_cases" "R5Scenarios"
+      "conformance::r5_scenarios::generated_r5_remote_depth_ceiling_uses_native_admission"
+      r5ScenarioFollowUp)
+      "subagents-cross-principal" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "composed_invariant_witnesses"
       "ComposedInvariantWitnesses"

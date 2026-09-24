@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 use defra_p2p_adapter::P2pDocumentRequest;
 use gents::background_completion::{
-    observe_cancel_cascade_ack, project_background_subagent_completion,
+    observe_cancel_cascade_ack, project_background_subagent_completion, CancelAckOutcome,
+    STUCK_CANCEL_THRESHOLD_SECS,
 };
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn as read_desired_state_record,
@@ -34,7 +35,10 @@ use crate::support::streaming_backend::{
 };
 use crate::support::{first_optional_row, test_p2p_db, TestDb};
 
-use super::scenario::{ModeledAction, ModeledScenario, NodeId};
+use super::scenario::{
+    ModeledAction, ModeledCancelAckEvent, ModeledCancelAckOutcome, ModeledRecoveryCheckpoint,
+    ModeledScenario, NodeId,
+};
 
 pub struct HarnessNode {
     pub id: NodeId,
@@ -55,7 +59,10 @@ pub struct Harness {
     generated_pairing_done: bool,
     generated_child_backend: Option<MockStreamingBackend>,
     generated_child_agent: Option<BootedAgent>,
-    short_child_lease_for_b_crash: bool,
+    child_lease_secs: u64,
+    child_backend_capacity: usize,
+    modeled_generations: HashMap<String, HashMap<u64, String>>,
+    observed_cancel_ack_events: Vec<ModeledCancelAckEvent>,
 }
 
 struct GeneratedBridge {
@@ -167,7 +174,10 @@ impl Harness {
             generated_pairing_done: false,
             generated_child_backend: None,
             generated_child_agent: None,
-            short_child_lease_for_b_crash: false,
+            child_lease_secs: 0,
+            child_backend_capacity: 0,
+            modeled_generations: HashMap::new(),
+            observed_cancel_ack_events: Vec::new(),
         };
         harness.record_observation().await?;
         Ok(harness)
@@ -175,10 +185,26 @@ impl Harness {
 
     pub async fn start_generated(scenario: &ModeledScenario) -> Result<Self> {
         let mut harness = Self::start_two_p2p_nodes().await?;
-        harness.short_child_lease_for_b_crash = scenario
+        anyhow::ensure!(
+            scenario.child_lease_secs > 0,
+            "R5 modeled child lease must be positive"
+        );
+        anyhow::ensure!(
+            scenario.cancel_ack_threshold_secs == u64::try_from(STUCK_CANCEL_THRESHOLD_SECS)?,
+            "R5 modeled cancel-ack threshold differs from native owner"
+        );
+        harness.child_lease_secs = scenario.child_lease_secs;
+        harness.child_backend_capacity = scenario
             .actions
             .iter()
-            .any(|action| matches!(action, ModeledAction::CrashNode { node, .. } if node == "B"));
+            .filter(|action| {
+                matches!(
+                    action,
+                    ModeledAction::PublishAcceptedBackgroundBridge { .. }
+                )
+            })
+            .count()
+            .max(1);
         let plans = scenario
             .actions
             .iter()
@@ -735,9 +761,12 @@ impl Harness {
                 "r5-generated-child-model",
             )
             .await;
-            if self.short_child_lease_for_b_crash {
-                configure_generated_child_lease(&self.b).await?;
-            }
+            configure_generated_child_execution(
+                &self.b,
+                self.child_lease_secs,
+                self.child_backend_capacity,
+            )
+            .await?;
             let agent = Gents::from_default_behavior_documents(
                 self.b.db.node.clone(),
                 self.b.db.node_identity.clone(),
@@ -966,8 +995,13 @@ impl Harness {
             row.execution_lease_expires_at
         );
         anyhow::ensure!(
-            matches!(row.terminal_output, Some(TerminalOutput::Message { .. })) == has_message,
-            "R5 child {child} terminal selection disagrees with model"
+            matches!(
+                (has_message, row.terminal_output.as_ref()),
+                (true, Some(TerminalOutput::Message { .. }))
+                    | (false, Some(TerminalOutput::NoMessage))
+            ),
+            "R5 child {child} terminal selection disagrees with generated has_message={has_message}: {:?}",
+            row.terminal_output
         );
         Ok(())
     }
@@ -1119,47 +1153,282 @@ impl Harness {
         }
     }
 
-    async fn wait_for_generated_expired_child_leases(&self) -> Result<()> {
-        let wait_limit = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        for bridge in self.generated_bridges.values() {
-            let Some(physical_child) = bridge.physical_child_request_id.as_deref() else {
-                continue;
-            };
+    async fn observe_generated_child_begin(&mut self, child: &str, generation: u64) -> Result<()> {
+        let physical_child = self.generated_child_request_id(child)?.to_owned();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let physical_generation = loop {
             let row = crate::support::load_request_row_by_logical_id(
                 self.b.db.node.as_ref(),
-                physical_child,
+                &physical_child,
             )
             .await;
-            if row.lifecycle_state != Some(RequestLifecycleState::Processing) {
-                continue;
-            }
-            let expiry = row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("crashed R5 child lost its persisted execution deadline")?;
-            let expiry = chrono::DateTime::parse_from_rfc3339(expiry)
-                .context("crashed R5 child has malformed execution deadline")?
-                .with_timezone(&chrono::Utc);
-            while chrono::Utc::now() <= expiry {
+            if row.lifecycle_state == Some(RequestLifecycleState::Processing) {
+                let physical_generation = row
+                    .execution_generation
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .context("R5 processing child omitted owned generation")?;
+                let native_lease_secs =
+                    read_generated_child_lease_secs(&self.b, &physical_child).await?;
                 anyhow::ensure!(
-                    tokio::time::Instant::now() < wait_limit,
-                    "R5 child execution deadline did not pass within configured test limit"
+                    native_lease_secs == i64::try_from(self.child_lease_secs)?,
+                    "R5 native claim lease differs from exported child_lease_secs: {native_lease_secs}"
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                anyhow::ensure!(
+                    row.execution_lease_expires_at.is_some(),
+                    "R5 processing child omitted durable expiry"
+                );
+                break physical_generation.to_owned();
             }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "R5 modeled BeginChild did not observe physical processing for {child}: {:?}",
+                row.lifecycle_state
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let prior = self
+            .modeled_generations
+            .entry(child.to_owned())
+            .or_default()
+            .insert(generation, physical_generation.clone());
+        anyhow::ensure!(
+            prior.is_none_or(|prior| prior == physical_generation),
+            "R5 symbolic generation {generation} changed its physical owner for {child}"
+        );
+        Ok(())
+    }
+
+    async fn wait_for_generated_expired_child_lease(&self, child: &str) -> Result<()> {
+        let wait_limit = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let physical_child = self.generated_child_request_id(child)?;
+        let row =
+            crate::support::load_request_row_by_logical_id(self.b.db.node.as_ref(), physical_child)
+                .await;
+        anyhow::ensure!(
+            row.lifecycle_state == Some(RequestLifecycleState::Processing),
+            "R5 AwaitChildExpiry requires a processing child {child}: {:?}",
+            row.lifecycle_state
+        );
+        let expiry = row
+            .execution_lease_expires_at
+            .as_deref()
+            .context("crashed R5 child lost its persisted execution deadline")?;
+        let expiry = chrono::DateTime::parse_from_rfc3339(expiry)
+            .context("crashed R5 child has malformed execution deadline")?
+            .with_timezone(&chrono::Utc);
+        while chrono::Utc::now() <= expiry {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < wait_limit,
+                "R5 child execution deadline did not pass within configured test limit"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Ok(())
+    }
+
+    async fn recover_generated_child_requests(
+        &mut self,
+        expected_generation: u64,
+        fresh_generation: u64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            expected_generation != fresh_generation,
+            "R5 recovery generation symbols must be distinct"
+        );
+        let mut candidates = Vec::new();
+        for (symbolic_child, generations) in &self.modeled_generations {
+            let Some(expected_physical) = generations.get(&expected_generation) else {
+                continue;
+            };
+            let physical_child = self.generated_child_request_id(symbolic_child)?.to_owned();
+            let row = crate::support::load_request_row_by_logical_id(
+                self.b.db.node.as_ref(),
+                &physical_child,
+            )
+            .await;
+            if row.lifecycle_state == Some(RequestLifecycleState::Processing) {
+                anyhow::ensure!(
+                    row.execution_generation.as_deref() == Some(expected_physical.as_str()),
+                    "R5 child {symbolic_child} no longer owns modeled generation {expected_generation}"
+                );
+                candidates.push((
+                    symbolic_child.clone(),
+                    physical_child,
+                    expected_physical.clone(),
+                ));
+            }
+        }
+        anyhow::ensure!(
+            !candidates.is_empty(),
+            "R5 recovery has no processing child bound to modeled generation {expected_generation}"
+        );
+        let report = RequestLifecycle::recover_all(self.b.db.node.as_ref(), self.b.did()).await?;
+        anyhow::ensure!(
+            report.requests_recovered >= candidates.len(),
+            "R5 real request recovery did not terminalize every modeled expired child: {report:?}"
+        );
+        for (symbolic_child, physical_child, old_generation) in candidates {
+            let row = crate::support::load_request_row_by_logical_id(
+                self.b.db.node.as_ref(),
+                &physical_child,
+            )
+            .await;
+            anyhow::ensure!(
+                row.lifecycle_state
+                    .is_some_and(RequestLifecycleState::is_terminal),
+                "R5 recovered child {symbolic_child} is not terminal: {:?}",
+                row.lifecycle_state
+            );
+            let next_generation = row
+                .execution_generation
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .context("R5 recovered child omitted fresh physical generation")?;
+            anyhow::ensure!(
+                next_generation != old_generation,
+                "R5 recovery reused the expired physical generation for {symbolic_child}"
+            );
+            let prior = self
+                .modeled_generations
+                .get_mut(&symbolic_child)
+                .context("R5 child generation binding disappeared")?
+                .insert(fresh_generation, next_generation.to_owned());
+            anyhow::ensure!(
+                prior.is_none_or(|prior| prior == next_generation),
+                "R5 fresh generation symbol changed its physical owner for {symbolic_child}"
+            );
+        }
+        Ok(())
+    }
+
+    fn record_cancel_ack_outcomes(&mut self, outcomes: Vec<CancelAckOutcome>) {
+        self.observed_cancel_ack_events
+            .extend(outcomes.into_iter().map(|outcome| {
+                let (tool, outcome) = match outcome {
+                    CancelAckOutcome::Pending {
+                        parent_tool_call_id,
+                    } => (parent_tool_call_id, ModeledCancelAckOutcome::Pending),
+                    CancelAckOutcome::Stuck {
+                        parent_tool_call_id,
+                        ..
+                    } => (parent_tool_call_id, ModeledCancelAckOutcome::Stuck),
+                    CancelAckOutcome::Acked {
+                        parent_tool_call_id,
+                    } => (parent_tool_call_id, ModeledCancelAckOutcome::Acked),
+                };
+                ModeledCancelAckEvent { tool, outcome }
+            }));
+    }
+
+    pub fn observed_cancel_ack_events(&self) -> &[ModeledCancelAckEvent] {
+        &self.observed_cancel_ack_events
+    }
+
+    fn assert_recovery_checkpoint(&self, checkpoint: &ModeledRecoveryCheckpoint) -> Result<()> {
+        let snapshot = self
+            .history
+            .last()
+            .context("R5 recovery checkpoint omitted observation")?;
+        let (modeled_notifications, modeled_wakes) = self.modeled_completion_keys()?;
+        let expected_notifications = checkpoint
+            .notification_children
+            .iter()
+            .map(|child| {
+                Ok(format!(
+                    "background-completion-notification:{}:subagent",
+                    self.generated_child_request_id(child)?,
+                ))
+            })
+            .collect::<Result<HashSet<_>>>()?;
+        let actual_notifications = snapshot
+            .subagent_notifications
+            .iter()
+            .filter(|key| modeled_notifications.contains(*key))
+            .cloned()
+            .collect::<HashSet<_>>();
+        anyhow::ensure!(
+            actual_notifications == expected_notifications,
+            "R5 recovery action {} notification children disagree: native={actual_notifications:?}, modeled={expected_notifications:?}",
+            checkpoint.after_action
+        );
+        let expected_wakes = checkpoint
+            .wake_sessions
+            .iter()
+            .map(|session| format!("background_completion:{session}"))
+            .collect::<HashSet<_>>();
+        let actual_wakes = snapshot
+            .background_wakeup_keys
+            .iter()
+            .filter(|key| modeled_wakes.contains(*key))
+            .cloned()
+            .collect::<HashSet<_>>();
+        anyhow::ensure!(
+            actual_wakes == expected_wakes,
+            "R5 recovery action {} wake sessions disagree: native={actual_wakes:?}, modeled={expected_wakes:?}",
+            checkpoint.after_action
+        );
+        anyhow::ensure!(
+            checkpoint.bridges.len() == self.generated_bridges.len(),
+            "R5 recovery checkpoint omitted a generated bridge"
+        );
+        for expected in &checkpoint.bridges {
+            let bridge = snapshot
+                .a_bridge_rows
+                .iter()
+                .find(|bridge| bridge.tool_call_id == expected.tool)
+                .with_context(|| format!("R5 recovery lost bridge {}", expected.tool))?;
+            anyhow::ensure!(
+                bridge.lifecycle_state == expected.state
+                    && bridge.child_request_id.as_deref()
+                        == Some(self.generated_child_request_id(&expected.child)?),
+                "R5 recovery action {} bridge {} differs: native={bridge:?}, modeled={expected:?}",
+                checkpoint.after_action,
+                expected.tool
+            );
+        }
+        for expected in &checkpoint.children {
+            let physical_child = self.generated_child_request_id(&expected.child)?;
+            let child = snapshot
+                .b_child_requests
+                .iter()
+                .find(|row| row.request_id == physical_child)
+                .with_context(|| format!("R5 recovery lost child {}", expected.child))?;
+            let observed_terminal = child
+                .lifecycle_state
+                .is_terminal()
+                .then_some(child.lifecycle_state.as_str());
+            anyhow::ensure!(
+                observed_terminal == expected.terminal.as_deref()
+                    && child.interrupt_requested_at.is_some() == expected.interrupt_requested,
+                "R5 recovery action {} child {} differs: native={child:?}, modeled={expected:?}",
+                checkpoint.after_action,
+                expected.child
+            );
         }
         Ok(())
     }
 
     pub async fn run_modeled(&mut self, scenario: &ModeledScenario) -> Result<()> {
-        for action in &scenario.actions {
+        let mut next_checkpoint = 0;
+        for (index, action) in scenario.actions.iter().enumerate() {
             let crashed = match action {
                 ModeledAction::CrashNode { node, .. } => Some(node.clone()),
                 _ => None,
             };
             self.apply_modeled_action(action).await?;
             self.record_observation_after(crashed).await?;
+            if let Some(checkpoint) = scenario.recovery_checkpoints.get(next_checkpoint) {
+                if checkpoint.after_action == index {
+                    self.assert_recovery_checkpoint(checkpoint)?;
+                    next_checkpoint += 1;
+                }
+            }
         }
+        anyhow::ensure!(
+            next_checkpoint == scenario.recovery_checkpoints.len(),
+            "R5 native trace did not consume every generated recovery checkpoint"
+        );
         if let Some(agent) = self.generated_child_agent.take() {
             agent.shutdown().await;
         }
@@ -1200,6 +1469,13 @@ impl Harness {
             ModeledAction::MaterializeChild { child, tool } => {
                 self.materialize_generated_child(child, tool).await?
             }
+            ModeledAction::BeginChild { child, generation } => {
+                self.observe_generated_child_begin(child, *generation)
+                    .await?
+            }
+            ModeledAction::AwaitChildExpiry { child } => {
+                self.wait_for_generated_expired_child_lease(child).await?
+            }
             ModeledAction::ReplicateChild { child, source, to } => {
                 self.replicate_generated_child(child, source, to, true)
                     .await?
@@ -1232,16 +1508,19 @@ impl Harness {
                 self.observe_generated_cancel_mirror(tool).await?
             }
             ModeledAction::ObserveCancelAck => {
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                let outcomes =
+                    observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                self.record_cancel_ack_outcomes(outcomes);
             }
-            ModeledAction::RecoverNode { node } => {
-                if node == "B" && self.generated_child_agent.is_none() {
-                    self.wait_for_generated_expired_child_leases().await?;
-                }
-                let runtime = self.node(node)?;
-                let _ = ToolCallLifecycle::recover_all(&runtime.db.node, runtime.did()).await?;
-                let _ =
-                    RequestLifecycle::recover_all(runtime.db.node.as_ref(), runtime.did()).await?;
+            ModeledAction::RecoverBridges => {
+                let _ = ToolCallLifecycle::recover_all(&self.a.db.node, self.a.did()).await?;
+            }
+            ModeledAction::RecoverChildRequests {
+                expected_generation,
+                fresh_generation,
+            } => {
+                self.recover_generated_child_requests(*expected_generation, *fresh_generation)
+                    .await?;
             }
             ModeledAction::CrashNode {
                 node,
@@ -1259,7 +1538,9 @@ impl Harness {
             }
             ModeledAction::Converge => {
                 self.observe_generated_background_completion().await?;
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                let outcomes =
+                    observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                self.record_cancel_ack_outcomes(outcomes);
             }
         }
         Ok(())
@@ -1444,13 +1725,55 @@ async fn write_generated_scripted_route(
     exec(node, &mutation, "write generated scripted P2P route").await
 }
 
-/// A short, valid runtime lease makes the generated crash/recovery trace
-/// executable against real elapsed time. The production execution and
-/// recovery owners still choose the terminal outcome; this only configures a
-/// behavior-owned limit before any child execution is claimed.
-async fn configure_generated_child_lease(node: &HarnessNode) -> Result<()> {
+async fn read_generated_child_lease_secs(node: &HarnessNode, request_id: &str) -> Result<i64> {
+    #[derive(Deserialize)]
+    struct LeaseRow {
+        execution_lease_secs: Option<i64>,
+    }
+    let response = node.db.node.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ execution_lease_secs }} }}"#,
+        escape_graphql_string(request_id),
+    )).await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "R5 child lease query failed: {:?}",
+        response.errors
+    );
+    let rows: Vec<LeaseRow> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|value| value.get("AgentRequest"))
+            .context("R5 child lease query omitted AgentRequest")?
+            .clone(),
+    )?;
+    let [row] = rows.as_slice() else {
+        bail!("R5 child lease query did not resolve exactly one request");
+    };
+    row.execution_lease_secs
+        .context("R5 processing child omitted execution_lease_secs")
+}
+
+/// Configure the exported lease duration through the behavior-owned execution
+/// document before any child is claimed. The native claim/recovery owners
+/// still choose the physical generation and terminal outcome.
+async fn configure_generated_child_execution(
+    node: &HarnessNode,
+    lease_secs: u64,
+    backend_capacity: usize,
+) -> Result<()> {
     const BEHAVIOR: &str = "r5-generated-child-behavior";
     const EXECUTION: &str = "r5-generated-child-execution";
+    const BACKEND: &str = "r5-generated-child-backend";
+    anyhow::ensure!(lease_secs > 0, "R5 child lease must be positive");
+    anyhow::ensure!(
+        backend_capacity > 0,
+        "R5 child backend capacity must be positive"
+    );
+    let backend_capacity = i64::try_from(backend_capacity)?;
+    let deadline_secs = lease_secs
+        .checked_add(30)
+        .context("R5 child deadline duration overflow")?;
     let agent_did = node.did().to_string();
     let profile_id = format!("{BEHAVIOR}-inference");
     ConfigAccess::transact_local(
@@ -1470,15 +1793,25 @@ async fn configure_generated_child_lease(node: &HarnessNode) -> Result<()> {
                 .await?
                 .context("R5 child inference profile was not configured")?;
                 profile["execution_id"] = EXECUTION.into();
+                let (_, mut backend) = read_desired_state_record(
+                    txn,
+                    Collection::InferenceBackend,
+                    &agent_did,
+                    BACKEND,
+                )
+                .await?
+                .context("R5 child inference backend was not configured")?;
+                backend["max_concurrent"] = backend_capacity.into();
                 let execution = json!({
                     "agent_did": agent_did,
                     "execution_id": EXECUTION,
-                    "stream_liveness_timeout_secs": 2,
-                    "deadline_duration_secs": 30,
+                    "stream_liveness_timeout_secs": lease_secs,
+                    "deadline_duration_secs": deadline_secs,
                 });
                 let plan = DesiredStateApplyPlan::new(
                     [
                         (Collection::InferenceProfile, profile),
+                        (Collection::InferenceBackend, backend),
                         (Collection::InferenceExecution, execution),
                     ]
                     .into_iter()

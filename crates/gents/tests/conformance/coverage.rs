@@ -1215,6 +1215,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R5CrossPrincipalCases".into(),
         ));
     }
+    if !snapshot.r5_scenario_cases.is_empty() {
+        emitted.insert(("r5_scenario_cases".into(), "R5Scenarios".into()));
+    }
     if !lean_composed_invariant_witnesses().is_empty() {
         emitted.insert((
             "composed_invariant_witnesses".to_string(),

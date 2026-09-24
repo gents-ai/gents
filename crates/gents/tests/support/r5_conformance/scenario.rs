@@ -8,14 +8,43 @@ pub type NodeId = String;
 #[serde(deny_unknown_fields)]
 pub struct ModeledScenario {
     pub name: String,
+    pub child_lease_secs: u64,
+    pub cancel_ack_threshold_secs: u64,
     pub actions: Vec<ModeledAction>,
+    pub recovery_checkpoints: Vec<ModeledRecoveryCheckpoint>,
     pub expected_notifications: usize,
     pub expected_wakes: usize,
     pub expected_rejected_invocations: usize,
+    pub expected_cancel_ack_events: Vec<ModeledCancelAckEvent>,
     pub expected_a_bridges: Vec<ModeledBridgeFact>,
     pub expected_b_children: Vec<ModeledChildFact>,
     pub expected_a_generation: u64,
     pub expected_b_generation: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeledRecoveryCheckpoint {
+    pub after_action: usize,
+    pub notification_children: Vec<String>,
+    pub wake_sessions: Vec<String>,
+    pub bridges: Vec<ModeledBridgeFact>,
+    pub children: Vec<ModeledChildFact>,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeledCancelAckEvent {
+    pub tool: String,
+    pub outcome: ModeledCancelAckOutcome,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeledCancelAckOutcome {
+    Pending,
+    Stuck,
+    Acked,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,7 +64,7 @@ pub struct ModeledChildFact {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(tag = "op")]
+#[serde(tag = "op", deny_unknown_fields)]
 pub enum ModeledAction {
     PairPrincipals {
         node: NodeId,
@@ -62,6 +91,13 @@ pub enum ModeledAction {
     MaterializeChild {
         child: String,
         tool: String,
+    },
+    BeginChild {
+        child: String,
+        generation: u64,
+    },
+    AwaitChildExpiry {
+        child: String,
     },
     ReplicateChild {
         child: String,
@@ -106,8 +142,10 @@ pub enum ModeledAction {
         tool: String,
     },
     ObserveCancelAck,
-    RecoverNode {
-        node: NodeId,
+    RecoverBridges,
+    RecoverChildRequests {
+        expected_generation: u64,
+        fresh_generation: u64,
     },
     CrashNode {
         node: NodeId,
