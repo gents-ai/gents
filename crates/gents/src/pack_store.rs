@@ -14,6 +14,10 @@ use anyhow::{ensure, Context, Result};
 
 use crate::pack_archive::{digest_hex, read_pack, Bounds, PackArchive, PackHeader, EXTENSION};
 
+/// The verified header an unpacked pack keeps beside its files; a dotfile,
+/// so it can never be mistaken for a pack asset.
+const UNPACKED_HEADER: &str = ".pack-header.json";
+
 /// A home's pack store.
 #[derive(Debug, Clone)]
 pub struct PackStore {
@@ -50,6 +54,17 @@ impl PackStore {
     /// `expected`, a pack with any other digest is refused and nothing is
     /// stored.
     pub fn import(&self, input: impl Read, expected: Option<&str>) -> Result<StoredPack> {
+        self.import_accepting(input, expected, |_| Ok(()))
+    }
+
+    /// The same, refusing the pack when `accept` does, before anything is
+    /// stored under its digest.
+    pub fn import_accepting(
+        &self,
+        input: impl Read,
+        expected: Option<&str>,
+        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> Result<()>,
+    ) -> Result<StoredPack> {
         if let Some(expected) = expected {
             digest_hex(expected)?;
         }
@@ -69,6 +84,7 @@ impl PackStore {
             tee.copy.flush().context("writing the staged pack")?;
             verified
         };
+        accept(&verified)?;
         let digest = &verified.header.digest;
         if let Some(expected) = expected {
             ensure!(
@@ -97,16 +113,59 @@ impl PackStore {
 
     /// Stores the `.pack` file at `file`.
     pub fn import_file(&self, file: &Path, expected: Option<&str>) -> Result<StoredPack> {
+        self.import_file_accepting(file, expected, |_| Ok(()))
+    }
+
+    /// [`Self::import_accepting`] for a file.
+    pub fn import_file_accepting(
+        &self,
+        file: &Path,
+        expected: Option<&str>,
+        accept: impl FnOnce(&crate::pack_archive::VerifiedPack) -> Result<()>,
+    ) -> Result<StoredPack> {
         let input =
             std::fs::File::open(file).with_context(|| format!("opening {}", file.display()))?;
-        self.import(io::BufReader::new(input), expected)
+        self.import_accepting(io::BufReader::new(input), expected, accept)
             .with_context(|| format!("{} is not a valid pack", file.display()))
     }
 
-    /// Opens the stored pack `digest`, verifying it again on the way in: a
-    /// file the store holds is still refused if its content no longer
-    /// matches its name.
+    /// Opens the stored pack `digest`. The first open unpacks it, verified
+    /// while streaming, into `{home}/packs/unpacked/{hex}/` (staged, then
+    /// renamed into place); every open maps its files from there, so a pack
+    /// of any size costs page cache, not memory. [`Self::verify`] checks the
+    /// stored file again from scratch.
     pub fn open(&self, digest: &str) -> Result<PackArchive> {
+        let hex = digest_hex(digest)?;
+        let unpacked = self.unpacked_root().join(hex);
+        if !unpacked.is_dir() {
+            self.unpack(digest, &unpacked)?;
+        }
+        let header: PackHeader = serde_json::from_slice(
+            &std::fs::read(unpacked.join(UNPACKED_HEADER))
+                .with_context(|| format!("reading {}", unpacked.display()))?,
+        )
+        .context("the unpacked pack's header is not valid")?;
+        ensure!(
+            header.digest == digest,
+            "the unpacked pack at {} holds {}, not {digest}",
+            unpacked.display(),
+            header.digest
+        );
+        let manifest = serde_json::from_slice(
+            &std::fs::read(unpacked.join("manifest.json")).context("reading manifest.json")?,
+        )
+        .context("the unpacked manifest is not valid")?;
+        PackArchive::from_unpacked(&unpacked, header, manifest)
+    }
+
+    fn unpacked_root(&self) -> PathBuf {
+        self.root.parent().and_then(Path::parent).map_or_else(
+            || self.root.join("unpacked"),
+            |packs| packs.join("unpacked"),
+        )
+    }
+
+    fn unpack(&self, digest: &str, target: &Path) -> Result<()> {
         let path = self.path(digest)?;
         let file = std::fs::File::open(&path).with_context(|| {
             format!(
@@ -114,15 +173,57 @@ impl PackStore {
                 self.root.display()
             )
         })?;
-        let archive = PackArchive::from_reader(io::BufReader::new(file), Bounds::default())
-            .with_context(|| format!("the stored pack {} is damaged", path.display()))?;
+        let parent = target.parent().context("unpacked path has no parent")?;
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+        let staging = tempfile::Builder::new()
+            .prefix(".unpacking-")
+            .tempdir_in(parent)
+            .with_context(|| format!("staging an unpacked pack in {}", parent.display()))?;
+        let verified = read_pack(
+            io::BufReader::new(file),
+            Bounds::default(),
+            |entry, content| {
+                let out = staging.path().join(entry);
+                if let Some(dir) = out.parent() {
+                    std::fs::create_dir_all(dir)?;
+                }
+                io::copy(
+                    content,
+                    &mut io::BufWriter::new(std::fs::File::create(&out)?),
+                )?;
+                Ok(())
+            },
+        )
+        .with_context(|| format!("the stored pack {} is damaged", path.display()))?;
         ensure!(
-            archive.digest() == digest,
+            verified.header.digest == digest,
             "the stored pack {} holds {}, not {digest}",
             path.display(),
-            archive.digest()
+            verified.header.digest
         );
-        Ok(archive)
+        std::fs::write(
+            staging.path().join("manifest.json"),
+            &verified.manifest_bytes,
+        )
+        .context("writing the unpacked manifest")?;
+        std::fs::write(
+            staging.path().join(UNPACKED_HEADER),
+            serde_json::to_vec(&verified.header)?,
+        )
+        .context("writing the unpacked header")?;
+        match std::fs::rename(staging.path(), target) {
+            Ok(()) => {
+                // The directory now lives at its final name.
+                let _ = staging.keep();
+                Ok(())
+            }
+            // Another open unpacked the same digest first; its copy is identical.
+            Err(_) if target.is_dir() => Ok(()),
+            Err(error) => {
+                Err(error).with_context(|| format!("unpacking into {}", target.display()))
+            }
+        }
     }
 
     /// Verifies the stored pack `digest` without holding its assets.

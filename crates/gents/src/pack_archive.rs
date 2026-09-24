@@ -34,23 +34,21 @@ pub use format::{
 /// The namespace a pack is published under when its manifest names none.
 pub const DEFAULT_NAMESPACE: &str = "gents";
 
-/// Hard cap on a pack's compressed size. A bundled pack today tops out
-/// under a megabyte (the largest, `grok_tui_port`, carries 139 assets in
-/// under a megabyte); a plugin's compiled `.afb` is usually a WASI command
-/// module of a few hundred kilobytes, and at the top end a Python plugin's
-/// self-contained pyodide bundle runs to a few megabytes, so 50 MiB is
-/// generous headroom, not a tight fit, and is checked before a single byte
-/// is decompressed. It is the registry's upload limit too, so a pack that
-/// builds can always be published.
-pub const MAX_PACK_BYTES: usize = 50 * 1024 * 1024;
+/// Hard cap on a pack's compressed size: 1 GiB, room for packs that carry
+/// models, datasets or interpreters. It is checked while reading, before
+/// more is read, and it is the registry's upload limit too, so a pack that
+/// builds can always be published. Nothing reads a pack whole: builds,
+/// downloads, uploads and store imports stream, and a stored pack's files
+/// are mapped from disk rather than held in memory.
+pub const MAX_PACK_BYTES: usize = 1024 * 1024 * 1024;
 
 /// Hard cap on total decompressed bytes, enforced by counting bytes as they
 /// come out of the decoder rather than trusted from a header: gzip's own
 /// trailer records the uncompressed size mod 2^32, which a crafted stream
 /// can make lie, and a tar entry's declared size is just as easy to forge.
-/// Matches `afterburner_afb`'s own `MAX_DECOMPRESSED_BYTES` for the
-/// identical reason (zip-bomb defense at the same order of magnitude).
-pub const MAX_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+/// Four times the compressed cap: a bound against decompression bombs, not a
+/// size a real pack approaches.
+pub const MAX_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// Hard cap on the number of tar entries. A pack bundles a manifest, docs,
 /// schemas and plugin artifacts, not an operator's whole workspace; the
@@ -60,13 +58,31 @@ pub const MAX_ENTRIES: usize = 4096;
 
 /// A pack read out of a `.pack` and verified.
 ///
-/// Held in memory: every consumer wants random access to declared assets,
-/// and the bounds in [`format::Bounds`] cap what that costs. The store
-/// verifies without holding assets at all.
+/// Its files are either held in memory ([`Self::from_bytes`], for small
+/// packs and tests) or mapped from a verified, unpacked copy on disk
+/// ([`Self::from_unpacked`], which the store uses), so a large pack costs
+/// page cache, not process memory.
 pub struct PackArchive {
     header: PackHeader,
     manifest: PackManifest,
-    assets: BTreeMap<String, Vec<u8>>,
+    assets: BTreeMap<String, AssetBytes>,
+}
+
+/// One asset's bytes: owned, or a read-only map of an immutable file.
+enum AssetBytes {
+    Owned(Vec<u8>),
+    Mapped(memmap2::Mmap),
+    Empty,
+}
+
+impl AssetBytes {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Mapped(map) => map,
+            Self::Empty => &[],
+        }
+    }
 }
 
 impl std::fmt::Debug for PackArchive {
@@ -95,13 +111,47 @@ impl PackArchive {
         let verified = read_pack(input, bounds, |path, content| {
             let mut data = Vec::new();
             content.read_to_end(&mut data)?;
-            assets.insert(path.to_owned(), data);
+            assets.insert(path.to_owned(), AssetBytes::Owned(data));
             Ok(())
         })?;
-        assets.insert("manifest.json".to_owned(), verified.manifest_bytes);
+        assets.insert(
+            "manifest.json".to_owned(),
+            AssetBytes::Owned(verified.manifest_bytes),
+        );
         Ok(Self {
             header: verified.header,
             manifest: verified.manifest,
+            assets,
+        })
+    }
+
+    /// A pack whose files were verified and written under `dir` (see
+    /// `PackStore`), mapping each declared file instead of reading it.
+    pub fn from_unpacked(dir: &Path, header: PackHeader, manifest: PackManifest) -> Result<Self> {
+        let mut assets = BTreeMap::new();
+        for path in crate::pack::declared_paths(&manifest) {
+            ensure!(
+                is_distributable_asset_path(&path),
+                "refusing to read pack asset {path:?}"
+            );
+            let file = std::fs::File::open(dir.join(&path))
+                .with_context(|| format!("the unpacked pack is missing {path}"))?;
+            let bytes = if file.metadata()?.len() == 0 {
+                AssetBytes::Empty
+            } else {
+                // SAFETY: the store writes an unpacked pack once, into a staging
+                // directory renamed into place under its digest, and never
+                // writes to it again, so the mapped file does not change.
+                AssetBytes::Mapped(
+                    unsafe { memmap2::Mmap::map(&file) }
+                        .with_context(|| format!("mapping {}", dir.join(&path).display()))?,
+                )
+            };
+            assets.insert(path, bytes);
+        }
+        Ok(Self {
+            header,
+            manifest,
             assets,
         })
     }
@@ -140,7 +190,7 @@ impl PackArchive {
     pub fn asset(&self, path: &str) -> Result<&[u8]> {
         self.assets
             .get(path)
-            .map(Vec::as_slice)
+            .map(AssetBytes::as_slice)
             .with_context(|| format!("this pack carries no asset {path:?}"))
     }
 
@@ -166,7 +216,7 @@ impl PackArchive {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
-            std::fs::write(&target, bytes)
+            std::fs::write(&target, bytes.as_slice())
                 .with_context(|| format!("writing {}", target.display()))?;
         }
         Ok(())

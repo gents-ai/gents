@@ -142,6 +142,22 @@ impl RegistryClient {
     }
 
     pub async fn download(&self, namespace: &str, name: &str, version: &str) -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        self.download_into(namespace, name, version, &mut bytes)
+            .await?;
+        Ok(bytes)
+    }
+
+    /// Streams a version into `out` a chunk at a time, refusing it past the
+    /// pack bound, and returns the sha256 hex of what was written.
+    pub async fn download_into(
+        &self,
+        namespace: &str,
+        name: &str,
+        version: &str,
+        out: &mut impl std::io::Write,
+    ) -> Result<String> {
+        use sha2::{Digest, Sha256};
         let url = self.api(&format!(
             "/{}/{namespace}/{name}/{version}/download",
             self.kind.path()
@@ -157,31 +173,30 @@ impl RegistryClient {
             status.is_success(),
             "downloading {namespace}/{name}@{version} from the registry failed ({status})"
         );
-        let limit = crate::pack_archive::MAX_PACK_BYTES;
+        let limit = crate::pack_archive::MAX_PACK_BYTES as u64;
         if let Some(advertised) = response.content_length() {
             anyhow::ensure!(
-                advertised <= limit as u64,
+                advertised <= limit,
                 "registry pack {namespace}/{name}@{version} advertises {advertised} bytes, over the {limit} byte compressed bound"
             );
         }
-        let mut bytes = Vec::with_capacity(
-            response
-                .content_length()
-                .unwrap_or_default()
-                .min(limit as u64) as usize,
-        );
+        let mut hasher = Sha256::new();
+        let mut written = 0u64;
         while let Some(chunk) = response
             .chunk()
             .await
             .with_context(|| format!("reading the download body from {url}"))?
         {
+            written += chunk.len() as u64;
             anyhow::ensure!(
-                bytes.len().saturating_add(chunk.len()) <= limit,
+                written <= limit,
                 "registry pack {namespace}/{name}@{version} exceeds the {limit} byte compressed bound"
             );
-            bytes.extend_from_slice(&chunk);
+            hasher.update(&chunk);
+            out.write_all(&chunk)
+                .with_context(|| format!("saving {namespace}/{name}@{version}"))?;
         }
-        Ok(bytes)
+        Ok(format!("{:x}", hasher.finalize()))
     }
 
     /// Exchanges a username and password for an API token.
@@ -416,14 +431,55 @@ pub async fn fetch_pack(
         }
         _ => None,
     };
-    let (archive, downloaded) = match cached {
-        Some(archive) => (archive, None),
-        None => {
+    let archive = match (cached, &store, &index, cache_home) {
+        (Some(archive), _, _, _) => archive,
+        // With a home, the download streams to disk and into the store, and
+        // the pack is opened from there: no step holds it in memory.
+        (None, Some(store), Some(index), Some(home)) => {
+            let staging_dir = home.join("packs");
+            std::fs::create_dir_all(&staging_dir)
+                .with_context(|| format!("creating {}", staging_dir.display()))?;
+            let mut staged = tempfile::NamedTempFile::new_in(&staging_dir)
+                .with_context(|| format!("staging a download in {}", staging_dir.display()))?;
+            let computed = {
+                let mut writer = std::io::BufWriter::new(staged.as_file_mut());
+                let computed = client
+                    .download_into(
+                        &coordinate.namespace,
+                        &coordinate.name,
+                        &coordinate.version,
+                        &mut writer,
+                    )
+                    .await?;
+                std::io::Write::flush(&mut writer).context("saving the download")?;
+                computed
+            };
+            anyhow::ensure!(
+                computed == coordinate.artifact_digest,
+                "the registry advertised digest {} for {coordinate_label} but the bytes hash to {computed}; refusing to install a pack that does not match what the registry described",
+                coordinate.artifact_digest
+            );
+            let stored = store
+                .import_file_accepting(staged.path(), None, |verified| {
+                    verify_pack_coordinate(
+                        &verified.manifest,
+                        &coordinate.namespace,
+                        &coordinate.name,
+                        &coordinate.version,
+                    )
+                })
+                .with_context(|| format!("installing {coordinate_label} from the registry"))?;
+            let archive = store.open(&stored.header.digest)?;
+            let dir = index.parent().context("download index has no parent")?;
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+            stage_and_persist(dir, index, stored.header.digest.as_bytes())?;
+            archive
+        }
+        _ => {
             let bytes = download_verified_pack(client, &coordinate).await?;
-            let archive = PackArchive::from_bytes(&bytes).with_context(|| {
+            PackArchive::from_bytes(&bytes).with_context(|| {
                 format!("{coordinate_label} from the registry is not a readable pack")
-            })?;
-            (archive, Some(bytes))
+            })?
         }
     };
     verify_pack_coordinate(
@@ -432,12 +488,6 @@ pub async fn fetch_pack(
         &coordinate.name,
         &coordinate.version,
     )?;
-    if let (Some(bytes), Some(store), Some(index)) = (downloaded, &store, &index) {
-        store.import(bytes.as_slice(), Some(archive.digest()))?;
-        let dir = index.parent().context("download index has no parent")?;
-        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
-        stage_and_persist(dir, index, archive.digest().as_bytes())?;
-    }
     Ok(RegistryPack {
         digest: archive.digest().to_owned(),
         archive,

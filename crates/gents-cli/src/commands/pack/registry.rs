@@ -11,8 +11,8 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use gents::pack_archive::PackArchive;
 pub(crate) use gents::pack_registry::{
-    download_verified_pack, fetch_pack, resolve_pack_coordinate, resolve_registry_url,
-    stage_and_persist, verify_digest, RegistryClient, RegistryPack,
+    fetch_pack, resolve_pack_coordinate, resolve_registry_url, stage_and_persist, verify_digest,
+    RegistryClient, RegistryPack,
 };
 #[cfg(test)]
 use gents::pack_registry::{
@@ -55,25 +55,61 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
 
     let coordinate =
         resolve_pack_coordinate(&client, namespace, name, args.version.as_deref()).await?;
-    let bytes = download_verified_pack(&client, &coordinate).await?;
-
-    let header = gents::pack_archive::PackArchive::from_bytes(&bytes)
-        .with_context(|| format!("{namespace}/{name} from the registry is not a readable pack"))?
-        .header()
-        .clone();
+    // Streamed to a staging file beside the output, verified, then renamed:
+    // a pack of any size is never held in memory.
+    let out_dir = args
+        .out
+        .as_deref()
+        .and_then(std::path::Path::parent)
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(
+            || std::path::PathBuf::from("."),
+            std::path::Path::to_path_buf,
+        );
+    let mut staged = tempfile::NamedTempFile::new_in(&out_dir)
+        .with_context(|| format!("staging the download in {}", out_dir.display()))?;
+    let computed = {
+        let mut writer = std::io::BufWriter::new(staged.as_file_mut());
+        let computed = client
+            .download_into(namespace, name, &coordinate.version, &mut writer)
+            .await?;
+        std::io::Write::flush(&mut writer).context("saving the download")?;
+        computed
+    };
+    verify_digest_hex(&computed, &coordinate.artifact_digest, &coordinate.version)?;
+    let header = gents::pack_archive::read_pack(
+        std::io::BufReader::new(std::fs::File::open(staged.path())?),
+        gents::pack_archive::Bounds::default(),
+        |_, _| Ok(()),
+    )
+    .with_context(|| format!("{namespace}/{name} from the registry is not a readable pack"))?
+    .header;
+    let size_bytes = staged.as_file().metadata()?.len();
     let out = args
         .out
         .unwrap_or_else(|| std::path::PathBuf::from(header.file_name()));
-    std::fs::write(&out, &bytes).with_context(|| format!("writing {}", out.display()))?;
+    staged
+        .persist(&out)
+        .map_err(|error| error.error)
+        .with_context(|| format!("writing {}", out.display()))?;
 
     crate::print_json(&serde_json::json!({
         "pack": name,
         "namespace": namespace,
         "version": coordinate.version,
         "digest": header.digest,
-        "size_bytes": bytes.len(),
+        "size_bytes": size_bytes,
         "out": out.display().to_string(),
     }))
+}
+
+/// The registry's advertised digest must be what the bytes hash to.
+fn verify_digest_hex(computed: &str, advertised: &str, version: &str) -> Result<()> {
+    anyhow::ensure!(
+        computed == advertised,
+        "the registry advertised digest {advertised} for version {version} but the bytes hash to {computed}; nothing was saved"
+    );
+    Ok(())
 }
 
 pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
