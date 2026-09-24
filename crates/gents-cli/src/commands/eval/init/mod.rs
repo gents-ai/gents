@@ -635,4 +635,64 @@ mod tests {
         assert_eq!(turn.sent.len(), 1);
         assert!(!ctx.out.exists());
     }
+
+    /// A live smoke test: the author runs as a real request on a served
+    /// home, `gents eval init eval_canary`-style against the canary fixture
+    /// pack the eval runner's own tests share. Needs `GENTS_EVAL_INIT_HOME`
+    /// pointing at a home `gents server` already serves, with a backend the
+    /// resolved profile can reach. It asserts only that a pack was written
+    /// and validated; everything else about the draft is the author's.
+    #[tokio::test]
+    #[ignore = "needs a served home with GENTS_EVAL_INIT_HOME and a real backend"]
+    async fn a_live_author_drafts_a_pack_that_validates() {
+        let home_dir = PathBuf::from(
+            std::env::var("GENTS_EVAL_INIT_HOME")
+                .expect("GENTS_EVAL_INIT_HOME names a home gents server already serves"),
+        );
+        let state = crate::home_state::read_runtime_state(&home_dir)
+            .unwrap()
+            .expect("a runtime state written by `gents server`");
+        let access = gents::ConfigAccess::Graphql(state.graphql.clone());
+        let owner = state.agent_did.clone();
+
+        let subject_dir = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../gents/tests/fixtures/eval_runner/canary_pack"
+        ));
+        let dossier = dossier::render(&subject_dir, None).unwrap();
+        let registry = CheckRegistry::builtin();
+        let profile = gents::default_inference_profile_id_for_behavior(
+            &gents::default_behavior_id_for_agent(&owner),
+        );
+        install_author(&access, &owner, &profile).await.unwrap();
+
+        let root = tempfile::tempdir().unwrap();
+        let ctx = InitContext {
+            dossier,
+            registry: &registry,
+            floors: Floors { validation_min: 1 },
+            definition_id: None,
+            owner: owner.clone(),
+            out: root.path().join("out"),
+            force: false,
+            subject: "eval_canary".into(),
+            subject_dir,
+            profile,
+        };
+        let mut turn = turn::LiveTurn {
+            graphql: state.graphql,
+            agent_did: owner,
+            session_id: uuid::Uuid::new_v4().to_string(),
+            timeout_secs: 300,
+            poll_secs: 1,
+        };
+        let mut lines = std::iter::empty::<String>();
+        let outcome = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
+            .await
+            .unwrap();
+
+        let written = outcome.written.expect("the author's draft validated");
+        assert!(written.out.join("manifest.json").is_file());
+        assert!(outcome.assembled.is_some());
+    }
 }

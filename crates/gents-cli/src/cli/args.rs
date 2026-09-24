@@ -3709,7 +3709,7 @@ pub(crate) struct EvalRunArgs {
 }
 
 /// `gents eval init`'s exit statuses.
-const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal and a served home (`gents server`). Exit status: 0 when the pack was written (and piloted, with --pilot) or the operator ended the interview; 1 when refused or when three drafts did not validate; 2 on a usage error.";
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal (this command is an interview) and a served home: start `gents server` first, or the command refuses before reading anything. An existing --out refuses unless --force replaces it. --pilot runs the written pack once against the subject, one trial per case and one run per populated split (train, validation, held-out), and asks to spend that before it does, unless --yes; a decline leaves the pack written at --out but the command still exits 1. The session id printed at the end continues with `gents chat --session-id <id> --behavior-id eval-author`. A documents capture filter's only variable is \"$trial\", replaced with the trial's DID wherever it appears in a string value. Exit status: 0 when the pack was written and validated (piloted too, with --pilot) or the operator ended the interview with nothing written; 1 when refused (an existing --out without --force, a non-terminal stdin, an unserved home, a declined pilot, or another failure) or when three drafts did not validate; 2 on a usage error.";
 
 #[derive(clap::Args)]
 pub(crate) struct EvalInitArgs {
