@@ -38,6 +38,7 @@ use crate::ToolChoice;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use crate::output_obligation::OutputObligationCheck;
+use crate::provider_audit::ClaudeAuditEvent;
 use crate::session_hook::SessionHook;
 use crate::stream_processor::AssistantTurnAccumulator;
 use crate::tool_call_lifecycle::runtime::{
@@ -246,7 +247,7 @@ where
             // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let (mut stream, activity) = loop {
+                let (mut stream, activity, mut audit_receiver) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -293,6 +294,8 @@ where
                                 )))
                             })?;
                     }
+                    let audit_receiver =
+                        crate::rendered_request::scope::take_audit_receiver(turn_index, attempt);
 
                     let activity =
                         crate::rendered_request::scope::attempt_activity(turn_index, attempt);
@@ -305,7 +308,7 @@ where
                     .await
                     .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
                     {
-                        Ok(stream) => break (stream, activity),
+                        Ok(stream) => break (stream, activity, audit_receiver),
                         Err(failure) => {
                             let (classified, error_text) = failure.classify();
                             match retry.on_pre_stream_failure(
@@ -422,16 +425,64 @@ where
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
-            while let Some(item) = within_provider_idle(
-                stream.next(),
-                config.provider_idle_timeout,
-                activity.as_deref(),
-                !saw_stream_item,
-            )
-            .await
-            .map_or_else(|stall| Some(Err(stall)), |next| {
-                next.map(|item| item.map_err(ProviderAttemptFailure::Completion))
-            }) {
+            loop {
+                let item = loop {
+                    let next_item = within_provider_idle(
+                        stream.next(),
+                        config.provider_idle_timeout,
+                        activity.as_deref(),
+                        !saw_stream_item,
+                    );
+                    tokio::pin!(next_item);
+                    let next = if let Some(receiver) = audit_receiver.as_ref() {
+                        tokio::select! {
+                            biased;
+                            audit = crate::provider_audit::recv_one(receiver) => (Some(audit), None),
+                            item = &mut next_item => (None, Some(item)),
+                        }
+                    } else {
+                        (None, Some(next_item.await))
+                    };
+                    match next {
+                        (Some(Some(observation)), _) => {
+                            if !saw_stream_item {
+                                ensure_rendered_request_was_captured(turn_index, attempt)?;
+                            }
+                            saw_stream_item = true;
+                            if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
+                                accumulator.begin_provider_block(index, kind)
+                                    .map_err(|error| StreamingError::Completion(
+                                        CompletionError::ProviderError(error.to_string())
+                                    ))?;
+                            }
+                            yield LoopStreamItem::ProviderAudit(observation);
+                        }
+                        (Some(None), _) => audit_receiver = None,
+                        (_, Some(item)) => break item.map_or_else(
+                            |stall| Some(Err(stall)),
+                            |next| next.map(|item| item.map_err(ProviderAttemptFailure::Completion)),
+                        ),
+                        _ => unreachable!("one selected provider item"),
+                    };
+                };
+                if let Some(receiver) = audit_receiver.as_ref() {
+                    while let Some(observation) =
+                        crate::provider_audit::try_recv_one(receiver).await
+                    {
+                        if !saw_stream_item {
+                            ensure_rendered_request_was_captured(turn_index, attempt)?;
+                        }
+                        saw_stream_item = true;
+                        if let ClaudeAuditEvent::BlockStart { index, ref kind } = observation.event {
+                            accumulator.begin_provider_block(index, kind)
+                                .map_err(|error| StreamingError::Completion(
+                                    CompletionError::ProviderError(error.to_string())
+                                ))?;
+                        }
+                        yield LoopStreamItem::ProviderAudit(observation);
+                    }
+                }
+                let Some(item) = item else { break; };
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {

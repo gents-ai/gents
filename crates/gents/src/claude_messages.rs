@@ -31,6 +31,7 @@ use thiserror::Error;
 use crate::claude_subscription::ClaudeStreamResponse;
 use crate::oauth_credential::BearerSource;
 use crate::rendered_request::RenderedRequestCapturingHttpClient;
+use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind, ProviderAuditSender};
 
 pub const MESSAGES_URI: &str = "https://api.anthropic.com/v1/messages";
 pub(crate) const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -149,6 +150,8 @@ pub struct MessagesSseState {
     finished: bool,
     /// `request-id` response header, carried into stream-error messages only.
     request_id: Option<String>,
+    audit_open: Option<u32>,
+    audit_events: Vec<ClaudeAuditEvent>,
 }
 
 impl MessagesSseState {
@@ -162,12 +165,18 @@ impl MessagesSseState {
             data: String::new(),
             finished: false,
             request_id: None,
+            audit_open: None,
+            audit_events: Vec::new(),
         }
     }
 
     pub fn with_request_id(mut self, request_id: Option<String>) -> Self {
         self.request_id = request_id;
         self
+    }
+
+    pub fn take_audit_events(&mut self) -> Vec<ClaudeAuditEvent> {
+        std::mem::take(&mut self.audit_events)
     }
 
     /// One SSE line without its trailing newline. `data:` lines accumulate;
@@ -209,15 +218,31 @@ impl MessagesSseState {
     pub fn finish_typed(
         mut self,
     ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
+        self.finish_typed_inner()
+    }
+
+    fn finish_typed_inner(
+        &mut self,
+    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
         let mut events = self.dispatch_pending_data()?;
         self.close_at_eof(&mut events)?;
         if !self.finished {
             self.finished = true;
             events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
-                usage: self.usage,
+                usage: self.usage.take(),
             }));
         }
         Ok(events)
+    }
+
+    fn finish_observed(
+        mut self,
+    ) -> (
+        Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError>,
+        Vec<ClaudeAuditEvent>,
+    ) {
+        let result = self.finish_typed_inner().map_err(Into::into);
+        (result, self.take_audit_events())
     }
 
     fn dispatch_pending_data(
@@ -269,7 +294,30 @@ impl MessagesSseState {
                 let Some(block) = payload.get("content_block") else {
                     return Ok(events);
                 };
+                if self.audit_open.is_some() {
+                    if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                        return Err(MessagesParseError::OverlappingToolUse {
+                            id: block
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_owned(),
+                        });
+                    }
+                    return Err(malformed_thinking(ThinkingParseCause::WrongBlock));
+                }
+                let block_index = match block.get("type").and_then(Value::as_str) {
+                    Some("text" | "tool_use" | "thinking" | "redacted_thinking") => {
+                        Some(audit_index(payload)?)
+                    }
+                    _ => None,
+                };
+                let audit_start_at = self.audit_events.len();
+                let mut audit_kind = None;
                 match block.get("type").and_then(Value::as_str) {
+                    Some("text") => {
+                        audit_kind = Some(ClaudeBlockKind::Text);
+                    }
                     Some("tool_use") => {
                         let id = block
                             .get("id")
@@ -289,11 +337,12 @@ impl MessagesSseState {
                             _ => None,
                         };
                         self.pending = Some(PendingBlock::Tool(PendingTool {
-                            id,
-                            name,
+                            id: id.clone(),
+                            name: name.clone(),
                             start_input,
                             deltas: String::new(),
                         }));
+                        audit_kind = Some(ClaudeBlockKind::ToolUse { id, name });
                     }
                     Some("thinking" | "redacted_thinking") => {
                         if self.pending.is_some() {
@@ -313,18 +362,38 @@ impl MessagesSseState {
                                             "thinking start has no text",
                                         ))
                                     })?;
+                            let initial_signature = match block.get("signature") {
+                                None => String::new(),
+                                Some(Value::String(signature)) => signature.clone(),
+                                Some(_) => {
+                                    return Err(malformed_thinking(ThinkingParseCause::Malformed(
+                                        "thinking start signature is not text",
+                                    )));
+                                }
+                            };
                             self.pending = Some(PendingBlock::Thinking {
                                 index,
                                 text: text.to_owned(),
-                                signature: String::new(),
-                                signature_started: false,
+                                signature_started: !initial_signature.is_empty(),
+                                signature: initial_signature.clone(),
                             });
                             if !text.is_empty() {
+                                self.audit_events.push(ClaudeAuditEvent::ThinkingText {
+                                    index: block_index.expect("recognized block has an index"),
+                                    fragment: text.to_owned(),
+                                });
                                 events.push(RawStreamingChoice::ReasoningDelta {
                                     id: None,
                                     reasoning: text.to_owned(),
                                 });
                             }
+                            if !initial_signature.is_empty() {
+                                self.audit_events.push(ClaudeAuditEvent::Signature {
+                                    index: block_index.expect("recognized block has an index"),
+                                    fragment: initial_signature,
+                                });
+                            }
+                            audit_kind = Some(ClaudeBlockKind::Thinking);
                         } else {
                             let data = block
                                 .get("data")
@@ -339,9 +408,20 @@ impl MessagesSseState {
                                 index,
                                 data: data.to_owned(),
                             });
+                            self.audit_events.push(ClaudeAuditEvent::RedactedData {
+                                index: block_index.expect("recognized block has an index"),
+                                data: data.to_owned(),
+                            });
+                            audit_kind = Some(ClaudeBlockKind::RedactedThinking);
                         }
                     }
                     _ => {}
+                }
+                if let Some(kind) = audit_kind {
+                    let index = block_index.expect("recognized block has an index");
+                    self.audit_open = Some(index);
+                    self.audit_events
+                        .insert(audit_start_at, ClaudeAuditEvent::BlockStart { index, kind });
                 }
             }
             "content_block_delta" => {
@@ -388,6 +468,10 @@ impl MessagesSseState {
                                     })?;
                                 text.push_str(fragment);
                                 if !fragment.is_empty() {
+                                    self.audit_events.push(ClaudeAuditEvent::ThinkingText {
+                                        index: audit_index(payload)?,
+                                        fragment: fragment.to_owned(),
+                                    });
                                     events.push(RawStreamingChoice::ReasoningDelta {
                                         id: None,
                                         reasoning: fragment.to_owned(),
@@ -428,6 +512,10 @@ impl MessagesSseState {
                                     })?;
                                 signature.push_str(fragment);
                                 *signature_started = true;
+                                self.audit_events.push(ClaudeAuditEvent::Signature {
+                                    index: audit_index(payload)?,
+                                    fragment: fragment.to_owned(),
+                                });
                             }
                             Some(PendingBlock::Thinking { .. }) => {
                                 return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
@@ -440,53 +528,64 @@ impl MessagesSseState {
                     _ => {}
                 }
             }
-            "content_block_stop" => match self.pending.take() {
-                Some(PendingBlock::Tool(tool)) => {
-                    events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
+            "content_block_stop" => {
+                let audit_index = audit_index(payload)?;
+                if self.audit_open != Some(audit_index) {
+                    return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                        u64::from(audit_index),
+                    )));
                 }
-                Some(PendingBlock::Thinking {
-                    index,
-                    text,
-                    signature,
-                    ..
-                }) => {
-                    let observed_index = reasoning_index(payload)?;
-                    if observed_index != index {
-                        return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
-                            observed_index,
-                        )));
+                match self.pending.take() {
+                    Some(PendingBlock::Tool(tool)) => {
+                        events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
                     }
-                    if signature.is_empty() {
-                        return Err(malformed_thinking(ThinkingParseCause::MissingSignature));
+                    Some(PendingBlock::Thinking {
+                        index,
+                        text,
+                        signature,
+                        ..
+                    }) => {
+                        let observed_index = reasoning_index(payload)?;
+                        if observed_index != index {
+                            return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                                observed_index,
+                            )));
+                        }
+                        if signature.is_empty() {
+                            return Err(malformed_thinking(ThinkingParseCause::MissingSignature));
+                        }
+                        self.last_reasoning_index = Some(index);
+                        events.push(RawStreamingChoice::Reasoning {
+                            id: None,
+                            content: crate::llm::rig_compat::to_rig_reasoning_part(
+                                &ReasoningContent::Text {
+                                    text,
+                                    signature: Some(signature),
+                                },
+                            ),
+                        });
                     }
-                    self.last_reasoning_index = Some(index);
-                    events.push(RawStreamingChoice::Reasoning {
-                        id: None,
-                        content: crate::llm::rig_compat::to_rig_reasoning_part(
-                            &ReasoningContent::Text {
-                                text,
-                                signature: Some(signature),
-                            },
-                        ),
-                    });
+                    Some(PendingBlock::Redacted { index, data }) => {
+                        let observed_index = reasoning_index(payload)?;
+                        if observed_index != index {
+                            return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                                observed_index,
+                            )));
+                        }
+                        self.last_reasoning_index = Some(index);
+                        events.push(RawStreamingChoice::Reasoning {
+                            id: None,
+                            content: crate::llm::rig_compat::to_rig_reasoning_part(
+                                &ReasoningContent::Redacted { data },
+                            ),
+                        });
+                    }
+                    None => {}
                 }
-                Some(PendingBlock::Redacted { index, data }) => {
-                    let observed_index = reasoning_index(payload)?;
-                    if observed_index != index {
-                        return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
-                            observed_index,
-                        )));
-                    }
-                    self.last_reasoning_index = Some(index);
-                    events.push(RawStreamingChoice::Reasoning {
-                        id: None,
-                        content: crate::llm::rig_compat::to_rig_reasoning_part(
-                            &ReasoningContent::Redacted { data },
-                        ),
-                    });
-                }
-                None => {}
-            },
+                self.audit_open = None;
+                self.audit_events
+                    .push(ClaudeAuditEvent::BlockStop { index: audit_index });
+            }
             "message_delta" => {
                 if let Some(value) = payload.get("usage") {
                     self.usage = Some(usage_from_sse(value));
@@ -539,6 +638,7 @@ pub fn parse_messages_sse_typed(
     let mut events = Vec::new();
     for line in sse.lines() {
         events.extend(state.push_line_typed(line)?);
+        state.take_audit_events();
     }
     events.extend(state.finish_typed()?);
     Ok(events)
@@ -567,6 +667,11 @@ fn reasoning_index(payload: &Value) -> Result<u64, MessagesParseError> {
         .get("index")
         .and_then(Value::as_u64)
         .ok_or_else(|| malformed_thinking(ThinkingParseCause::Malformed("missing content index")))
+}
+
+fn audit_index(payload: &Value) -> Result<u32, MessagesParseError> {
+    let index = reasoning_index(payload)?;
+    u32::try_from(index).map_err(|_| malformed_thinking(ThinkingParseCause::WrongIndex(index)))
 }
 
 struct PendingTool {
@@ -647,6 +752,15 @@ pub(crate) fn stream_sse_body(
     state: MessagesSseState,
 ) -> impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>
 {
+    stream_sse_body_observed(body, state, None)
+}
+
+fn stream_sse_body_observed(
+    body: http_client::sse::BoxedStream,
+    state: MessagesSseState,
+    audit_sender: Option<ProviderAuditSender>,
+) -> impl futures::Stream<Item = Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError>>
+{
     async_stream::stream! {
         let mut body = body;
         let mut state = state;
@@ -661,9 +775,16 @@ pub(crate) fn stream_sse_body(
             };
             buffer.extend_from_slice(&chunk);
             while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
-                let line: Vec<u8> = buffer.drain(..=newline).collect();
-                let line = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
-                match state.push_line(&line) {
+                let mut line: Vec<u8> = buffer.drain(..=newline).collect();
+                line.pop();
+                let line = match String::from_utf8(line) {
+                    Ok(line) => line,
+                    Err(_) => {
+                        yield Err(invalid_sse_utf8());
+                        return;
+                    }
+                };
+                match push_line_observed(&mut state, &line, audit_sender.as_ref()).await {
                     Ok(events) => {
                         for event in events {
                             yield Ok(event);
@@ -677,17 +798,85 @@ pub(crate) fn stream_sse_body(
             }
         }
         if !buffer.is_empty() {
-            let line = String::from_utf8_lossy(&buffer).into_owned();
-            match state.push_line(&line) {
+            let line = match String::from_utf8(buffer) {
+                Ok(line) => line,
+                Err(_) => {
+                    yield Err(invalid_sse_utf8());
+                    return;
+                }
+            };
+            match push_line_observed(&mut state, &line, audit_sender.as_ref()).await {
                 Ok(events) => for event in events { yield Ok(event); },
                 Err(error) => { yield Err(error); return; }
             }
         }
-        match state.finish() {
+        let mut reservation = match audit_sender.as_ref() {
+            Some(sender) => match sender.reserve().await {
+                Ok(reservation) => Some(reservation),
+                Err(()) => {
+                    yield Err(audit_queue_closed());
+                    return;
+                }
+            },
+            None => None,
+        };
+        let (finished, audit) = state.finish_observed();
+        let mut audit_overflow = false;
+        for event in audit {
+            if let Some(reservation) = reservation.as_mut() {
+                if reservation.emit(event).is_err() {
+                    audit_overflow = true;
+                    break;
+                }
+            }
+        }
+        drop(reservation);
+        if audit_overflow {
+            yield Err(audit_event_overflow());
+            return;
+        }
+        match finished {
             Ok(events) => for event in events { yield Ok(event); },
             Err(error) => yield Err(error),
         }
     }
+}
+
+fn audit_queue_closed() -> CompletionError {
+    CompletionError::ProviderError(
+        "Claude audit receiver closed before provider stream ended".into(),
+    )
+}
+
+fn invalid_sse_utf8() -> CompletionError {
+    CompletionError::ProviderError("Claude Messages SSE contains invalid UTF-8".into())
+}
+
+fn audit_event_overflow() -> CompletionError {
+    CompletionError::ProviderError("Claude SSE event exceeded reserved audit capacity".into())
+}
+
+async fn push_line_observed(
+    state: &mut MessagesSseState,
+    line: &str,
+    audit_sender: Option<&ProviderAuditSender>,
+) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    let dispatches = line.strip_suffix('\r').unwrap_or(line).is_empty();
+    let mut reservation = match (dispatches, audit_sender) {
+        (true, Some(sender)) => Some(sender.reserve().await.map_err(|()| audit_queue_closed())?),
+        _ => None,
+    };
+    let parsed = state.push_line(line);
+    for event in state.take_audit_events() {
+        if let Some(reservation) = reservation.as_mut() {
+            reservation
+                .emit(event)
+                .map_err(|()| audit_event_overflow())?;
+        } else if audit_sender.is_some() {
+            return Err(audit_event_overflow());
+        }
+    }
+    parsed
 }
 
 pub async fn stream_messages<S: BearerSource>(
@@ -791,9 +980,16 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
         let prefix = read_body_prefix(response.into_body()).await;
         return Err(non_success_error(status, request_id.as_deref(), &prefix));
     }
-    Ok(stream_sse_body(
+    let audit_sender = gents_loop::rendered_request::scope::current_audit_sender();
+    if gents_loop::rendered_request::scope::current_scope().is_some() && audit_sender.is_none() {
+        return Err(CompletionError::ProviderError(
+            "Claude Messages response has no exact provider audit attempt".into(),
+        ));
+    }
+    Ok(stream_sse_body_observed(
         response.into_body(),
         MessagesSseState::new(surface).with_request_id(request_id),
+        audit_sender,
     ))
 }
 

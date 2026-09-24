@@ -1017,6 +1017,26 @@ fn native_replay_tag(
         LeanCanonicalSource::Tool { call } => OutputSource::ToolCall {
             tool_call_doc_id: format!("tool-{call}"),
         },
+        LeanCanonicalSource::Auxiliary {
+            auxiliary_kind,
+            scope,
+            turn,
+            attempt,
+        } => OutputSource::ProviderTurn {
+            scope: gents_protocol::rendered_request::CaptureScope {
+                kind: match auxiliary_kind {
+                    crate::lean_vocab_test::LeanAuxiliaryKind::Compaction => {
+                        gents_protocol::rendered_request::CaptureScopeKind::Compaction
+                    }
+                    crate::lean_vocab_test::LeanAuxiliaryKind::CompactionFallback => {
+                        gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
+                    }
+                },
+                seq: *scope,
+            },
+            turn_index: (*turn).try_into().expect("modeled turn fits"),
+            attempt: (*attempt).try_into().expect("modeled attempt fits"),
+        },
         LeanCanonicalSource::Authored { key } => OutputSource::Authored {
             key: format!("authored-{key}"),
         },

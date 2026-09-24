@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.Execution.GateCases
 import Proofs.CanonicalOutput.Execution.CompactionCases
+import Proofs.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.RequestExecutionLease
@@ -32,6 +33,7 @@ inductive Input where
   | recover (actor : Nat) (now fresh deadline : Nat)
   | renew (now expectedDeadline : Nat)
   | appendRaw (actor now : Nat) (record : Segment)
+  | closeAuxiliary (now generation : Nat) (closing : Segment)
   | appendToolOutput (actor now document : Nat) (record : Segment)
   | recoverItems (actor now fresh deadline : Nat) (items : List RecoveryItem)
   | recoverTerminal (actor now fresh : Nat)
@@ -86,6 +88,7 @@ def Input.step : Input → Step
   | .recover _ _ fresh deadline => .commit (.recover 7 fresh 5 deadline [])
   | .renew _ expectedDeadline => .commit (.renew 7 expectedDeadline)
   | .appendRaw _ _ record => .commit (.append 7 record)
+  | .closeAuxiliary _ generation closing => .commit (.closeAuxiliary generation closing)
   | .appendToolOutput _ _ document record => .commit (.toolAppend document record)
   | .recoverItems _ _ fresh deadline items => .commit (.recover 7 fresh 5 deadline items)
   | .recoverTerminal _ _ fresh outcome selection items =>
@@ -119,6 +122,7 @@ def Input.now : Input → Nat
   | .recover _ now .. => now
   | .renew now _ => now
   | .appendRaw _ now _ => now
+  | .closeAuxiliary now .. => now
   | .appendToolOutput _ now .. => now
   | .recoverItems _ now .. => now
   | .recoverTerminal _ now .. => now
@@ -143,6 +147,7 @@ def Input.tag : Input → String
   | .recover .. => "recover_expired_generation"
   | .renew .. => "renew_lease"
   | .appendRaw .. => "append_output"
+  | .closeAuxiliary .. => "close_auxiliary"
   | .appendToolOutput .. => "append_tool_output"
   | .recoverItems .. => "recover_expired_generation"
   | .recoverTerminal .. => "recover_expired_terminal"
@@ -534,6 +539,27 @@ def compactionCases : List Case :=
         .closeForeground, .deliverResult 1, .deliverResult 3, .compact 3]
       "The bridge background receipt and late result need a native bridge callback/compaction scenario; split close and delivery are not physical transactions." ]
 
+def auxiliaryCloseCases : List Case :=
+  [ mkCase "compaction_auxiliary_complete_close_is_audit_only" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .compaction .complete)]
+  , mkCase "fallback_auxiliary_partial_close_is_audit_only" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .compactionFallback),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .compactionFallback .«partial»)]
+  , mkCase "auxiliary_close_rejects_expired_parent_lease" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
+       .closeAuxiliary 11 7
+        { (AuxiliaryCases.close .compaction .complete) with createdAt := 11 }] ]
+  ++ [mkCase "auxiliary_close_replay_rejects_stale_writer" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .compaction .complete),
+       .closeAuxiliary 5 8 (AuxiliaryCases.staleWriterClose .compaction .complete)]]
+
+example : (auxiliaryCloseCases.map (fun value =>
+    value.expected.map (List.map (·.accepted)))) =
+    [some [true, true], some [true, true], some [true, false],
+      some [true, true, false]] := by native_decide
+
 /-- Write-gate scheduling premise: a suspended same-task holder publishes
 nothing. It must be the final step, since a suspended holder cannot release. -/
 def schedulingCases : List Case :=
@@ -544,7 +570,7 @@ def cases : List Case :=
   schedulingCases ++ toolSeamCases ++ nativeToolCompletionCases ++ leaseOrderingCases ++
     toolOutputDeadlineCases ++ terminalRecoveryCases ++
     publicationCases ++ integrityCases ++
-    compactionCases ++ livePartialCases
+    compactionCases ++ auxiliaryCloseCases ++ livePartialCases
 
 def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
   "\"call_id\":" ++ toString context.callId ++ ","
@@ -664,6 +690,9 @@ def inputJson (input : Input) : String :=
   | .append generation record =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"record\":" ++
         canonicalSegmentJson record ++ "}"
+  | .closeAuxiliary generation closing =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"closing\":" ++
+        canonicalSegmentJson closing ++ "}"
   | .toolAppend document record =>
       common ++ ",\"document\":" ++ toString document ++ ",\"record\":" ++
         canonicalSegmentJson record ++ "}"

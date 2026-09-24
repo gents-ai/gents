@@ -462,6 +462,32 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
     // establish native consumption; only registered consumers and the ledger's
     // consumer entries may make that claim.
     let mut emitted = BTreeSet::new();
+    for (category, domain, present) in [
+        (
+            "reasoning_audit_cases",
+            "ReasoningAuditCases",
+            !snapshot.reasoning_audit_cases.is_empty(),
+        ),
+        (
+            "reasoning_signature_cases",
+            "ReasoningSignatureCases",
+            !snapshot.reasoning_signature_cases.is_empty(),
+        ),
+        (
+            "auxiliary_output_cases",
+            "AuxiliaryOutputCases",
+            !snapshot.auxiliary_output_cases.is_empty(),
+        ),
+        (
+            "prompt_assembly_claude_wire_start_cases",
+            "PromptAssemblyClaudeWireStartCases",
+            !snapshot.prompt_assembly_claude_wire_start_cases.is_empty(),
+        ),
+    ] {
+        if present {
+            emitted.insert((category.to_owned(), domain.to_owned()));
+        }
+    }
     let boundary_ids = snapshot
         .boundaries
         .iter()

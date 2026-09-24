@@ -183,7 +183,11 @@ pub fn plan_recovery_prefix(
         .map(|(index, stream)| (&stream.declaration, index as u32))
         .collect::<Vec<_>>();
     text.sort_by_key(|(declaration, _)| (declaration.block_index, declaration.part_index));
-    let retained_streams = text.into_iter().map(|(_, stream)| stream).collect();
+    let retained_streams = if source.is_auxiliary_audit() {
+        Vec::new()
+    } else {
+        text.into_iter().map(|(_, stream)| stream).collect()
+    };
 
     Ok(RecoveryPrefixPlan {
         close: SourceClose::Closed {

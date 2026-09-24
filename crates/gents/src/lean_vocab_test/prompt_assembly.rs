@@ -201,6 +201,30 @@ pub(crate) struct LeanPromptAssemblyClaudeThinkingStreamCase {
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyClaudeWireStartCase {
+    pub(crate) name: String,
+    pub(crate) start: LeanClaudeWireThinkingStart,
+    pub(crate) later: Vec<LeanClaudeStreamEvent>,
+    pub(crate) expected: LeanClaudeWireExpected,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeWireThinkingStart {
+    pub(crate) index: u64,
+    pub(crate) thinking: String,
+    pub(crate) signature_present: bool,
+    pub(crate) signature: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeWireExpected {
+    pub(crate) kind: String,
+    pub(crate) error: Option<String>,
+    pub(crate) steps: Option<Vec<LeanClaudeContentStep>>,
+    pub(crate) content: Option<Vec<LeanClaudeStreamBlock>>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanClaudeStreamEvent {
     pub(crate) kind: String,
     pub(crate) value: Option<String>,

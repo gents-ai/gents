@@ -15,11 +15,12 @@ use gents_protocol::row::AgentRequestRow;
 use crate::identity::AgentIdentity;
 
 use crate::lean_vocab_test::{
-    CanonicalExecutionAdapter, ExecutionFuture, LeanCanonicalExecutionObservation,
-    LeanCanonicalExecutionOperation, LeanCanonicalExecutionSeed, LeanCanonicalMessage,
-    LeanCanonicalSegment, LeanCanonicalSource, LeanCanonicalToolAdmission, LeanCanonicalWriter,
-    LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
-    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanResultPart, LeanTerminalSelection,
+    CanonicalExecutionAdapter, ExecutionFuture, LeanAuxiliaryKind,
+    LeanCanonicalExecutionObservation, LeanCanonicalExecutionOperation, LeanCanonicalExecutionSeed,
+    LeanCanonicalMessage, LeanCanonicalSegment, LeanCanonicalSource, LeanCanonicalToolAdmission,
+    LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome,
+    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanResultPart,
+    LeanTerminalSelection,
 };
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
@@ -932,18 +933,30 @@ impl NativeCanonicalExecution {
                 scope,
                 turn_index,
                 attempt,
-            } => {
-                let scope = scope
-                    .to_string()
-                    .strip_prefix("inference.")
-                    .context("native provider scope is not modeled")?
-                    .parse()?;
-                LeanCanonicalSource::Provider {
-                    scope,
-                    turn: u64::from(*turn_index),
-                    attempt: u64::from(*attempt),
+            } => match scope.kind {
+                gents_protocol::rendered_request::CaptureScopeKind::Inference => {
+                    LeanCanonicalSource::Provider {
+                        scope: scope.seq,
+                        turn: u64::from(*turn_index),
+                        attempt: u64::from(*attempt),
+                    }
                 }
-            }
+                gents_protocol::rendered_request::CaptureScopeKind::Compaction
+                | gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback => {
+                    LeanCanonicalSource::Auxiliary {
+                        auxiliary_kind: match scope.kind {
+                            gents_protocol::rendered_request::CaptureScopeKind::Compaction => {
+                                LeanAuxiliaryKind::Compaction
+                            }
+                            _ => LeanAuxiliaryKind::CompactionFallback,
+                        },
+                        scope: scope.seq,
+                        turn: u64::from(*turn_index),
+                        attempt: u64::from(*attempt),
+                    }
+                }
+                _ => anyhow::bail!("native provider scope is not modeled"),
+            },
             gents_protocol::output::OutputSource::ToolCall { tool_call_doc_id } => {
                 LeanCanonicalSource::Tool {
                     call: self
@@ -995,11 +1008,17 @@ impl NativeCanonicalExecution {
                                         gents_protocol::output::StreamPayload::Reasoning => {
                                             (LeanPayloadKind::Reasoning, None)
                                         }
+                                        gents_protocol::output::StreamPayload::ReasoningSignature => {
+                                            (LeanPayloadKind::Signature, None)
+                                        }
                                         gents_protocol::output::StreamPayload::ReasoningSummary => {
                                             (LeanPayloadKind::Summary, None)
                                         }
-                                        gents_protocol::output::StreamPayload::ReasoningOpaque => {
-                                            (LeanPayloadKind::Opaque, None)
+                                        gents_protocol::output::StreamPayload::ReasoningEncrypted => {
+                                            (LeanPayloadKind::Encrypted, None)
+                                        }
+                                        gents_protocol::output::StreamPayload::ReasoningRedacted => {
+                                            (LeanPayloadKind::Redacted, None)
                                         }
                                         gents_protocol::output::StreamPayload::ToolArguments {
                                             id,
@@ -1836,6 +1855,12 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     item,
                     ..
                 } => native.close_partial(*now, *generation, item).await,
+                LeanCanonicalExecutionOperation::CloseAuxiliary {
+                    now,
+                    generation,
+                    closing,
+                    ..
+                } => native.close_auxiliary(*now, *generation, closing).await,
                 LeanCanonicalExecutionOperation::RecoverExpiredTerminal {
                     now,
                     expected_generation,
@@ -2141,6 +2166,81 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
 }
 
 impl NativeCanonicalExecution {
+    async fn close_auxiliary(
+        &mut self,
+        now: u64,
+        generation: u64,
+        closing: &LeanCanonicalSegment,
+    ) -> Result<LeanCanonicalExecutionObservation> {
+        let LeanCanonicalWriter::Request {
+            generation: writer_generation,
+        } = &closing.writer
+        else {
+            anyhow::bail!("auxiliary close requires a request writer")
+        };
+        let prepared = self.provider_segment(closing, *writer_generation)?;
+        let close = match &prepared.close {
+            Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                ..
+            }) => crate::streaming::canonical::ProviderAttemptClose::AuxiliaryComplete,
+            Some(SourceClose::Closed {
+                outcome: OutputOutcome::Partial,
+                ..
+            }) => crate::streaming::canonical::ProviderAttemptClose::Partial,
+            _ => anyhow::bail!("auxiliary close must carry a Complete or Partial closure"),
+        };
+        let result = crate::streaming::canonical::close_provider_attempt_at(
+            &self.node,
+            &symbolic_generation(generation),
+            &prepared,
+            close,
+            Some(crate::streaming::canonical::ProviderPartialCandidate {
+                closing: prepared.clone(),
+                header: None,
+            }),
+            self.fixture_time(now)?,
+        )
+        .await;
+        match result {
+            Ok(None) => {}
+            Ok(Some(_)) => anyhow::bail!("auxiliary close published a header"),
+            Err(error)
+                if error
+                    .downcast_ref::<crate::streaming::canonical::ProviderCloseRejection>()
+                    .is_some()
+                    || error
+                        .downcast_ref::<gents_protocol::output::ReconstructionError>()
+                        .is_some() =>
+            {
+                return self.observe(false).await;
+            }
+            Err(error) => return Err(error.context("native CloseAuxiliary owner failed")),
+        }
+        let request = crate::graphql::escape_graphql_string(&self.request_doc_id);
+        let response = crate::config_client::ConfigAccess::Local(self.node.clone())
+            .execute(&format!(
+                r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ {} }} }}"#,
+                crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS,
+            ))
+            .await?;
+        let rows = response["data"]["AgentOutputSegment"]
+            .as_array()
+            .context("auxiliary closure query omitted rows")?;
+        let matching = rows
+            .iter()
+            .map(crate::session::canonical_rows::decode_output_segment_row)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|row| row.segment == prepared)
+            .collect::<Vec<_>>();
+        let [row] = matching.as_slice() else {
+            anyhow::bail!("accepted auxiliary close did not persist one exact closing fact")
+        };
+        self.segment_ids.insert(row.doc_id.clone(), closing.id);
+        self.observe(true).await
+    }
+
     async fn close_partial(
         &mut self,
         now: u64,
@@ -2710,14 +2810,38 @@ impl NativeCanonicalExecution {
         record: &LeanCanonicalSegment,
         generation: u64,
     ) -> Result<gents_protocol::output::OutputSegment> {
-        let LeanCanonicalSource::Provider {
-            scope,
-            turn,
-            attempt,
-        } = &record.coordinate.source
-        else {
-            anyhow::bail!("append output currently supports provider sources only")
+        let (capture_kind, scope, turn, attempt) = match &record.coordinate.source {
+            LeanCanonicalSource::Provider {
+                scope,
+                turn,
+                attempt,
+            } => (
+                gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                *scope,
+                *turn,
+                *attempt,
+            ),
+            LeanCanonicalSource::Auxiliary {
+                auxiliary_kind,
+                scope,
+                turn,
+                attempt,
+            } => (
+                match auxiliary_kind {
+                    LeanAuxiliaryKind::Compaction => {
+                        gents_protocol::rendered_request::CaptureScopeKind::Compaction
+                    }
+                    LeanAuxiliaryKind::CompactionFallback => {
+                        gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
+                    }
+                },
+                *scope,
+                *turn,
+                *attempt,
+            ),
+            _ => anyhow::bail!("append output currently supports provider sources only"),
         };
+        anyhow::ensure!(scope > 0, "provider capture scope allocation is zero");
         anyhow::ensure!(record.coordinate.request > 0, "symbolic request is blank");
         anyhow::ensure!(
             matches!(&record.writer, LeanCanonicalWriter::Request { generation: writer } if *writer == generation),
@@ -2738,11 +2862,17 @@ impl NativeCanonicalExecution {
                             LeanPayloadKind::Reasoning => {
                                 gents_protocol::output::StreamPayload::Reasoning
                             }
+                            LeanPayloadKind::Signature => {
+                                gents_protocol::output::StreamPayload::ReasoningSignature
+                            }
                             LeanPayloadKind::Summary => {
                                 gents_protocol::output::StreamPayload::ReasoningSummary
                             }
-                            LeanPayloadKind::Opaque => {
-                                gents_protocol::output::StreamPayload::ReasoningOpaque
+                            LeanPayloadKind::Encrypted => {
+                                gents_protocol::output::StreamPayload::ReasoningEncrypted
+                            }
+                            LeanPayloadKind::Redacted => {
+                                gents_protocol::output::StreamPayload::ReasoningRedacted
                             }
                             LeanPayloadKind::Arguments => {
                                 let tool = declaration
@@ -2782,9 +2912,12 @@ impl NativeCanonicalExecution {
             session_id: self.session_id.clone(),
             request_doc_id: self.request_doc_id.clone(),
             source: gents_protocol::output::OutputSource::ProviderTurn {
-                scope: format!("inference.{scope}").parse()?,
-                turn_index: u32::try_from(*turn)?,
-                attempt: u32::try_from(*attempt)?,
+                scope: gents_protocol::rendered_request::CaptureScope {
+                    kind: capture_kind,
+                    seq: scope,
+                },
+                turn_index: u32::try_from(turn)?,
+                attempt: u32::try_from(attempt)?,
             },
             writer: gents_protocol::output::OutputWriter::RequestExecution {
                 execution_generation: symbolic_generation(generation),

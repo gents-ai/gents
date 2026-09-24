@@ -105,7 +105,9 @@ def messageScopeResult (observation : Observation)
       else .error .invalid
 
 def visibleStreams (streams : Streams) : Streams :=
-  streams.filter fun stream => stream.1.kind != .opaque
+  streams.filter fun stream =>
+    stream.1.kind != .encrypted && stream.1.kind != .redacted &&
+      stream.1.kind != .signature
 
 inductive CloseObservation where
   | «open»
@@ -168,7 +170,10 @@ def contiguousFlushes (records : List Segment) (writer : Writer) :
           let rest ← contiguousFlushes records writer (ordinal + 1) fuel
           .ok (flush :: rest)
 
-def reconstructPrefix (observation : Observation) (limit : Option Nat) :
+/-- The durable audit reads the same validated dense prefix as live output, but
+keeps every received field and native declaration. A missing replica ordinal
+ends the observed prefix; closure state never widens its replay eligibility. -/
+def reconstructAuditPrefix (observation : Observation) (limit : Option Nat) :
     Except OpenError Streams := do
   let source := CanonicalOutput.Execution.sourceData
     observation.records observation.target.coordinate
@@ -188,8 +193,12 @@ def reconstructPrefix (observation : Observation) (limit : Option Nat) :
   let flushes ← contiguousFlushes data observation.target.writer 0 (limit.getD data.length)
   if flushes.isEmpty then .error .loading else
   match consumeFlushes flushes [] with
-  | .ok streams => .ok (visibleStreams streams)
+  | .ok streams => .ok streams
   | .error _ => .error .invalid
+
+def reconstructPrefix (observation : Observation) (limit : Option Nat) :
+    Except OpenError Streams :=
+  (reconstructAuditPrefix observation limit).map visibleStreams
 
 def reconstructOpen (observation : Observation) : Except OpenError Streams :=
   reconstructPrefix observation none
@@ -314,6 +323,8 @@ def projectUnheadedClosed (observation : Observation) (closing : Segment)
         | _, _ => loadingOrSettlingBeforeClose observation closing
 
 def project (observation : Observation) : View :=
+  if observation.target.coordinate.source.isAuxiliary then .absent
+  else
   match observation.target.messageId with
   | some id => projectPublished observation id
   | none =>

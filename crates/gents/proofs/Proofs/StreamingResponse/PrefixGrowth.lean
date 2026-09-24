@@ -62,28 +62,34 @@ theorem reconstructOpen_witness (observation : Observation) (streams : Streams)
         observation.target.writer 0
         (Execution.sourceData observation.records observation.target.coordinate).length = .ok flushes ∧
       consumeFlushes flushes [] = .ok raw ∧ streams = visibleStreams raw := by
-  simp only [reconstructOpen, reconstructPrefix, Option.getD] at h
-  repeat' first
-    | contradiction
-    | split at h
-  cases hs : contiguousFlushes
-      (Execution.sourceData observation.records observation.target.coordinate)
-      observation.target.writer 0
-      (Execution.sourceData observation.records observation.target.coordinate).length with
-  | error error => simp [hs, Except.bind] at h; contradiction
-  | ok flushes =>
-      simp [hs, Except.bind] at h
-      change (if flushes = [] then Except.error OpenError.loading else
-        match consumeFlushes flushes [] with
-        | .ok raw => .ok (visibleStreams raw)
-        | .error _ => .error .invalid) = .ok streams at h
-      split at h
-      · contradiction
-      · cases hc : consumeFlushes flushes [] with
-        | error error => simp [hc] at h
-        | ok raw =>
-            simp [hc] at h
-            exact ⟨flushes, raw, rfl, hc, h.symm⟩
+  cases ha : reconstructAuditPrefix observation none with
+  | error error => simp [reconstructOpen, reconstructPrefix, ha, Except.map] at h
+  | ok raw =>
+      have hstreams : streams = visibleStreams raw := by
+        simpa [reconstructOpen, reconstructPrefix, ha, Except.map] using h.symm
+      simp only [reconstructAuditPrefix, Option.getD] at ha
+      repeat' first
+        | contradiction
+        | split at ha
+      cases hs : contiguousFlushes
+          (Execution.sourceData observation.records observation.target.coordinate)
+          observation.target.writer 0
+          (Execution.sourceData observation.records observation.target.coordinate).length with
+      | error error => simp [hs, Except.bind, Bind.bind] at ha
+      | ok flushes =>
+          simp [hs, Except.bind] at ha
+          change (if flushes = [] then Except.error OpenError.loading else
+            match consumeFlushes flushes [] with
+            | .ok actual => .ok actual
+            | .error _ => .error .invalid) = .ok raw at ha
+          split at ha
+          · contradiction
+          · cases hc : consumeFlushes flushes [] with
+            | error error => simp [hc] at ha
+            | ok actual =>
+                simp [hc] at ha
+                subst raw
+                exact ⟨flushes, actual, rfl, hc, hstreams⟩
 
 /-- Benign source arrival is a relation on immutable records, not on rendered
 bytes: old facts remain, writer/source stay fixed, and no new competing fact is
@@ -132,7 +138,8 @@ theorem reconstructOpen_grows_under_benign_arrival
   have hp := contiguousFlushes_prefix_of_extension _ _ _ hstable _ _ _ _ _
     hfuel hselect hselectNew
   exact (reconstructed_prefix_grows _ _ _ _ hp hconsume hconsumeNew).filterDeclarations
-    (fun declaration => declaration.kind != .opaque)
+    (fun declaration => declaration.kind != .encrypted &&
+      declaration.kind != .redacted && declaration.kind != .signature)
 
 theorem open_live_view_has_reconstructed_prefix
     (observation : Observation) (streams : Streams)
@@ -141,7 +148,11 @@ theorem open_live_view_has_reconstructed_prefix
     (hclose : observeClose observation.records observation.target.coordinate = .open)
     (hview : project observation = .live streams) :
     reconstructOpen observation = .ok streams := by
-  simp only [project, hmessage, hscope, Bool.not_true, Bool.false_eq_true,
+  have haux : observation.target.coordinate.source.isAuxiliary = false := by
+    cases hs : observation.target.coordinate.source.isAuxiliary with
+    | true => simp [project, hs] at hview
+    | false => rfl
+  simp only [project, haux, hmessage, hscope, Bool.not_true, Bool.false_eq_true,
     ↓reduceIte, hclose] at hview
   split at hview
   · contradiction

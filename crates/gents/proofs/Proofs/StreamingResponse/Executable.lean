@@ -17,7 +17,7 @@ structure TargetSelectionCase where
 
 def sampleCoordinate : Coordinate := ⟨10, .provider 0 0 0⟩
 def sampleText : Declaration := { block := 0, part := 0, kind := .text }
-def sampleOpaque : Declaration := { block := 1, part := 0, kind := .opaque }
+def sampleOpaque : Declaration := { block := 1, part := 0, kind := .encrypted }
 
 def sampleComplete : Segment :=
   { id := 100, coordinate := sampleCoordinate, writer := .request 7
@@ -79,6 +79,7 @@ def sampleForkMessage : MessageEnvelope :=
     key := "child-turn", sequence := 0 }
 
 def sampleReasoning : Declaration := { block := 0, part := 0, kind := .reasoning }
+def sampleReasoningSignature : Declaration := { block := 0, part := 0, kind := .signature }
 def sampleArguments : Declaration :=
   { block := 1, part := 0, kind := .arguments
     tool := some ⟨"provider-call", some "call-alias", "lookup"⟩ }
@@ -89,9 +90,10 @@ from `project`/`reconstructMessage`; this is not a second projection policy. -/
 def sampleNativePayload : Segment :=
   { id := 110, coordinate := sampleCoordinate, writer := .request 7
     flush := some ⟨0,
-      [⟨0, 3, some sampleReasoning⟩, ⟨1, 2, some sampleArguments⟩],
-      [119, 104, 121, 123, 125]⟩
-    close := some (.closed .complete 1 [3, 2]), createdAt := 5 }
+      [⟨0, 3, some sampleReasoning⟩, ⟨1, 2, some sampleArguments⟩,
+       ⟨2, 3, some sampleReasoningSignature⟩],
+      [119, 104, 121, 123, 125, 115, 105, 103]⟩
+    close := some (.closed .complete 1 [3, 2, 3]), createdAt := 5 }
 
 def sampleNativeMessage : MessageEnvelope :=
   { header :=
@@ -110,10 +112,11 @@ def sampleMixedReasoningPayload : Segment :=
     flush := some ⟨0,
       [⟨0, 1, some { block := 0, part := 0, kind := .reasoning }⟩,
        ⟨1, 1, some { block := 0, part := 1, kind := .summary }⟩,
-       ⟨2, 1, some { block := 0, part := 2, kind := .opaque }⟩,
-       ⟨3, 1, some { block := 0, part := 3, kind := .opaque }⟩],
-      [97, 98, 99, 100]⟩
-    close := some (.closed .complete 1 [1, 1, 1, 1]), createdAt := 5 }
+       ⟨2, 1, some { block := 0, part := 2, kind := .encrypted }⟩,
+       ⟨3, 1, some { block := 0, part := 3, kind := .redacted }⟩,
+       ⟨4, 3, some sampleReasoningSignature⟩],
+      [97, 98, 99, 100, 115, 105, 103]⟩
+    close := some (.closed .complete 1 [1, 1, 1, 1, 3]), createdAt := 5 }
 
 def sampleMixedReasoningMessage : MessageEnvelope :=
   { header :=
@@ -131,8 +134,8 @@ def sampleMixedReasoningMessage : MessageEnvelope :=
 def sampleAllOpaqueReasoningPayload : Segment :=
   { id := 121, coordinate := sampleCoordinate, writer := .request 7
     flush := some ⟨0,
-      [⟨0, 1, some { block := 0, part := 0, kind := .opaque }⟩,
-       ⟨1, 1, some { block := 0, part := 1, kind := .opaque }⟩],
+      [⟨0, 1, some { block := 0, part := 0, kind := .encrypted }⟩,
+       ⟨1, 1, some { block := 0, part := 1, kind := .redacted }⟩],
       [101, 102]⟩
     close := some (.closed .complete 1 [1, 1]), createdAt := 5 }
 
@@ -186,7 +189,7 @@ reasoning even though canonical reconstruction retains it losslessly. -/
 def renderedKinds : View → List String
   | .live streams | .retainedPartial streams =>
       streams.filterMap fun stream => match stream.1.kind with
-        | .opaque => none
+        | .signature | .encrypted | .redacted => none
         | .text => some "text"
         | .reasoning => some "reasoning"
         | .summary => some "summary"
