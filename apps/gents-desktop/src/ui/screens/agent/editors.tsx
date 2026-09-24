@@ -31,7 +31,7 @@ import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
 
-export type Choice = { value: string; label: string };
+export type Choice = { value: string; label: string; disabled?: boolean };
 
 type Common = {
   id: string;
@@ -441,7 +441,11 @@ export function RefRow({
               {(v: string) => {
                 const l = labelOf(v);
                 return (
-                  <ComboboxItem key={v || "∅"} value={v}>
+                  <ComboboxItem
+                    key={v || "∅"}
+                    value={v}
+                    disabled={shown.find((i) => i.value === v)?.disabled}
+                  >
                     <span className="flex min-w-0 flex-1 items-baseline justify-between gap-4">
                       <span className="truncate">{l.name}</span>
                       {l.hint && (

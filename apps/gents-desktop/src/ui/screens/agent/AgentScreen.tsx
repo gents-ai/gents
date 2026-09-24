@@ -80,12 +80,12 @@ export function AgentScreen({
   const groups = [...new Set(SECTIONS.map((s) => s.group))];
   return (
     <div
-      className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] md:grid-cols-[20rem_minmax(0,1fr)]"
+      className="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] @4xl:grid-cols-[20rem_minmax(0,1fr)]"
       data-testid="agent-screen"
       data-section={section}
       ref={page}
     >
-      <ScrollArea className="hidden h-full md:block">
+      <ScrollArea className="hidden h-full @4xl:block">
         <SidebarNav className="w-auto">
           {groups.map((group) => (
             <SidebarGroup key={group} title={group}>
@@ -110,8 +110,9 @@ export function AgentScreen({
         </SidebarNav>
       </ScrollArea>
       <ScrollArea className="h-full">
-        {/* below md the sidebar becomes a sticky section picker */}
-        <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur md:hidden">
+        {/* the section list needs room beside the editor, whatever the nav
+            takes; without it the list becomes a sticky section picker */}
+        <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-2 backdrop-blur @4xl:hidden">
           <Select
             items={SECTIONS.map((s) => ({ value: s.id, label: s.label }))}
             value={ALIASES[section] ?? section}

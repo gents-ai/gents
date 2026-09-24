@@ -125,7 +125,7 @@ test.describe("kit shell", () => {
       document.documentElement.dataset.shell = "mac";
     });
     for (const viewport of [
-      { width: 1180, height: 720 },
+      { width: 640, height: 720 },
       { width: 1480, height: 868 },
       { width: 1180, height: 696 },
     ]) {

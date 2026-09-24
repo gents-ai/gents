@@ -162,6 +162,17 @@ impl ConfigReferences {
                     doc.default_behavior_id.as_deref(),
                     "default_behavior_id",
                 )?;
+                // Configuration.defaultBehaviorPublishable
+                if let Some(default) = doc.default_behavior_id.as_deref() {
+                    let behavior: AgentBehavior =
+                        decode(&self.documents[&(Collection::AgentBehavior, default.to_owned())])?;
+                    ensure!(
+                        behavior.enabled,
+                        "AgentBehavior {default:?} is the default behavior of {} and must be \
+                         enabled; enable it or choose another default first",
+                        self.agent_did
+                    );
+                }
             }
             Collection::AgentBehavior => {
                 let doc: AgentBehavior = decode(value)?;

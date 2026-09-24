@@ -1675,6 +1675,33 @@ fn behavior_and_context_share_canonical_reference_closure() {
         .contains("InferenceProfile"));
 }
 
+/// Configuration.defaultBehaviorPublishable: publication rejects a principal
+/// whose default is disabled, whichever document the candidate changed.
+#[test]
+fn default_behavior_must_be_enabled() {
+    use crate::Collection;
+    let candidate = |enabled: bool, default: Option<&str>| {
+        let mut documents = reference_documents();
+        let mut behavior = serde_json::to_value(reference_behavior()).unwrap();
+        behavior["enabled"] = enabled.into();
+        documents.push((Collection::AgentBehavior, behavior));
+        documents.push((
+            Collection::AgentPrincipal,
+            serde_json::json!({"agent_did":"owner","default_behavior_id":default}),
+        ));
+        ConfigReferences::from_documents("owner", documents)
+            .unwrap()
+            .validate()
+    };
+    candidate(true, Some("behavior")).unwrap();
+    candidate(false, None).unwrap();
+    let error = candidate(false, Some("behavior")).unwrap_err().to_string();
+    assert!(
+        error.contains("\"behavior\" is the default behavior of owner and must be enabled"),
+        "{error}"
+    );
+}
+
 #[test]
 fn unchanged_nested_links_are_validated_without_a_behavior_write() {
     for missing in [

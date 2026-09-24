@@ -56,7 +56,7 @@ import {
 import type { Shell } from "@/hooks/useShell";
 import { anchor } from "@/lib/scroll";
 import { useResizableWidth } from "@/lib/resizable";
-import { useMediaQuery } from "@/lib/media";
+import { ROOMY_WINDOW, useMediaQuery } from "@/lib/media";
 import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
 import { href, navigate } from "@/lib/router";
 import {
@@ -992,7 +992,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     io.observe(el);
     return () => io.disconnect();
   }, [shell.selectedSessionId]);
-  const wide = useMediaQuery("(min-width: 768px)");
+  const wide = useMediaQuery(ROOMY_WINDOW);
   const traceOpen = wide ? traceOpenPref : mobileTrace;
   const setTraceOpen = (open: boolean) =>
     wide ? setTracePref(open) : setMobileTrace(open);
@@ -1572,7 +1572,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           {wide && <TracePanel shell={shell} onClose={() => setTraceOpen(false)} />}
         </div>
       </div>
-      {/* below md the panel is a sheet over the transcript, as a side panel should be */}
+      {/* in a narrow window the panel is a sheet over the transcript */}
       {!wide && (
         <Sheet open={traceOpen} onOpenChange={setTraceOpen}>
           <SheetContent

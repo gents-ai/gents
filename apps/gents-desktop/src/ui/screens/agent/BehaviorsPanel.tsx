@@ -323,6 +323,28 @@ function missingToTurnOn(deployment: DeploymentView, b: BehaviorView) {
   ];
 }
 
+/* why a behavior cannot become the default: a default must be enabled, so one
+   that cannot be turned on cannot be chosen */
+export function defaultBlocker(deployment: DeploymentView, b: BehaviorView) {
+  const missing = b.enabled ? [] : missingToTurnOn(deployment, b);
+  return missing.length
+    ? `Needs ${missing.join(" and ")} before it can be enabled and made default`
+    : null;
+}
+
+export const DEFAULT_STAYS_ENABLED =
+  "The default behavior stays enabled. Choose another default before turning it off.";
+
+/* Publication rejects a disabled default, so a behavior is turned on in its
+   own write before the principal names it. */
+export async function enableForDefault(
+  shell: Shell,
+  deployment: DeploymentView,
+  b: BehaviorView,
+) {
+  if (!b.enabled) await saveEnabled(shell, deployment, b, true);
+}
+
 /* the end of a behavior's row: its enable switch and a menu */
 function RowControls({
   shell,
@@ -339,6 +361,9 @@ function RowControls({
   const [busy, setBusy] = useState(false);
   const missing = missingToTurnOn(deployment, behavior);
   const blocked = !behavior.enabled && missing.length > 0;
+  /* the current default is never turned off in place */
+  const keptOn = behavior.enabled && behavior.isDefault;
+  const noDefault = defaultBlocker(deployment, behavior);
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
@@ -354,8 +379,13 @@ function RowControls({
   };
   const makeDefault = async () => {
     try {
+      await enableForDefault(shell, deployment, behavior);
       await saveDefault(shell, deployment, behavior.behaviorId);
-      toast("Default behavior set");
+      toast(
+        behavior.enabled
+          ? "Default behavior set"
+          : `${behavior.displayName} is enabled and is now the default`,
+      );
     } catch (e) {
       toast(
         `Default behavior set failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -372,14 +402,17 @@ function RowControls({
         title={
           blocked
             ? `Needs ${missing.join(" and ")} before it can be enabled`
-            : undefined
+            : keptOn
+              ? DEFAULT_STAYS_ENABLED
+              : undefined
         }
       >
         {inEditor && (behavior.enabled ? "Enabled" : "Disabled")}
         <Switch
           aria-label={`${behavior.displayName} is ${behavior.enabled ? "enabled" : "disabled"}`}
+          aria-description={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
           checked={behavior.enabled}
-          disabled={busy || blocked}
+          disabled={busy || blocked || keptOn}
           onCheckedChange={(v) => void toggle(v)}
         />
       </span>
@@ -399,10 +432,21 @@ function RowControls({
           <DropdownMenuGroup>
             <DropdownMenuItem
               className="whitespace-nowrap"
-              disabled={behavior.isDefault}
+              disabled={behavior.isDefault || noDefault !== null}
               onClick={() => void makeDefault()}
             >
-              {behavior.isDefault ? "The default behavior" : "Make default"}
+              {behavior.isDefault ? (
+                "The default behavior"
+              ) : (
+                <span className="flex flex-col">
+                  <span>Make default</span>
+                  {(noDefault || !behavior.enabled) && (
+                    <span className="text-xs text-muted-foreground">
+                      {noDefault ?? "Also enables it"}
+                    </span>
+                  )}
+                </span>
+              )}
             </DropdownMenuItem>
             {!inEditor && (
               <DropdownMenuItem
