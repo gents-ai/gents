@@ -365,3 +365,14 @@ removed first (clean, pushed) so every branch is free to check out.
   `69dc8cdff`, wizard `a7f807c26`, side `7812129db`. Ledger
   `.superpowers/sdd/2026-09-24-stack-rebase/`. Coordinator stood down; worktree
   `gents-rebase` on a clean scratch branch.
+- 2026-09-24 rebase pass 2 COMPLETE (PR 1 onto main `575db1eb2` from the stack base `bb50f9259`,
+  then restack): guarded-publication `8ec58dd77`, contract `a572dd442`, runner `85dfc22a7`, policy
+  `515bab1b3`, driver `23f33ac59`, cli `607a2b4f7`, wizard `fc0b9b5dc`, side `f5dc83327`. Conflicts:
+  PR 1 coverage.rs (main's counts plus PR 1's 7 `publish_if` cases); branch 6 Cargo.lock (main's
+  objc2 plus our libc, `cargo metadata --locked` clean). Wizard full gate: all non-test steps pass;
+  gents+gents-loop 3646/2 where both failures reproduce 3/3 on main (`r6_background_tools::wait_tool_caller_interrupt…`,
+  `hook::tests::cancelling_in_flight_terminalizes_native_tools_and_children`, the latter new on main
+  `575db1eb2`); gents-cli 1230/4 known environmental. No new fix commits. GitHub grouped #1653 to
+  #1716 into stack 1659 (maintainer, 13:57 UTC); CI runs only once the stack's base PR is mergeable.
+  User's standing instruction: when CI is green on all seven, mark them ready and request review
+  from jackzampolin.
