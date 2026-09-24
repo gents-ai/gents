@@ -90,13 +90,17 @@ function MountedBehaviorPicker({
     <>
       <Popover
         open={popover.open}
-        onOpenChange={popover.onOpenChange}
+        onOpenChange={(next) => {
+          /* reopening the picker withdraws a create still waiting on its exit */
+          if (next) createAfterClose.current = false;
+          popover.onOpenChange(next);
+        }}
         onOpenChangeComplete={(next) => {
+          /* a popover opened after Create was clicked takes the turn instead */
+          const create = !next && createAfterClose.current && !popover.peerPending();
+          if (!next) createAfterClose.current = false;
           popover.onOpenChangeComplete(next);
-          if (!next && createAfterClose.current) {
-            createAfterClose.current = false;
-            setCreating(true);
-          }
+          if (create) setCreating(true);
         }}
       >
         <PopoverTrigger

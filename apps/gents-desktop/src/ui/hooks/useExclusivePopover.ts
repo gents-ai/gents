@@ -100,5 +100,11 @@ export function useExclusivePopover(onClose?: () => void) {
     [id],
   );
 
-  return { open, onOpenChange, onOpenChangeComplete, popupRef };
+  /** Another popover asked to open while this one was active. */
+  const peerPending = useCallback(
+    () => pendingPopoverId !== null && pendingPopoverId !== id,
+    [id],
+  );
+
+  return { open, onOpenChange, onOpenChangeComplete, popupRef, peerPending };
 }

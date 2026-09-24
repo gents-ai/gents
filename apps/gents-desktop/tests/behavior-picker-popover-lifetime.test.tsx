@@ -148,6 +148,25 @@ describe("BehaviorPicker popover lifetime", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("lets a popover opened during the picker's exit take the turn from create", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await screen.findByRole("dialog", { name: "Choose behavior" });
+    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
+    await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
+
+    await acknowledgeClose();
+    expect(
+      await screen.findByRole("dialog", { name: "Database sync details" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("dialog", { name: "New behavior" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
   it("cancels a pending picker when its chosen behavior disappears", async () => {
     const user = userEvent.setup();
     const view = render(<Harness />);
