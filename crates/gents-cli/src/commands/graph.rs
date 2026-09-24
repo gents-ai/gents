@@ -96,6 +96,21 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
             "would_write": false,
         }));
     }
+    let distribution = gents::pack::resolve_pack(&args.package)?;
+    if !distribution.manifest.metadata.plugins.is_empty() {
+        // A plugin runs on the host of the node that calls it; a remote
+        // node's host is not reachable from here.
+        anyhow::ensure!(
+            args.scope.graphql.is_none(),
+            "{} ships plugins, which install on the node's own host; run the install there \
+             with --home",
+            args.package
+        );
+        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+        super::pack::install_pack_plugins(&home, &distribution.manifest, |path| {
+            distribution.asset(path)
+        })?;
+    }
     let receipt =
         install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await?;
     let previous = load_active_graph_plan_with_access(&access, &owner_did, &receipt.graph_id)

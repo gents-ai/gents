@@ -38,6 +38,15 @@ pub struct PackIdentity {
     pub coordinate: String,
     pub version: String,
     pub digest: String,
+    /// The plugins this install put in the host's plugin store.
+    pub plugins: Vec<InstalledPackPlugin>,
+}
+
+/// A plugin a pack install stored, by name and artifact digest.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InstalledPackPlugin {
+    pub name: String,
+    pub digest: String,
 }
 
 /// What to do with a document someone edited since the pack wrote it.
@@ -65,6 +74,7 @@ struct Record {
     doc_id: Option<String>,
     digest: Option<String>,
     documents: BTreeMap<String, RecordedDocument>,
+    plugins: Vec<InstalledPackPlugin>,
     history: Vec<String>,
 }
 
@@ -79,6 +89,8 @@ pub struct InstallReport {
     pub adopted: Vec<String>,
     pub kept: Vec<String>,
     pub removed: Vec<String>,
+    /// Plugins the install recorded, or the removal released.
+    pub plugins: Vec<InstalledPackPlugin>,
 }
 
 fn key(collection: &str, id: &str) -> String {
@@ -96,7 +108,7 @@ fn collection_named(name: &str) -> Result<Collection> {
 async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) -> Result<Record> {
     let response = txn
         .execute(&format!(
-            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID digest documents history }} }}"#,
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }}, coordinate: {{ _eq: "{}" }} }}, limit: 2) {{ _docID digest documents plugins history }} }}"#,
             escape_graphql_string(owner),
             escape_graphql_string(coordinate)
         ))
@@ -120,6 +132,7 @@ async fn read_record(txn: &ConfigApplyTxn<'_>, owner: &str, coordinate: &str) ->
             .into_iter()
             .map(|document| (key(&document.collection, &document.id), document))
             .collect(),
+        plugins: serde_json::from_value(row["plugins"].clone()).unwrap_or_default(),
         history: serde_json::from_value(row["history"].clone()).unwrap_or_default(),
     })
 }
@@ -244,6 +257,7 @@ pub(crate) async fn install_in_txn(
         .with_removals(removals)?;
     crate::config_client::validate_desired_state_plan(txn, &plan).await?;
     report.applied = crate::config_client::apply_desired_state_plan(txn, &plan).await?;
+    report.plugins = pack.plugins.clone();
     // The record holds what is stored, not what was authored: the stored
     // document carries merged tags and normalized fields, and drift is judged
     // against it.
@@ -268,7 +282,7 @@ pub(crate) async fn install_in_txn(
         "version": pack.version,
         "digest": pack.digest,
         "documents": recorded.into_values().collect::<Vec<_>>(),
-        "plugins": [],
+        "plugins": pack.plugins,
         "history": history,
         "installed_at": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     });
@@ -322,7 +336,10 @@ pub async fn remove_pack(
                     .doc_id
                     .clone()
                     .with_context(|| format!("{coordinate} is not installed for {owner}"))?;
-                let mut report = InstallReport::default();
+                let mut report = InstallReport {
+                    plugins: record.plugins.clone(),
+                    ..InstallReport::default()
+                };
                 let mut edited = Vec::new();
                 let mut removals = Vec::new();
                 for (name, document) in &record.documents {

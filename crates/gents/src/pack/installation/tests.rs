@@ -29,6 +29,10 @@ fn identity(version: &str) -> PackIdentity {
             "sha256:{}",
             version.repeat(64).chars().take(64).collect::<String>()
         ),
+        plugins: vec![InstalledPackPlugin {
+            name: "echo".into(),
+            digest: format!("sha256:{}", "e".repeat(64)),
+        }],
     }
 }
 
@@ -89,6 +93,11 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
         .await
         .unwrap();
     assert_eq!(removed.removed, vec!["Tools/alpha"]);
+    assert_eq!(
+        removed.plugins,
+        identity("1").plugins,
+        "removal releases what install stored"
+    );
     assert_eq!(
         tools_ids(&access).await,
         vec!["shared"],

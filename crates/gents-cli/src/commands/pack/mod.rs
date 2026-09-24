@@ -352,6 +352,30 @@ fn prune(args: PackPruneArgs) -> Result<()> {
     }))
 }
 
+/// Admits and stores every plugin a pack ships in `home`'s plugin store, the
+/// one `gents plugin install` uses, so a plugin that arrived inside a pack
+/// runs by name like one installed alone.
+pub(crate) fn install_pack_plugins<'a>(
+    home: &std::path::Path,
+    manifest: &PackManifest,
+    asset: impl Fn(&str) -> Result<&'a [u8]>,
+) -> Result<Vec<super::plugin::store::InstalledPlugin>> {
+    manifest
+        .metadata
+        .plugins
+        .iter()
+        .map(|plugin| {
+            super::plugin::install_from_pack(
+                home,
+                &manifest.metadata.namespace,
+                &manifest.version,
+                plugin,
+                asset(&plugin.artifact)?,
+            )
+        })
+        .collect()
+}
+
 /// `gents pack remove`: deletes what the pack's install created, keeping
 /// documents it adopted, and forgets the install.
 async fn remove(args: PackRemoveArgs) -> Result<()> {
@@ -380,6 +404,18 @@ async fn remove(args: PackRemoveArgs) -> Result<()> {
         args.drift.policy(),
     )
     .await?;
+    if !report.plugins.is_empty() {
+        let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+        for plugin in &report.plugins {
+            // Another install may have replaced it since; only this pack's
+            // own artifact is forgotten.
+            if super::plugin::store::read_record(&home, namespace, &plugin.name)
+                .is_ok_and(|record| record.digest == plugin.digest)
+            {
+                super::plugin::store::remove_record(&home, namespace, &plugin.name)?;
+            }
+        }
+    }
     crate::print_json(
         &json!({ "pack": format!("{namespace}/{name}"), "owner": owner, "removed": report }),
     )
@@ -582,6 +618,20 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
                 .await
                 .context("pack install schemas")?;
+            let plugins = if pack.manifest().metadata.plugins.is_empty() {
+                Vec::new()
+            } else {
+                // A plugin runs on the host of the node that calls it; a
+                // remote node's host is not reachable from here.
+                anyhow::ensure!(
+                    args.scope.graphql.is_none(),
+                    "{} ships plugins, which install on the node's own host; run the install \
+                     there with --home",
+                    pack.manifest().name
+                );
+                let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+                install_pack_plugins(&home, pack.manifest(), |path| pack.asset(path))?
+            };
             let identity = gents::pack::PackIdentity {
                 coordinate: format!(
                     "{}/{}",
@@ -590,6 +640,13 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                 ),
                 version: pack.manifest().version.clone(),
                 digest: pack.digest().to_owned(),
+                plugins: plugins
+                    .iter()
+                    .map(|plugin| gents::pack::InstalledPackPlugin {
+                        name: plugin.name.clone(),
+                        digest: plugin.digest.clone(),
+                    })
+                    .collect(),
             };
             let apply = gents::pack::install_pack_documents(
                 &access,
@@ -645,17 +702,8 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             // a plugin that arrived bundled in a pack is just as runnable
             // by name (`gents plugin run <name>`) as one installed on its
             // own.
-            let mut installed_plugins = Vec::new();
-            for plugin in &pack.manifest().metadata.plugins {
-                let artifact_bytes = pack.asset(&plugin.artifact)?;
-                installed_plugins.push(super::plugin::install_from_pack(
-                    &home,
-                    &pack.manifest().metadata.namespace,
-                    &pack.manifest().version,
-                    plugin,
-                    artifact_bytes,
-                )?);
-            }
+            let installed_plugins =
+                install_pack_plugins(&home, pack.manifest(), |path| pack.asset(path))?;
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),
