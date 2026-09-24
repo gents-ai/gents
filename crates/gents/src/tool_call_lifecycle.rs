@@ -237,7 +237,7 @@ mod background_hook_conformance;
 #[cfg(test)]
 mod cascade_source_conformance;
 #[cfg(test)]
-mod completion_owner_conformance;
+pub(crate) mod completion_owner_conformance;
 #[cfg(test)]
 mod composed_conformance;
 #[cfg(test)]
