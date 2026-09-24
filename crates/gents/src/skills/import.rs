@@ -15,6 +15,12 @@ const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
 pub struct SkillFrontmatter {
     pub name: Option<String>,
     pub description: Option<String>,
+    /// Agent Skills `license`.
+    #[serde(default)]
+    pub license: Option<String>,
+    /// Agent Skills `allowed-tools`: space-separated tool names.
+    #[serde(default, rename = "allowed-tools")]
+    pub allowed_tools: Option<String>,
 }
 
 /// Shared by operator imports and model-facing configuration. Broken metadata

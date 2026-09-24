@@ -16,14 +16,14 @@ use crate::cli::{PackAddArgs, PackAddCommand, PackFmtArgs, PackPart, PackRemoveP
 
 const CONFIG: &str = "pack_config.json";
 
-struct PackEdit {
-    dir: PathBuf,
-    manifest: Value,
+pub(super) struct PackEdit {
+    pub(super) dir: PathBuf,
+    pub(super) manifest: Value,
     config: Option<Value>,
 }
 
 impl PackEdit {
-    fn load(dir: &Path) -> Result<Self> {
+    pub(super) fn load(dir: &Path) -> Result<Self> {
         let manifest = read_json(&dir.join("manifest.json"))?;
         let config = match manifest.get("config").and_then(Value::as_str) {
             Some(path) => Some(read_json(&dir.join(path))?),
@@ -36,7 +36,7 @@ impl PackEdit {
         })
     }
 
-    fn save(&self) -> Result<()> {
+    pub(super) fn save(&self) -> Result<()> {
         write_json(&self.dir.join("manifest.json"), &self.manifest)?;
         if let (Some(config), Some(path)) = (
             &self.config,
@@ -53,7 +53,7 @@ impl PackEdit {
 
     /// The configuration, created (and the pack made a documents pack) when
     /// an assets pack gains its first document.
-    fn config(&mut self) -> Result<&mut Map<String, Value>> {
+    pub(super) fn config(&mut self) -> Result<&mut Map<String, Value>> {
         if self.config.is_none() {
             anyhow::ensure!(
                 matches!(self.kind(), "assets" | "documents" | "graph"),
@@ -75,11 +75,11 @@ impl PackEdit {
             .context("pack_config.json is not a JSON object")
     }
 
-    fn list(&mut self, key: &str) -> Result<&mut Vec<Value>> {
+    pub(super) fn list(&mut self, key: &str) -> Result<&mut Vec<Value>> {
         list_in(self.config()?, key)
     }
 
-    fn manifest_list(&mut self, key: &str) -> Result<&mut Vec<Value>> {
+    pub(super) fn manifest_list(&mut self, key: &str) -> Result<&mut Vec<Value>> {
         list_in(
             self.manifest
                 .as_object_mut()
@@ -123,7 +123,7 @@ impl PackEdit {
     }
 
     /// Writes a new file and declares it.
-    fn create_file(&mut self, path: &str, contents: &str) -> Result<()> {
+    pub(super) fn create_file(&mut self, path: &str, contents: impl AsRef<[u8]>) -> Result<()> {
         let target = self.dir.join(path);
         anyhow::ensure!(!target.exists(), "{path} already exists");
         std::fs::create_dir_all(target.parent().context("file has no parent")?)?;
@@ -204,7 +204,7 @@ pub(crate) fn add(args: PackAddArgs) -> Result<()> {
     pack.save()
 }
 
-fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {
+pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<()> {
     match command {
         PackAddCommand::Behavior { id, slot } => add_behavior(pack, &id, slot.as_deref()),
         PackAddCommand::Task { id, behavior } => {

@@ -503,6 +503,41 @@ pub(crate) struct PackTestArgs {
     pub(crate) scenario: bool,
 }
 
+/// The ecosystem a plugin being imported comes from.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PackImportFrom {
+    /// Agent Plugins: `plugin.json`, `skills/`, `mcp.json`.
+    AgentPlugins,
+    /// Claude Code: `.claude-plugin/plugin.json`.
+    Claude,
+    /// Codex: `.codex-plugin/plugin.json`.
+    Codex,
+    /// Hermes Agent: `plugin.yaml`.
+    Hermes,
+    /// An MCP registry `server.json`.
+    Mcp,
+    /// A single Agent Skill: `SKILL.md`.
+    Skill,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackImportArgs {
+    #[arg(help = "The plugin: a directory or a git URL")]
+    pub(crate) source: String,
+    #[arg(long, value_enum, help = "Its ecosystem; detected when omitted")]
+    pub(crate) from: Option<PackImportFrom>,
+    #[arg(long, help = "Where to write the pack; defaults to ./<name>")]
+    pub(crate) out: Option<PathBuf>,
+    #[arg(long, help = "snake_case pack name; defaults to the plugin's own name")]
+    pub(crate) name: Option<String>,
+    #[arg(
+        long,
+        default_value = "gents",
+        help = "Registry namespace the pack publishes under"
+    )]
+    pub(crate) namespace: String,
+}
+
 #[derive(clap::Args)]
 pub(crate) struct PackCheckArgs {
     #[arg(help = "Pack directories to check; defaults to the current directory")]
@@ -540,6 +575,8 @@ pub(crate) enum PackCommand {
     New(PackNewArgs),
     /// Scaffold a pack in the current directory, named after it.
     Init(PackScaffoldArgs),
+    /// Convert a plugin from another ecosystem into a pack directory to review.
+    Import(PackImportArgs),
     /// Add a part to a pack and record it in manifest.json.
     Add(PackAddArgs),
     /// Remove a part and every file it added.
