@@ -1,6 +1,8 @@
 use super::*;
 
 impl ToolCallLifecycle {
+    pub const CANCEL_DURING_RUN_OUTPUT: &'static str = "tool call cancelled";
+
     /// Running → Completed for bridge (subagent) tools.
     ///
     /// Lean parity: bridge_complete. Parent tool .running → .completed when
@@ -394,7 +396,7 @@ impl ToolCallLifecycle {
             remote_cancel_intent_at,
             completion_reason: Some(completion_reason),
         };
-        let raw = "tool call cancelled";
+        let raw = Self::CANCEL_DURING_RUN_OUTPUT;
         let updated = match presented {
             Some((rendered, presentation)) => {
                 self.terminalize_raw_with_presentation(

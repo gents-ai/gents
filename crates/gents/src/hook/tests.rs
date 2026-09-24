@@ -2806,7 +2806,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
         "cascade cancel should latch child interrupt_requested_at"
     );
 
-    // Late complete must not overwrite the interrupt terminal (CAS).
+    // Divergent late output must not overwrite the durable interrupt terminal.
     let mut reloaded = crate::tool_call_lifecycle::ToolCallLifecycle::load(
         node.clone(),
         &session_id,
@@ -2815,7 +2815,7 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     .await
     .unwrap()
     .expect("outer row");
-    // Force in-memory running so complete() is attempted; durable CAS must lose.
+    // A stale in-memory Running observation is not authority to replace output.
     reloaded.set_state(crate::tool_call_lifecycle::ToolCallState::Running);
     reloaded.set_started_at(Some(chrono::Utc::now() - chrono::Duration::seconds(1)));
     let late_completion = reloaded.complete("late success").await;
@@ -2824,10 +2824,14 @@ async fn cancelling_in_flight_terminalizes_native_tools_and_children() {
     assert!(
         late_error
             .to_string()
-            .contains("canonical tool delivery replay payload differs from terminal result"),
+            .contains("terminal raw tool result is not an exact extension of persisted raw output"),
         "unexpected late-completion failure: {late_error:#}"
     );
     let outer_after = fetch_tool_call_row(&node, &session_id, "native-tool").await;
+    assert_eq!(
+        outer_after, outer_row,
+        "late completion changed the terminal row"
+    );
     assert_eq!(
         outer_after
             .get("lifecycle_state")
