@@ -3,6 +3,7 @@ import {
   Brain,
   Cpu,
   ListChecks,
+  Package,
   Play,
   SlidersHorizontal,
   Sparkles,
@@ -25,5 +26,6 @@ export const SECTIONS = [
   { group: "Automation", id: "schedules", label: "Schedules", icon: Timer },
   { group: "Automation", id: "event-sources", label: "Event sources", icon: Zap },
   { group: "Automation", id: "triggers", label: "Triggers", icon: Zap },
+  { group: "Packs", id: "packs", label: "Packs", icon: Package },
 ] as const;
 export type SectionId = (typeof SECTIONS)[number]["id"];
