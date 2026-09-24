@@ -377,7 +377,8 @@ def admissionsValid (world : World) (message : MessageEnvelope)
         | [] => admission.context.spawnBehaviorId.isNone
         | [route] => admission.context.awaitMode == .background &&
             admission.context.childRequestId.isSome &&
-            admission.context.spawnBehaviorId == some route.2.2
+            admission.context.spawnBehaviorId == some route.2.2 &&
+            receiveDelegatedWorkspace world.workspace admission.delegatedWorkspace
         | _ => false
         ))
 
@@ -454,7 +455,7 @@ def prepareDelegatedCalls (world : World) (segments : List Segment) (message : M
         | some intent => .ok intent
       if target.coordinator != world.principal then .error .invalidDelegation
       let row ← match prepareDelegatedCall segments noDeniedDocuments message intent
-          target.coordinator target.target target.behavior with
+          target.coordinator target.target target.behavior world.subagentDepth world.workspace with
         | .error _ => .error .invalidDelegation
         | .ok row => .ok row
       let later ← prepareDelegatedCalls world segments message rest

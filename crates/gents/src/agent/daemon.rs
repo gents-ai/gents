@@ -129,7 +129,6 @@ pub(super) struct BehaviorDaemon<M: CompletionModel> {
     preamble: String,
     loop_tools: Arc<Vec<Box<dyn crate::llm::tool::ToolDyn>>>,
     prompt_builder: LayeredPromptBuilder,
-    stream_writer: DefraStreamWriter,
     compactor: Arc<dyn ReductionEngine>,
     compaction_options: ReductionOptions,
     hook_failure_policy: FailurePolicy,
@@ -172,11 +171,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         slot_generation: u64,
         request_admission: crate::request_admission::AgentRequestAdmissionVerifier,
     ) -> Result<Self> {
-        let stream_writer = DefraStreamWriter::new(
-            node.clone(),
-            behavior.agent_did(),
-            Duration::from_millis(behavior.stream_batch_ms),
-        );
         let mut compaction_config = crate::completion_factory::loop_config(
             behavior.as_ref(),
             preamble.clone(),
@@ -197,7 +191,6 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             preamble,
             loop_tools,
             prompt_builder,
-            stream_writer,
             compactor,
             compaction_options,
             hook_failure_policy,
@@ -396,6 +389,14 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         request: AgentRequest,
         shutdown: tokio::sync::watch::Receiver<bool>,
     ) {
+        // Publication and terminal selection belong to this one execution.
+        // Dropping the request future also drops its in-memory projection;
+        // durable transcript and recovery state remain in DefraDB.
+        let stream_writer = DefraStreamWriter::new(
+            self.node.clone(),
+            self.behavior.agent_did(),
+            Duration::from_millis(self.behavior.stream_batch_ms),
+        );
         let Some(request) = verify_request_at_claim_boundary(
             &self.request_admission,
             self.node.clone(),
@@ -442,7 +443,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                         record_current_failure_class(&error);
                         let _ = finalize_request_failure(
                             &mut lifecycle,
-                            &self.stream_writer,
+                            &stream_writer,
                             &error.to_string(),
                             &request.request_id,
                         )
@@ -457,7 +458,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     record_current_failure_class(&error);
                     let _ = finalize_request_failure(
                         &mut lifecycle,
-                        &self.stream_writer,
+                        &stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
@@ -556,7 +557,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
             );
             finalize_request_failure(
                 &mut lifecycle,
-                &self.stream_writer,
+                &stream_writer,
                 &error.to_string(),
                 &request.request_id,
             )
@@ -566,10 +567,10 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
 
         match crate::workspace::writer_request_already_sealed(self.node.as_ref(), &request).await {
             Ok(true) => {
-                if let Err(error) = lifecycle.begin_owned_execution(&self.stream_writer).await {
+                if let Err(error) = lifecycle.begin_owned_execution(&stream_writer).await {
                     finalize_request_failure(
                         &mut lifecycle,
-                        &self.stream_writer,
+                        &stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
@@ -596,7 +597,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                     finalize_request_failure(
                         &mut lifecycle,
-                        &self.stream_writer,
+                        &stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
@@ -605,7 +606,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 }
                 if let Err(error) = terminalize_request(
                     &mut lifecycle,
-                    &self.stream_writer,
+                    &stream_writer,
                     RequestTerminalOutcome::Completed,
                     None,
                 )
@@ -628,7 +629,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 finalize_request_failure(
                     &mut lifecycle,
-                    &self.stream_writer,
+                    &stream_writer,
                     &error.to_string(),
                     &request.request_id,
                 )
@@ -647,7 +648,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
         );
 
         let result = self
-            .handle_request(&mut lifecycle, shutdown, interrupt_rx)
+            .handle_request(&mut lifecycle, &stream_writer, shutdown, interrupt_rx)
             .await;
         observer.abort();
 
@@ -673,7 +674,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                     if finalize_request_failure(
                         &mut lifecycle,
-                        &self.stream_writer,
+                        &stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
@@ -713,7 +714,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                     // a pending commit-tree and write the durable receipt.
                     finalize_request_failure(
                         &mut lifecycle,
-                        &self.stream_writer,
+                        &stream_writer,
                         &error.to_string(),
                         &request.request_id,
                     )
@@ -722,7 +723,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 }
                 if let Err(error) = terminalize_request(
                     &mut lifecycle,
-                    &self.stream_writer,
+                    &stream_writer,
                     RequestTerminalOutcome::Completed,
                     None,
                 )
@@ -738,7 +739,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 record_current_request_outcome("interrupted");
                 match terminalize_request(
                     &mut lifecycle,
-                    &self.stream_writer,
+                    &stream_writer,
                     RequestTerminalOutcome::Interrupted,
                     Some("interrupted"),
                 )
@@ -794,7 +795,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 if finalize_request_failure(
                     &mut lifecycle,
-                    &self.stream_writer,
+                    &stream_writer,
                     &error.to_string(),
                     &request.request_id,
                 )
@@ -822,7 +823,7 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 );
                 if finalize_request_failure(
                     &mut lifecycle,
-                    &self.stream_writer,
+                    &stream_writer,
                     &error.to_string(),
                     &request.request_id,
                 )

@@ -326,10 +326,13 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
             })
         });
         let response_row = rendered_output.as_ref();
+        let response_started_at_ms = if projection.has_response_start() {
+            None
+        } else {
+            canonical_output_started_at_ms(state, &canonical_output).await?
+        };
         projection.observe_response_timing(
-            request_row
-                .and_then(|row| nonempty_timestamp_field(row, "created_at"))
-                .and_then(timestamp_millis),
+            response_started_at_ms,
             request_row
                 .and_then(|row| nonempty_timestamp_field(row, "terminalized_at"))
                 .and_then(timestamp_millis),
@@ -438,6 +441,28 @@ pub(in crate::commands::codex_shim) async fn stream_gents_turn(
                             .await?;
                     }
                 }
+            }
+        }
+        // A published provider-turn header closes its selected source before
+        // the request settles: complete that reasoning item at publication
+        // with the header's durable text. Completion is idempotent per item,
+        // so the later terminal pass does not replay it.
+        if !projection_settled {
+            if let gents::session::CanonicalRequestOutput::Published {
+                header,
+                presentation,
+                ..
+            } = &canonical_output
+            {
+                projection.observe_response_timing(None, timestamp_millis(&header.created_at));
+                let item_id = latest_reasoning_cursor.active_item_id(&current.request_id);
+                projection
+                    .finish_reasoning(
+                        outbound,
+                        &item_id,
+                        presentation.reasoning_markdown.as_deref(),
+                    )
+                    .await?;
             }
         }
 
@@ -794,6 +819,67 @@ fn nonempty_timestamp_field<'a>(row: &'a Value, field: &str) -> Option<&'a str> 
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
+}
+
+/// When the owner-selected output began: the first segment of the selected
+/// live source, or the selected header's creation for a native terminal
+/// message. Request admission time is not response start.
+async fn canonical_output_started_at_ms(
+    state: &ShimState,
+    output: &gents::session::CanonicalRequestOutput,
+) -> Result<Option<i64>> {
+    use gents::session::CanonicalRequestOutput;
+    let (presentation, header) = match output {
+        CanonicalRequestOutput::Live(presentation)
+        | CanonicalRequestOutput::Settling(presentation) => (presentation, None),
+        CanonicalRequestOutput::Published {
+            header,
+            presentation,
+            ..
+        }
+        | CanonicalRequestOutput::TerminalMessage {
+            header,
+            presentation,
+            ..
+        } => (presentation, Some(header)),
+        _ => return Ok(None),
+    };
+    let Some(selected) = presentation.selected_source.as_ref() else {
+        return Ok(header.and_then(|header| timestamp_millis(&header.created_at)));
+    };
+    let response = query_node_json(
+        state.node.as_ref(),
+        &format!(
+            r#"{{ AgentOutputSegment(
+                filter: {{ request_doc_id: {{ _eq: "{}" }} }},
+                order: {{ created_at: ASC }}
+            ) {{ source writer created_at }} }}"#,
+            gents::graphql::escape_graphql_string(&selected.request_doc_id),
+        ),
+    )
+    .await
+    .context("loading selected Codex output segments")?;
+    let is_selected = |row: &Value| {
+        let source = row
+            .get("source")
+            .cloned()
+            .map(serde_json::from_value::<gents_protocol::output::OutputSource>);
+        let writer = row
+            .get("writer")
+            .cloned()
+            .map(serde_json::from_value::<gents_protocol::output::OutputWriter>);
+        matches!(source, Some(Ok(source)) if source == selected.source)
+            && matches!(writer, Some(Ok(writer)) if writer == selected.writer)
+    };
+    Ok(response
+        .pointer("/data/AgentOutputSegment")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| is_selected(row))
+        .filter_map(|row| nonempty_timestamp_field(row, "created_at"))
+        .filter_map(timestamp_millis)
+        .min())
 }
 
 fn progress_marker(

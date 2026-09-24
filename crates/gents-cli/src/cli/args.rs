@@ -1247,6 +1247,11 @@ pub(crate) struct ChatArgs {
     pub(crate) timeout_secs: u64,
     #[arg(long, default_value_t = 1)]
     pub(crate) poll_secs: u64,
+    #[arg(
+        long,
+        help = "Print raw tool call arguments/results as JSON instead of the short summary line"
+    )]
+    pub(crate) verbose: bool,
     #[arg(value_name = "MESSAGE")]
     pub(crate) message: Vec<String>,
 }

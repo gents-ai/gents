@@ -61,29 +61,6 @@ inductive Step where
   | commitWhileSiblingWaits (operation : Operation)
   | replicate (record : Segment)
 
-/-- Executable provider-native `spawn_subagent` input. Its argument stream is
-the exact JSON consumed by the Rust publication owner, unlike the older
-abstract `child`/`nativeCommand` witnesses. -/
-def realSpawnArguments : String :=
-  "{\"name\":\"lean-behavior-8\",\"prompt\":\"work\",\"await_mode\":\"background\"}"
-
-def realSpawnArgumentBytes : List UInt8 := realSpawnArguments.toUTF8.data.toList
-
-def realSpawnProviderTurn : Segment :=
-  { providerTurn with
-    flush := some ⟨0,
-      [⟨0, realSpawnArgumentBytes.length, some
-        { block := 0, part := 0, kind := .arguments,
-          tool := some ⟨"native-call", none, "spawn_subagent"⟩ }⟩],
-      realSpawnArgumentBytes⟩
-    close := some (.closed .complete 1 [realSpawnArgumentBytes.length]) }
-
-def realSpawnProviderMessage : MessageEnvelope :=
-  { providerMessage with
-    header := { providerMessage.header with refs := [⟨500, 0⟩] }
-    blocks := [.toolCall 600 "native-call" none "spawn_subagent"
-      ⟨⟨500, 0⟩, .full⟩ none none] }
-
 def Input.step : Input → Step
   | .acceptForeground =>
       .commit (.accept 7 providerTurn providerMessage [] [foregroundAdmission])
@@ -372,6 +349,43 @@ def leaseOrderingCases : List Case :=
   , mkCase "real_spawn_dispatched_wait_explicitly_renews"
       (routedWorld 5) [.realSpawnAccept, .dispatch 5, .renew 8 10] ]
 
+/-- Four inference sources whose insertion order and JSON spelling both
+disagree with numeric `(scope, turn, attempt)` identity order. -/
+private def numericRecoveryRawA : Segment :=
+  { raw 910 9 0 5 with coordinate := ⟨10, .provider 9 9 9⟩ }
+
+private def numericRecoveryRawB : Segment :=
+  { raw 911 10 0 5 with coordinate := ⟨10, .provider 9 9 10⟩ }
+
+private def numericRecoveryRawC : Segment :=
+  { raw 912 0 0 5 with coordinate := ⟨10, .provider 9 10 0⟩ }
+
+private def numericRecoveryRawD : Segment :=
+  { raw 913 0 0 5 with coordinate := ⟨10, .provider 10 0 0⟩ }
+
+private def numericRecoveryItems : List RecoveryItem :=
+  [ ⟨{ partialClose 920 9 1 10 with coordinate := numericRecoveryRawA.coordinate },
+      some (recoveryMessage 930 920 0 10)⟩
+  , ⟨{ partialClose 921 10 1 10 with coordinate := numericRecoveryRawB.coordinate },
+      some (recoveryMessage 931 921 1 10)⟩
+  , ⟨{ partialClose 922 0 1 10 with coordinate := numericRecoveryRawC.coordinate },
+      some (recoveryMessage 932 922 2 10)⟩
+  , ⟨{ partialClose 923 0 1 10 with coordinate := numericRecoveryRawD.coordinate },
+      some (recoveryMessage 933 923 3 10)⟩ ]
+
+private def numericRecoveryInputs : List Input :=
+  [.appendRaw 1 5 numericRecoveryRawD,
+   .appendRaw 1 5 numericRecoveryRawC,
+   .appendRaw 1 5 numericRecoveryRawB,
+   .appendRaw 1 5 numericRecoveryRawA,
+   .recoverTerminal 2 10 8 .failed (.message 933) numericRecoveryItems]
+
+example : ((run (world 5) 600 numericRecoveryInputs).bind List.getLast?).map
+    (fun observation => (observation.accepted,
+      observation.messages.map (fun message => (message.header.id, message.sequence)))) =
+    some (true, [(930, 0), (931, 1), (932, 2), (933, 3)]) := by
+  native_decide
+
 /-- Terminal recovery is distinct from resumable generation replacement. The
 selection is exact and supplied to the canonical transaction, not chosen by
 the observation adapter. -/
@@ -386,7 +400,9 @@ def terminalRecoveryCases : List Case :=
   , mkCase "expired_interrupt_recovery_without_output_selects_none"
       (world 5) [.recoverTerminal 2 10 8 .interrupted .noMessage []]
   , mkCase "terminal_recovery_rejects_invalid_selection"
-      (world 5) [.recoverTerminal 2 10 8 .failed (.message 999) []] ]
+      (world 5) [.recoverTerminal 2 10 8 .failed (.message 999) []]
+  , mkCase "recovery_orders_numeric_scope_turn_and_attempt"
+      (world 5) numericRecoveryInputs ]
 
 /-- One native transaction covers the tool close and its paired result header.
 The separate close/deliver steps remain executable model witnesses, not claims
@@ -416,6 +432,12 @@ def publicationCases : List Case :=
         .acceptTurn regressedProviderClose regressedProviderMessage [foregroundAdmission]]
   , mkCase "real_spawn_same_route_replay_is_idempotent"
       (routedWorld 5) [.realSpawnAccept, .realSpawnAccept]
+  , mkCase "real_spawn_depth_two_copies_parent_depth"
+      (routedDepthWorld 2) [.realSpawnAccept]
+  , mkCase "real_spawn_depth_three_copies_parent_depth"
+      (routedDepthWorld Subagent.maxSubagentDepth) [.realSpawnAccept]
+  , mkCase "real_spawn_fresh_parent_workspace_mismatch_rejected"
+      (routedWorld 5) [.realSpawnWorkspaceDrift]
   , mkCase "real_spawn_route_behavior_drift_rejected_on_replay"
       (routedWorld 5) [.realSpawnAccept, .realSpawnBehaviorDrift]
   , mkCase "real_spawn_route_workspace_drift_rejected_on_replay"
@@ -430,11 +452,16 @@ def publicationCases : List Case :=
       (world 5) [.acceptForeground, .dispatch 5, .backgroundTool, .backgroundReceipt,
         .terminalizeCompleted, .closeForeground]
       "The split close after background receipt has no direct native transaction; bind the bridge-specific receipt and terminal callback scenario separately."
-  , mkCaseFor "spawned_admission_replays_and_rejects_conflicting_child" (world 5) 601
+  , mkCaseFor "spawned_admission_replays_inertly" (world 5) 601
+      [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
+        .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
+        .admitSpawned spawnedAdmission]
+  , { mkCaseFor "spawned_admission_conflicting_child_document_rejected" (world 5) 601
       [.acceptTurn spawnProviderTurn spawnProviderMessage [foregroundAdmission],
         .dispatch 5, .admitSpawned spawnedAdmission, .dispatchCall 5 601,
         .admitSpawned spawnedAdmission,
-        .admitSpawned { spawnedAdmission with document := 602 }] ]
+        .admitSpawned { spawnedAdmission with document := 602 }] with
+      nativeGap := some "The native spawned-child owner derives the child document from the parent and has no candidate child-document argument; it cannot execute the modeled conflicting-document admission." } ]
 
 example : (run (routedWorld 5) 600 [.realSpawnAccept, .realSpawnAccept]).map
     (List.map (·.accepted)) = some [true, true] := by
@@ -494,14 +521,17 @@ def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
       ",\"child_request_id\":" ++ jsonOptionalNat context.childRequestId ++
       ",\"spawn_behavior_id\":" ++ jsonOptionalNat context.spawnBehaviorId
 
-def admissionJson (value : ToolAdmission) : String :=
-  "{" ++ "\"document\":" ++ toString value.document ++ "," ++
-    contextFieldsJson value.context ++ ",\"delegated_workspace\":" ++
-    (value.delegatedWorkspace.map (fun workspace =>
+def delegatedWorkspaceJson (value : Option DelegatedWorkspace) : String :=
+  (value.map (fun workspace =>
       "{\"workspace_id\":" ++ toString workspace.workspaceId ++
       ",\"workspace_owner_agent_did\":" ++ toString workspace.ownerAgent ++
       ",\"workspace_seal_hash\":" ++ jsonOptionalNat workspace.sealHash ++
-      ",\"workspace_authority\":" ++ jsonString workspace.authority.toDefraDB ++ "}")).getD "null" ++ "}"
+      ",\"workspace_authority\":" ++ jsonString workspace.authority.toDefraDB ++ "}")).getD "null"
+
+def admissionJson (value : ToolAdmission) : String :=
+  "{" ++ "\"document\":" ++ toString value.document ++ "," ++
+    contextFieldsJson value.context ++ ",\"delegated_workspace\":" ++
+    delegatedWorkspaceJson value.delegatedWorkspace ++ "}"
 
 def spawnedAdmissionJson (value : SpawnedToolAdmission) : String :=
   "{" ++ "\"document\":" ++ toString value.document ++ ","
@@ -521,6 +551,8 @@ def seedJson (value : World) : String :=
   "{" ++ "\"request_id\":" ++ toString value.requestId ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
     ++ "\"principal\":" ++ toString value.principal ++ ","
+    ++ "\"subagent_depth\":" ++ toString value.subagentDepth ++ ","
+    ++ "\"workspace\":" ++ delegatedWorkspaceJson value.workspace ++ ","
     ++ "\"remote_routes\":" ++ jsonArray (value.remoteRoutes.map fun (call, target, behavior) =>
       "{\"call\":" ++ toString call ++ ",\"target\":" ++ toString target ++
         ",\"behavior\":" ++ toString behavior ++ "}") ++ ","

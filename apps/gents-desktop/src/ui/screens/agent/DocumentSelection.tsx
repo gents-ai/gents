@@ -1,14 +1,18 @@
 import { useState } from "react";
+import { Checkbox } from "@gents/ui/components/checkbox";
 import { Input } from "@gents/ui/components/input";
+import { StackedRow } from "./rows";
 
 /** Select explicit document references; discovery never implicitly grants access. */
 export function DocumentSelection({
   label,
+  description,
   options,
   selected,
   onChange,
 }: {
   label: string;
+  description?: string;
   options: { value: string; label: string; description?: string | null }[];
   selected: string[];
   onChange: (values: string[]) => void;
@@ -31,8 +35,7 @@ export function DocumentSelection({
       .includes(search.toLowerCase()),
   );
   return (
-    <fieldset className="space-y-3 p-4">
-      <legend className="px-1 text-sm font-medium">{label}</legend>
+    <StackedRow label={label} description={description}>
       <Input
         aria-label={`Search ${label.toLowerCase()}`}
         placeholder="Search by name"
@@ -43,15 +46,14 @@ export function DocumentSelection({
         {visible.map((option) => (
           <label
             key={option.value}
-            className="flex cursor-pointer items-start gap-3 rounded-lg p-2 hover:bg-muted"
+            className="flex cursor-pointer items-start gap-3 rounded-lg px-2 py-1.5 hover:bg-accent"
           >
-            <input
-              type="checkbox"
-              className="mt-1"
+            <Checkbox
+              className="mt-0.5"
               checked={selected.includes(option.value)}
-              onChange={(event) =>
+              onCheckedChange={(checked) =>
                 onChange(
-                  event.target.checked
+                  checked
                     ? [...selected, option.value]
                     : selected.filter((id) => id !== option.value),
                 )
@@ -73,6 +75,6 @@ export function DocumentSelection({
           </p>
         )}
       </div>
-    </fieldset>
+    </StackedRow>
   );
 }

@@ -15,7 +15,10 @@ use crate::{
     RequestSubmitOptions, SubmittedRequest, DEFAULT_HTTP_PORT,
 };
 
-use streaming::{load_existing_tool_call_keys, stream_turn_progress};
+use streaming::{
+    load_existing_tool_call_keys, sanitize_summary_text, stream_turn_progress,
+    SUMMARY_ARGUMENT_MAX_CHARS,
+};
 
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -65,6 +68,7 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
                     goal,
                     args.timeout_secs,
                     args.poll_secs,
+                    args.verbose,
                 )
                 .await?;
                 if let Some(path) = args.output_file.as_deref() {
@@ -103,12 +107,14 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
         );
     }
 
+    let prompt_label = chat_prompt_label(&args, runtime_state.as_ref());
+
     let stdin = io::stdin();
     let mut pending_goal = goal;
     let mut lines = stdin.lock().lines();
     let mut stdout = io::stdout();
     loop {
-        write!(stdout, "> ")?;
+        write!(stdout, "{prompt_label}> ")?;
         stdout.flush()?;
         let Some(line) = lines.next() else {
             break;
@@ -131,11 +137,35 @@ pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
             pending_goal.take(),
             args.timeout_secs,
             args.poll_secs,
+            args.verbose,
         )
         .await?;
     }
 
     Ok(())
+}
+
+/// Minimal, one-line context for the interactive prompt: which agent is
+/// listening. Falls back through the sources that can name it, and finally
+/// to a generic label rather than a bare `>` with no context (#1622).
+fn chat_prompt_label(
+    args: &ChatArgs,
+    runtime_state: Option<&crate::shared::StoredRuntimeState>,
+) -> String {
+    sanitize_prompt_label(
+        args.agent_name
+            .clone()
+            .or_else(|| runtime_state.map(|state| state.agent_name.clone())),
+    )
+}
+
+/// Routes a candidate agent-name label through the same control/newline
+/// stripping and bounding used for tool summaries: `agent_name` can come
+/// from `--agent-name` or stored runtime state, neither of which is trusted
+/// terminal input, and this prompt is printed on every turn.
+fn sanitize_prompt_label(name: Option<String>) -> String {
+    name.and_then(|name| sanitize_summary_text(&name, SUMMARY_ARGUMENT_MAX_CHARS))
+        .unwrap_or_else(|| "gents".to_string())
 }
 
 #[derive(Clone, Copy)]
@@ -153,6 +183,7 @@ async fn submit_chat_turn_with_goal(
     goal: Option<GoalBackedSubmission<'_>>,
     timeout_secs: u64,
     poll_secs: u64,
+    verbose: bool,
 ) -> Result<RequestOutputEnvelope> {
     let existing_tool_calls = load_existing_tool_call_keys(graphql, session_id).await?;
     let submitted = match goal {
@@ -186,6 +217,7 @@ async fn submit_chat_turn_with_goal(
         existing_tool_calls,
         timeout_secs,
         poll_secs,
+        verbose,
     )
     .await
 }
@@ -295,4 +327,28 @@ fn chat_turn_output(submitted: &SubmittedRequest, envelope: RequestOutputEnvelop
         "request": request,
         "output": output,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prompt_label_strips_control_characters_and_bounds_a_hostile_agent_name() {
+        let hostile = format!("gents\x1b[31mHACKED\x1b[0m\r\n{}", "x".repeat(200));
+        let label = sanitize_prompt_label(Some(hostile));
+        assert!(!label.contains('\u{1b}'), "ESC leaked: {label:?}");
+        assert!(!label.contains('\r'), "CR leaked: {label:?}");
+        assert!(
+            !label.contains('\n'),
+            "prompt label must stay one line: {label:?}"
+        );
+        assert!(label.chars().count() <= SUMMARY_ARGUMENT_MAX_CHARS + 3);
+    }
+
+    #[test]
+    fn prompt_label_falls_back_to_gents_when_nothing_printable_remains() {
+        assert_eq!(sanitize_prompt_label(None), "gents");
+        assert_eq!(sanitize_prompt_label(Some("\x1b\x07".to_string())), "gents");
+    }
 }

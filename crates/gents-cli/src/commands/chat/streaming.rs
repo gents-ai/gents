@@ -1,5 +1,5 @@
 use std::hash::{Hash, Hasher};
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -14,6 +14,11 @@ use crate::{
 };
 
 use super::SubmittedRequest;
+
+const DIM: &str = "\x1b[2m";
+const RESET: &str = "\x1b[0m";
+const SPINNER_FRAMES: [char; 4] = ['-', '\\', '|', '/'];
+const SPINNER_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Debug, Clone)]
 pub(super) struct ToolCallProgress {
@@ -135,18 +140,117 @@ pub(super) async fn load_existing_tool_call_keys(
         .collect())
 }
 
+/// Whether ANSI styling should be applied to CLI output: only on a real
+/// terminal, and only when the caller has not opted out via `NO_COLOR`
+/// (https://no-color.org — any non-empty *or* empty value disables color).
+fn colors_enabled() -> bool {
+    io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none()
+}
+
+fn dim(text: &str, colors: bool) -> String {
+    if colors {
+        format!("{DIM}{text}{RESET}")
+    } else {
+        text.to_string()
+    }
+}
+
+/// A best-effort "working…" indicator on stderr while a turn is in flight
+/// and nothing has streamed yet (#1622). Only appears when both stdout and
+/// stderr are terminals (see [`spinner_enabled`]), so piped/non-interactive
+/// output stays completely clean. It is cleared — and never shown again for
+/// the rest of this turn — the moment any tool activity or answer text is
+/// about to print.
+struct WorkingIndicator {
+    stop: Option<tokio::sync::oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<()>>,
+}
+
+/// Whether the working indicator should run at all. It writes to stderr, so
+/// stderr must be a terminal for the spinner itself to be interactive rather
+/// than junk in a redirected file; and it's always cleared immediately
+/// before the first stdout print, so stdout must be a terminal too — a
+/// piped/non-interactive stdout is exactly the case that must stay clean,
+/// regardless of what stderr is attached to.
+fn spinner_enabled(stdout_tty: bool, stderr_tty: bool) -> bool {
+    stdout_tty && stderr_tty
+}
+
+impl WorkingIndicator {
+    fn start_if_tty() -> Option<Self> {
+        if !spinner_enabled(io::stdout().is_terminal(), io::stderr().is_terminal()) {
+            return None;
+        }
+        let (stop_tx, stop_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(spin(stop_rx));
+        Some(Self {
+            stop: Some(stop_tx),
+            task: Some(task),
+        })
+    }
+
+    async fn clear(mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(task) = self.task.take() {
+            let _ = task.await;
+        }
+    }
+}
+
+impl Drop for WorkingIndicator {
+    fn drop(&mut self) {
+        // Best-effort cleanup for a path that never reached `clear` (e.g. an
+        // early `bail!`): abort the spinner rather than await it here, since
+        // `Drop` cannot be async. The process is exiting either way.
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+async fn spin(mut stop: tokio::sync::oneshot::Receiver<()>) {
+    let mut ticker = tokio::time::interval(SPINNER_INTERVAL);
+    let mut frame = 0usize;
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                eprint!("\r{} working...", SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]);
+                let _ = io::stderr().flush();
+                frame += 1;
+            }
+            _ = &mut stop => break,
+        }
+    }
+    // Erase the indicator line so the next thing printed starts clean.
+    eprint!("\r\x1b[2K");
+    let _ = io::stderr().flush();
+}
+
+/// Clears `indicator` (if it hasn't already been cleared) right before the
+/// first tool event or answer text prints this turn. A no-op afterward.
+async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
+    if let Some(indicator) = indicator.take() {
+        indicator.clear().await;
+    }
+}
+
 pub(super) async fn stream_turn_progress(
     graphql: &str,
     submitted: &SubmittedRequest,
     mut known_tool_calls: std::collections::BTreeMap<String, String>,
     timeout_secs: u64,
     poll_secs: u64,
+    verbose: bool,
 ) -> Result<RequestOutputEnvelope> {
     let idle_timeout = Duration::from_secs(timeout_secs);
     let mut last_progress_at = tokio::time::Instant::now();
     let mut latest_progress_marker: Option<ChatProgressMarker> = None;
     let mut thinking_printed = false;
     let mut tool_output_fingerprints = std::collections::BTreeMap::new();
+    let colors = colors_enabled();
+    let mut indicator = WorkingIndicator::start_if_tty();
 
     loop {
         let query = chat_progress_query(submitted);
@@ -209,7 +313,8 @@ pub(super) async fn stream_turn_progress(
                 if previous_fingerprint != output_fingerprint {
                     tool_output_fingerprints.insert(tool.tool_call_key.clone(), output_fingerprint);
                     last_progress_at = tokio::time::Instant::now();
-                    println!("{}", format_live_tool_progress_line(&tool));
+                    clear_indicator(&mut indicator).await;
+                    println!("{}", render_live_tool_line(&tool, verbose, colors));
                     io::stdout().flush()?;
                 }
                 continue;
@@ -229,14 +334,11 @@ pub(super) async fn stream_turn_progress(
             tool_output_fingerprints.insert(tool.tool_call_key.clone(), output_fingerprint);
             known_tool_calls.insert(tool.tool_call_key.clone(), tool.status.clone());
             last_progress_at = tokio::time::Instant::now();
+            clear_indicator(&mut indicator).await;
             if previous_status.is_none() && matches!(tool.status.as_str(), "completed" | "error") {
-                println!(
-                    "[tool] {} {}",
-                    tool.tool_name,
-                    format_tool_args_preview(&tool.arguments)
-                );
+                println!("{}", render_tool_start_line(&tool, verbose, colors));
             }
-            println!("{}", format_tool_progress_line(&tool));
+            println!("{}", render_tool_line(&tool, verbose, colors));
             io::stdout().flush()?;
         }
 
@@ -265,7 +367,8 @@ pub(super) async fn stream_turn_progress(
         }
         if let Some(output) = observed_output.as_ref() {
             if !thinking_printed && should_print_thinking(lifecycle_state, output) {
-                println!("[thinking]");
+                clear_indicator(&mut indicator).await;
+                println!("{}", dim("[thinking]", colors));
                 io::stdout().flush()?;
                 thinking_printed = true;
             }
@@ -323,6 +426,7 @@ pub(super) async fn stream_turn_progress(
                         crate::CliOutputObservation::TerminalNoMessage => None,
                         _ => unreachable!("exact terminal selection produced another variant"),
                     };
+                    clear_indicator(&mut indicator).await;
                     if let Some(presentation) = presentation {
                         if !presentation.body_markdown.trim().is_empty() {
                             println!("{}", presentation.body_markdown);
@@ -376,6 +480,57 @@ pub(super) async fn stream_turn_progress(
         }
 
         tokio::time::sleep(Duration::from_secs(poll_secs)).await;
+    }
+}
+
+/// The one-line tool line for this poll: raw JSON args/result under
+/// `--verbose`, otherwise the short, dimmed summary (#1622).
+fn render_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
+    if verbose {
+        format_tool_progress_line(tool)
+    } else {
+        format_tool_summary_line(tool, colors)
+    }
+}
+
+/// The interim line printed while a terminal tool call's canonical result
+/// hasn't replicated yet and only a live/partial output snapshot is
+/// available. Never reports an outcome: the call's own `status` may already
+/// be "completed"/"error", but the snapshot in hand doesn't yet carry the
+/// tool's self-reported `ok`/`status`, so guessing here would risk a wrong
+/// "ok"/"failed" that a moment later flips when the real result lands.
+fn render_live_tool_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
+    if verbose {
+        format_live_tool_progress_line(tool)
+    } else {
+        format_tool_summary_line(
+            &ToolCallProgress {
+                status: "running".to_string(),
+                ..tool.clone()
+            },
+            colors,
+        )
+    }
+}
+
+/// The catch-up "tool started" line printed when a tool call is first seen
+/// already in a terminal state (its running phase was missed between polls).
+fn render_tool_start_line(tool: &ToolCallProgress, verbose: bool, colors: bool) -> String {
+    if verbose {
+        format!(
+            "[tool] {} {}",
+            tool.tool_name,
+            format_tool_args_preview(&tool.arguments)
+        )
+    } else {
+        format_tool_summary_line(
+            &ToolCallProgress {
+                status: "running".to_string(),
+                result: None,
+                ..tool.clone()
+            },
+            colors,
+        )
     }
 }
 
@@ -543,6 +698,180 @@ pub(super) fn preview_compact_text(value: &str) -> Option<String> {
     })
 }
 
+fn bounded_chars(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    format!("{}...", text.chars().take(limit).collect::<String>())
+}
+
+/// The longest a tool's key argument or failure status may be in the short
+/// summary line before eliding the rest — long enough to show a real
+/// command or path, short enough that even a giant one stays one line.
+pub(super) const SUMMARY_ARGUMENT_MAX_CHARS: usize = 100;
+
+/// Makes tool-provided text safe to print as a single line of a terminal
+/// summary. Tool arguments and output are not trusted terminal input: a
+/// multiline command or an embedded control character (ESC, CR, BEL, ...)
+/// would otherwise either break the one-line summary or become a live
+/// terminal control sequence when printed. This collapses every run of
+/// whitespace (including newlines) to a single space, drops every other
+/// control character outright, and bounds the result to `max_chars`
+/// *characters* — never splitting a UTF-8 code point. Returns `None` when
+/// nothing printable remains.
+///
+/// This is the sole normalization/bounding helper for terminal-facing text
+/// that ultimately comes from an untrusted source (tool name, tool
+/// arguments, tool output, or an agent's display name): every such call
+/// site routes through this function rather than adding a second one.
+pub(super) fn sanitize_summary_text(text: &str, max_chars: usize) -> Option<String> {
+    let mut normalized = String::with_capacity(text.len());
+    let mut last_was_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                normalized.push(' ');
+                last_was_space = true;
+            }
+        } else if ch.is_control() {
+            // ESC, BEL, backspace, and friends: printed verbatim these are
+            // live terminal controls, not text, so they are dropped rather
+            // than escaped — there is no safe visible rendering for them in
+            // a plain one-line summary.
+            continue;
+        } else {
+            normalized.push(ch);
+            last_was_space = false;
+        }
+    }
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(bounded_chars(trimmed, max_chars))
+}
+
+/// The single most useful argument for a one-line tool summary: the command
+/// (with its args) for a command-execution tool, the path for a file tool,
+/// and best-effort otherwise. `None` when `arguments` isn't recognized JSON,
+/// so callers fall back to a compact preview of the raw arguments.
+fn key_argument(arguments: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(arguments).ok()?;
+    let object = value.as_object()?;
+
+    if let Some(command) = object.get("command").and_then(Value::as_str) {
+        let extra_args = object
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .filter(|joined| !joined.is_empty());
+        return Some(match extra_args {
+            Some(extra) => format!("{command} {extra}"),
+            None => command.to_string(),
+        });
+    }
+
+    let path = object.get("path").and_then(Value::as_str);
+    if let Some(pattern) = object.get("pattern").and_then(Value::as_str) {
+        return Some(match path.filter(|path| *path != ".") {
+            Some(path) => format!("{pattern} in {path}"),
+            None => pattern.to_string(),
+        });
+    }
+    if let Some(path) = path {
+        return Some(path.to_string());
+    }
+
+    None
+}
+
+/// The two prefixes gents's own tools use for their first, compact-text
+/// metadata line (`gents_exec: {...}` for command tools, `gents_fs: {...}`
+/// for file tools). Both carry at least `ok` (bool) and `status` (string).
+const TOOL_OUTPUT_METADATA_PREFIXES: [&str; 2] = ["gents_exec: ", "gents_fs: "];
+
+fn parse_tool_output_metadata(result: &str) -> Option<(bool, String)> {
+    let prefix = TOOL_OUTPUT_METADATA_PREFIXES
+        .iter()
+        .find(|prefix| result.starts_with(*prefix))?;
+    let rest = &result[prefix.len()..];
+    let json_line = rest.split('\n').next().unwrap_or(rest);
+    let value: Value = serde_json::from_str(json_line).ok()?;
+    Some((
+        value.get("ok").and_then(Value::as_bool).unwrap_or(true),
+        value
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string(),
+    ))
+}
+
+/// One-line outcome for a terminal tool call. `None` while still running:
+/// there is nothing to report yet.
+enum ToolOutcome {
+    Ok,
+    Failed(Option<String>),
+}
+
+impl ToolOutcome {
+    fn render(&self) -> String {
+        match self {
+            ToolOutcome::Ok => "ok".to_string(),
+            ToolOutcome::Failed(Some(status)) => format!("failed: {status}"),
+            ToolOutcome::Failed(None) => "failed".to_string(),
+        }
+    }
+}
+
+/// Derives the outcome from the tool call's own lifecycle `status` plus,
+/// when present, the tool's self-reported `ok`/`status` metadata. A "completed"
+/// AgentToolCall (the call ran and returned) can still report `ok: false`
+/// inside its own output — e.g. a shell command that exited non-zero — and
+/// that inner outcome, not the call's bookkeeping status, is what a user
+/// needs to see (#1622).
+fn tool_outcome(status: &str, result: Option<&str>) -> Option<ToolOutcome> {
+    match status {
+        "completed" => Some(match result.and_then(parse_tool_output_metadata) {
+            Some((ok, meta_status)) if !ok => ToolOutcome::Failed(sanitize_summary_text(
+                &meta_status,
+                SUMMARY_ARGUMENT_MAX_CHARS,
+            )),
+            _ => ToolOutcome::Ok,
+        }),
+        "error" => Some(ToolOutcome::Failed(result.and_then(|value| {
+            sanitize_summary_text(value, SUMMARY_ARGUMENT_MAX_CHARS)
+        }))),
+        _ => None,
+    }
+}
+
+/// Short, dimmed, one-line tool summary: tool name, its key argument, and
+/// — once terminal — the outcome. Raw JSON never appears here; that's only
+/// available with `--verbose` via [`format_tool_progress_line`].
+pub(super) fn format_tool_summary_line(tool: &ToolCallProgress, colors: bool) -> String {
+    let mut line = sanitize_summary_text(&tool.tool_name, SUMMARY_ARGUMENT_MAX_CHARS)
+        .unwrap_or_else(|| "tool".to_string());
+    let argument = key_argument(&tool.arguments)
+        .or_else(|| preview_compact_text(&tool.arguments))
+        .and_then(|argument| sanitize_summary_text(&argument, SUMMARY_ARGUMENT_MAX_CHARS));
+    if let Some(argument) = argument {
+        line.push(' ');
+        line.push_str(&argument);
+    }
+    if let Some(outcome) = tool_outcome(&tool.status, tool.result.as_deref()) {
+        line.push_str(" -> ");
+        line.push_str(&outcome.render());
+    }
+    dim(&format!("  [tool] {line}"), colors)
+}
+
 fn text_fingerprint(value: &str) -> (usize, u64) {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     value.hash(&mut hasher);
@@ -673,5 +1002,326 @@ mod tests {
         // progress, so they must not register new output bytes.
         assert_eq!(absent.canonical_output, retained.canonical_output);
         assert_eq!(retained.canonical_output, None);
+    }
+
+    fn bash_tool(status: &str, result: Option<&str>) -> ToolCallProgress {
+        ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "bash".into(),
+            status: status.into(),
+            arguments: r#"{"args":["branch","--show-current"],"command":"git"}"#.into(),
+            result: result.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn key_argument_joins_command_and_args_for_bash() {
+        assert_eq!(
+            key_argument(r#"{"args":["branch","--show-current"],"command":"git"}"#),
+            Some("git branch --show-current".to_string())
+        );
+        assert_eq!(key_argument(r#"{"command":"ls"}"#), Some("ls".to_string()));
+    }
+
+    #[test]
+    fn key_argument_uses_path_for_file_tools() {
+        assert_eq!(
+            key_argument(r#"{"path":"notes.txt","start_line":1}"#),
+            Some("notes.txt".to_string())
+        );
+    }
+
+    #[test]
+    fn key_argument_prefers_pattern_with_non_default_path_for_search_tools() {
+        assert_eq!(
+            key_argument(r#"{"pattern":"TODO","path":"crates/gents"}"#),
+            Some("TODO in crates/gents".to_string())
+        );
+        assert_eq!(
+            key_argument(r#"{"pattern":"TODO","path":"."}"#),
+            Some("TODO".to_string())
+        );
+    }
+
+    #[test]
+    fn key_argument_is_none_for_unrecognized_shape() {
+        assert_eq!(key_argument(r#"{"objective":"ship it"}"#), None);
+        assert_eq!(key_argument("not json"), None);
+    }
+
+    #[test]
+    fn tool_summary_line_reports_ok_for_a_successful_completed_bash_call() {
+        let tool = bash_tool(
+            "completed",
+            Some(
+                "gents_exec: {\"ok\":true,\"status\":\"success\",\"exit_code\":0}\nstdout:\n(empty)\nstderr:\n(empty)",
+            ),
+        );
+        assert_eq!(
+            format_tool_summary_line(&tool, false),
+            "  [tool] bash git branch --show-current -> ok"
+        );
+    }
+
+    #[test]
+    fn tool_summary_line_reports_failed_with_short_status_for_a_nonzero_exit() {
+        // This is the exact scenario the raw-JSON transcript in #1622 showed:
+        // the AgentToolCall itself completed (the command ran and returned),
+        // but its own output says the command failed.
+        let tool = bash_tool(
+            "completed",
+            Some(
+                "gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\",\"exit_code\":1}\nstdout:\n(empty)\nstderr:\nfatal: not a git repository",
+            ),
+        );
+        assert_eq!(
+            format_tool_summary_line(&tool, false),
+            "  [tool] bash git branch --show-current -> failed: exit_nonzero"
+        );
+    }
+
+    #[test]
+    fn tool_summary_line_reports_failed_for_an_infra_level_tool_error() {
+        let tool = bash_tool("error", Some("command denied by policy: rm"));
+        assert_eq!(
+            format_tool_summary_line(&tool, false),
+            "  [tool] bash git branch --show-current -> failed: command denied by policy: rm"
+        );
+    }
+
+    #[test]
+    fn tool_summary_line_has_no_outcome_while_still_running() {
+        let tool = bash_tool("running", None);
+        assert_eq!(
+            format_tool_summary_line(&tool, false),
+            "  [tool] bash git branch --show-current"
+        );
+    }
+
+    #[test]
+    fn tool_summary_line_uses_path_for_a_successful_file_read() {
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "read_file".into(),
+            status: "completed".into(),
+            arguments: r#"{"path":"notes.txt"}"#.into(),
+            result: Some(
+                "gents_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"read_file\",\"path\":\"notes.txt\"}\nchat-tool-token"
+                    .into(),
+            ),
+        };
+        assert_eq!(
+            format_tool_summary_line(&tool, false),
+            "  [tool] read_file notes.txt -> ok"
+        );
+    }
+
+    #[test]
+    fn tool_summary_line_falls_back_to_a_compact_preview_for_unknown_shapes() {
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "create_goal".into(),
+            status: "completed".into(),
+            arguments: r#"{"objective":"ship it","token_budget":100}"#.into(),
+            result: None,
+        };
+        assert_eq!(
+            format_tool_summary_line(&tool, false),
+            r#"  [tool] create_goal {"objective":"ship it","token_budget":100} -> ok"#
+        );
+    }
+
+    #[test]
+    fn tool_summary_line_is_dimmed_only_when_colors_are_enabled() {
+        let tool = bash_tool("running", None);
+        let colored = format_tool_summary_line(&tool, true);
+        assert!(colored.starts_with(DIM));
+        assert!(colored.ends_with(RESET));
+        assert!(colored.contains("[tool] bash git branch --show-current"));
+
+        let plain = format_tool_summary_line(&tool, false);
+        assert!(!plain.contains('\x1b'));
+        assert_eq!(plain, "  [tool] bash git branch --show-current");
+    }
+
+    #[test]
+    fn tool_summary_line_sanitizes_a_hostile_tool_name_and_status_and_keeps_dim_ansi() {
+        // Both the tool's own name and its self-reported failure status are
+        // attacker-influenced (an MCP tool's declared name; a tool's own
+        // output), not trusted terminal input, same as the key argument.
+        let hostile_name = format!("bash\x1b[31mHACKED\x1b[0m\r\n{}", "n".repeat(200));
+        let hostile_status = format!("exit\x1b[31mHACKED\x1b[0m\r\n{}", "s".repeat(200));
+        let result = format!(
+            "gents_exec: {}\nstdout:\n(empty)\nstderr:\n(empty)",
+            serde_json::json!({"ok": false, "status": hostile_status, "exit_code": 1})
+        );
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: hostile_name,
+            status: "completed".into(),
+            arguments: r#"{"command":"ls"}"#.into(),
+            result: Some(result),
+        };
+
+        let plain = format_tool_summary_line(&tool, false);
+        assert!(
+            !plain.contains('\u{1b}'),
+            "ESC leaked into plain line: {plain:?}"
+        );
+        assert!(
+            !plain.contains('\r'),
+            "CR leaked into plain line: {plain:?}"
+        );
+        assert_eq!(
+            plain.lines().count(),
+            1,
+            "summary must stay one line: {plain:?}"
+        );
+        assert!(
+            plain.chars().count() < 250,
+            "summary line should stay bounded even for hostile name/status: {plain}"
+        );
+
+        let colored = format_tool_summary_line(&tool, true);
+        assert!(
+            colored.starts_with(DIM) && colored.ends_with(RESET),
+            "deliberate dim ANSI wrapper must remain: {colored:?}"
+        );
+        let inner = colored
+            .strip_prefix(DIM)
+            .and_then(|rest| rest.strip_suffix(RESET))
+            .expect("dim wrapper present");
+        assert!(
+            !inner.contains('\u{1b}'),
+            "ESC leaked inside the dim wrapper: {inner:?}"
+        );
+        assert!(
+            !inner.contains('\r'),
+            "CR leaked inside the dim wrapper: {inner:?}"
+        );
+    }
+
+    #[test]
+    fn verbose_tool_line_is_unaffected_by_the_short_summary_formatter() {
+        let tool = bash_tool(
+            "completed",
+            Some("gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\"}"),
+        );
+        // `--verbose` still gets the original raw-JSON rendering, unchanged.
+        assert_eq!(
+            render_tool_line(&tool, true, false),
+            format_tool_progress_line(&tool)
+        );
+        assert!(render_tool_line(&tool, true, false).contains("exit_nonzero"));
+    }
+
+    #[test]
+    fn sanitize_summary_text_collapses_a_multiline_command_to_one_line() {
+        assert_eq!(
+            sanitize_summary_text("echo line1\nline2\r\nline3", 100),
+            Some("echo line1 line2 line3".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_summary_text_strips_esc_and_neutralizes_cr() {
+        // A raw ESC would otherwise be interpreted as a live terminal
+        // control sequence when printed; a bare CR would overwrite the
+        // start of the line. Neither may survive into the summary.
+        let input = "ls \u{1b}[31mHACKED\u{1b}[0m\rdone";
+        let sanitized = sanitize_summary_text(input, 100).expect("nonempty");
+        assert!(!sanitized.contains('\u{1b}'), "ESC leaked: {sanitized:?}");
+        assert!(!sanitized.contains('\r'), "CR leaked: {sanitized:?}");
+        assert_eq!(sanitized, "ls [31mHACKED[0m done");
+    }
+
+    #[test]
+    fn sanitize_summary_text_drops_other_control_characters() {
+        // BEL and backspace: neither is whitespace, both are control
+        // characters, and printed verbatim both are terminal noise, not text.
+        assert_eq!(
+            sanitize_summary_text("a\u{7}b\u{8}c", 100),
+            Some("abc".to_string())
+        );
+    }
+
+    #[test]
+    fn sanitize_summary_text_bounds_a_very_long_input() {
+        let long = "x".repeat(500);
+        let sanitized = sanitize_summary_text(&long, 100).expect("nonempty");
+        assert_eq!(sanitized.chars().count(), 103); // 100 + "..."
+        assert!(sanitized.ends_with("..."));
+        assert!(sanitized.starts_with(&"x".repeat(100)));
+    }
+
+    #[test]
+    fn sanitize_summary_text_cuts_on_a_char_boundary_near_non_ascii() {
+        // Multi-byte characters straddling the cut point must not panic and
+        // must not be split mid-codepoint.
+        let mut input = "a".repeat(99);
+        input.push_str("考考考考考");
+        let sanitized = sanitize_summary_text(&input, 100).expect("nonempty");
+        assert_eq!(sanitized.chars().count(), 103); // 100 chars + "..."
+        assert!(sanitized.ends_with("..."));
+        assert!(sanitized.is_char_boundary(sanitized.len()));
+    }
+
+    #[test]
+    fn sanitize_summary_text_is_none_for_only_whitespace_and_controls() {
+        assert_eq!(sanitize_summary_text("  \n\t \u{1b} ", 100), None);
+        assert_eq!(sanitize_summary_text("", 100), None);
+    }
+
+    #[test]
+    fn tool_summary_line_collapses_a_multiline_bash_command_to_one_line() {
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "bash".into(),
+            status: "running".into(),
+            arguments: r#"{"command":"printf 'line1\nline2\u001b[31mline3'"}"#.into(),
+            result: None,
+        };
+        let line = format_tool_summary_line(&tool, false);
+        assert_eq!(
+            line.lines().count(),
+            1,
+            "summary must stay one line: {line:?}"
+        );
+        assert!(
+            !line.contains('\u{1b}'),
+            "ESC leaked into summary: {line:?}"
+        );
+        assert_eq!(line, "  [tool] bash printf 'line1 line2[31mline3'");
+    }
+
+    #[test]
+    fn tool_summary_line_bounds_a_very_long_argument() {
+        let tool = ToolCallProgress {
+            tool_call_doc_id: "physical-tool".into(),
+            tool_call_key: "tool-key".into(),
+            tool_name: "bash".into(),
+            status: "running".into(),
+            arguments: format!(r#"{{"command":"{}"}}"#, "x".repeat(500)),
+            result: None,
+        };
+        let line = format_tool_summary_line(&tool, false);
+        assert!(line.contains("..."), "expected an elided argument: {line}");
+        assert!(
+            line.chars().count() < 150,
+            "summary line should stay short even for a huge argument: {line}"
+        );
+    }
+
+    #[test]
+    fn spinner_enabled_requires_both_stdout_and_stderr_to_be_terminals() {
+        assert!(spinner_enabled(true, true));
+        assert!(!spinner_enabled(true, false));
+        assert!(!spinner_enabled(false, true));
+        assert!(!spinner_enabled(false, false));
     }
 }

@@ -4,7 +4,7 @@ import {
 } from "@source-inc/gents-desktop-client";
 
 const READINESS_REASON: Record<string, string> = {
-  behavior_disabled: "behaviour is disabled",
+  behavior_disabled: "behavior is disabled",
   runtime_configuration_invalid: "runtime configuration is invalid",
   backend_not_configured: "no inference backend",
   backend_disabled: "inference backend is disabled",

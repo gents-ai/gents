@@ -122,6 +122,11 @@ async fn the_persisted_request_json_is_the_body_the_provider_received() {
     );
     let accounting = provenance["assembly_trace"]["context_accounting"].clone();
     assert_eq!(accounting["compaction_reason"], "below_threshold");
+    assert_eq!(
+        accounting["estimated_input_tokens"].as_u64(),
+        Some(gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap() as u64),
+        "pre-dispatch input accounting must equal estimation of the actual HTTP body"
+    );
     let components = &accounting["components"];
     let component_total = [
         "messages",
@@ -1037,13 +1042,8 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     const BIG_OUTPUT_CHARS: usize = 40_000;
     const CONTEXT_WINDOW: usize = 40_000;
     const COMPACTION_THRESHOLD: f64 = 0.25;
-    // Size the fixture through the production exact threshold helper. The
-    // provider counter uses serialized-byte estimates; four plain characters
-    // per token keeps this payload near that boundary without copying the
-    // threshold formula or reintroducing floating-point budget arithmetic.
-    let budget_chars =
-        gents::provider_budget::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD)
-            .saturating_mul(4);
+    let input_budget =
+        gents::provider_budget::effective_input_budget(CONTEXT_WINDOW, COMPACTION_THRESHOLD);
 
     let big_output = format!("{BIG_MARKER}{}", "x".repeat(BIG_OUTPUT_CHARS));
     let marker = "capture-compaction";
@@ -1127,16 +1127,30 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
             canonical(&observed[index]),
             "turn {index} must carry the body the provider was posted"
         );
+        let actual_tokens =
+            gents_loop::provider_input::estimate_input_body(observed[index].clone()).unwrap();
+        let provenance = parse_json(&row["provenance_json"]);
+        let accounting = &provenance["assembly_trace"]["context_accounting"];
+        assert_eq!(
+            accounting["estimated_input_tokens"].as_u64(),
+            Some(actual_tokens as u64),
+            "turn {index} pre-dispatch estimate must describe its actual HTTP request"
+        );
+        assert!(
+            actual_tokens <= input_budget,
+            "turn {index} dispatched {actual_tokens} input tokens above budget {input_budget}"
+        );
     }
 
     // The premise: turn 0 starts under budget, so the compaction observed at
     // turn 1 is caused by the tool result and not by a preamble that has since
     // outgrown the window.
-    let turn_zero_chars = row_text(&rows[0]).len();
+    let turn_zero_tokens =
+        gents_loop::provider_input::estimate_input_body(observed[0].clone()).unwrap();
     assert!(
-        turn_zero_chars < budget_chars,
-        "turn 0 must start under the compaction budget; it was {turn_zero_chars} \
-         chars against a budget of {budget_chars}"
+        turn_zero_tokens < input_budget,
+        "turn 0 must start under the compaction budget; it was {turn_zero_tokens} \
+         input tokens against a budget of {input_budget}"
     );
 
     // Turn 1: the compacted list is what the provider was shown.

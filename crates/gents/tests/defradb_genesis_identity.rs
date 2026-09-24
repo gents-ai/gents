@@ -11,8 +11,8 @@ use gents::session::canonical_rows::{
     CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
 };
 use gents_protocol::output::{
-    OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
-    StreamDeclaration, StreamPayload,
+    OutputOutcome, OutputSegment, OutputSource, OutputWriter, PayloadRef, ReconstructionError,
+    SegmentRun, SourceClose, StreamDeclaration, StreamPayload,
 };
 use std::sync::Arc;
 
@@ -161,5 +161,35 @@ async fn canonical_segment_genesis_is_immutable_under_concurrent_and_repeated_cr
         after_change.contains(&persisted[0]) && after_change.contains(&(changed_id, changed)),
         "changed genesis overwrote or altered a physical row: {after_change:?}"
     );
+    // Feed the physical database facts into the production projection owner.
+    // Either closure may arrive first; neither may become a selected winner.
+    let mut observed = after_change;
+    for _ in 0..2 {
+        let records = observed
+            .iter()
+            .map(
+                |(doc_id, segment)| gents_protocol::output::reconstruction::ObservedSegment {
+                    doc_id,
+                    segment,
+                },
+            )
+            .collect::<Vec<_>>();
+        for (close_doc_id, _) in &observed {
+            let result = gents_protocol::output::reconstruction::reconstruct_stream(
+                &records,
+                &[],
+                &[],
+                &PayloadRef {
+                    close_doc_id: close_doc_id.clone(),
+                    stream: 0,
+                },
+            );
+            ensure!(
+                matches!(result, Err(ReconstructionError::ConflictingClosures { .. })),
+                "physical closure twins must not select a winner: {result:?}"
+            );
+        }
+        observed.reverse();
+    }
     Ok(())
 }

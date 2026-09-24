@@ -17,7 +17,7 @@ const SOURCE_LABELS: Record<DerivedCancelCauseView["source"], string> = {
   parentCascade: "a cascade from the parent request",
   deadline: "the runtime deadline",
   toolLifecycle: "the tool's lifecycle",
-  responseInterruptedAt: "the response's interrupt marker",
+  requestLifecycle: "the request's lifecycle state",
   unresolved: "an unresolved source",
 };
 

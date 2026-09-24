@@ -99,6 +99,10 @@ impl<'a> TurnProjection<'a> {
         observe_latest_response_completion(&mut self.response_completed_at_ms, completed_at_ms);
     }
 
+    pub(super) fn has_response_start(&self) -> bool {
+        self.response_started_at_ms.is_some()
+    }
+
     pub(super) fn reset_response_timing(&mut self) {
         self.response_started_at_ms = None;
         self.response_completed_at_ms = None;

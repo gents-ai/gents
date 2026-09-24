@@ -132,10 +132,11 @@
       "generated_groups": ["canonical_payload_presentation_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs"],
       "native_status": "pending",
       "required_cases": [
         "Compare stored and reconstructed payload lengths for full presentation, literals, head/tail windows and missing dependencies.",
+        "The four generated cases run through native canonical reconstruction for presented payload bytes and missing-dependency failure; the stored-byte quantities are Lean expectations, not a native provider-size measurement.",
         "This group covers reconstruction only: payload counts exclude metadata, URLs, escaping and request structure and do not establish provider sizing or a compaction decision.",
         "The actual serialized-request estimate/threshold join is tracked separately by native.external-projected-request-threshold."
       ],

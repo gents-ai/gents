@@ -1,14 +1,24 @@
 /* Skills, as the desktop app's Skills tab: id (immutable after create),
    name, enabled, display name, description, instructions and tool
    dependencies, saved through SkillSaveRequest. */
+import { dependentsWarning } from "./dependents";
 import type { DeploymentView, SkillView } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 import { navigate } from "@/lib/router";
-import { AreaRow, DraftActions, FactRow, SwitchRow, TextRow } from "./editors";
-import { fromLinesOrNull, toLines, useDraft } from "./draft";
+import {
+  AreaRow,
+  DraftActions,
+  FactRow,
+  SwitchRow,
+  TextRow,
+  TagsRow,
+  PathRow,
+} from "./editors";
+import { useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { newId } from "./draft";
 import { Group } from "./rows";
+import { RowMenu } from "./RowMenu";
 
 function SkillEditor({
   shell,
@@ -31,9 +41,9 @@ function SkillEditor({
     description: skill.description ?? "",
     instructions: skill.instructions ?? "",
     sourceDirectory: skill.sourceDirectory ?? "",
-    toolRefs: toLines(skill.toolRefs),
+    toolRefs: skill.toolRefs,
     interfaceJson: skill.interfaceJson ?? "",
-    tags: toLines(skill.tags),
+    tags: skill.tags,
   };
   const d = useDraft(saved, async (next) => {
     if (!next.name.trim()) throw new Error("Name is required");
@@ -53,12 +63,12 @@ function SkillEditor({
           description: next.description || null,
           instructions: next.instructions,
           source_directory: next.sourceDirectory || null,
-          tool_refs: fromLinesOrNull(next.toolRefs),
+          tool_refs: next.toolRefs.length ? next.toolRefs : null,
           display_name: next.displayName || null,
           interface_json: next.interfaceJson || null,
           enabled: next.enabled,
           created_at: skill.createdAt,
-          tags: fromLinesOrNull(next.tags),
+          tags: next.tags.length ? next.tags : null,
         },
       }),
     );
@@ -78,9 +88,10 @@ function SkillEditor({
           onCommit={d.commit}
           onEnter={d.onEnter}
         />
-        <TextRow
+        <PathRow
           id={id("sourceDirectory")}
           label="Source directory"
+          description="Where the skill's files live."
           value={d.draft.sourceDirectory}
           onChange={(v) => d.set("sourceDirectory", v)}
           onCommit={d.commit}
@@ -117,16 +128,15 @@ function SkillEditor({
           onChange={(v) => d.set("instructions", v)}
           onCommit={d.commit}
           rows={6}
+          stacked
         />
-        <AreaRow
+        <TagsRow
           id={id("tools")}
           label="Tool dependencies"
-          description="One per line; intersected with the behaviour ceiling."
+          description="Intersected with the behavior ceiling."
           value={d.draft.toolRefs}
           onChange={(v) => d.set("toolRefs", v)}
-          onCommit={d.commit}
-          rows={3}
-          mono
+          placeholder="Add a tool"
         />
         <AreaRow
           id={id("interface")}
@@ -137,15 +147,13 @@ function SkillEditor({
           onCommit={d.commit}
           rows={4}
           mono
+          stacked
         />
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One optional discovery label per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={2}
         />
       </Group>
       <DraftActions
@@ -157,6 +165,7 @@ function SkillEditor({
       />
       <DeleteButton
         label={skill.name ?? skill.skillId}
+        warning={dependentsWarning(deployment, "skill", skill.skillId)}
         base={base}
         onDelete={() =>
           shell.applyConfig((api) =>
@@ -169,6 +178,24 @@ function SkillEditor({
       />
     </>
   );
+}
+
+/* the canonical document for a skill view, for row edits and copies */
+function skillDocument(deployment: DeploymentView, s: SkillView) {
+  return {
+    skill_id: s.skillId,
+    agent_did: deployment.agentDid,
+    name: s.name ?? undefined,
+    description: s.description,
+    instructions: s.instructions ?? "",
+    source_directory: s.sourceDirectory,
+    tool_refs: s.toolRefs.length ? s.toolRefs : null,
+    display_name: s.displayName,
+    interface_json: s.interfaceJson,
+    enabled: s.enabled ?? true,
+    created_at: s.createdAt,
+    tags: s.tags.length ? s.tags : null,
+  };
 }
 
 export function SkillsPanel({
@@ -192,11 +219,51 @@ export function SkillsPanel({
       rows={deployment.skills.map((s) => ({
         id: s.skillId,
         title: s.displayName ?? s.name ?? s.skillId,
-        meta: `${s.toolRefs.length} tools${s.enabled === false ? " · disabled" : ""}`,
+        meta: `${s.toolRefs.length} ${s.toolRefs.length === 1 ? "tool" : "tools"}${s.enabled === false ? " · disabled" : ""}`,
         tags: s.tags,
+        trailing: (
+          <RowMenu
+            name={s.displayName ?? s.name ?? s.skillId}
+            base={base}
+            id={s.skillId}
+            enabled={{
+              checked: s.enabled !== false,
+              onChange: (enabled) =>
+                shell.applyConfig((api) =>
+                  api.saveSkillConfig({
+                    document: { ...skillDocument(deployment, s), enabled },
+                  }),
+                ),
+            }}
+            onDuplicate={async () => {
+              const skill_id = newId("skill");
+              await shell.applyConfig((api) =>
+                api.saveSkillConfig({
+                  document: {
+                    ...skillDocument(deployment, s),
+                    skill_id,
+                    name: `${s.name ?? s.skillId}-copy`,
+                    display_name: `${s.displayName ?? s.name ?? s.skillId} copy`,
+                    created_at: null,
+                  },
+                }),
+              );
+              return skill_id;
+            }}
+            onDelete={() =>
+              shell.applyConfig((api) =>
+                api.deleteSkillConfig({
+                  skillId: s.skillId,
+                  agentDid: deployment.agentDid,
+                }),
+              )
+            }
+            warning={dependentsWarning(deployment, "skill", s.skillId)}
+          />
+        ),
       }))}
       createLabel="New skill"
-      empty="No skills yet. A skill is instructions and tool references a behaviour can load by name."
+      empty="No skills yet. A skill is instructions and tool references a behavior can load by name."
       onCreate={async () => {
         const skillId = newId("skill");
         await shell.applyConfig((api) =>

@@ -3,16 +3,16 @@ use anyhow::Context;
 
 impl DefraSessionHook {
     /// Prepare immutable bridge provenance before the provider turn creates
-    /// its pending ToolCall row.  A plan is deliberately optional: malformed
-    /// or disallowed invocations are still accepted as provider intent and
-    /// retain the existing dispatch-time diagnostic path.
+    /// its pending ToolCall row. A plan is deliberately optional for malformed
+    /// or disallowed provider intent, which retains a dispatch-time diagnostic.
+    /// Configuration/read failures instead fail the request before publication.
     pub(crate) async fn preplan_spawn_admissions(
         &self,
         message: &Message,
         internal_call_ids: &[String],
-    ) -> Vec<crate::streaming::SpawnAdmissionPlan> {
+    ) -> anyhow::Result<Vec<crate::streaming::SpawnAdmissionPlan>> {
         let Message::Assistant { content, .. } = message else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let tool_calls = content
             .iter()
@@ -22,40 +22,41 @@ impl DefraSessionHook {
             })
             .collect::<Vec<_>>();
         if tool_calls.len() != internal_call_ids.len() {
-            return Vec::new();
+            return Ok(Vec::new());
+        }
+        let candidates = tool_calls
+            .into_iter()
+            .filter_map(|call| {
+                if call.function.name != SPAWN_SUBAGENT_TOOL_NAME {
+                    return None;
+                }
+                serde_json::from_value::<SpawnSubagentArgs>(call.function.arguments.clone())
+                    .ok()
+                    .filter(|parsed| {
+                        !parsed.name.trim().is_empty() && !parsed.prompt.trim().is_empty()
+                    })
+                    .map(|parsed| (call, parsed))
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return Ok(Vec::new());
         }
         let request_id = {
             let state = self.state.lock().await;
             state.current_request_id.clone()
         };
         let Some(request_id) = request_id else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        let Ok(parent) = load_parent_subagent_context(&self.node, &request_id).await else {
-            return Vec::new();
-        };
-        let delegated_workspace = match parent_delegated_workspace(&parent) {
-            Ok(workspace) => workspace,
-            Err(error) => {
-                tracing::warn!(request_id, error = %error, "skip spawn admission with malformed parent workspace provenance");
-                return Vec::new();
-            }
-        };
+        let parent = load_parent_subagent_context(&self.node, &request_id)
+            .await
+            .with_context(|| format!("preplan spawn admission for parent request {request_id}"))?;
+        let delegated_workspace = parent_delegated_workspace(&parent).with_context(|| {
+            format!("preplan spawn admission for parent request {request_id}: invalid workspace provenance")
+        })?;
         let mut plans = Vec::new();
-        for call in tool_calls {
-            if call.function.name != SPAWN_SUBAGENT_TOOL_NAME {
-                continue;
-            }
-            let Ok(parsed) =
-                serde_json::from_value::<SpawnSubagentArgs>(call.function.arguments.clone())
-            else {
-                continue;
-            };
-            if parsed.name.trim().is_empty()
-                || parsed.prompt.trim().is_empty()
-                || !parent.subagent_spawn_enabled
-                || parent.subagent_depth >= MAX_SUBAGENT_DEPTH
-            {
+        for (call, parsed) in candidates {
+            if !parent.subagent_spawn_enabled || parent.subagent_depth >= MAX_SUBAGENT_DEPTH {
                 continue;
             }
             let Some(target) = resolve_context_target(&parent, parsed.name.trim()) else {
@@ -75,13 +76,18 @@ impl DefraSessionHook {
             {
                 continue;
             }
-            if host == SubagentTargetHost::Local
-                && !matches!(
-                    load_agent_behavior(&self.node, &target.behavior_id).await,
-                    Ok(Some(_))
-                )
-            {
-                continue;
+            if host == SubagentTargetHost::Local {
+                let behavior = load_agent_behavior(&self.node, &target.behavior_id)
+                    .await
+                    .with_context(|| {
+                        format!(
+                            "preplan spawn admission for parent request {request_id}: read target behavior {}",
+                            target.behavior_id
+                        )
+                    })?;
+                if behavior.is_none() {
+                    continue;
+                }
             }
             plans.push(crate::streaming::SpawnAdmissionPlan {
                 tool_call_id: call.id.clone(),
@@ -92,7 +98,7 @@ impl DefraSessionHook {
                 await_mode,
             });
         }
-        plans
+        Ok(plans)
     }
 
     pub(super) async fn ensure_assistant_turn_sequence(
@@ -333,12 +339,9 @@ impl DefraSessionHook {
                 }
                 Ok(Some(_)) => {}
                 Err(error) => {
-                    tracing::warn!(
-                        behavior_id = %behavior_id,
-                        %error,
-                        "spawn guard: failed to verify local target behavior existence; \
-                         proceeding with spawn"
-                    );
+                    return Err(error).with_context(|| {
+                        format!("spawn guard: failed to verify local target behavior {behavior_id}")
+                    })
                 }
             }
         }
@@ -648,4 +651,34 @@ fn parent_delegated_workspace(
                 .expect("validated workspace authority"),
             workspace_seal_hash: lineage.workspace_seal_hash,
         }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_parent_workspace_provenance_is_an_error_not_absent_delegation() {
+        let mut parent = crate::background_tools::ParentSubagentContext {
+            session_id: "session".into(),
+            request_id: "request".into(),
+            request_doc_id: "request-doc".into(),
+            behavior_id: "behavior".into(),
+            subagent_depth: 0,
+            request_deadline_at: chrono::Utc::now(),
+            allowed_targets: Vec::new(),
+            subagent_spawn_enabled: true,
+            subagent_background_enabled: false,
+            subagent_default_await_mode: AwaitMode::Foreground,
+            subagent_allow_cross_deployment: false,
+            cross_deployment_spawn_timeout_seconds: None,
+            workspace_id: Some("workspace".into()),
+            workspace_authority: None,
+            workspace_owner_agent_did: None,
+            workspace_seal_hash: None,
+        };
+        assert!(parent_delegated_workspace(&parent).is_err());
+        parent.workspace_id = None;
+        assert!(parent_delegated_workspace(&parent).unwrap().is_none());
+    }
 }

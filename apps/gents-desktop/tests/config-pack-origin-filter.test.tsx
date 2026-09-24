@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/router", () => ({
@@ -9,7 +10,8 @@ vi.mock("@/lib/router", () => ({
 import { ListDetail } from "../src/ui/screens/agent/ListDetail";
 
 describe("pack origin configuration filters", () => {
-  it("facets pack rows without hiding user rows from All", () => {
+  it("facets pack rows without hiding user rows from All", async () => {
+    const user = userEvent.setup();
     render(
       <ListDetail
         base={{ name: "agent", agentDid: "did:key:test", section: "skills" }}
@@ -30,22 +32,21 @@ describe("pack origin configuration filters", () => {
 
     expect(screen.getByText("Review scanner")).toBeTruthy();
     expect(screen.getByText("User coder")).toBeTruthy();
-    expect(screen.getByText("enabled · pack:code_review")).toBeTruthy();
+    expect(screen.getByText("enabled · pack code_review")).toBeTruthy();
 
-    fireEvent.change(screen.getByTestId("skills-origin-filter"), {
-      target: { value: "code_review" },
-    });
+    await user.click(screen.getByTestId("skills-origin-filter"));
+    await user.click(await screen.findByRole("option", { name: "Pack code_review" }));
     expect(screen.getByText("Review scanner")).toBeTruthy();
     expect(screen.queryByText("User coder")).toBeNull();
 
-    fireEvent.change(screen.getByTestId("skills-origin-filter"), {
-      target: { value: "__not_from_pack__" },
-    });
+    await user.click(screen.getByTestId("skills-origin-filter"));
+    await user.click(await screen.findByRole("option", { name: "Not from a pack" }));
     expect(screen.queryByText("Review scanner")).toBeNull();
     expect(screen.getByText("User coder")).toBeTruthy();
   });
 
-  it("composes text and provenance filters on long lists", () => {
+  it("composes text and provenance filters on long lists", async () => {
+    const user = userEvent.setup();
     render(
       <ListDetail
         base={{ name: "agent", agentDid: "did:key:test", section: "skills" }}
@@ -82,9 +83,8 @@ describe("pack origin configuration filters", () => {
     expect(screen.getByText("Review summary")).toBeTruthy();
     expect(screen.queryByText("User skill 0")).toBeNull();
 
-    fireEvent.change(screen.getByTestId("skills-origin-filter"), {
-      target: { value: "code_review" },
-    });
+    await user.click(screen.getByTestId("skills-origin-filter"));
+    await user.click(await screen.findByRole("option", { name: "Pack code_review" }));
     expect(screen.getByText("Review scanner")).toBeTruthy();
     expect(screen.queryByText("Review summary")).toBeNull();
     expect(screen.getByText("1 of 9")).toBeTruthy();

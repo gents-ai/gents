@@ -1,6 +1,30 @@
 use super::*;
 use anyhow::Context;
 
+/// Durable claim receipt. Scheduling a renewal and retaining local ownership
+/// are deliberately separate from the atomic request/session claim below.
+pub(crate) struct DurableClaimReceipt {
+    request: AgentRequest,
+    request_commit_cid: String,
+    deadline_at: chrono::DateTime<chrono::Utc>,
+    background_completion_input_through_sequence: Option<u32>,
+    valid_until_at_claim: Option<chrono::DateTime<chrono::Utc>>,
+    execution_generation: String,
+    lease_ms: u64,
+}
+
+pub(crate) enum DurableClaimOutcome {
+    Claimed(DurableClaimReceipt),
+    NotClaimed(ClaimOutcome),
+}
+
+impl DurableClaimOutcome {
+    #[cfg(test)]
+    pub(crate) fn was_claimed(&self) -> bool {
+        matches!(self, Self::Claimed(_))
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct BackgroundCompletionClaimSnapshot {
     through_sequence: Option<u32>,
@@ -169,6 +193,59 @@ impl RequestLifecycle {
         self.claim_inner(true).await
     }
 
+    /// The one durable claim entry: pre-claim gates and the atomic claim /
+    /// mailbox / session projection. The clock closures are invoked at the
+    /// original observation boundaries, after their preceding async reads.
+    pub(crate) async fn claim_pending_durable_with_inputs<T, F>(
+        &mut self,
+        ttl_now: T,
+        claim_inputs: F,
+    ) -> Result<DurableClaimOutcome>
+    where
+        T: FnOnce() -> chrono::DateTime<chrono::Utc>,
+        F: FnOnce() -> (chrono::DateTime<chrono::Utc>, String),
+    {
+        self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
+        let (interrupt_requested_at, valid_until) =
+            fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
+        if let Some(interrupt_at) = interrupt_requested_at {
+            self.transition_pending_to_interrupted(&interrupt_at)
+                .await?;
+            self.state = LocalLifecycleState::Interrupted;
+            return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Interrupted));
+        }
+        self.valid_until_at_claim =
+            match super::parse_valid_until(valid_until.as_deref(), ttl_now()) {
+                super::TtlOutcome::Malformed(error) => {
+                    anyhow::bail!(
+                        "invalid valid_until on request {}: {error}",
+                        self.request.doc_id
+                    );
+                }
+                super::TtlOutcome::Expired(_) => {
+                    self.transition_pending_to_dead_stale().await?;
+                    self.state = LocalLifecycleState::Dead;
+                    return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Expired));
+                }
+                super::TtlOutcome::NotSet => None,
+                super::TtlOutcome::Live(parsed) => Some(parsed),
+            };
+        let dedup = self.check_deduplication().await?;
+        if !dedup.is_earliest {
+            tracing::info!(
+                request_id = %self.request.request_id,
+                session_id = %self.request.session_id,
+                blocking_request_id = dedup.blocking_request_id.as_deref().unwrap_or(""),
+                "request remains queued behind earlier same-session request"
+            );
+            return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued));
+        }
+        let (now, generation) = claim_inputs();
+        Ok(DurableClaimOutcome::Claimed(
+            self.persist_pending_claim_at(now, generation).await?,
+        ))
+    }
+
     /// Commit the modeled claimed → processing boundary before allocating a
     /// local stream buffer. Beginning creates no output document and does not
     /// renew the lease. A committed begin is the durable replay fact.
@@ -184,8 +261,37 @@ impl RequestLifecycle {
         self.ensure_state(&[LocalLifecycleState::Claimed], "begin_owned_execution")?;
         let generation = self.execution_generation()?.to_owned();
         let request_doc_id = self.request.doc_id.clone();
-        crate::config_client::ConfigAccess::transact_local_idempotent(
+        Self::begin_owned_execution_durable_with_clock(
             &self.node,
+            &request_doc_id,
+            &generation,
+            chrono::Utc::now,
+        )
+        .await?;
+        stream_writer
+            .initialize_request_buffer(&self.request.doc_id)
+            .await?;
+        self.state = LocalLifecycleState::Streaming;
+        Ok(())
+    }
+
+    /// The single durable claimed-to-processing transaction. The live owner
+    /// adds its process-local stream buffer after this commit; the native
+    /// adapter exercises the same CAS with modeled time.
+    pub(crate) async fn begin_owned_execution_durable_with_clock<F>(
+        node: &Arc<EmbeddedNode>,
+        request_doc_id: &str,
+        generation: &str,
+        now: F,
+    ) -> Result<()>
+    where
+        F: Fn() -> chrono::DateTime<chrono::Utc> + Sync,
+    {
+        let generation = generation.to_owned();
+        let request_doc_id = request_doc_id.to_owned();
+        let now = &now;
+        crate::config_client::ConfigAccess::transact_local_idempotent(
+            node,
             None,
             crate::config_client::IdempotentTransactionRetry::Standard,
             "lifecycle.begin_owned_execution",
@@ -211,7 +317,7 @@ impl RequestLifecycle {
                         generation: observed_generation,
                         deadline_ms: chrono::DateTime::parse_from_rfc3339(expiry)?.timestamp_millis(),
                     };
-                    let now = chrono::Utc::now().timestamp_millis();
+                    let now = now().timestamp_millis();
                     // A lost acknowledgement must not reapply the transition
                     // or reset its lease. It may acknowledge the exact live
                     // generation's already committed processing state.
@@ -232,12 +338,7 @@ impl RequestLifecycle {
                     Ok(())
                 })
             },
-        ).await?;
-        stream_writer
-            .initialize_request_buffer(&self.request.doc_id)
-            .await?;
-        self.state = LocalLifecycleState::Streaming;
-        Ok(())
+        ).await
     }
 
     async fn transition_pending_to_interrupted(&mut self, _interrupt_at: &str) -> Result<()> {
@@ -422,48 +523,44 @@ impl RequestLifecycle {
     }
 
     async fn claim_inner(&mut self, _explicit_did: bool) -> Result<ClaimOutcome> {
+        let receipt = match self
+            .claim_pending_durable_with_inputs(chrono::Utc::now, || {
+                (chrono::Utc::now(), uuid::Uuid::new_v4().to_string())
+            })
+            .await?
+        {
+            DurableClaimOutcome::Claimed(receipt) => receipt,
+            DurableClaimOutcome::NotClaimed(outcome) => return Ok(outcome),
+        };
+        self.request = receipt.request;
+        self.request_commit_cid = Some(receipt.request_commit_cid);
+        self.state = LocalLifecycleState::Claimed;
+        self.claimed_deadline_at = Some(receipt.deadline_at);
+        self.background_completion_input_through_sequence =
+            receipt.background_completion_input_through_sequence;
+        self.valid_until_at_claim = receipt.valid_until_at_claim;
+        self.execution_lease = Some(RequestExecutionLease::new(
+            receipt.execution_generation.clone(),
+        ));
+        self.renewal_task = Some(super::execution_renewal::RenewalTask::start(
+            self.node.clone(),
+            self.request.doc_id.clone(),
+            receipt.execution_generation,
+            receipt.lease_ms,
+        ));
+        Ok(ClaimOutcome::Claimed)
+    }
+
+    /// Persist the exact pending-to-claimed transaction without arming the
+    /// process-local renewal scheduler. The native conformance adapter supplies
+    /// model time/generation here; production supplies wall time and a fresh UUID.
+    async fn persist_pending_claim_at(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        execution_generation: String,
+    ) -> Result<DurableClaimReceipt> {
         self.ensure_state(&[LocalLifecycleState::Pending], "claim")?;
-        let (interrupt_requested_at, valid_until) =
-            fetch_interrupt_and_ttl(&self.node, &self.request.doc_id).await?;
-
-        if let Some(interrupt_at) = interrupt_requested_at {
-            self.transition_pending_to_interrupted(&interrupt_at)
-                .await?;
-            self.state = LocalLifecycleState::Interrupted;
-            return Ok(ClaimOutcome::Interrupted);
-        }
-
-        let valid_until_at_claim =
-            match super::parse_valid_until(valid_until.as_deref(), chrono::Utc::now()) {
-                super::TtlOutcome::Malformed(error) => {
-                    anyhow::bail!(
-                        "invalid valid_until on request {}: {error}",
-                        self.request.doc_id
-                    );
-                }
-                super::TtlOutcome::Expired(_) => {
-                    self.transition_pending_to_dead_stale().await?;
-                    self.state = LocalLifecycleState::Dead;
-                    return Ok(ClaimOutcome::Expired);
-                }
-                super::TtlOutcome::NotSet => None,
-                super::TtlOutcome::Live(parsed) => Some(parsed),
-            };
-
-        let dedup = self.check_deduplication().await?;
-        if !dedup.is_earliest {
-            tracing::info!(
-                request_id = %self.request.request_id,
-                session_id = %self.request.session_id,
-                blocking_request_id = dedup.blocking_request_id.as_deref().unwrap_or(""),
-                "request remains queued behind earlier same-session request"
-            );
-            return Ok(ClaimOutcome::Queued);
-        }
-
-        let now = chrono::Utc::now();
         let claimed_at = now.to_rfc3339();
-        let execution_generation = uuid::Uuid::new_v4().to_string();
         let lease_secs = i64::try_from(self.execution_lease_duration_secs)
             .context("execution lease duration out of range")?;
         let lease_ms = lease_secs
@@ -587,8 +684,6 @@ impl RequestLifecycle {
                 claimed_request.doc_id
             );
         }
-        self.request = claimed_request;
-        self.request_commit_cid = Some(request_commit_cid);
         tracing::debug!(
             doc_id = %doc_id,
             deadline = %deadline,
@@ -597,20 +692,15 @@ impl RequestLifecycle {
             "claimed agent request with exact DefraDB version"
         );
 
-        self.state = LocalLifecycleState::Claimed;
-        self.claimed_deadline_at = Some(deadline_at);
-        self.background_completion_input_through_sequence =
-            background_completion_input_through_sequence;
-        self.valid_until_at_claim = valid_until_at_claim;
-        self.execution_lease = Some(RequestExecutionLease::new(execution_generation.clone()));
-        self.renewal_task = Some(super::execution_renewal::RenewalTask::start(
-            self.node.clone(),
-            self.request.doc_id.clone(),
+        Ok(DurableClaimReceipt {
+            request: claimed_request,
+            request_commit_cid,
+            deadline_at,
+            background_completion_input_through_sequence,
+            valid_until_at_claim: self.valid_until_at_claim,
             execution_generation,
-            lease_ms as u64,
-        ));
-
-        Ok(ClaimOutcome::Claimed)
+            lease_ms: lease_ms as u64,
+        })
     }
 }
 
@@ -680,6 +770,107 @@ mod tests {
         crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")
             .expect("decode created request")
             .expect("created request receipt")
+    }
+
+    async fn durable_request_row(
+        node: &EmbeddedNode,
+        doc_id: &str,
+    ) -> gents_protocol::row::AgentRequestRow {
+        let doc_id = escape_graphql_string(doc_id);
+        let response = node.execute(&format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        )).await;
+        assert!(!response.has_errors(), "{:?}", response.errors);
+        crate::graphql::first_row::<gents_protocol::row::AgentRequestRow>(&response, "AgentRequest")
+            .unwrap()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn durable_claim_and_begin_use_real_owners_without_arming_local_renewal() {
+        let node = test_node().await;
+        let request = insert_pending_request(
+            &node,
+            "durable-claim",
+            "durable-session",
+            "2023-11-14T22:13:25Z",
+            None,
+            "interactive",
+        )
+        .await;
+        let doc_id = request.doc_id.clone();
+        let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+            node.clone(),
+            TEST_BEHAVIOR_ID,
+            TEST_AGENT_DID,
+            request,
+            60,
+            ExecutionOrigin::Interactive,
+            TEST_BACKEND_ID,
+        );
+        lifecycle.set_execution_lease_duration(std::time::Duration::from_secs(5));
+        let now = chrono::DateTime::parse_from_rfc3339("2023-11-14T22:13:25Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let outcome = lifecycle
+            .claim_pending_durable_with_inputs(|| now, || (now, "lean-generation-7".into()))
+            .await
+            .unwrap();
+        let DurableClaimOutcome::Claimed(receipt) = outcome else {
+            panic!("fresh request was not durably claimed")
+        };
+        assert_eq!(receipt.request.doc_id, doc_id);
+        assert_eq!(receipt.execution_generation, "lean-generation-7");
+        assert_eq!(receipt.lease_ms, 5_000);
+        assert_eq!(lifecycle.state, LocalLifecycleState::Pending);
+        assert!(lifecycle.execution_lease.is_none());
+        assert!(lifecycle.renewal_task.is_none());
+
+        let claimed = durable_request_row(&node, &doc_id).await;
+        assert_eq!(
+            claimed.lifecycle_state,
+            Some(RequestLifecycleState::Claimed)
+        );
+        assert_eq!(
+            claimed.execution_generation.as_deref(),
+            Some("lean-generation-7")
+        );
+        assert_eq!(
+            claimed.execution_lease_expires_at.as_deref(),
+            Some("2023-11-14T22:13:30+00:00")
+        );
+        RequestLifecycle::begin_owned_execution_durable_with_clock(
+            &node,
+            &doc_id,
+            "lean-generation-7",
+            || now,
+        )
+        .await
+        .unwrap();
+        RequestLifecycle::begin_owned_execution_durable_with_clock(
+            &node,
+            &doc_id,
+            "lean-generation-7",
+            || now + chrono::Duration::seconds(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            durable_request_row(&node, &doc_id).await.lifecycle_state,
+            Some(RequestLifecycleState::Processing)
+        );
+        assert!(
+            RequestLifecycle::begin_owned_execution_durable_with_clock(
+                &node,
+                &doc_id,
+                "lean-generation-7",
+                || now + chrono::Duration::seconds(6),
+            )
+            .await
+            .is_err(),
+            "expired replay must not acknowledge ownership"
+        );
     }
 
     #[tokio::test]

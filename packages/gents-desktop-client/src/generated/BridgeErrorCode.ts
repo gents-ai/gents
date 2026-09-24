@@ -4,4 +4,4 @@
  * Closed set of bridge error codes. Additive codes bump contract MINOR;
  * rename/removal/meaning change bumps MAJOR.
  */
-export type BridgeErrorCode = "clientNotRunning" | "clientStartFailed" | "notFound" | "invalidArgument" | "unsupported" | "endpointUnreachable" | "stalePreview" | "cascadeDepthExceeded" | "pathEscapesRoot" | "backend" | "incompatibleLocalStore" | "pairing" | "unknown";
+export type BridgeErrorCode = "clientNotRunning" | "clientStartFailed" | "notFound" | "invalidArgument" | "unsupported" | "endpointUnreachable" | "stalePreview" | "cascadeDepthExceeded" | "pathEscapesRoot" | "backend" | "incompatibleLocalStore" | "pairing" | "credentialNotSaved" | "unknown";

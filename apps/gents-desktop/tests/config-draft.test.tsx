@@ -64,7 +64,10 @@ describe("configuration drafts", () => {
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Name is required");
-    expect(persist).toHaveBeenLastCalledWith({ name: "Draft", enabled: false });
+    expect(persist).toHaveBeenLastCalledWith(
+      { name: "Draft", enabled: false },
+      undefined,
+    );
 
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(persist).toHaveBeenCalledTimes(2);
@@ -91,5 +94,54 @@ describe("configuration drafts", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByTestId("name")).toHaveTextContent("New remote");
     expect(screen.getByTestId("enabled")).toHaveTextContent("true");
+  });
+});
+
+describe("draft save results", () => {
+  function Probe({
+    persist,
+    isNew,
+    onResult,
+  }: {
+    persist: (next: { name: string }) => Promise<unknown>;
+    isNew?: boolean;
+    onResult: (ok: boolean) => void;
+  }) {
+    const draft = useDraft({ name: "Prefilled" }, persist, { isNew });
+    return (
+      <>
+        <output data-testid="dirty">{String(draft.dirty)}</output>
+        <button onClick={() => void draft.save().then(onResult)}>Save it</button>
+      </>
+    );
+  }
+
+  it("resolves false on a failed persist and true once it succeeds", async () => {
+    const user = userEvent.setup();
+    const onResult = vi.fn();
+    const persist = vi
+      .fn<(next: { name: string }) => Promise<unknown>>()
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce(undefined);
+    render(<Probe persist={persist} isNew onResult={onResult} />);
+    await user.click(screen.getByRole("button", { name: "Save it" }));
+    expect(onResult).toHaveBeenLastCalledWith(false);
+    await user.click(screen.getByRole("button", { name: "Save it" }));
+    expect(onResult).toHaveBeenLastCalledWith(true);
+    expect(screen.getByTestId("dirty")).toHaveTextContent("false");
+  });
+
+  it("treats an untouched new document as saveable and an untouched saved one as not", async () => {
+    const user = userEvent.setup();
+    const persist = vi.fn(async () => undefined);
+    const onResult = vi.fn();
+    const view = render(<Probe persist={persist} isNew onResult={onResult} />);
+    expect(screen.getByTestId("dirty")).toHaveTextContent("true");
+    view.unmount();
+    render(<Probe persist={persist} onResult={onResult} />);
+    expect(screen.getByTestId("dirty")).toHaveTextContent("false");
+    await user.click(screen.getByRole("button", { name: "Save it" }));
+    expect(onResult).toHaveBeenLastCalledWith(false);
+    expect(persist).not.toHaveBeenCalled();
   });
 });

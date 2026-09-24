@@ -17,6 +17,7 @@ import Proofs.Conformance.Contracts.Json.ToolPolicy
 import Proofs.Conformance.Contracts.Json.Lsp
 import Proofs.Conformance.Contracts.Json.ClientRuntime
 import Proofs.Conformance.Contracts.Json.BackgroundWork
+import Proofs.Conformance.Contracts.Json.DelegatedChild
 import Proofs.Conformance.Contracts.Json.DescendantGraph
 import Proofs.Conformance.Contracts.Json.ComposedInvariants
 import Proofs.Conformance.Contracts.Json.CodexShim
@@ -375,6 +376,8 @@ def snapshotJson : String :=
     ++ "\"subagent_delegation_graph_cases\":"
       ++ jsonArray
         (subagentDelegationGraphCases.map subagentDelegationGraphCaseJson) ++ ","
+    ++ "\"delegated_child_resolution_cases\":"
+      ++ Conformance.DelegatedChildContracts.casesJson ++ ","
     ++ "\"transcript_conformance_cases\":"
       ++ jsonArray
         (transcriptConformanceCases.map transcriptCaseJson) ++ ","

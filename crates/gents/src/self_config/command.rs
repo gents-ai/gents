@@ -1673,7 +1673,7 @@ pub(super) fn help_patch_contracts(resource: Option<&str>) -> Value {
             patch_contract(
                 SelfConfigTarget::InferenceExecution,
                 json!({
-                    "display_name":"string|null","max_turns":"positive integer|null","max_total_tokens":"positive integer|null; null is unlimited","stream_batch_ms":"positive integer|null; default 1000","stream_liveness_timeout_secs":"positive integer|null; default 1800 and less than deadline","deadline_duration_secs":"positive integer|null; default 86400","retry_policy_id":"existing same-principal retry policy ID|null","tags":"array<string>; default []"
+                    "display_name":"string|null","max_turns":"positive integer|null","max_total_tokens":"positive integer|null; null is unlimited","stream_batch_ms":"positive integer|null; default 1000","stream_liveness_timeout_secs":format!("positive integer|null; default {} and less than deadline", crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),"deadline_duration_secs":"positive integer|null; default 86400","retry_policy_id":"existing same-principal retry policy ID|null","tags":"array<string>; default []"
                 }),
             ),
             patch_contract(

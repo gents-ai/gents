@@ -6,9 +6,8 @@
 
 [[set]]
 identifier = "core"
-description = "Contract, bootstrap summary, aggregate snapshot, observer metrics"
+description = "Bootstrap summary, aggregate snapshot, observer metrics"
 permissions = [
-  "allow-desktop-bridge-contract",
   "allow-desktop-bootstrap-summary",
   "allow-desktop-client-snapshot",
   "allow-desktop-observer-metrics",
@@ -176,6 +175,7 @@ permissions = [
   "allow-desktop-claude-login",
   "allow-desktop-claude-login-cancel",
   "allow-desktop-provider-account-disconnect",
+  "allow-desktop-provider-account-retry-save",
 ]
 
 [[set]]

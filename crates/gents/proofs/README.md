@@ -252,6 +252,9 @@ outside it, as a remote merge is. Its observations include exact normalized
 immutable segments and messages, not only row counts.
 `Conformance/Contracts/Json/PayloadPresentation` exports stored and presented
 payload lengths from reconstruction, not provider request sizes or token usage.
+`canonical_presentation/native_adapter.rs` runs its four generated cases through
+native reconstruction for presented payload bytes and missing dependencies;
+stored-byte values remain Lean expectations, not native provider estimates.
 The compaction projection join connects exact canonical message reconstruction
 to a fallible complete-request projection and estimation boundary, then to the
 existing reduction decision. Rebuilt requests are projected and measured again;

@@ -61,6 +61,7 @@ function newSessionShell(
       behaviorEnvironments: [],
       contexts: [],
       skills: [],
+      sessions: [],
     },
     mailboxCause: null,
     sending: false,
@@ -103,7 +104,10 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
     retryMessage: vi.fn(),
     forkSession: vi.fn(),
     refreshSnapshot: vi.fn(),
-    api: {},
+    api: {
+      listSubagentTree: vi.fn().mockResolvedValue(null),
+      fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
+    },
   } as unknown as Shell;
 }
 

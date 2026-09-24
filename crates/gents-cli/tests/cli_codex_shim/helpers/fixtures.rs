@@ -36,6 +36,68 @@ async fn exact_request_binding(
     ))
 }
 
+/// The next free canonical sequence in a live session, chosen only after the
+/// runtime has claimed `request_doc_id` and appended its prompt header.
+/// Seeding earlier races that append: both headers would take the same
+/// sequence, and canonical header lookup rejects sequence twins as conflicts.
+async fn next_session_message_sequence(
+    graphql: &str,
+    agent_did: &str,
+    session_id: &str,
+    request_doc_id: &str,
+) -> Result<u32> {
+    let query = format!(
+        r#"{{
+            prompt: AgentMessage(
+                filter: {{
+                    session_id: {{ _eq: "{session_id}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    request_doc_id: {{ _eq: "{request_doc_id}" }},
+                    role: {{ _eq: "user" }}
+                }},
+                limit: 1
+            ) {{ sequence }}
+            AgentMessage(
+                filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }},
+                order: {{ sequence: DESC }},
+                limit: 1
+            ) {{ sequence }}
+            AgentToolCall(
+                filter: {{ session_id: {{ _eq: "{session_id}" }}, agent_did: {{ _eq: "{agent_did}" }} }}
+            ) {{ message_sequence }}
+        }}"#,
+        session_id = escape_graphql_string(session_id),
+        agent_did = escape_graphql_string(agent_did),
+        request_doc_id = escape_graphql_string(request_doc_id),
+    );
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    loop {
+        let response = graphql_query(graphql, &query).await?;
+        let sequences = |alias: &str, field: &str| {
+            response
+                .pointer(&format!("/data/{alias}"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row.get(field).and_then(Value::as_u64))
+                .collect::<Vec<_>>()
+        };
+        if !sequences("prompt", "sequence").is_empty() {
+            let highest = sequences("AgentMessage", "sequence")
+                .into_iter()
+                .chain(sequences("AgentToolCall", "message_sequence"))
+                .max()
+                .unwrap_or(0);
+            return u32::try_from(highest + 1).context("fixture session sequence exceeds u32");
+        }
+        anyhow::ensure!(
+            tokio::time::Instant::now() < deadline,
+            "runtime never appended the prompt header for request {request_doc_id}"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn seed_canonical_tool_transcript(
     graphql: &str,
@@ -232,6 +294,23 @@ async fn seed_canonical_tool_transcript(
         )
         .await?;
     }
+    // Fail at the seam rather than as a later projection timeout: the shim
+    // reads this tool through the same canonical owner.
+    let presentation = gents::tool_call_lifecycle::load_tool_call_presentation(
+        &access,
+        tool_call_doc_id,
+        agent_did,
+        session_id,
+        requester_did,
+    )
+    .await
+    .context("seeded tool call does not reconstruct through its canonical admission")?;
+    anyhow::ensure!(
+        serde_json::from_str::<Value>(&presentation.arguments)?
+            == serde_json::from_str::<Value>(arguments)?
+            && presentation.result.as_deref() == result,
+        "seeded tool call reconstructs different canonical arguments or result"
+    );
     Ok(())
 }
 
@@ -434,6 +513,8 @@ pub(super) async fn seed_running_background_tool(
     let now = chrono::Utc::now().to_rfc3339();
     let (request_doc_id, agent_did, requester_did) =
         exact_request_binding(graphql, request_id).await?;
+    let sequence =
+        next_session_message_sequence(graphql, &agent_did, session_id, &request_doc_id).await?;
     let requester_field = requester_did
         .as_deref()
         .map(|did| format!(r#"requester_did: "{}","#, escape_graphql_string(did)))
@@ -447,7 +528,7 @@ pub(super) async fn seed_running_background_tool(
                 session_id: "{session_id}",
                 agent_did: "{agent_did}",
                 {requester_field}
-                message_sequence: 1,
+                message_sequence: {sequence},
                 tool_name: "bash",
                 tool_call_id: "codex-bg-interrupt",
                 status: "called",
@@ -474,7 +555,7 @@ pub(super) async fn seed_running_background_tool(
         &tool_call_doc_id,
         "codex-bg-interrupt",
         "bash",
-        1,
+        sequence,
         r#"{"command":"sleep 600"}"#,
         None,
         &now,
@@ -506,6 +587,13 @@ pub(super) async fn seed_authorized_subagent_link(
         parent_requester_did.as_deref() == Some(agent_did),
         "parent requester changed"
     );
+    let sequence = next_session_message_sequence(
+        graphql,
+        agent_did,
+        parent_session_id,
+        &parent_request_doc_id,
+    )
+    .await?;
     let args = serde_json::to_string(&json!({
         "name": "reviewer",
         "prompt": "Inspect the parent change"
@@ -559,7 +647,7 @@ pub(super) async fn seed_authorized_subagent_link(
                 session_id: "{parent_session_id}",
                 agent_did: "{agent_did}",
                 requester_did: "{agent_did}",
-                message_sequence: 1,
+                message_sequence: {sequence},
                 tool_name: "spawn_subagent",
                 tool_call_id: "{tool_call_id}",
                 status: "completed",
@@ -593,7 +681,7 @@ pub(super) async fn seed_authorized_subagent_link(
         tool_call_doc_id,
         tool_call_id,
         "spawn_subagent",
-        1,
+        sequence,
         &args,
         Some(&result),
         &now,
@@ -695,6 +783,13 @@ pub(super) async fn seed_unresolved_completed_subagent_tool(
     let (parent_request_doc_id, _, requester_did) =
         exact_request_binding(graphql, parent_request_id).await?;
     anyhow::ensure!(requester_did.as_deref() == Some(agent_did));
+    let sequence = next_session_message_sequence(
+        graphql,
+        agent_did,
+        parent_session_id,
+        &parent_request_doc_id,
+    )
+    .await?;
     let completed_at_ms = chrono::DateTime::parse_from_rfc3339(&now)?.timestamp_millis();
     let missing_child_request_id = Uuid::new_v4().to_string();
     let args = serde_json::to_string(&json!({
@@ -713,7 +808,7 @@ pub(super) async fn seed_unresolved_completed_subagent_tool(
                 session_id: "{parent_session_id}",
                 agent_did: "{agent_did}",
                 requester_did: "{agent_did}",
-                message_sequence: 2,
+                message_sequence: {sequence},
                 tool_name: "spawn_subagent",
                 tool_call_id: "unresolved-spawn",
                 status: "completed",
@@ -746,7 +841,7 @@ pub(super) async fn seed_unresolved_completed_subagent_tool(
         &tool_call_doc_id,
         "unresolved-spawn",
         "spawn_subagent",
-        2,
+        sequence,
         &args,
         Some(&result),
         &now,
@@ -976,7 +1071,9 @@ pub(super) async fn materialize_child_response_before_terminal(
         session_id: session_id.to_owned(),
         request_doc_id: request_doc_id.clone(),
         source: source.clone(),
-        ordinal: Some(2),
+        // A terminal-only close carries no flush: it has no ordinal and seals
+        // the two data segments (initial output and the reasoning append).
+        ordinal: None,
         writer: OutputWriter::RequestExecution {
             execution_generation: generation.clone(),
         },
@@ -984,7 +1081,7 @@ pub(super) async fn materialize_child_response_before_terminal(
         payload: String::new(),
         close: Some(SourceClose::Closed {
             outcome: OutputOutcome::Complete,
-            segments: 3,
+            segments: 2,
             stream_bytes: vec![
                 presentation.body_markdown.len() as u64,
                 presentation

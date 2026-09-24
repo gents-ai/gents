@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import {
   FieldContent,
   FieldDescription,
+  FieldError,
   FieldLabel,
   FieldLegend,
   FieldRow,
@@ -15,16 +16,19 @@ export function Group({
   children,
   action,
 }: {
-  title: string;
+  /* optional: a panel with one self-explanatory field needs no heading */
+  title?: string;
   children: ReactNode;
   action?: ReactNode;
 }) {
   return (
     <FieldSet className="mb-8">
-      <div className="flex items-baseline justify-between">
-        <FieldLegend variant="eyebrow">{title}</FieldLegend>
-        {action}
-      </div>
+      {(title || action) && (
+        <div className="flex items-baseline justify-between">
+          {title && <FieldLegend variant="eyebrow">{title}</FieldLegend>}
+          {action}
+        </div>
+      )}
       <FieldRows>{children}</FieldRows>
     </FieldSet>
   );
@@ -34,11 +38,13 @@ export function Row({
   label,
   description,
   htmlFor,
+  error,
   children,
 }: {
   label: ReactNode;
   description?: ReactNode;
   htmlFor?: string;
+  error?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -46,6 +52,7 @@ export function Row({
       <FieldContent>
         <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
         {description && <FieldDescription>{description}</FieldDescription>}
+        {error && <FieldError>{error}</FieldError>}
       </FieldContent>
       {children}
     </FieldRow>
@@ -56,11 +63,13 @@ export function StackedRow({
   label,
   description,
   htmlFor,
+  error,
   children,
 }: {
   label: ReactNode;
   description?: ReactNode;
   htmlFor?: string;
+  error?: ReactNode;
   children?: ReactNode;
 }) {
   return (
@@ -68,6 +77,7 @@ export function StackedRow({
       <FieldContent>
         <FieldLabel htmlFor={htmlFor}>{label}</FieldLabel>
         {description && <FieldDescription>{description}</FieldDescription>}
+        {error && <FieldError>{error}</FieldError>}
       </FieldContent>
       {children}
     </FieldRow>

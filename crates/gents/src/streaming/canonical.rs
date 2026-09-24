@@ -64,6 +64,12 @@ pub(crate) enum ProviderReplayRejection {
 }
 
 #[derive(Debug, thiserror::Error)]
+pub(crate) enum ProviderWorkspaceRejection {
+    #[error("remote spawn workspace differs from accepted parent request")]
+    ParentStampChanged,
+}
+
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum ProviderAppendRejection {
     #[error("cannot append to a closed provider source")]
     ClosedSource,
@@ -545,8 +551,14 @@ async fn publish_provider_turn_with_time(
                     .context("encoded tool arguments stream is missing")?
                     .payload
                     .clone();
-                let delegated_input = admission
-                    .filter(|plan| plan.spawn_target_did != prepared.agent_did)
+                let remote_admission = admission
+                    .filter(|plan| plan.spawn_target_did != prepared.agent_did);
+                if let Some(plan) = remote_admission {
+                    if plan.delegated_workspace != accepted_parent_workspace(&request)? {
+                        return Err(ProviderWorkspaceRejection::ParentStampChanged.into());
+                    }
+                }
+                let delegated_input = remote_admission
                     .map(|_| gents_protocol::output::DelegatedToolInput {
                         source: arguments.clone(),
                         arguments: arguments_text,
@@ -787,6 +799,15 @@ async fn replay_publication_in_txn(
         let should_delegate = persisted_admission
             .as_ref()
             .is_some_and(|plan| plan.spawn_target_did != exemplar.agent_did);
+        if should_delegate {
+            let source = accepted_parent_workspace(&parent_request)?;
+            if !persisted_admission
+                .as_ref()
+                .is_some_and(|plan| plan.delegated_workspace == source)
+            {
+                return Err(ProviderWorkspaceRejection::ParentStampChanged.into());
+            }
+        }
         let expected_arguments = match expected {
             gents_protocol::message::Message::Assistant { content, .. } => content
                 .iter()
@@ -1012,6 +1033,7 @@ async fn load_request_in_txn(
         filter: {{ _docID: {{ _eq: "{id}" }} }}) {{
         _docID request_id agent_did requester_did session_id lifecycle_state
         execution_generation execution_lease_expires_at subagent_depth
+        workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash
     }} }}"#
         ))
         .await?;
@@ -1029,6 +1051,33 @@ async fn load_request_in_txn(
         "provider segment crossed its request owner or session"
     );
     Ok(row)
+}
+
+/// Reconstruct the existing signed workspace-reference shape from the exact
+/// parent row read in the publication transaction. This is bridge provenance,
+/// not a new workspace grant or an ACP decision.
+fn accepted_parent_workspace(
+    request: &AgentRequestRow,
+) -> Result<Option<gents_protocol::output::DelegatedWorkspace>> {
+    let lineage = crate::lifecycle::WorkspaceLineage {
+        workspace_id: request.workspace_id.clone(),
+        workspace_owner_agent_did: request.workspace_owner_agent_did.clone(),
+        workspace_authority: request.workspace_authority.clone(),
+        workspace_seal_hash: request.workspace_seal_hash.clone(),
+    };
+    lineage.require_authority_if_workspace_id()?;
+    Ok(lineage
+        .workspace_id
+        .map(|workspace_id| gents_protocol::output::DelegatedWorkspace {
+            workspace_id,
+            workspace_owner_agent_did: lineage
+                .workspace_owner_agent_did
+                .expect("validated workspace owner"),
+            workspace_authority: lineage
+                .workspace_authority
+                .expect("validated workspace authority"),
+            workspace_seal_hash: lineage.workspace_seal_hash,
+        }))
 }
 
 async fn load_source_in_txn(
@@ -1063,4 +1112,24 @@ async fn load_source_in_txn(
                 .filter(|row| row.segment.source == prepared.source)
                 .collect()
         })
+}
+
+#[cfg(test)]
+mod workspace_guard_tests {
+    use super::*;
+
+    #[test]
+    fn malformed_parent_provenance_is_not_a_workspace_stamp_rejection() {
+        let request = AgentRequestRow {
+            request_id: "injected-malformed-parent".to_owned(),
+            workspace_id: Some("workspace-without-authority".to_owned()),
+            ..Default::default()
+        };
+        let error = accepted_parent_workspace(&request)
+            .expect_err("incomplete parent provenance must fail validation");
+        assert!(
+            error.downcast_ref::<ProviderWorkspaceRejection>().is_none(),
+            "only an authenticated stamp mismatch is a modeled rejection: {error:#}"
+        );
+    }
 }

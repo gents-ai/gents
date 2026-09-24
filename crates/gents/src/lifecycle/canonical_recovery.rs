@@ -10,6 +10,7 @@ use gents_protocol::output::{
     MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource, OutputWriter,
     SourceClose, TerminalOutput, TranscriptMessage,
 };
+use gents_protocol::rendered_request::CaptureOrderKey;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -257,10 +258,16 @@ pub(crate) async fn recover_expired_generation_with_facts(
             ).await?;
             let referenced = existing_headers.iter().flat_map(|header| header.message.payload_references())
                 .map(|reference| reference.close_doc_id.as_str()).collect::<BTreeSet<_>>();
-            let mut sources = BTreeMap::<String, OutputSource>::new();
+            let mut sources = BTreeMap::<CaptureOrderKey, OutputSource>::new();
             for record in &segments {
-                if record.segment.writer == writer && matches!(record.segment.source, OutputSource::ProviderTurn { .. }) {
-                    sources.insert(serde_json::to_string(&record.segment.source)?, record.segment.source.clone());
+                if record.segment.writer == writer {
+                    if let OutputSource::ProviderTurn { scope, turn_index, attempt } = &record.segment.source {
+                        sources.insert(CaptureOrderKey {
+                            scope: *scope,
+                            turn_index: i64::from(*turn_index),
+                            attempt: i64::from(*attempt),
+                        }, record.segment.source.clone());
+                    }
                 }
             }
             let mut sequence = super::queue::next_append_sequence_in_transaction(

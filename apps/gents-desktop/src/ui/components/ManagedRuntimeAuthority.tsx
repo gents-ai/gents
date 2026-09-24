@@ -4,6 +4,7 @@ import { Button } from "@gents/ui/components/button";
 import { Input } from "@gents/ui/components/input";
 import type { ManagedServerAuthorityInput } from "@source-inc/gents-desktop-client";
 import { authoritySummary } from "@/lib/managedRuntimeAuthority";
+import { pickDirectory } from "@/lib/pickDirectory";
 
 type ToolCeiling = ManagedServerAuthorityInput["toolCeiling"];
 
@@ -63,21 +64,15 @@ export function ManagedRuntimeAuthorityPicker({
     }
   };
   const choose = async () => {
-    if (!("__TAURI_INTERNALS__" in window)) {
-      input.current?.focus();
-      return;
-    }
     const generation = validationGeneration.current;
     try {
-      const { open } = await import("@tauri-apps/plugin-dialog");
-      const selected = await open({
-        directory: true,
-        multiple: false,
+      const selected = await pickDirectory({
         defaultPath: toolRoot ?? home,
         title: "Choose the managed runtime tool root",
       });
       if (generation !== validationGeneration.current) return;
-      if (typeof selected === "string") await validate(selected);
+      if (selected) await validate(selected);
+      else input.current?.focus();
     } catch (cause) {
       if (generation === validationGeneration.current) {
         onError(cause instanceof Error ? cause.message : String(cause));

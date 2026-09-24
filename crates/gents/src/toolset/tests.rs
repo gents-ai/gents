@@ -1835,6 +1835,63 @@ async fn unrestricted_bash_timeout_kills_descendants_and_returns_promptly() {
 }
 
 #[cfg(unix)]
+#[tokio::test]
+async fn unrestricted_bash_timeout_keeps_output_printed_before_the_timeout() {
+    let root = temp_root("gents-bash-timeout-partial-output");
+    let pid_file = root.join("shell.pid");
+    let tool = UnrestrictedBashTool::with_policy(
+        ToolContext::new(root, false).unwrap(),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        CommandExecutionPolicy::write_capable().with_mode(CommandExecutionMode::Unrestricted),
+    );
+    let command = "printf '%s' \"$$\" > shell.pid; echo compiled-pkg-one; echo compiled-pkg-two; echo warn-from-stderr >&2; sleep 30";
+
+    let boxed: Box<dyn crate::llm::tool::ToolDyn> = Box::new(tool);
+    let call = crate::tool_call_lifecycle::runtime::call_tool_managed(
+        boxed.as_ref(),
+        serde_json::json!({
+            "command": command,
+            "timeout_secs": 1,
+        })
+        .to_string(),
+    );
+    let outcome = tokio::time::timeout(Duration::from_secs(10), call)
+        .await
+        .expect("timed-out bash call must return promptly");
+    let crate::tool_call_lifecycle::ToolOutcome::Failed {
+        class: crate::tool_call_lifecycle::FailureClass::External,
+        text: output,
+        ..
+    } = outcome
+    else {
+        panic!("per-call timeout must be a recoverable typed failure, got {outcome:?}");
+    };
+
+    let meta = compact_exec_meta(&output);
+    assert_eq!(meta["status"], "timeout");
+    assert_eq!(meta["timed_out"], true);
+    assert!(meta["exit_code"].is_null());
+    assert!(meta["duration_ms"].as_u64().unwrap() >= 1000, "{output}");
+    assert!(
+        output.contains("compiled-pkg-one\ncompiled-pkg-two"),
+        "{output}"
+    );
+    assert!(output.contains("warn-from-stderr"), "{output}");
+    let hint = meta["hint"]
+        .as_str()
+        .expect("timeout result carries a hint");
+    assert!(hint.starts_with("timed out after "), "{hint}");
+    assert!(hint.contains("spawn_process"), "{hint}");
+    let shell_pid = std::fs::read_to_string(&pid_file)
+        .unwrap()
+        .trim()
+        .parse::<i32>()
+        .unwrap();
+    assert_unix_process_exited(shell_pid).await;
+}
+
+#[cfg(unix)]
 async fn assert_unix_process_exited(pid: i32) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

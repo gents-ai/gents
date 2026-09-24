@@ -39,7 +39,6 @@ export type RequestDiagnostics = {
   response?: {
     status?: string | null;
     errorMessage?: string | null;
-    progressSeq?: number | null;
     materializedMessageSequence?: number | null;
     materializedAt?: string | null;
     completedAt?: string | null;

@@ -111,10 +111,27 @@ where
                 attempt,
                 message,
             }) => {
-                let spawn_admissions = self
+                let spawn_admissions = match self
                     .persistence_hook
                     .preplan_spawn_admissions(&message, &self.pending_tool_internal_ids)
-                    .await;
+                    .await
+                {
+                    Ok(plans) => plans,
+                    Err(error) => {
+                        // This turn cannot be accepted, but its already-acknowledged
+                        // prefix still needs the ordinary, lease-fenced Partial close.
+                        // Keep the preplanning failure even if cleanup also fails.
+                        if let Err(close_error) = self
+                            .persist_partial_turn("persist rejected assistant turn")
+                            .await
+                        {
+                            return Err(error.context(format!(
+                                "failed to close rejected provider turn: {close_error:#}"
+                            )));
+                        }
+                        return Err(error);
+                    }
+                };
                 let published = self
                     .stream_writer
                     .publish_native_turn_with_spawn_admissions(
@@ -322,10 +339,9 @@ where
 
     pub async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
         self.flush_pending().await?;
-        let Some(message) = self.assistant_turn.take_message() else {
+        let Some(_message) = self.assistant_turn.take_message() else {
             return Ok(false);
         };
-        let _ = (message, context);
         if let Some((turn, attempt)) = self.active_provider_attempt.take() {
             self.stream_writer
                 .close_provider_attempt(
@@ -334,9 +350,13 @@ where
                     attempt,
                     crate::stream_writer::ProviderAttemptClose::Partial,
                 )
-                .await?;
+                .await
+                .with_context(|| format!("{context}: closing partial provider attempt"))?;
         }
-        self.stream_writer.reset_tail(self.doc_id).await?;
+        self.stream_writer
+            .reset_tail(self.doc_id)
+            .await
+            .with_context(|| format!("{context}: resetting partial assistant tail"))?;
 
         Ok(true)
     }
@@ -427,8 +447,7 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
     for part in &reasoning.content {
         let piece = match part {
             ReasoningContent::Text { text, .. } | ReasoningContent::Summary(text) => text.as_str(),
-            ReasoningContent::Encrypted(_) => "[encrypted reasoning]",
-            ReasoningContent::Redacted { .. } => "[redacted reasoning]",
+            ReasoningContent::Encrypted(_) | ReasoningContent::Redacted { .. } => continue,
         };
 
         if piece.is_empty() {
@@ -441,4 +460,36 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
     }
 
     rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use gents_protocol::message::ReasoningContent;
+
+    use super::{render_reasoning_text, AssistantReasoning};
+
+    #[test]
+    fn opaque_reasoning_is_not_streamed_as_text() {
+        let reasoning = AssistantReasoning {
+            id: None,
+            content: vec![
+                ReasoningContent::Encrypted("ciphertext".to_string()),
+                ReasoningContent::Text {
+                    text: "Planning the edit".to_string(),
+                    signature: None,
+                },
+                ReasoningContent::Redacted {
+                    data: "opaque".to_string(),
+                },
+            ],
+        };
+        assert_eq!(render_reasoning_text(&reasoning), "Planning the edit");
+        assert_eq!(
+            render_reasoning_text(&AssistantReasoning {
+                id: None,
+                content: vec![ReasoningContent::Encrypted("ciphertext".to_string())],
+            }),
+            ""
+        );
+    }
 }

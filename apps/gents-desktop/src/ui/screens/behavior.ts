@@ -1,12 +1,16 @@
 import type { DeploymentView } from "@source-inc/gents-desktop-client";
 
 /* two-letter initials on a pastel chip; the ink stays fixed like a marker */
+/* a leading article is not a name: "The Engineer" is En, not Te */
+const ARTICLES = new Set(["the", "a", "an"]);
+
 export function initials(name: string) {
-  const words = name.trim().split(/\s+/);
-  return (words.length > 1 ? words[0]![0]! + words[1]![0]! : name.slice(0, 2)).replace(
-    /^(.)(.)$/,
-    (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase(),
-  );
+  const all = name.trim().split(/\s+/);
+  const words =
+    all.length > 1 && ARTICLES.has(all[0]!.toLowerCase()) ? all.slice(1) : all;
+  return (
+    words.length > 1 ? words[0]![0]! + words[1]![0]! : words.join(" ").slice(0, 2)
+  ).replace(/^(.)(.)$/, (_, a: string, b: string) => a.toUpperCase() + b.toLowerCase());
 }
 
 export function behaviorName(
@@ -19,8 +23,8 @@ export function behaviorName(
   );
 }
 
-/* A pastel per behaviour: one lightness and chroma, a hue spread around
-   the wheel by the golden angle so neighbouring names never share a
+/* A pastel per behavior: one lightness and chroma, a hue spread around
+   the wheel by the golden angle so neighboring names never share a
    tint. Deep green ink (marker-foreground) reads on every hue. */
 export function chipColor(name: string, hue?: number | null) {
   return `oklch(0.9 0.09 ${behaviorHue(name, hue).toFixed(1)})`;

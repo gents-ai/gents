@@ -15,6 +15,7 @@ export type { SessionContextComponentsView } from "../generated/SessionContextCo
 export type { SessionContextView } from "../generated/SessionContextView.js";
 export type { SessionRequestContextView } from "../generated/SessionRequestContextView.js";
 export type { ToolCallView } from "../generated/ToolCallView.js";
+export type { ToolDiffLineKind } from "../generated/ToolDiffLineKind.js";
 export type { ToolDiffLineView } from "../generated/ToolDiffLineView.js";
 export type { ToolPresentationView } from "../generated/ToolPresentationView.js";
 

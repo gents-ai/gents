@@ -49,6 +49,27 @@ async fn claimed_owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
     .unwrap()
 }
 
+async fn claimed_owner_with_short_lease(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
+    let mut lifecycle = RequestLifecycle::materialize_pending_with_execution_binding(
+        node.clone(),
+        "general",
+        Arc::new(LeaseTestIdentity),
+        "hello",
+        60,
+        ExecutionOrigin::Interactive,
+        "lease-test",
+        TriggerLineage::default(),
+    )
+    .await
+    .unwrap();
+    lifecycle.set_execution_lease_duration(Duration::from_secs(2));
+    assert_eq!(
+        lifecycle.claim_with_identity().await.unwrap(),
+        ClaimOutcome::Claimed
+    );
+    lifecycle
+}
+
 async fn owner(node: &Arc<EmbeddedNode>) -> RequestLifecycle {
     let mut lifecycle = claimed_owner(node).await;
     let writer = crate::streaming::DefraStreamWriter::new(
@@ -222,6 +243,131 @@ async fn owned_stream_appends_do_not_renew_execution_lease() {
         lease_tuple(&request_row(&node, &request.doc_id).await),
         initial,
         "output flushes do not renew the execution lease"
+    );
+    drop(lifecycle);
+}
+
+#[tokio::test]
+async fn renewal_timer_advances_durable_deadline_while_provider_and_tool_reads_wait() {
+    use tokio::io::AsyncReadExt;
+
+    let (node, _dir) = test_node().await;
+    let mut lifecycle = claimed_owner_with_short_lease(&node).await;
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        "did:test:execution-lease",
+        Duration::ZERO,
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+
+    // These stand in for an in-flight provider read and an independent tool
+    // read. Neither produces bytes or touches the request's lease.
+    let (mut provider_reader, _provider_writer) = tokio::io::duplex(64);
+    let (mut tool_reader, _tool_writer) = tokio::io::duplex(64);
+    let provider_read = tokio::spawn(async move {
+        let mut byte = [0];
+        provider_reader.read_exact(&mut byte).await
+    });
+    let tool_read = tokio::spawn(async move {
+        let mut byte = [0];
+        tool_reader.read_exact(&mut byte).await
+    });
+    tokio::task::yield_now().await;
+    assert!(!provider_read.is_finished());
+    assert!(!tool_read.is_finished());
+    let before = request_row(&node, &doc_id).await;
+    let generation = before.execution_generation.clone();
+    let first_deadline =
+        DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
+            .unwrap();
+
+    tokio::time::timeout(Duration::from_secs(8), async {
+        loop {
+            let row = request_row(&node, &doc_id).await;
+            let deadline =
+                DateTime::parse_from_rfc3339(row.execution_lease_expires_at.as_deref().unwrap())
+                    .unwrap();
+            if deadline > first_deadline {
+                assert_eq!(row.lifecycle_state, Some(RequestLifecycleState::Processing));
+                assert_eq!(row.execution_generation, generation);
+                assert!(!provider_read.is_finished());
+                assert!(!tool_read.is_finished());
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the actual renewal timer must advance the durable deadline while reads wait");
+
+    provider_read.abort();
+    tool_read.abort();
+    drop(lifecycle);
+}
+
+#[tokio::test]
+async fn renewal_after_a_simulated_scheduling_gap_cannot_revive_expired_owner() {
+    let (node, _dir) = test_node().await;
+    let mut lifecycle = claimed_owner_with_short_lease(&node).await;
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        "did:test:execution-lease",
+        Duration::ZERO,
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let generation = request_row(&node, &doc_id)
+        .await
+        .execution_generation
+        .expect("claimed generation");
+
+    // Stop polling to simulate a scheduler gap. This is not an OS suspend or
+    // wall-clock mutation: the stored deadline remains the authority.
+    drop(lifecycle.renewal_task.take());
+    let before = request_row(&node, &doc_id).await;
+    let deadline =
+        DateTime::parse_from_rfc3339(before.execution_lease_expires_at.as_deref().unwrap())
+            .unwrap()
+            .with_timezone(&Utc);
+    let until_expired = (deadline - Utc::now() + chrono::Duration::milliseconds(50))
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    tokio::time::sleep(until_expired).await;
+    let observed_now = Utc::now();
+    assert!(observed_now >= deadline);
+
+    assert_eq!(
+        crate::lifecycle::renew_execution_lease_once_at(
+            &node,
+            &doc_id,
+            &generation,
+            deadline,
+            observed_now,
+        )
+        .await
+        .unwrap(),
+        crate::lifecycle::RenewalAttemptOutcome::Lost,
+    );
+    assert_eq!(
+        lease_tuple(&request_row(&node, &doc_id).await),
+        lease_tuple(&before)
+    );
+    assert_eq!(
+        RequestLifecycle::recover_all(&node, "did:test:execution-lease")
+            .await
+            .unwrap()
+            .requests_recovered,
+        1,
+    );
+    let recovered = request_row(&node, &doc_id).await;
+    assert_eq!(
+        recovered.lifecycle_state,
+        Some(RequestLifecycleState::Failed)
+    );
+    assert_ne!(
+        recovered.execution_generation.as_deref(),
+        Some(generation.as_str())
     );
     drop(lifecycle);
 }

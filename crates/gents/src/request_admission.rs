@@ -216,7 +216,7 @@ pub(crate) async fn terminalize_pending_request_rejection(
     let failure_reason = escape_graphql_string(reason);
     let terminalized_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
-        r#"mutation {{
+        r#"mutation($terminal_output: JSON) {{
             update_AgentRequest(
                 filter: {{
                     _docID: {{ _eq: "{doc_id}" }},
@@ -227,13 +227,29 @@ pub(crate) async fn terminalize_pending_request_rejection(
                     lifecycle_state: "failed",
                     failure_reason: "{failure_reason}",
                     terminalized_at: "{terminalized_at}",
-                    terminal_redrive_attempts: 0
+                    terminal_redrive_attempts: 0,
+                    terminal_output: $terminal_output
                 }}
             ) {{ _docID }}
         }}"#
     );
-    crate::config_client::ConfigAccess::write_local_idempotent_update_response(
-        node, operation, &mutation,
+    let mutation = &mutation;
+    crate::config_client::ConfigAccess::transact_local_idempotent(
+        node,
+        None,
+        crate::config_client::IdempotentTransactionRetry::Standard,
+        operation,
+        move |txn| {
+            Box::pin(async move {
+                txn.execute_with_variables(
+                    &mutation,
+                    &serde_json::json!({
+                        "terminal_output": gents_protocol::output::TerminalOutput::NoMessage
+                    }),
+                )
+                .await
+            })
+        },
     )
     .await
     .map(|_| ())
@@ -1330,6 +1346,69 @@ mod tests {
     use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::schema::ensure_runtime_schemas;
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
+
+    #[tokio::test]
+    async fn pending_admission_rejection_selects_terminal_no_message() {
+        let temp = tempfile::tempdir().unwrap();
+        let identity =
+            KeyIdentity::load_or_create(temp.path().join("rejection.key"), None).unwrap();
+        let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+        ensure_runtime_schemas(&node).await.unwrap();
+        let mut create = AgentRequestCreate::base(
+            "rejected-request",
+            identity.did(),
+            identity.did(),
+            "behavior",
+            "session",
+            "work",
+            "interactive",
+            "2026-09-01T00:00:00Z",
+            AgentRequestAdmissionRecord::local_self(identity.did()),
+        );
+        crate::sign_agent_request_create(&identity, &mut create)
+            .await
+            .unwrap();
+        let created = node.execute(&create.graphql_mutation().unwrap()).await;
+        assert!(!created.has_errors(), "{:?}", created.errors);
+        let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        super::terminalize_pending_request_rejection(
+            &node,
+            &doc_id,
+            identity.did(),
+            "request activates a skill outside its context allowlist",
+            "test.admission_rejection",
+        )
+        .await
+        .unwrap();
+
+        let escaped_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+        let selected = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{ lifecycle_state failure_reason terminal_output }} }}"#
+            ))
+            .await;
+        assert!(!selected.has_errors(), "{:?}", selected.errors);
+        let row = crate::graphql::first_row::<serde_json::Value>(&selected, "AgentRequest")
+            .unwrap()
+            .unwrap();
+        assert_eq!(row["lifecycle_state"], "failed");
+        assert_eq!(
+            row["failure_reason"],
+            "request activates a skill outside its context allowlist"
+        );
+        let terminal_output: gents_protocol::output::TerminalOutput =
+            serde_json::from_value(row["terminal_output"].clone()).unwrap();
+        assert_eq!(
+            terminal_output,
+            gents_protocol::output::TerminalOutput::NoMessage
+        );
+    }
 
     #[tokio::test]
     async fn signed_input_cannot_expand_context_or_impersonate_runtime_queue() {
