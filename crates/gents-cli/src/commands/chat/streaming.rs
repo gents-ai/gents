@@ -104,7 +104,7 @@ pub(super) fn chat_progress_query(request: &SubmittedRequest) -> String {
     )
 }
 
-pub(super) async fn load_existing_tool_call_keys(
+pub(crate) async fn load_existing_tool_call_keys(
     graphql: &str,
     session_id: &str,
 ) -> Result<std::collections::BTreeMap<String, String>> {
@@ -236,7 +236,7 @@ async fn clear_indicator(indicator: &mut Option<WorkingIndicator>) {
     }
 }
 
-pub(super) async fn stream_turn_progress(
+pub(crate) async fn stream_turn_progress(
     graphql: &str,
     submitted: &SubmittedRequest,
     mut known_tool_calls: std::collections::BTreeMap<String, String>,

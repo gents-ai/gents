@@ -3388,6 +3388,11 @@ pub(crate) enum EvalCommand {
         about = "List the checks a definition may name, with their params schema and reason codes"
     )]
     Checks(EvalChecksArgs),
+    #[command(
+        about = "Interview a model about one behavior of a pack and write the eval definition pack it drafts",
+        after_help = EVAL_INIT_AFTER_HELP
+    )]
+    Init(EvalInitArgs),
 }
 
 impl EvalCommand {
@@ -3404,6 +3409,7 @@ impl EvalCommand {
             Self::Compare(args) => &args.scope,
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
+            Self::Init(args) => &args.scope,
             // `dispatch` answers `checks` before resolving any home.
             Self::Checks(_) => &NO_SCOPE,
         }
@@ -3698,6 +3704,53 @@ pub(crate) struct EvalRunArgs {
     pub(crate) registry: Option<String>,
     #[arg(long)]
     pub(crate) json: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+/// `gents eval init`'s exit statuses.
+const EVAL_INIT_AFTER_HELP: &str = "Needs a terminal and a served home (`gents server`). Exit status: 0 when the pack was written (and piloted, with --pilot) or the operator ended the interview; 1 when refused or when three drafts did not validate; 2 on a usage error.";
+
+#[derive(clap::Args)]
+pub(crate) struct EvalInitArgs {
+    /// A pack name, resolved as `gents pack install` resolves one, or a pack
+    /// directory written as a path (`./subject`, `/packs/subject`).
+    pub(crate) subject: String,
+    /// The behavior to draft cases for; implied when the pack has one.
+    #[arg(long)]
+    pub(crate) behavior: Option<String>,
+    /// Where the definition pack is written; refused when it exists, unless
+    /// --force.
+    #[arg(long)]
+    pub(crate) out: PathBuf,
+    /// The definition's id; the author's draft names one when absent.
+    #[arg(long)]
+    pub(crate) definition_id: Option<String>,
+    /// The inference profile the author (and the pilot) runs on; the home's
+    /// default when absent.
+    #[arg(long)]
+    pub(crate) profile: Option<String>,
+    /// Run the written draft once, one trial per case on every split, and let
+    /// the author revise it from the evidence.
+    #[arg(long)]
+    pub(crate) pilot: bool,
+    /// Pilot without asking first.
+    #[arg(long)]
+    pub(crate) yes: bool,
+    /// Replace an existing --out.
+    #[arg(long)]
+    pub(crate) force: bool,
+    /// The fewest validation cases a draft may have.
+    #[arg(long, default_value_t = 6)]
+    pub(crate) validation_min: usize,
+    /// How long one author turn may go without progress.
+    #[arg(long, default_value_t = 86_400)]
+    pub(crate) timeout_secs: u64,
+    #[arg(long, default_value_t = 1)]
+    pub(crate) poll_secs: u64,
+    /// The pack registry to fall back to for a subject not compiled in.
+    #[arg(long)]
+    pub(crate) registry: Option<String>,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }

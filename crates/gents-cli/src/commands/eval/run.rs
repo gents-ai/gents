@@ -131,7 +131,7 @@ pub(super) fn profiles_by_cell(args: &EvalRunArgs) -> Result<BTreeMap<&str, &str
     Ok(profiles)
 }
 
-async fn run_request(
+pub(super) async fn run_request(
     ctx: &EvalContext,
     args: &EvalRunArgs,
 ) -> Result<(RunRequest, Vec<SubjectPack>)> {
@@ -187,7 +187,7 @@ async fn run_request(
 }
 
 /// Drive `running` to its end, printing a line for each slot that lands.
-async fn follow<F>(
+pub(super) async fn follow<F>(
     ctx: &EvalContext,
     run_id: &str,
     landed: BTreeSet<String>,

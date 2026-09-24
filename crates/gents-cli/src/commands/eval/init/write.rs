@@ -19,7 +19,7 @@ use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-use super::dossier::read_pack;
+use super::dossier::{read_pack, Dossier};
 use super::validate::Assembled;
 
 const CONFIG: &str = "pack_config.json";
@@ -45,10 +45,12 @@ pub(crate) struct Staged {
     dir: TempDir,
     pack_name: String,
     /// The definition as the loader read it back.
+    #[cfg_attr(not(test), allow(dead_code))]
     definition: EvalDefinition,
 }
 
 impl Staged {
+    #[cfg(test)]
     pub(crate) fn definition(&self) -> &EvalDefinition {
         &self.definition
     }
@@ -60,6 +62,7 @@ impl Staged {
 pub(crate) async fn stage(
     assembled: &Assembled,
     interview_summary: &str,
+    subject: &Dossier,
     pilot: Option<&PilotNote>,
 ) -> Result<Staged, Vec<String>> {
     let definition = &assembled.definition;
@@ -68,8 +71,15 @@ pub(crate) async fn stage(
         .prefix("gents-eval-init-")
         .tempdir()
         .map_err(|error| vec![format!("creating a temporary directory: {error}")])?;
-    write_files(dir.path(), &pack_name, assembled, interview_summary, pilot)
-        .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
+    write_files(
+        dir.path(),
+        &pack_name,
+        assembled,
+        interview_summary,
+        subject,
+        pilot,
+    )
+    .map_err(|error| vec![format!("writing the definition pack: {error:#}")])?;
     let loaded = round_trip(dir.path(), definition).await.map_err(|error| {
         vec![format!(
             "the definition pack does not load and install: {error:#}"
@@ -115,23 +125,26 @@ pub(crate) fn commit(staged: Staged, out: &Path, force: bool) -> Result<Written>
 }
 
 /// [`stage`] then [`commit`], with the stage's messages as one error.
+#[cfg(test)]
 pub(crate) async fn write_pack(
     assembled: &Assembled,
     interview_summary: &str,
+    subject: &Dossier,
     out: &Path,
     force: bool,
 ) -> Result<Written> {
-    let staged = stage(assembled, interview_summary, None)
+    let staged = stage(assembled, interview_summary, subject, None)
         .await
         .map_err(|messages| anyhow::anyhow!(messages.join("\n")))?;
     commit(staged, out, force)
 }
 
-/// The pack's README: what was drafted, from what interview, which cases,
-/// and the pilot when there was one.
+/// The pack's README: what was drafted, for which subject, from what
+/// interview, which cases, and the pilot when there was one.
 pub(crate) fn readme(
     assembled: &Assembled,
     interview_summary: &str,
+    subject: &Dossier,
     pilot: Option<&PilotNote>,
 ) -> String {
     let definition = &assembled.definition;
@@ -146,10 +159,13 @@ pub(crate) fn readme(
     );
     let _ = writeln!(
         text,
-        "Eval definition `{}` (comparability version {}), drafted by `gents eval init` on {} for a behavior subject bound to inference slot {}.\n",
+        "Eval definition `{}` (comparability version {}), drafted by `gents eval init` on {} for behavior `{}` of pack `{}` ({}), bound to inference slot {}.\n",
         definition.definition_id,
         definition.comparability_version,
         chrono::Utc::now().format("%Y-%m-%d"),
+        subject.behavior_id,
+        subject.pack_name,
+        subject.pack_digest,
         definition
             .subject
             .inference_slots
@@ -160,24 +176,8 @@ pub(crate) fn readme(
     );
     text.push_str("## What the author was told\n\n");
     text.push_str(interview_summary.trim_end());
-    text.push_str("\n\n## Cases\n\n| case | split | stages | checks |\n|---|---|---|---|\n");
-    for case in &definition.cases {
-        let mut checks: Vec<&str> = case
-            .stages
-            .iter()
-            .flat_map(|stage| stage.checks.iter().map(|check| check.check.as_str()))
-            .collect();
-        checks.sort_unstable();
-        checks.dedup();
-        let _ = writeln!(
-            text,
-            "| {} | {} | {} | {} |",
-            case.case_id,
-            split_name(case.split),
-            case.stages.len(),
-            checks.join(", ")
-        );
-    }
+    text.push_str("\n\n## Cases\n\n");
+    text.push_str(&case_table(definition));
     if let Some(pilot) = pilot {
         text.push_str("\n## Pilot\n\n");
         let _ = writeln!(
@@ -195,6 +195,30 @@ pub(crate) fn readme(
                 "\nThe draft was revised after the pilot; the revised cases were not piloted again.\n",
             );
         }
+    }
+    text
+}
+
+/// The definition's cases as a markdown table: id, split, stage count and
+/// the checks they name. The README holds it; the command prints it.
+pub(crate) fn case_table(definition: &EvalDefinition) -> String {
+    let mut text = String::from("| case | split | stages | checks |\n|---|---|---|---|\n");
+    for case in &definition.cases {
+        let mut checks: Vec<&str> = case
+            .stages
+            .iter()
+            .flat_map(|stage| stage.checks.iter().map(|check| check.check.as_str()))
+            .collect();
+        checks.sort_unstable();
+        checks.dedup();
+        let _ = writeln!(
+            text,
+            "| {} | {} | {} | {} |",
+            case.case_id,
+            split_name(case.split),
+            case.stages.len(),
+            checks.join(", ")
+        );
     }
     text
 }
@@ -218,7 +242,7 @@ fn case_asset(case_id: &str) -> String {
     format!("cases/{}.json", case_id.replace('-', "_"))
 }
 
-fn split_name(split: EvalSplit) -> String {
+pub(crate) fn split_name(split: EvalSplit) -> String {
     serde_json::to_value(split)
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
@@ -230,6 +254,7 @@ fn write_files(
     pack_name: &str,
     assembled: &Assembled,
     interview_summary: &str,
+    subject: &Dossier,
     pilot: Option<&PilotNote>,
 ) -> Result<()> {
     let definition = &assembled.definition;
@@ -265,7 +290,7 @@ fn write_files(
     files.insert(CONFIG.to_owned(), bytes);
     files.insert(
         README.to_owned(),
-        readme(assembled, interview_summary, pilot).into_bytes(),
+        readme(assembled, interview_summary, subject, pilot).into_bytes(),
     );
 
     let manifest = json!({
@@ -466,7 +491,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let out = root.path().join("nested/canary_eval");
 
-        let written = write_pack(&assembled, SUMMARY, &out, false).await.unwrap();
+        let written = write_pack(&assembled, SUMMARY, &dossier(), &out, false)
+            .await
+            .unwrap();
         assert_eq!(written.out, out);
         assert_eq!(written.pack_name, "canary_quality");
 
@@ -509,6 +536,10 @@ mod tests {
             "{readme}"
         );
         assert!(!readme.contains("## Pilot"), "{readme}");
+        assert!(
+            readme.contains("for behavior `canary` of pack `eval_canary` (sha256:canary)"),
+            "{readme}"
+        );
     }
 
     #[tokio::test]
@@ -519,14 +550,16 @@ mod tests {
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(out.join("stale.txt"), "old").unwrap();
 
-        let error = write_pack(&assembled, SUMMARY, &out, false)
+        let error = write_pack(&assembled, SUMMARY, &dossier(), &out, false)
             .await
             .unwrap_err()
             .to_string();
         assert!(error.contains("--force"), "{error}");
         assert!(out.join("stale.txt").exists(), "a refusal leaves out alone");
 
-        write_pack(&assembled, SUMMARY, &out, true).await.unwrap();
+        write_pack(&assembled, SUMMARY, &dossier(), &out, true)
+            .await
+            .unwrap();
         assert!(!out.join("stale.txt").exists());
         assert!(out.join("manifest.json").exists());
     }
@@ -537,7 +570,7 @@ mod tests {
         // Interpolation markers in the author's text install as written.
         draft.title = Some("Canary ${HOME} quality".into());
         let assembled = validated(&draft);
-        let staged = stage(&assembled, SUMMARY, None).await.unwrap();
+        let staged = stage(&assembled, SUMMARY, &dossier(), None).await.unwrap();
         assert_eq!(
             staged.definition().title.as_deref(),
             Some("Canary ${HOME} quality")
@@ -597,7 +630,7 @@ mod tests {
         // pack name it gives is the writer's.
         let mut draft = good();
         draft.definition_id = Some("Canary.Quality".into());
-        let messages = stage(&validated(&draft), SUMMARY, None)
+        let messages = stage(&validated(&draft), SUMMARY, &dossier(), None)
             .await
             .err()
             .unwrap();
@@ -608,7 +641,7 @@ mod tests {
         // refusal reaches the author.
         let mut draft = good();
         draft.cases[0]["case_id"] = json!("Train-A");
-        let messages = stage(&validated(&draft), SUMMARY, None)
+        let messages = stage(&validated(&draft), SUMMARY, &dossier(), None)
             .await
             .err()
             .unwrap();
@@ -631,7 +664,7 @@ mod tests {
             ],
             revised: false,
         };
-        let kept = readme(&assembled, SUMMARY, Some(&pilot));
+        let kept = readme(&assembled, SUMMARY, &dossier(), Some(&pilot));
         assert!(kept.contains("## Pilot"), "{kept}");
         for run_id in &pilot.run_ids {
             assert!(kept.contains(run_id.as_str()), "{kept}");
@@ -641,6 +674,7 @@ mod tests {
         let revised = readme(
             &assembled,
             SUMMARY,
+            &dossier(),
             Some(&PilotNote {
                 revised: true,
                 ..pilot

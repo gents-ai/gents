@@ -15,10 +15,8 @@ use crate::{
     RequestSubmitOptions, SubmittedRequest, DEFAULT_HTTP_PORT,
 };
 
-use streaming::{
-    load_existing_tool_call_keys, sanitize_summary_text, stream_turn_progress,
-    SUMMARY_ARGUMENT_MAX_CHARS,
-};
+pub(crate) use streaming::{load_existing_tool_call_keys, stream_turn_progress};
+use streaming::{sanitize_summary_text, SUMMARY_ARGUMENT_MAX_CHARS};
 
 pub(crate) async fn chat(args: ChatArgs) -> Result<()> {
     let home_dir = resolve_home_dir(args.home.as_deref());
@@ -310,7 +308,7 @@ fn terminal_presentation(
     }
 }
 
-fn chat_turn_text_content(envelope: &RequestOutputEnvelope) -> &str {
+pub(crate) fn chat_turn_text_content(envelope: &RequestOutputEnvelope) -> &str {
     terminal_presentation(envelope)
         .map(|presentation| presentation.body_markdown.as_str())
         .unwrap_or("")

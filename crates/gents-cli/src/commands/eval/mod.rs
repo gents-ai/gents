@@ -88,6 +88,11 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
         let mut out = stdout.lock();
         return checks::checks(&CheckRegistry::builtin(), args, &mut out);
     }
+    // The interview needs a terminal and a served home; both are checked
+    // before the home is opened.
+    if let EvalCommand::Init(args) = &command {
+        init::preflight(args).await?;
+    }
     let ctx = EvalContext::resolve(command.scope()).await?;
     let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
     let registry = CheckRegistry::builtin();
@@ -138,6 +143,7 @@ pub(crate) async fn execute(
         }
         EvalCommand::Gc(args) => manage::gc(ctx, &args, out).await,
         EvalCommand::Checks(args) => checks::checks(deps.registry, &args, out),
+        EvalCommand::Init(args) => init::run(ctx, &args, deps, out).await,
     };
     result.map_err(surface_refusal)
 }
@@ -374,6 +380,20 @@ mod tests {
             panic!("not trial");
         };
         assert_eq!((args.cell.as_str(), args.trial_index), ("baseline", None));
+    }
+
+    #[test]
+    fn init_parses_its_subject_out_and_defaults() {
+        let probe = Probe::try_parse_from(["probe", "init", "./subject", "--out", "/tmp/o"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::Init(args) = &probe.command else {
+            panic!("not init");
+        };
+        assert_eq!(args.subject, "./subject");
+        assert_eq!(args.out, std::path::PathBuf::from("/tmp/o"));
+        assert_eq!(args.validation_min, 6);
+        assert!(!args.pilot && !args.yes && !args.force);
+        assert!(Probe::try_parse_from(["probe", "init", "./subject"]).is_err());
     }
 
     /// `checks` reads no home, so it takes no scope flags.

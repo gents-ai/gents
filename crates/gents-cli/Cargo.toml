@@ -31,6 +31,7 @@ required-features = ["live-e2e"]
 
 [dependencies]
 anyhow.workspace = true
+async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
 bs58 = "0.5"
 chrono.workspace = true
@@ -111,7 +112,6 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 
 [dev-dependencies]
 acp.workspace = true
-async-trait = "0.1"
 futures = "0.3"
 gents-desktop-core.workspace = true
 gents-lean-contract.workspace = true
