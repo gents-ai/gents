@@ -613,6 +613,8 @@ fn claude_thinking_events_as_sse(events: &[LeanClaudeStreamEvent]) -> String {
 
 #[test]
 fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
+    use gents::llm::message::ReasoningContent;
+
     let cases = lean_prompt_assembly_claude_thinking_stream_cases();
     assert!(
         !cases.is_empty(),
@@ -687,16 +689,16 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
                     arguments: None,
                 }),
                 RawStreamingChoice::Reasoning { content, .. } => {
-                    use rig::completion::message::ReasoningContent;
-                    let part = match content {
+                    let part = gents::llm::rig_compat::from_rig_reasoning_part(content);
+                    let part = match part {
                         ReasoningContent::Text { text, signature } => LeanClaudeReasoningPart {
                             kind: "text".into(),
-                            payload: text.clone(),
-                            signature: signature.clone(),
+                            payload: text,
+                            signature,
                         },
                         ReasoningContent::Redacted { data } => LeanClaudeReasoningPart {
                             kind: "redacted".into(),
-                            payload: data.clone(),
+                            payload: data,
                             signature: None,
                         },
                         other => panic!("unsupported native Claude reasoning output: {other:?}"),
@@ -763,15 +765,11 @@ fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
                         &reasoning,
                     ),
                 RawStreamingChoice::Reasoning { id, content } => {
-                    let part = match content {
-                        rig::completion::message::ReasoningContent::Text { text, signature } => {
-                            ReasoningContent::Text { text, signature }
-                        }
-                        rig::completion::message::ReasoningContent::Redacted { data } => {
-                            ReasoningContent::Redacted { data }
-                        }
+                    let part = gents::llm::rig_compat::from_rig_reasoning_part(&content);
+                    match &part {
+                        ReasoningContent::Text { .. } | ReasoningContent::Redacted { .. } => {}
                         other => panic!("unexpected Claude reasoning: {other:?}"),
-                    };
+                    }
                     accumulator
                         .push_provider_reasoning(
                             ProviderInputProfile::ClaudeMessages,
