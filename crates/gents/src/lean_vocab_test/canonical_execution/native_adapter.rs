@@ -3051,6 +3051,10 @@ async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing(
         .await
         .expect_err("invalid durable deadline cannot authorize a fresh append");
         assert!(
+            format!("{error:#}").contains("no accepted deadline"),
+            "missing deadline must fail at the deadline integrity check: {error:#}"
+        );
+        assert!(
             error
                 .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
                 .is_none(),
