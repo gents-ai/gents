@@ -12,7 +12,7 @@ use serde_json::Value;
 use tracing::Instrument;
 
 use crate::support::live_inference::{
-    bind_target, boot_live_agent_with_options, targets_dir, InferenceTarget,
+    bind_target, boot_live_agent_with_options, parse_selection, targets_dir, InferenceTarget,
 };
 use crate::support::test_db_in;
 
@@ -1048,4 +1048,65 @@ fn targets_reject_extra_documents_owners_and_dangling_profiles() {
     ] {
         assert!(decode(invalid.clone()).is_err(), "accepted {invalid}");
     }
+}
+
+#[test]
+fn target_selection_dedupes_files_and_rejects_name_collisions() {
+    let names = |value: &str| {
+        parse_selection(value).map(|selected| {
+            selected
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        names(" workstation-1, ,openrouter,,workstation-1 ").unwrap(),
+        ["workstation-1", "openrouter"]
+    );
+    assert_eq!(
+        names("workstation-1,scripts/evals/targets/workstation-1.json").unwrap(),
+        ["workstation-1"]
+    );
+    let foreign = tempfile::tempdir().unwrap();
+    let copy = foreign.path().join("workstation-1.json");
+    std::fs::copy(targets_dir().join("workstation-1.json"), &copy).unwrap();
+    let error = names(&format!("workstation-1,{}", copy.display())).unwrap_err();
+    assert!(
+        error.to_string().contains("share the name workstation-1"),
+        "{error}"
+    );
+    assert!(names(" , ").is_err());
+}
+
+#[test]
+fn targets_are_literal_and_never_hold_inline_keys() {
+    let profile = serde_json::json!({"profile_id": "p", "backend_id": "b", "model_name": "m"});
+    let backend = |endpoint: &str, auth: serde_json::Value| {
+        serde_json::json!({
+            "agent_principal": {},
+            "inference_backends": [{
+                "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
+                "endpoint": endpoint, "auth": auth
+            }],
+            "inference_profiles": [profile]
+        })
+    };
+    assert!(InferenceTarget::decode(
+        "t".into(),
+        backend(
+            "http://127.0.0.1:9/v1",
+            serde_json::json!({"kind": "api_key", "key": "k"})
+        )
+    )
+    .is_err());
+    // `${PATH}` is set in every test process; a literal target must not expand it.
+    assert!(InferenceTarget::decode(
+        "t".into(),
+        backend(
+            "http://${PATH}/v1",
+            serde_json::json!({"kind": "unauthenticated"})
+        )
+    )
+    .is_err_and(|error| format!("{error:#}").contains("PATH")));
 }

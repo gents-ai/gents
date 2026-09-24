@@ -60,23 +60,11 @@ pub struct InferenceTarget {
 impl InferenceTarget {
     /// Resolve a target name or path.
     pub fn load(selector: &str) -> Result<Self> {
-        let selector = selector.trim();
-        anyhow::ensure!(!selector.is_empty(), "inference target selector is blank");
-        let path = if selector.contains('/') || selector.ends_with(".json") {
-            let path = PathBuf::from(selector);
-            if path.is_absolute() {
-                path
-            } else {
-                workspace_root().join(path)
-            }
-        } else {
-            targets_dir().join(format!("{selector}.json"))
-        };
-        let name = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .with_context(|| format!("inference target path has no name: {}", path.display()))?
-            .to_owned();
+        let (name, path) = resolve_selector(selector)?;
+        Self::load_path(name, &path)
+    }
+
+    fn load_path(name: String, path: &Path) -> Result<Self> {
         let bytes = std::fs::read(&path)
             .with_context(|| format!("reading inference target {}", path.display()))?;
         let value = serde_json::from_slice(&bytes)
@@ -91,7 +79,9 @@ impl InferenceTarget {
             Some(&PackInstallOptions {
                 agent_did: TARGET_VALIDATION_OWNER.to_owned(),
             }),
-            &|variable| std::env::var(variable).ok(),
+            // Targets are literal documents: interpolating the process
+            // environment could copy secrets into endpoints, reports or the DB.
+            &|_| None,
             &|_, _, reference| anyhow::bail!("inference targets have no sidecars: {reference}"),
         )?;
         let authored = serde_json::to_value(&config)?;
@@ -125,6 +115,10 @@ impl InferenceTarget {
             .map_err(|_| anyhow::anyhow!("an inference target has exactly one profile"))?;
         backend.validate()?;
         profile.validate()?;
+        anyhow::ensure!(
+            !matches!(backend.auth, BackendAuth::ApiKey { .. }),
+            "inference targets select credentials by environment variable, never an inline API key"
+        );
         anyhow::ensure!(backend.enabled, "inference target backend is disabled");
         Ok(Self {
             name,
@@ -133,7 +127,8 @@ impl InferenceTarget {
         })
     }
 
-    /// Every target named by `GENTS_EVAL_TARGET`, in order, without duplicates.
+    /// Every target named by `GENTS_EVAL_TARGET`, in order. Each target's
+    /// environment credential must be present before any trial starts.
     pub fn selected_all() -> Result<Vec<Self>> {
         let value = std::env::var(EVAL_TARGET_VARIABLE).map_err(|_| {
             anyhow::anyhow!(
@@ -141,23 +136,25 @@ impl InferenceTarget {
                 targets_dir().display()
             )
         })?;
-        let mut seen = std::collections::BTreeSet::new();
-        let targets = value
-            .split(',')
-            .map(str::trim)
-            .filter(|selector| !selector.is_empty())
-            .map(Self::load)
-            .filter(|target| {
-                target
-                    .as_ref()
-                    .map_or(true, |target| seen.insert(target.name.clone()))
-            })
+        let targets = parse_selection(&value)?
+            .into_iter()
+            .map(|(name, path)| Self::load_path(name, &path))
             .collect::<Result<Vec<_>>>()?;
-        anyhow::ensure!(
-            !targets.is_empty(),
-            "{EVAL_TARGET_VARIABLE} names no inference target"
-        );
+        for target in &targets {
+            target.require_credential()?;
+        }
         Ok(targets)
+    }
+
+    fn require_credential(&self) -> Result<()> {
+        if let BackendAuth::Environment { variable } = &self.backend.auth {
+            anyhow::ensure!(
+                std::env::var(variable).is_ok_and(|key| !key.trim().is_empty()),
+                "inference target {} requires {variable} to be set",
+                self.name
+            );
+        }
+        Ok(())
     }
 
     /// The single target a live test runs against.
@@ -234,6 +231,56 @@ impl InferenceTarget {
             Err(_) => panic!("target {name} endpoint {url} timed out (not reachable)"),
         }
     }
+}
+
+/// Resolve one selector to its target name and file. Names are files under
+/// `scripts/evals/targets/`; relative paths resolve against the workspace root.
+fn resolve_selector(selector: &str) -> Result<(String, PathBuf)> {
+    let selector = selector.trim();
+    anyhow::ensure!(!selector.is_empty(), "inference target selector is blank");
+    let path = if selector.contains('/') || selector.ends_with(".json") {
+        let path = PathBuf::from(selector);
+        if path.is_absolute() {
+            path
+        } else {
+            workspace_root().join(path)
+        }
+    } else {
+        targets_dir().join(format!("{selector}.json"))
+    };
+    let path = std::fs::canonicalize(&path).unwrap_or(path);
+    let name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .with_context(|| format!("inference target path has no name: {}", path.display()))?
+        .to_owned();
+    Ok((name, path))
+}
+
+/// Parse a comma-separated selection. A repeated file is selected once; two
+/// different files with one name would make report rows ambiguous.
+pub fn parse_selection(value: &str) -> Result<Vec<(String, PathBuf)>> {
+    let mut selected: Vec<(String, PathBuf)> = Vec::new();
+    for selector in value
+        .split(',')
+        .filter(|selector| !selector.trim().is_empty())
+    {
+        let (name, path) = resolve_selector(selector)?;
+        match selected.iter().find(|(existing, _)| *existing == name) {
+            Some((_, existing)) if *existing == path => {}
+            Some((_, existing)) => anyhow::bail!(
+                "inference targets {} and {} share the name {name}",
+                existing.display(),
+                path.display()
+            ),
+            None => selected.push((name, path)),
+        }
+    }
+    anyhow::ensure!(
+        !selected.is_empty(),
+        "{EVAL_TARGET_VARIABLE} names no inference target"
+    );
+    Ok(selected)
 }
 
 /// The one target selected for a live test; panics with the selection rule.

@@ -655,6 +655,7 @@ async fn install_onboarding_profiles(
 ) -> Result<()> {
     use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
+    let reasoning_effort = reasoning_effort.or(target.profile(agent_did).reasoning_effort);
     let sampling = InferenceSampling {
         agent_did: agent_did.to_owned(),
         sampling_id: SAMPLING_ID.to_owned(),

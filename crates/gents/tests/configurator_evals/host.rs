@@ -41,6 +41,22 @@ fn host_start_provisions_the_selected_target_model() {
     );
     let openrouter = InferenceTarget::load("openrouter").unwrap();
     assert!(start_arguments(&openrouter).is_err());
+    let tuned = InferenceTarget::decode(
+        "tuned".into(),
+        serde_json::json!({
+            "agent_principal": {},
+            "inference_backends": [{
+                "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
+                "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "unauthenticated"}
+            }],
+            "inference_profiles": [{
+                "profile_id": "p", "backend_id": "b", "model_name": "m", "context_window": 1000
+            }]
+        }),
+    )
+    .unwrap();
+    let error = start_arguments(&tuned).unwrap_err();
+    assert!(error.to_string().contains("context_window"), "{error}");
 }
 
 pub(super) fn require_host_target(target: &InferenceTarget) -> Result<()> {
@@ -52,6 +68,31 @@ pub(super) fn require_host_target(target: &InferenceTarget) -> Result<()> {
             ),
         "host suites support only unauthenticated OpenAI-compatible inference targets; {} is not one",
         target.name
+    );
+    let profile = serde_json::to_value(target.profile("did:key:host"))?;
+    let unsupported = profile
+        .as_object()
+        .context("inference profile")?
+        .keys()
+        .filter(|field| {
+            !matches!(
+                field.as_str(),
+                "agent_did"
+                    | "profile_id"
+                    | "backend_id"
+                    | "model_name"
+                    | "display_name"
+                    | "description"
+                    | "tags"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    ensure!(
+        unsupported.is_empty(),
+        "host suites provision only the model name; target {} also sets {}",
+        target.name,
+        unsupported.join(", ")
     );
     Ok(())
 }
