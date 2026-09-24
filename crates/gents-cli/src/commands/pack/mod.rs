@@ -13,7 +13,7 @@ mod scenario;
 mod secscan;
 mod server;
 mod test;
-mod update;
+pub(crate) mod update;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, PackManifest, ResolvedPack};
@@ -415,7 +415,7 @@ pub(crate) async fn resolve_scope_owner(
 
 /// `gents pack remove`: deletes what the pack's install created, keeping
 /// documents it adopted, and forgets the install.
-async fn remove(args: PackRemoveArgs) -> Result<()> {
+pub(crate) async fn remove(args: PackRemoveArgs) -> Result<()> {
     let (namespace, name) = split_namespace(&args.package);
     let (access, owner) = resolve_scope_owner(&args.scope).await?;
     let report = gents::pack::remove_pack(
@@ -442,7 +442,7 @@ async fn remove(args: PackRemoveArgs) -> Result<()> {
     )
 }
 
-async fn install(args: PackInstallArgs) -> Result<()> {
+pub(crate) async fn install(args: PackInstallArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");

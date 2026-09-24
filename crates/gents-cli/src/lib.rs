@@ -19,6 +19,7 @@ mod home_state;
 mod http;
 mod interactive_backend;
 pub mod native_service;
+pub mod packs;
 mod p2p_relay;
 mod request_helpers;
 mod resolve_helpers;
