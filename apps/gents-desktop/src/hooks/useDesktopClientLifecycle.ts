@@ -20,7 +20,10 @@ import {
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
 import { restoreManagedServer } from "./managedServerLifecycle";
-import type { ManagedServerWait } from "../lib/managedServerStartup";
+import {
+  ManagedServerStartupError,
+  type ManagedServerWait,
+} from "../lib/managedServerStartup";
 import { ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 
@@ -75,6 +78,8 @@ export function useDesktopClientLifecycle({
     null,
   );
   const managedServerWaitAbort = useRef<AbortController | null>(null);
+  const [managedServerFailure, setManagedServerFailure] =
+    useState<ManagedServerStartupError | null>(null);
 
   function setStartupPhase(next: DesktopStartupPhase) {
     startupPhaseRef.current = next;
@@ -162,6 +167,7 @@ export function useDesktopClientLifecycle({
         setStartupPhase("checking-managed-server");
         const abort = new AbortController();
         managedServerWaitAbort.current = abort;
+        setManagedServerFailure(null);
         try {
           localServerAvailable.current = await restoreManagedServer(api, {
             onWait: setManagedServerWait,
@@ -171,7 +177,12 @@ export function useDesktopClientLifecycle({
           // A legacy or broken ~/.gents must not block first-run setup or
           // already-saved remote peers. Surface the error after the shell is up.
           localServerAvailable.current = false;
-          setError(String(error));
+          setError(error instanceof Error ? error.message : String(error));
+          if (error instanceof ManagedServerStartupError) {
+            setManagedServerFailure(error);
+            setStartupPhase("managed-server-error");
+            return;
+          }
           if (
             error instanceof BridgeInvokeError &&
             error.code === "incompatibleLocalStore" &&
@@ -201,7 +212,35 @@ export function useDesktopClientLifecycle({
   }
 
   function onSkipManagedServerWait() {
-    managedServerWaitAbort.current?.abort();
+    if (initializationInFlight.current) {
+      managedServerWaitAbort.current?.abort();
+      return;
+    }
+    localServerAvailable.current = false;
+    setManagedServerFailure(null);
+    setError(null);
+    setStartupPhase("loading-configuration");
+    void refreshSnapshot();
+  }
+
+  async function onRestartManagedServer() {
+    const status = managedServerFailure?.status;
+    if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
+      return;
+    setStarting(true);
+    setError(null);
+    try {
+      await api.restartManagedServer(status.agentName, {
+        toolCeiling: status.effectiveToolCeiling,
+        toolRoot: status.effectiveToolRoot,
+      });
+      await initializeDesktop();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : String(error));
+      setStartupPhase("managed-server-error");
+    } finally {
+      setStarting(false);
+    }
   }
 
   async function onRetryStartup() {
@@ -299,6 +338,12 @@ export function useDesktopClientLifecycle({
     managedServerReset,
     managedServerWait,
     onSkipManagedServerWait,
+    canRestartManagedServer: Boolean(
+      managedServerFailure?.status.agentName &&
+      managedServerFailure.status.effectiveToolCeiling &&
+      api.restartManagedServer,
+    ),
+    onRestartManagedServer,
     restartDesktopClient,
   };
 }

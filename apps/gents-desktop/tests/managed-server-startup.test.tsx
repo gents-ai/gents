@@ -12,6 +12,8 @@ import { StartupScreen } from "../src/components/StartupScreen";
 import { restoreManagedServer } from "../src/hooks/managedServerLifecycle";
 import {
   awaitManagedServerSettled,
+  ManagedServerStartupError,
+  unsettledManagedServerError,
   type ManagedServerWait,
 } from "../src/lib/managedServerStartup";
 import type { Shell } from "../src/ui/hooks/useShell";
@@ -79,6 +81,59 @@ describe("managed server startup waits", () => {
     await expect(restoreManagedServer(api, { onWait })).resolves.toBe(true);
     expect(onWait).toHaveBeenCalledWith(expect.objectContaining({ kind: "booting" }));
     expect(api.startManagedServer).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting on a runtime that stays booting past the bridge bound and says so", async () => {
+    const api = {
+      managedServerStatus: vi.fn(async () => managedStatus({ state: "starting" })),
+    };
+    const settled = await awaitManagedServerSettled(
+      api,
+      managedStatus({ state: "starting" }),
+      () => {},
+      { intervalMs: 1, timeoutsMs: { booting: 20, approval: 20 } },
+    );
+    const failure = unsettledManagedServerError(settled);
+    expect(failure).toBeInstanceOf(ManagedServerStartupError);
+    expect(failure!.message).toContain("did not report ready");
+  });
+
+  it("surfaces a crash-looping service at launch instead of silently continuing", async () => {
+    const api = {
+      managedServerStatus: vi.fn(async () =>
+        managedStatus({
+          state: "failed",
+          error:
+            "The background agent keeps exiting before it becomes ready: it exited with code 78.",
+        }),
+      ),
+    } as unknown as DesktopApiAdapter;
+    await expect(restoreManagedServer(api)).rejects.toThrow("exited with code 78");
+  });
+
+  it("offers restart and continuing without the agent when launch startup fails", async () => {
+    const restart = vi.fn(async () => undefined);
+    const skip = vi.fn();
+    render(
+      <StartupScreen
+        error="The background agent keeps exiting before it becomes ready: it exited with code 78."
+        managedServerSupported
+        onRestartManagedServer={restart}
+        onRetry={vi.fn(async () => undefined)}
+        onSkipManagedServerWait={skip}
+        phase="managed-server-error"
+      />,
+    );
+    expect(screen.getByTestId("startup-screen")).toHaveTextContent(
+      "exited with code 78",
+    );
+    expect(screen.getByTestId("startup-retry")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("startup-restart-managed-server"));
+    expect(restart).toHaveBeenCalledOnce();
+    await userEvent.click(
+      screen.getByTestId("startup-continue-without-managed-server"),
+    );
+    expect(skip).toHaveBeenCalledOnce();
   });
 
   it("lets launch continue without the local agent while approval is pending", async () => {
@@ -246,6 +301,28 @@ describe("first-run local agent startup", () => {
     await userEvent.click(screen.getByTestId("setup-continue"));
     await screen.findByRole("heading", { name: "Choose an inference provider" });
   }, 15_000);
+
+  it("keeps earlier steps and their results visible when a later step fails", async () => {
+    const run = firstRun();
+    (run.shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("saved connections could not be written"),
+    );
+    render(<SetupScreen shell={run.shell} onDone={vi.fn()} />);
+    const next = screen.getByTestId("setup-next");
+    await waitFor(() => expect(next).toBeEnabled());
+    await userEvent.click(next);
+    await waitFor(() => expect(run.api.startManagedServer).toHaveBeenCalled());
+    run.finishStart();
+
+    await screen.findByText("saved connections could not be written");
+    const log = screen.getByRole("list", { name: "Setup progress" });
+    const steps = log.querySelectorAll("li");
+    expect(steps[0]).toHaveAttribute("data-state", "complete");
+    expect(steps[0]).toHaveTextContent("Forge is running as did:key:z6MkFo");
+    expect(log).toHaveTextContent("Load configuration");
+    expect(screen.getByText("Try again")).toBeInTheDocument();
+    expect(screen.queryByTestId("setup-continue")).not.toBeInTheDocument();
+  });
 
   it("pauses on the completed step log before moving on by itself", async () => {
     const run = firstRun();

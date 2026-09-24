@@ -169,6 +169,7 @@ function AppHost({ bridge: explicitBridge }: { bridge?: DesktopShellBridge }) {
           managedServerReset={shell.managedServerReset}
           managedServerWait={shell.managedServerWait}
           onSkipManagedServerWait={shell.skipManagedServerWait}
+          onRestartManagedServer={shell.restartManagedServer}
           onOpenLoginItems={bridge.api.openManagedServerLoginItems}
           phase={shell.startupPhase}
         />

@@ -577,6 +577,7 @@ export function SetupScreen({
     setPhase("checking-managed-server");
     setStartupDetails({});
     setProvisionedAt(null);
+    let failedPhase: Exclude<DesktopStartupPhase, "ready"> = "managed-server-error";
     try {
       if (api.startManagedServer) {
         const startManagedServer = api.startManagedServer;
@@ -602,19 +603,21 @@ export function SetupScreen({
         });
       }
       setPhase("loading-configuration");
+      failedPhase = "configuration-error";
       await shell.onInitLocalRuntime(agentName);
       setStartupDetails((current) => ({
         ...current,
         configuration: `Saved the local connection to ${agentName}`,
       }));
       setPhase("starting-client");
+      failedPhase = "client-error";
       if (api.commitManagedServerAutoStart) {
         await api.commitManagedServerAutoStart(agentName);
       }
       await waitForManagedRuntimePairing(api);
       await finishProvisioning();
     } catch (e) {
-      setPhase("managed-server-error");
+      setPhase(failedPhase);
       setError(setupErrorMessage(e));
     } finally {
       setBusy(false);
@@ -1071,7 +1074,10 @@ export function SetupScreen({
             setError(null);
             setStep("welcome");
           }}
-          onContinue={() => setStep("inference")}
+          onContinue={() => {
+            setProvisionedAt(null);
+            setStep("inference");
+          }}
           onOpenLoginItems={api.openManagedServerLoginItems}
         />
       </Frame>

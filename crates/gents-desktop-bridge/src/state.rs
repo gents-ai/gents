@@ -215,6 +215,8 @@ pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
+    /// Cancels a start that is waiting outside the lifecycle lock.
+    pub start_wait: Option<tokio_util::sync::CancellationToken>,
 }
 
 pub struct DesktopBridge {

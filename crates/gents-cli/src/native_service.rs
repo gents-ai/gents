@@ -602,10 +602,9 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     running: print.success && launchd_is_running(&print.stdout),
                     job_loaded: print.success,
                     enabled: !explicitly_disabled,
-                    requires_approval: !print.success
-                        && self.runner.background_approval_required(
-                            &self.config.definition_path(self.platform),
-                        ),
+                    requires_approval: self
+                        .runner
+                        .background_approval_required(&self.config.definition_path(self.platform)),
                     detail: Some(output_detail(&print)),
                 })
             }
@@ -655,6 +654,46 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     requires_approval: false,
                     detail: Some(output_detail(&active)),
                 })
+            }
+        }
+    }
+
+    /// Why a loaded job is not running: the supervisor's record of the last
+    /// failed exit while it waits to restart the process. `None` while the
+    /// process runs, has never exited, or last exited successfully.
+    pub fn exit_failure(&self) -> Result<Option<String>> {
+        if !self.config.definition_path(self.platform).is_file() {
+            return Ok(None);
+        }
+        self.require_installed()?;
+        match self.platform {
+            NativeServicePlatform::Macos => {
+                let target = format!("gui/{}/{}", self.current_uid()?, SERVICE_LABEL);
+                let print =
+                    self.run_allow_failure("launchctl", &["print".into(), target.into()])?;
+                ensure_launchd_print_result(&print)?;
+                Ok(print
+                    .success
+                    .then(|| launchd_exit_failure(&print.stdout))
+                    .flatten())
+            }
+            NativeServicePlatform::Linux => {
+                let show = self.run_allow_failure(
+                    "systemctl",
+                    &[
+                        "--user".into(),
+                        "show".into(),
+                        "--property=ActiveState,SubState,Result,ExecMainStatus,NRestarts".into(),
+                        SYSTEMD_UNIT.into(),
+                    ],
+                )?;
+                if !show.success {
+                    bail!(
+                        "systemctl could not report why Gents stopped: {}",
+                        output_detail(&show)
+                    );
+                }
+                Ok(systemd_exit_failure(&show.stdout))
             }
         }
     }
@@ -1079,6 +1118,48 @@ fn launchd_is_running(output: &str) -> bool {
             .is_some_and(|pid| pid > 0)
     });
     state_running && has_pid
+}
+
+fn launchd_exit_failure(output: &str) -> Option<String> {
+    if launchd_is_running(output) {
+        return None;
+    }
+    let field = |name: &str| {
+        output
+            .lines()
+            .map(str::trim)
+            .find_map(|line| line.strip_prefix(name))
+            .map(str::trim)
+    };
+    if let Some(signal) = field("last terminating signal = ") {
+        return Some(format!("terminated by signal {signal}"));
+    }
+    let code = field("last exit code = ")?;
+    if code.starts_with('(') || code.split(':').next().map(str::trim) == Some("0") {
+        return None;
+    }
+    Some(format!("exited with code {code}"))
+}
+
+fn systemd_exit_failure(output: &str) -> Option<String> {
+    let field = |name: &str| {
+        output
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(name)?.strip_prefix('='))
+            .unwrap_or_default()
+    };
+    let (active, sub, result) = (field("ActiveState"), field("SubState"), field("Result"));
+    if active == "active" && sub != "auto-restart" {
+        return None;
+    }
+    if sub != "auto-restart" && (result.is_empty() || result == "success") {
+        return None;
+    }
+    Some(format!(
+        "{result} (exit status {}, {} restarts)",
+        field("ExecMainStatus"),
+        field("NRestarts")
+    ))
 }
 
 fn launchd_is_disabled(output: &str) -> Result<bool> {
@@ -1595,6 +1676,75 @@ mod tests {
         fn background_approval_required(&self, _: &Path) -> bool {
             true
         }
+    }
+
+    #[test]
+    fn supervisor_exit_records_name_a_crash_loop() {
+        assert_eq!(
+            launchd_exit_failure(
+                "state = not running\nruns = 3\nlast exit code = 78: Function not implemented\n"
+            )
+            .as_deref(),
+            Some("exited with code 78: Function not implemented")
+        );
+        assert_eq!(
+            launchd_exit_failure("state = not running\nlast terminating signal = Killed: 9\n")
+                .as_deref(),
+            Some("terminated by signal Killed: 9")
+        );
+        assert!(
+            launchd_exit_failure("state = not running\nlast exit code = (never exited)\n")
+                .is_none()
+        );
+        assert!(launchd_exit_failure("state = not running\nlast exit code = 0\n").is_none());
+        assert!(launchd_exit_failure("state = running\npid = 42\nlast exit code = 1\n").is_none());
+
+        assert_eq!(
+            systemd_exit_failure(
+                "ActiveState=activating\nSubState=auto-restart\nResult=exit-code\nExecMainStatus=1\nNRestarts=4\n"
+            )
+            .as_deref(),
+            Some("exit-code (exit status 1, 4 restarts)")
+        );
+        assert!(systemd_exit_failure(
+            "ActiveState=activating\nSubState=start\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
+        )
+        .is_none());
+        assert!(systemd_exit_failure(
+            "ActiveState=active\nSubState=running\nResult=success\nExecMainStatus=0\nNRestarts=0\n"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn macos_loaded_job_blocked_by_background_approval_reports_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Macos),
+            render_launchd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Macos,
+            PendingApprovalRunner(Mutex::new(vec![
+                command_output(true, "501", ""),
+                command_output(
+                    true,
+                    "state = not running\nlast exit code = 78: Function not implemented",
+                    "",
+                ),
+                command_output(true, "501", ""),
+                command_output(true, "", ""),
+            ])),
+        );
+        let status = manager.status().unwrap();
+        assert!(status.job_loaded);
+        assert!(!status.running);
+        assert!(status.requires_approval);
     }
 
     #[test]

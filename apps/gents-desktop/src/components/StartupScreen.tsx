@@ -31,6 +31,7 @@ type StartupScreenProps = {
   managedServerWait?: ManagedServerWait | null;
   onSkipManagedServerWait?: () => void;
   onOpenLoginItems?: () => Promise<void>;
+  onRestartManagedServer?: () => Promise<void>;
 };
 
 export function StartupScreen({
@@ -43,6 +44,7 @@ export function StartupScreen({
   managedServerWait = null,
   onSkipManagedServerWait,
   onOpenLoginItems,
+  onRestartManagedServer,
 }: StartupScreenProps) {
   const [asideIndex, setAsideIndex] = useState(0);
   const [resetConfirmed, setResetConfirmed] = useState(false);
@@ -177,14 +179,40 @@ export function StartupScreen({
                 </button>
               </div>
             ) : null}
-            <button
-              className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
-              data-testid="startup-retry"
-              onClick={() => void onRetry()}
-              type="button"
-            >
-              Try again
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                className="inline-flex h-8 w-fit items-center rounded-lg bg-brand px-3 text-sm font-medium text-brand-foreground"
+                data-testid="startup-retry"
+                onClick={() => void onRetry()}
+                type="button"
+              >
+                Try again
+              </button>
+              {phase === "managed-server-error" && !managedServerReset ? (
+                <>
+                  {onRestartManagedServer ? (
+                    <button
+                      className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
+                      data-testid="startup-restart-managed-server"
+                      onClick={() => void onRestartManagedServer()}
+                      type="button"
+                    >
+                      Restart agent
+                    </button>
+                  ) : null}
+                  {onSkipManagedServerWait ? (
+                    <button
+                      className="inline-flex h-8 w-fit items-center rounded-lg border border-border px-3 text-sm font-medium"
+                      data-testid="startup-continue-without-managed-server"
+                      onClick={onSkipManagedServerWait}
+                      type="button"
+                    >
+                      Continue without the local agent
+                    </button>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
           </div>
         ) : null}
       </div>

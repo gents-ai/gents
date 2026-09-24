@@ -3,7 +3,8 @@ import type {
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 
-export const MANAGED_SERVER_WAIT_TIMEOUT_MS = 10 * 60_000;
+export const MANAGED_SERVER_BOOT_TIMEOUT_MS = 5 * 60_000;
+export const MANAGED_SERVER_APPROVAL_TIMEOUT_MS = 10 * 60_000;
 export const MANAGED_SERVER_POLL_INTERVAL_MS = 1_000;
 
 export type ManagedServerWaitKind = "approval" | "booting";
@@ -52,7 +53,7 @@ export function describeManagedServerWait(
   }
   return {
     label: "Waiting for the background agent to finish starting",
-    detail: `The agent process is running but has not reported ready yet. Waiting ${elapsed}.`,
+    detail: `Gents is starting the background agent. It has not reported ready yet. Waiting ${elapsed}.`,
   };
 }
 
@@ -101,24 +102,64 @@ export async function observeManagedServerOperation<T>(
   }
 }
 
+/** The background agent did not settle: it timed out waiting or reported a failure. */
+export class ManagedServerStartupError extends Error {
+  constructor(
+    message: string,
+    readonly status: ManagedServerStatus,
+  ) {
+    super(message);
+    this.name = "ManagedServerStartupError";
+  }
+}
+
+export function unsettledManagedServerError(
+  status: ManagedServerStatus,
+): ManagedServerStartupError | null {
+  const kind = managedServerWaitKind(status);
+  if (kind === "approval") {
+    return new ManagedServerStartupError(
+      `Gents is still not allowed to run in the background. Turn on Gents under ${LOGIN_ITEMS_PATH}, then try again.`,
+      status,
+    );
+  }
+  if (kind === "booting") {
+    return new ManagedServerStartupError(
+      `The background agent did not report ready within ${MANAGED_SERVER_BOOT_TIMEOUT_MS / 60_000} minutes. Restart the agent, or try again.`,
+      status,
+    );
+  }
+  if (status.state === "failed" && status.error) {
+    return new ManagedServerStartupError(status.error, status);
+  }
+  return null;
+}
+
 /**
  * Waits while the bridge observes the managed service booting or awaiting
- * macOS approval. Resolves with the last observation; `signal` ends the wait
- * early when the user chooses to continue without it.
+ * macOS approval, within the same bounds the bridge applies to its own waits.
+ * Resolves with the last observation; `signal` ends the wait early when the
+ * user chooses to continue without it.
  */
 export async function awaitManagedServerSettled(
   api: Pick<DesktopApiAdapter, "managedServerStatus">,
   initial: ManagedServerStatus,
   onWait: (wait: ManagedServerWait | null) => void,
   {
-    timeoutMs = MANAGED_SERVER_WAIT_TIMEOUT_MS,
+    timeoutsMs = {
+      booting: MANAGED_SERVER_BOOT_TIMEOUT_MS,
+      approval: MANAGED_SERVER_APPROVAL_TIMEOUT_MS,
+    },
     intervalMs = MANAGED_SERVER_POLL_INTERVAL_MS,
     signal,
-  }: { timeoutMs?: number; intervalMs?: number; signal?: AbortSignal } = {},
+  }: {
+    timeoutsMs?: Record<ManagedServerWaitKind, number>;
+    intervalMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<ManagedServerStatus> {
   let status = initial;
   let wait: ManagedServerWait | null = null;
-  const started = Date.now();
   const aborted = new Promise<void>((resolve) => {
     if (signal?.aborted) resolve();
     signal?.addEventListener("abort", () => resolve(), { once: true });
@@ -126,7 +167,7 @@ export async function awaitManagedServerSettled(
   try {
     while (api.managedServerStatus && !signal?.aborted) {
       wait = nextManagedServerWait(wait, status, Date.now());
-      if (!wait || Date.now() - started >= timeoutMs) break;
+      if (!wait || Date.now() - wait.since >= timeoutsMs[wait.kind]) break;
       onWait(wait);
       await Promise.race([delay(intervalMs), aborted]);
       if (signal?.aborted) break;

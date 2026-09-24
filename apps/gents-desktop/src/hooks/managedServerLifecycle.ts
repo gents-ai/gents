@@ -2,6 +2,7 @@ import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
 import {
   awaitManagedServerSettled,
+  unsettledManagedServerError,
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
 
@@ -15,6 +16,12 @@ const managedServerRestoreInFlight = new WeakMap<
   Promise<boolean | null>
 >();
 
+/**
+ * Observes the OS-owned service at launch. Concurrent callers share one
+ * observation, so only the first caller's `onWait` and `signal` apply.
+ * Rejects with `ManagedServerStartupError` when the service stays booting or
+ * blocked past the bridge's bounds, or reports a failure.
+ */
 export function restoreManagedServer(
   api: DesktopApiAdapter,
   options: RestoreOptions = {},
@@ -43,6 +50,10 @@ async function restoreManagedServerOnce(
     onWait,
     { signal },
   );
+  if (!signal?.aborted) {
+    const failure = unsettledManagedServerError(status);
+    if (failure) throw failure;
+  }
   if (status.state === "running" || status.state === "external") {
     return true;
   }
