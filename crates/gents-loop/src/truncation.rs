@@ -1,10 +1,16 @@
 //! Pure text truncation: head/tail line-and-byte clamping with no storage
-//! side effect.
-//!
-//! `gents::truncation` layers a DefraDB-backed spill (`Truncator`,
-//! `DefraSpillTruncator`) on top of this module for native tool output that
-//! overflows its budget; the loop itself only ever needs the bounded text,
-//! never the spill document, so that half stays in `gents`.
+//! side effect. The full output is retained by the canonical transcript;
+//! this only selects what the model is shown.
+
+/// Every notice `truncate` writes starts with one of these. Compaction
+/// recognizes already-truncated tool output by them, so a new notice shape
+/// must be added here.
+pub const TRUNCATION_NOTICE_PREFIXES: [&str; 4] = [
+    "[Showing lines ",
+    "[Showing first ",
+    "[Showing last ",
+    "[Output omitted: ",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TruncationMode {
@@ -87,6 +93,20 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
         TruncationTrigger::Lines
     };
 
+    if limits.max_bytes == 0 {
+        return TextTruncation {
+            text: format!(
+                "[Output omitted: byte limit is zero ({} bytes total)]",
+                original_bytes
+            ),
+            truncated: true,
+            trigger: Some(trigger),
+            original_lines,
+            original_bytes,
+            returned_bytes: 0,
+        };
+    }
+
     let (truncated, returned_bytes) = match mode {
         TruncationMode::Head => {
             let mut result = String::new();
@@ -104,6 +124,25 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
                 }
                 result.push_str(line);
                 line_count += 1;
+            }
+
+            if line_count == 0 && exceeds_bytes && limits.max_lines > 0 {
+                let mut end = limits.max_bytes.min(original_bytes);
+                while !text.is_char_boundary(end) {
+                    end -= 1;
+                }
+                let result = &text[..end];
+                return TextTruncation {
+                    text: format!(
+                        "{}\n\n[Showing first {} of {} bytes]",
+                        result, end, original_bytes,
+                    ),
+                    truncated: true,
+                    trigger: Some(trigger),
+                    original_lines,
+                    original_bytes,
+                    returned_bytes: end,
+                };
             }
 
             let returned_bytes = result.len();
@@ -135,6 +174,27 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
                 } else {
                     result = format!("{}\n{}", line, result);
                 }
+            }
+
+            if included == 0 && exceeds_bytes && limits.max_lines > 0 {
+                let mut start = original_bytes.saturating_sub(limits.max_bytes);
+                while !text.is_char_boundary(start) {
+                    start += 1;
+                }
+                let result = &text[start..];
+                return TextTruncation {
+                    text: format!(
+                        "[Showing last {} of {} bytes]\n\n{}",
+                        original_bytes - start,
+                        original_bytes,
+                        result,
+                    ),
+                    truncated: true,
+                    trigger: Some(trigger),
+                    original_lines,
+                    original_bytes,
+                    returned_bytes: original_bytes - start,
+                };
             }
 
             let returned_bytes = result.len();
@@ -226,6 +286,8 @@ mod tests {
         assert!(truncated);
         assert_eq!(trigger, Some(TruncationTrigger::Bytes));
         assert!(result.len() < 100_000);
+        assert!(result.starts_with(&"x".repeat(1024)));
+        assert!(result.contains("[Showing first 1024 of 100000 bytes]"));
     }
 
     #[test]
@@ -240,6 +302,102 @@ mod tests {
         assert!(truncated);
         assert_eq!(trigger, Some(TruncationTrigger::Bytes));
         assert!(result.len() < 100_000);
+        assert!(result.ends_with(&"x".repeat(1024)));
+        assert!(result.contains("[Showing last 1024 of 100000 bytes]"));
+    }
+
+    #[test]
+    fn every_truncated_output_carries_a_notice_prefix() {
+        let many_lines = (0..50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let one_line = "x".repeat(200);
+        let cases = [
+            (
+                many_lines.as_str(),
+                TruncationLimits {
+                    max_lines: 5,
+                    max_bytes: 10_000,
+                },
+            ),
+            (
+                many_lines.as_str(),
+                TruncationLimits {
+                    max_lines: 100,
+                    max_bytes: 40,
+                },
+            ),
+            (
+                one_line.as_str(),
+                TruncationLimits {
+                    max_lines: 10,
+                    max_bytes: 50,
+                },
+            ),
+            (
+                one_line.as_str(),
+                TruncationLimits {
+                    max_lines: 10,
+                    max_bytes: 0,
+                },
+            ),
+        ];
+        for (text, limits) in &cases {
+            for mode in [TruncationMode::Head, TruncationMode::Tail] {
+                let result = truncate(text, mode, limits);
+                assert!(result.truncated);
+                assert!(
+                    TRUNCATION_NOTICE_PREFIXES
+                        .iter()
+                        .any(|prefix| result.text.contains(prefix)),
+                    "{mode:?} {limits:?}: {}",
+                    result.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_line_that_fits_keeps_the_line_budget() {
+        // The empty line is a whole line; the byte fallback must not add a
+        // second one past max_lines.
+        let limits = TruncationLimits {
+            max_lines: 1,
+            max_bytes: 3,
+        };
+        let head = truncate("\nabcdefgh", TruncationMode::Head, &limits);
+        assert!(
+            head.text.starts_with("\n\n[Showing lines 1-1 of 2"),
+            "{:?}",
+            head.text
+        );
+        assert_eq!(head.returned_bytes, 0);
+
+        let tail = truncate("abcdefgh\n\n", TruncationMode::Tail, &limits);
+        assert!(
+            tail.text.starts_with("[Showing lines 2-2 of 2"),
+            "{:?}",
+            tail.text
+        );
+        assert_eq!(tail.returned_bytes, 0);
+    }
+
+    #[test]
+    fn oversized_utf8_line_preserves_char_boundaries() {
+        let text = "é".repeat(10);
+        let limits = TruncationLimits {
+            max_lines: 10,
+            max_bytes: 5,
+        };
+
+        let head = truncate(&text, TruncationMode::Head, &limits);
+        assert_eq!(head.returned_bytes, 4);
+        assert!(head.text.starts_with("éé\n\n[Showing first 4 of 20 bytes]"));
+
+        let tail = truncate(&text, TruncationMode::Tail, &limits);
+        assert_eq!(tail.returned_bytes, 4);
+        assert!(tail.text.ends_with("[Showing last 4 of 20 bytes]\n\néé"));
     }
 
     #[test]
