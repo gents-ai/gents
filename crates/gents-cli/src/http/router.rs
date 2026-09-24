@@ -56,6 +56,9 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
     pub(crate) activation_runtime: Arc<OnceCell<gents::Gents>>,
     pub(crate) activation_observation: watch::Receiver<RuntimeActivationObservation>,
+    /// This node's `client` route collection versions, set once by serve after
+    /// its migrations register every collection.
+    pub(crate) replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -109,6 +112,7 @@ pub(crate) fn runtime_contract_router(
     enrollment_decisions: EnrollmentDecisionServiceHandle,
     activation_runtime: Arc<OnceCell<gents::Gents>>,
     activation_observation: watch::Receiver<RuntimeActivationObservation>,
+    replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
 ) -> Router {
     let graphql_for_mcp = graphql.clone();
     let p2p_http_client = crate::commands::p2p::p2p_http_client().unwrap_or_else(|_| {
@@ -134,6 +138,7 @@ pub(crate) fn runtime_contract_router(
         enrollment_decisions,
         activation_runtime,
         activation_observation,
+        replicated_schema,
     };
 
     let mut router = Router::new()
@@ -564,10 +569,23 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             },
         };
         map.insert("enrollment".to_string(), json!(enrollment));
+        map.insert(
+            gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
+            replicated_schema_status(&state.replicated_schema),
+        );
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 
     (StatusCode::OK, axum::Json(body)).into_response()
+}
+
+/// `null` until serve publishes the schema after its migrations complete.
+fn replicated_schema_status(
+    replicated_schema: &OnceCell<gents_protocol::peer_schema::ReplicatedSchema>,
+) -> Value {
+    replicated_schema
+        .get()
+        .map_or(Value::Null, |schema| json!(schema))
 }
 
 async fn self_handler(State(state): State<RuntimeHttpState>) -> Response {
@@ -762,6 +780,31 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn replicated_schema_is_null_until_published_then_complete() {
+        let cell = OnceCell::new();
+        assert_eq!(replicated_schema_status(&cell), Value::Null);
+
+        let schema: gents_protocol::peer_schema::ReplicatedSchema =
+            gents::agent::p2p_reconcile::CLIENT_COLLECTIONS
+                .iter()
+                .map(|name| {
+                    (
+                        (*name).to_string(),
+                        gents_protocol::peer_schema::ReplicatedCollectionIdentity {
+                            version_id: format!("bafy-{name}"),
+                            branchable: true,
+                            policy_resource: None,
+                        },
+                    )
+                })
+                .collect();
+        cell.set(schema.clone()).unwrap();
+        let published: gents_protocol::peer_schema::ReplicatedSchema =
+            serde_json::from_value(replicated_schema_status(&cell)).unwrap();
+        assert_eq!(published, schema);
+    }
+
     fn state() -> RuntimeHttpState {
         let (activation_runtime, activation_observation) = empty_activation_state();
         RuntimeHttpState {
@@ -781,6 +824,7 @@ mod tests {
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
             activation_observation,
+            replicated_schema: Default::default(),
         }
     }
 

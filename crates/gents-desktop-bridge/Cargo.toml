@@ -49,6 +49,7 @@ uuid.workspace = true
 tauri-plugin = { version = "2", features = ["build"] }
 
 [dev-dependencies]
+gents-desktop-core = { workspace = true, features = ["test-fixtures"] }
 gents-lean-contract.workspace = true
 tauri = { version = "2", features = ["test"] }
 tempfile = "3"

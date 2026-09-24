@@ -7,6 +7,9 @@
 //! Pairing filters use DefraDB's predicate type directly. Local helpers only
 //! derive, combine, and inspect those predicates.
 
+use gents_protocol::peer_schema::{
+    compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
@@ -602,6 +605,34 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
     (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
 }
 
+/// Read this node's active identity for every `client` route collection.
+/// Fails unless every collection is registered, so a node that has not
+/// finished its migrations never publishes a partial schema.
+pub async fn read_client_replicated_schema(
+    node: std::sync::Arc<defra_node::EmbeddedNode>,
+) -> anyhow::Result<ReplicatedSchema> {
+    let access = crate::config_client::ConfigAccess::Local(node);
+    let mut schema = ReplicatedSchema::new();
+    for name in CLIENT_COLLECTIONS {
+        let identity = access
+            .collection_version(name)
+            .await?
+            .as_ref()
+            .and_then(ReplicatedCollectionIdentity::from_collection_version)
+            .ok_or_else(|| anyhow::anyhow!("client route collection {name} is not registered"))?;
+        schema.insert((*name).to_string(), identity);
+    }
+    Ok(schema)
+}
+
+/// Compare two nodes' `client` route collections; see [`compare_replicated_schema`].
+pub fn compare_client_replicated_schema(
+    local: &ReplicatedSchema,
+    remote: Option<&ReplicatedSchema>,
+) -> Result<(), ReplicatedSchemaSkew> {
+    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote)
+}
+
 /// Look up a template by id.  Returns `None` for unknown ids.
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
@@ -684,6 +715,59 @@ mod tests {
         .collect();
 
         assert!(to_replication_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn client_schema_comparison_covers_every_client_route_collection() {
+        let identity = |version: &str| ReplicatedCollectionIdentity {
+            version_id: version.to_string(),
+            branchable: true,
+            policy_resource: None,
+        };
+        let local: ReplicatedSchema = CLIENT_COLLECTIONS
+            .iter()
+            .map(|name| ((*name).to_string(), identity(name)))
+            .collect();
+        assert_eq!(
+            compare_client_replicated_schema(&local, Some(&local)),
+            Ok(())
+        );
+
+        let mut skewed = local.clone();
+        skewed.insert("AgentSession".into(), identity("bafy-other-release"));
+        assert_eq!(
+            compare_client_replicated_schema(&local, Some(&skewed))
+                .unwrap_err()
+                .collections,
+            vec!["AgentSession".to_string()]
+        );
+
+        let mut missing = local.clone();
+        missing.remove("Task");
+        assert_eq!(
+            compare_client_replicated_schema(&local, Some(&missing))
+                .unwrap_err()
+                .collections,
+            vec!["Task".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn client_schema_is_unreadable_until_migrations_register_every_collection() {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let error = read_client_replicated_schema(node.clone())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("is not registered"), "{error:#}");
+
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let schema = read_client_replicated_schema(node).await.unwrap();
+        assert_eq!(
+            schema.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            CLIENT_COLLECTIONS.iter().copied().collect::<BTreeSet<_>>()
+        );
     }
 
     #[test]

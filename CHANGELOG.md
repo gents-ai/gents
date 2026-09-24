@@ -15,6 +15,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- The desktop compares the collection versions it replicates with an agent
+  runtime's. It refuses to enroll with a runtime whose replicated collections
+  differ, and its sync status shows "Update required", naming the differing
+  collections, when the managed runtime it starts differs, instead of
+  accepting messages the runtime can never receive. Versions whose replicated
+  collections match stay compatible.
 - Desktop startup waits for a background agent that is still booting instead
   of failing, and shows how long it has waited. It fails when the service
   stops, when it keeps exiting (with the exit reason), or after five minutes,

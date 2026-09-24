@@ -696,6 +696,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
     let enrollment_decisions = crate::http::enrollment::empty_decision_service_handle();
     let activation_runtime = Arc::new(tokio::sync::OnceCell::new());
     let (activation_tx, activation_rx) = watch::channel(RuntimeActivationObservation::default());
+    let replicated_schema = Arc::new(tokio::sync::OnceCell::new());
     let extra_routes = runtime_contract_router(
         graphql_url.clone(),
         agent_name.clone(),
@@ -712,6 +713,7 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         enrollment_decisions.clone(),
         activation_runtime.clone(),
         activation_rx,
+        replicated_schema.clone(),
     )
     .merge(embedded_http_probe_router(
         &bind_probe_path,
@@ -739,6 +741,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         return Err(error);
     }
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
+    let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+        .await
+        .context("reading client route collection versions after migrations")?;
+    replicated_schema.set(schema).ok();
     let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
         node.as_ref(),
         identity.as_ref(),

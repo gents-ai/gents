@@ -250,13 +250,8 @@ pub(super) fn handle_request(
             )?;
             let payload =
                 runtime.block_on(fetch_runtime_connection_payload(&request.server_address))?;
-            let token = payload
-                .pointer("/enrollment/token")
-                .and_then(serde_json::Value::as_str)
-                .filter(|token| !token.trim().is_empty())
-                .context("server does not advertise authenticated status enrollment")?;
             let enrollment =
-                runtime.block_on(fixture.desktop_core().request_status_enrollment(token))?;
+                runtime.block_on(fixture.desktop_core().request_status_enrollment(&payload))?;
             Ok(HttpResponse::json_ok(serde_json::to_string(
                 &EnrollmentRequestView::from(enrollment),
             )?))

@@ -493,12 +493,19 @@ const syncProjectorPath = join(
 const syncProjector = readFileSync(syncProjectorPath, "utf8");
 if (
   !syncProjector.includes(
-    'export type SyncHealthStateName = "healthy" | "syncing" | "offline" | "failed";',
+    [
+      "export type SyncHealthStateName =",
+      '  | "healthy"',
+      '  | "syncing"',
+      '  | "offline"',
+      '  | "failed"',
+      '  | "incompatible";',
+    ].join("\n"),
   ) ||
   !syncProjector.includes("export function projectSyncOperationalStatus(")
 ) {
   failures.push(
-    "gents-desktop-client must own the exact four-state sync projection",
+    "gents-desktop-client must own the exact five-state sync projection",
   );
 }
 for (const sourceRoot of [

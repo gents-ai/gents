@@ -213,6 +213,11 @@ impl PendingOAuthCredentials {
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
+    /// Cancels `pairing_task` while it still waits for the runtime's status,
+    /// before any enrollment document is authored.
+    pub pairing_cancel: Option<tokio_util::sync::CancellationToken>,
+    /// The single in-flight replicated-schema observation of the managed runtime.
+    pub schema_observation_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.
