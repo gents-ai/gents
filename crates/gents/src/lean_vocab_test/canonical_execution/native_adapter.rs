@@ -1740,6 +1740,49 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     native.segment_ids.insert(doc_id, record.id);
                     native.observe(true).await
                 }
+                LeanCanonicalExecutionOperation::AppendToolOutput {
+                    now,
+                    document,
+                    record,
+                    ..
+                } => {
+                    anyhow::ensure!(
+                        record.close.is_none() && record.flush.is_some(),
+                        "tool append requires a data flush without a closure"
+                    );
+                    let physical = native.physical_tool(*document)?.to_owned();
+                    let prepared = native.tool_output_segment(record, *document, &physical)?;
+                    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+                        native.node.clone(),
+                        &physical,
+                        &native.principal,
+                        &native.session_id,
+                        Some(&native.principal),
+                    )
+                    .await?
+                    .context("accepted physical tool disappeared before output append")?;
+                    let binding = tool.tool_output_binding()?;
+                    let receipt = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+                        &binding,
+                        &prepared.payload,
+                        native.fixture_time(record.created_at)?,
+                        native.fixture_time(*now)?,
+                    )
+                    .await;
+                    let receipt = match receipt {
+                        Ok(receipt) => receipt,
+                        Err(error)
+                            if error
+                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                                .is_some() =>
+                        {
+                            return native.observe(false).await;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    native.segment_ids.insert(receipt.segment_doc_id, record.id);
+                    native.observe(true).await
+                }
                 LeanCanonicalExecutionOperation::AppendOutputWhileSiblingWaits {
                     now,
                     generation,
@@ -2900,6 +2943,128 @@ async fn every_generated_native_execution_script_runs_to_completion() {
         "native execution contract gaps:\n{}",
         failures.join("\n")
     );
+}
+
+/// Native representation negative controls outside Lean's valid Time domain:
+/// a missing durable deadline fails in the append owner, while malformed input
+/// is rejected by DefraDB's DateTime scalar before it can become a durable row.
+#[tokio::test]
+async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing() {
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "tool_output_before_deadline")
+        })
+        .expect("Lean exports the native pre-deadline tool-output script");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution {
+        seed,
+        query_document,
+        operations,
+        expected_observations,
+        ..
+    } = case
+    else {
+        unreachable!()
+    };
+    let [accept, dispatch, append] = operations.as_slice() else {
+        panic!("generated tool-output script must accept, dispatch, then append");
+    };
+    let LeanCanonicalExecutionOperation::AppendToolOutput {
+        now,
+        document,
+        record,
+        ..
+    } = append
+    else {
+        panic!("third generated operation must append tool output");
+    };
+    let mut adapter = NativeCanonicalExecutionAdapter;
+    let mut native = adapter.initialize(seed).await.unwrap();
+    native.query_document = *query_document;
+    for operation in [accept, dispatch] {
+        assert!(
+            adapter
+                .apply(&mut native, *query_document, operation)
+                .await
+                .unwrap()
+                .accepted
+        );
+    }
+    let before = native.observe(true).await.unwrap();
+    assert_eq!(before, expected_observations[1]);
+    assert!(expected_observations[2].accepted);
+    let physical = native.physical_tool(*document).unwrap().to_owned();
+    let prepared = native
+        .tool_output_segment(record, *document, &physical)
+        .unwrap();
+    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        native.node.clone(),
+        &physical,
+        &native.principal,
+        &native.session_id,
+        Some(&native.principal),
+    )
+    .await
+    .unwrap()
+    .expect("dispatched generated tool has a physical lifecycle");
+    let binding = tool.tool_output_binding().unwrap();
+    let physical = crate::graphql::escape_graphql_string(&physical);
+    for (label, deadline_value) in [("missing", None), ("malformed", Some("not-a-deadline"))] {
+        let deadline_field = deadline_value
+            .map(|value| format!("\"{}\"", crate::graphql::escape_graphql_string(value)))
+            .unwrap_or_else(|| "null".to_owned());
+        let mutation = format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{physical}" }} }}, input: {{ deadline_at: {deadline_field} }}) {{ _docID }} }}"#
+        );
+        let changed = crate::config_client::ConfigAccess::write_local(
+            &native.node,
+            "test.generated_tool_append_invalid_deadline",
+            &mutation,
+        )
+        .await;
+        if deadline_value.is_some() {
+            let error = changed.expect_err("DateTime schema must reject malformed deadline input");
+            assert!(
+                error.to_string().contains("Invalid DateTime format"),
+                "malformed deadline must fail at the schema boundary: {error:#}"
+            );
+            assert_eq!(native.observe(true).await.unwrap(), before);
+            continue;
+        }
+        let changed = changed.unwrap();
+        assert_eq!(
+            changed["data"]["update_AgentToolCall"]
+                .as_array()
+                .map(Vec::len),
+            Some(1),
+            "{label} deadline fixture must update exactly one physical tool"
+        );
+        let error = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+            &binding,
+            &prepared.payload,
+            native.fixture_time(record.created_at).unwrap(),
+            native.fixture_time(*now).unwrap(),
+        )
+        .await
+        .expect_err("invalid durable deadline cannot authorize a fresh append");
+        assert!(
+            error
+                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                .is_none(),
+            "{label} deadline is an integrity error, not a modeled rejection: {error:#}"
+        );
+        let mut expected_unchanged = before.clone();
+        expected_unchanged.accepted = false;
+        assert_eq!(
+            native.observe(false).await.unwrap(),
+            expected_unchanged,
+            "{label} deadline must leave exact canonical output records unchanged"
+        );
+    }
+    native.node.shutdown().await;
 }
 
 /// In-process, fixture-time gate experiment: this binds a generated lease-ordering

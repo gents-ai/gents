@@ -1815,9 +1815,25 @@ async fn ensure_background_receipt_before_bridge_close(
     Ok(())
 }
 
-/// Commit one raw tool-output chunk.  The per-writer mutex serializes capture
-/// callbacks; this transaction still derives the next ordinal from immutable
-/// facts so retry/restart cannot manufacture a cumulative rewrite.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolOutputAppendRejection {
+    #[error("tool output append lost the running tool lifecycle")]
+    NotRunning,
+    #[error("tool output append exceeded the accepted tool deadline")]
+    DeadlineExceeded,
+}
+
+#[derive(Debug)]
+pub(crate) struct ToolOutputAppendReceipt {
+    pub(crate) range: std::ops::Range<u64>,
+    pub(crate) segment_doc_id: String,
+}
+
+/// Commit one raw tool-output chunk. The per-writer mutex serializes capture
+/// callbacks; the transaction derives the next ordinal from immutable facts.
+/// Fresh writes observe the clock under the transaction gate and are accepted
+/// through the deadline (only `now > deadline` rejects). Exact committed
+/// retries bypass only that deadline check, not the Running/open-source fences.
 pub(crate) async fn append_tool_output(
     binding: &ToolOutputBinding,
     bytes: &str,
@@ -1825,7 +1841,34 @@ pub(crate) async fn append_tool_output(
     if bytes.is_empty() {
         return Ok(0..0);
     }
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    Ok(
+        append_tool_output_with_time(binding, bytes, Utc::now(), None)
+            .await?
+            .range,
+    )
+}
+
+#[cfg(test)]
+pub(crate) async fn append_tool_output_at(
+    binding: &ToolOutputBinding,
+    bytes: &str,
+    operation_created_at: DateTime<Utc>,
+    observed_now: DateTime<Utc>,
+) -> Result<ToolOutputAppendReceipt> {
+    append_tool_output_with_time(binding, bytes, operation_created_at, Some(observed_now)).await
+}
+
+async fn append_tool_output_with_time(
+    binding: &ToolOutputBinding,
+    bytes: &str,
+    operation_created_at: DateTime<Utc>,
+    fixture_now: Option<DateTime<Utc>>,
+) -> Result<ToolOutputAppendReceipt> {
+    anyhow::ensure!(
+        !bytes.is_empty(),
+        "empty tool output has no physical append receipt"
+    );
+    let created_at = operation_created_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let payload = bytes.to_owned();
     let binding = binding.clone();
     let node = binding.node.clone();
@@ -1839,6 +1882,7 @@ pub(crate) async fn append_tool_output(
             let payload = payload.clone();
             let binding = binding.clone();
             Box::pin(async move {
+                let now = fixture_now.unwrap_or_else(Utc::now);
                 let tool = escape_graphql_string(&binding.tool_call_doc_id);
                 let request = escape_graphql_string(&binding.request_doc_id);
                 let agent = escape_graphql_string(&binding.agent_did);
@@ -1863,17 +1907,24 @@ pub(crate) async fn append_tool_output(
                         r#"{{ AgentToolCall(filter: {{
                 _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
                 agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }},
-                {requester_filter},
-                lifecycle_state: {{ _eq: "running" }}
-            }}, limit: 2) {{ _docID }} }}"#
+                {requester_filter}
+            }}, limit: 2) {{ _docID lifecycle_state deadline_at }} }}"#
                     ))
                     .await?;
+                let tools = row["data"]["AgentToolCall"]
+                    .as_array()
+                    .context("tool output append query omitted physical rows")?;
                 anyhow::ensure!(
-                    row["data"]["AgentToolCall"]
-                        .as_array()
-                        .is_some_and(|rows| rows.len() == 1),
-                    "tool output append lost exact running lifecycle"
+                    tools.len() == 1,
+                    "tool output append has no unique physical binding"
                 );
+                let state = tools[0]["lifecycle_state"]
+                    .as_str()
+                    .and_then(ToolCallState::from_persisted)
+                    .context("tool output append has malformed lifecycle state")?;
+                if state != ToolCallState::Running {
+                    return Err(ToolOutputAppendRejection::NotRunning.into());
+                }
                 let response = txn
                     .execute(&format!(
                         r#"{{ AgentOutputSegment(filter: {{
@@ -1961,14 +2012,30 @@ pub(crate) async fn append_tool_output(
                         existing.segment == segment,
                         "canonical tool output retry conflicts with the recorded segment"
                     );
-                    return Ok(start..start + segment.payload.len() as u64);
+                    return Ok(ToolOutputAppendReceipt {
+                        range: start..start + segment.payload.len() as u64,
+                        segment_doc_id: existing.doc_id.clone(),
+                    });
                 }
-                txn.execute_with_variables(
-                    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                    &output_segment_create_variables(&segment)?,
-                )
-                .await?;
-                Ok(start..start + segment.payload.len() as u64)
+                let deadline = tools[0]["deadline_at"]
+                    .as_str()
+                    .context("tool output append has no accepted deadline")?;
+                let deadline = DateTime::parse_from_rfc3339(deadline)
+                    .context("tool output append has malformed accepted deadline")?
+                    .with_timezone(&Utc);
+                if now > deadline {
+                    return Err(ToolOutputAppendRejection::DeadlineExceeded.into());
+                }
+                let response = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(&segment)?,
+                    )
+                    .await?;
+                Ok(ToolOutputAppendReceipt {
+                    range: start..start + segment.payload.len() as u64,
+                    segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
+                })
             })
         },
     )

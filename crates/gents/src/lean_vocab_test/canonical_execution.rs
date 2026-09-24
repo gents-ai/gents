@@ -274,6 +274,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         record: LeanCanonicalSegment,
     },
+    AppendToolOutput {
+        actor: u64,
+        now: u64,
+        document: u64,
+        record: LeanCanonicalSegment,
+    },
     /// The same guarded insert attempted by a same-task holder whose sibling
     /// awaits the gate. The holder is unpollable, so nothing may commit.
     AppendOutputWhileSiblingWaits {
@@ -363,6 +369,7 @@ impl LeanCanonicalExecutionOperation {
             | Self::ClosePartial { actor, now, .. }
             | Self::RenewLease { actor, now, .. }
             | Self::AppendOutput { actor, now, .. }
+            | Self::AppendToolOutput { actor, now, .. }
             | Self::AppendOutputWhileSiblingWaits { actor, now, .. }
             | Self::AcceptTurn { actor, now, .. }
             | Self::BackgroundTool { actor, now, .. }
