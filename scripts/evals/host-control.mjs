@@ -5,11 +5,13 @@ import { HostEnvironment } from "./host-environment.mjs";
 export async function control(argv, env = process.env) {
   const [operation, id, fault] = argv;
   if (operation === "fork") {
-    if (argv.length !== 3)
-      throw new Error("fork requires container and private snapshot directory");
+    if (argv.length !== 4)
+      throw new Error(
+        "fork requires container, private snapshot directory and inference endpoint",
+      );
     const original = new HostEnvironment(id);
     const candidate = await original.forkStoppedRuntime({
-      endpoint: env.GENTS_D4F_ENDPOINT,
+      endpoint: argv[3],
       directory: fault,
     });
     try {
@@ -25,18 +27,16 @@ export async function control(argv, env = process.env) {
     }
   }
   if (operation === "start") {
-    if (argv.length !== 1)
-      throw new Error("start takes no positional arguments");
+    if (argv.length !== 3)
+      throw new Error("start requires inference endpoint and model");
+    const [, endpoint, model] = argv;
     const host = await HostEnvironment.start({
       runtime: true,
-      endpoint: env.GENTS_D4F_ENDPOINT,
+      endpoint,
       runtimeImage: env.GENTS_HOST_RUNTIME_IMAGE,
     });
     try {
-      const graphql = await host.provision({
-        endpoint: env.GENTS_D4F_ENDPOINT,
-        model: env.GENTS_D4F_MODEL,
-      });
+      const graphql = await host.provision({ endpoint, model });
       return {
         container_id: host.id,
         runtime_image: env.GENTS_HOST_RUNTIME_IMAGE,

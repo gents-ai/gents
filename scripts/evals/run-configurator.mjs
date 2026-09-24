@@ -178,7 +178,7 @@ export async function runConfigurator({
           await readFile(join(directory, "report.json"), "utf8"),
         );
         if (
-          report.schema_version !== 1 ||
+          report.schema_version !== 2 ||
           report.status !== "completed" ||
           !(report.planned > 0) ||
           report.completed !== report.planned ||

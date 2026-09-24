@@ -1,20 +1,16 @@
 //! Live end-to-end interrupt test against an OpenAI-compatible streaming backend.
 //!
 //! Normal test runs skip this file because it depends on a reachable live
-//! inference service (the GLM-5.3 Flash deployment on workstation-1). To run
-//! it locally:
+//! inference target named by `GENTS_EVAL_TARGET`. To run it locally:
 //!
 //! ```bash
-//! GENTS_LIVE_OPENAI=1 \
-//! GENTS_LIVE_OPENAI_ENDPOINT=http://workstation-1:8000/v1 \
-//! GENTS_LIVE_OPENAI_MODEL=GLM-5.3-Flash-NVFP4 \
+//! GENTS_LIVE_OPENAI=1 GENTS_EVAL_TARGET=workstation-1 \
 //! cargo test -p gents --test e2e_live -- live_interrupt_mid_stream_on_openai_compatible -- --ignored --nocapture
 //! ```
 //!
 //! The backend fixture follows the typed `subagent_delegation_live.rs` pattern:
-//! an actual agent-DID-scoped `InferenceBackend` (unauthenticated
-//! OpenAI-compatible ChatCompletions endpoint) plus an `InferenceProfile`
-//! selecting the model with high reasoning effort, an `InferenceSampling`
+//! the target's agent-DID-scoped `InferenceBackend` plus an `InferenceProfile`
+//! selecting the target's model with high reasoning effort, an `InferenceSampling`
 //! document (temperature 1.0, top_p 0.95), an `AgentContext`, and the
 //! `AgentBehavior` the runtime request binds to — all applied through
 //! `apply_fixture_documents` and booted via
@@ -40,9 +36,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::document_config::{
-    AgentBehavior, AgentContext, BackendAuth, InferenceBackend, InferenceProfile, InferenceSampling,
-};
+use gents::document_config::{AgentBehavior, AgentContext, InferenceProfile, InferenceSampling};
 use gents::graphql::escape_graphql_string;
 use gents::session::canonical_rows::{
     decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
@@ -51,8 +45,7 @@ use gents::session::canonical_rows::{
 use gents::session::load_canonical_message_from_node;
 use gents::{
     default_inference_profile_id_for_behavior, ensure_agent_principal, interrupt_request_by_doc_id,
-    AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions, Gents, OpenAiWireApi,
-    ReasoningEffort, ToolCeiling,
+    AgentIdentity, Collection, DocumentRuntimeOptions, Gents, ReasoningEffort, ToolCeiling,
 };
 use gents_protocol::message::{AssistantContent, Message, Text};
 use gents_protocol::output::live::{
@@ -72,12 +65,10 @@ use crate::support::interrupt::{
     create_runtime_request, wait_for_inference_call_state, wait_for_request_lifecycle_state,
     wait_for_runtime_ready, BootedAgent,
 };
+use crate::support::live_inference::{live_target, InferenceTarget};
 use crate::support::test_db;
 use crate::support::TestDb;
 
-const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
-const DEFAULT_LIVE_MODEL: &str = "GLM-5.3-Flash-NVFP4";
-const LIVE_BACKEND_ID: &str = "backend-live-openai-interrupt";
 const LIVE_BEHAVIOR_ID: &str = "live-interrupt";
 const LIVE_SAMPLING_ID: &str = "live-interrupt:live-sampling";
 const LIVE_CONTEXT_ID: &str = "live-interrupt:context";
@@ -97,13 +88,10 @@ async fn live_interrupt_mid_stream_on_openai_compatible() -> Result<()> {
         "set GENTS_LIVE_OPENAI=1 and pass --ignored to run the live interrupt smoke test"
     );
 
-    let endpoint = std::env::var("GENTS_LIVE_OPENAI_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string());
-    let model =
-        std::env::var("GENTS_LIVE_OPENAI_MODEL").unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string());
+    let target = live_target();
 
     let db = test_db("live-openai-interrupt").await;
-    let agent = boot_live_agent(&db, &endpoint, &model).await?;
+    let agent = boot_interrupt_agent(&db, &target).await?;
 
     let request_id = "req-live-openai-interrupt";
     let session_id = "session-live-openai-interrupt";
@@ -530,14 +518,14 @@ async fn wait_for_interrupted_terminal_row(
     }
 }
 
-async fn boot_live_agent(db: &TestDb, endpoint: &str, model: &str) -> Result<BootedAgent> {
+async fn boot_interrupt_agent(db: &TestDb, target: &InferenceTarget) -> Result<BootedAgent> {
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("live-openai-interrupt"));
     let agent_did = identity.did().to_string();
 
     // Install the actual agent-DID-scoped live fixture documents the runtime
     // reconciler resolves: backend, profile, sampling, context, behavior, and
     // the principal selecting the behavior as default.
-    upsert_live_backend(db.node.as_ref(), &agent_did, endpoint, model).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, target).await;
 
     let agent = Gents::from_default_behavior_documents(
         db.node.clone(),
@@ -561,29 +549,14 @@ async fn boot_live_agent(db: &TestDb, endpoint: &str, model: &str) -> Result<Boo
 /// `subagent_delegation_live.rs` pattern): an actual agent-DID-scoped
 /// `InferenceBackend` plus the profile/sampling/context/behavior documents the
 /// default behavior resolves through, with the principal's
-/// `default_behavior_id` bound to `LIVE_BEHAVIOR_ID`. Backend auth is
-/// unauthenticated (local vLLM); the profile selects the model with high
-/// reasoning effort.
-async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, endpoint: &str, model: &str) {
+/// `default_behavior_id` bound to `LIVE_BEHAVIOR_ID`. The profile selects the
+/// target's model with high reasoning effort.
+async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, target: &InferenceTarget) {
     let mut principal = ensure_agent_principal(node, agent_did)
         .await
         .expect("ensure live interrupt fixture principal");
 
-    let backend = InferenceBackend {
-        agent_did: agent_did.to_string(),
-        backend_id: LIVE_BACKEND_ID.to_string(),
-        name: LIVE_BACKEND_ID.to_string(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
-        endpoint: endpoint.to_string(),
-        auth: BackendAuth::Unauthenticated,
-        connect_timeout_secs: None,
-        discovery_timeout_secs: None,
-        max_concurrent: Some(4),
-        max_queue_depth: Some(100),
-        enabled: true,
-        tags: Vec::new(),
-    };
+    let backend = target.backend(agent_did);
     // Sampling matches the live GLM-5.3 deployment settings; `max_tokens`
     // rides the profile's canonical output budget (32,768), leaving the
     // stream long enough to interrupt mid-flight.
@@ -596,13 +569,10 @@ async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, endpoint: &st
         ..Default::default()
     };
     let profile = InferenceProfile {
-        agent_did: agent_did.to_string(),
         profile_id: default_inference_profile_id_for_behavior(LIVE_BEHAVIOR_ID),
-        backend_id: LIVE_BACKEND_ID.to_string(),
-        model_name: model.to_string(),
         sampling_id: Some(LIVE_SAMPLING_ID.to_string()),
         reasoning_effort: Some(ReasoningEffort::High),
-        ..Default::default()
+        ..target.profile(agent_did)
     };
     let context = AgentContext {
         context_id: LIVE_CONTEXT_ID.to_string(),

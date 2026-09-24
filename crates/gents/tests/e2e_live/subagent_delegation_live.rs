@@ -5,28 +5,21 @@
 //! runs (live model), and the result flows back to the orchestrator.
 //!
 //! Normal test runs skip these (they are `#[ignore]`-gated AND early-return
-//! unless `GENTS_LIVE_SUBAGENT=1`). To run locally:
+//! unless `GENTS_LIVE_SUBAGENT=1`). Inference comes from the target named by
+//! `GENTS_EVAL_TARGET`. To run locally:
 //!
 //! ```bash
-//! GENTS_LIVE_SUBAGENT=1 \
-//!   cargo test -p gents --test subagent_delegation_live -- --ignored --nocapture
+//! GENTS_LIVE_SUBAGENT=1 GENTS_EVAL_TARGET=workstation-1 \
+//!   cargo test -p gents --test e2e_live live_ -- --ignored --nocapture
 //! ```
 //!
-//! Endpoint/model are overridable:
-//! - `GENTS_LIVE_SUBAGENT_ENDPOINT` (default `http://workstation-1:8000/v1`)
-//! - `GENTS_LIVE_SUBAGENT_MODEL` (default `GLM-5.3-Flash-NVFP4`)
-//!
-//! The #937 standard-path backgrounding test has its own gate and defaults to
-//! the GLM-5.3 Flash deployment on workstation-1:
+//! The #937 standard-path backgrounding test has its own gate:
 //!
 //! ```bash
-//! GENTS_LIVE_BACKGROUNDING=1 \
+//! GENTS_LIVE_BACKGROUNDING=1 GENTS_EVAL_TARGET=workstation-1 \
 //!   cargo test -p gents --test e2e_live \
 //!   live_standard_backgrounding_uses_real_inference -- --ignored --nocapture
 //! ```
-//!
-//! - `GENTS_LIVE_BACKGROUNDING_ENDPOINT` (default `http://workstation-1:8000/v1`)
-//! - `GENTS_LIVE_BACKGROUNDING_MODEL` (default `GLM-5.3-Flash-NVFP4`)
 //!
 //! ## Cross-node delegation (Test 3)
 //!
@@ -54,17 +47,17 @@ use anyhow::Result;
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{
-    AgentBehavior, AgentContext, BackendAuth, BashTools, HostTools, InferenceBackend,
-    InferenceProfile, InferenceSampling, SubagentTools, Tools,
+    AgentBehavior, AgentContext, BashTools, HostTools, InferenceProfile, InferenceSampling,
+    SubagentTools, Tools,
 };
 use gents::graphql::escape_graphql_string;
 use gents::run_timeline_fetch::load_run_timeline_rows;
 use gents::{
     agent::p2p_reconcile::resolve_template, default_behavior_id_for_agent,
     default_inference_profile_id_for_behavior, ensure_agent_principal, resolve_descendant_graph,
-    AgentIdentity, BackendProviderKind, BashMode, Collection, DefraWatcher, DescendantGraphAccess,
+    AgentIdentity, BashMode, Collection, DefraWatcher, DescendantGraphAccess,
     DescendantMaterializationState, DescendantPage, DescendantQuery, DocumentRuntimeOptions, Gents,
-    OpenAiWireApi, ReasoningEffort, SubagentTargetDocument, ToolCeiling,
+    ReasoningEffort, SubagentTargetDocument, ToolCeiling,
 };
 use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -74,15 +67,11 @@ use tracing_subscriber::EnvFilter;
 
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::terminal_assistant_answer;
+use crate::support::live_inference::{live_target, terminal_assistant_answer, InferenceTarget};
 use crate::support::{
     first_optional_row, snapshots::fetch_runtime_snapshot, test_db, test_p2p_db, TestDb,
 };
 
-const DEFAULT_LIVE_ENDPOINT: &str = "http://workstation-1:8000/v1";
-const DEFAULT_LIVE_MODEL: &str = "GLM-5.3-Flash-NVFP4";
-const DEFAULT_BACKGROUNDING_MODEL: &str = "GLM-5.3-Flash-NVFP4";
-const LIVE_BACKEND_ID: &str = "backend-live-subagent";
 const RESEARCHER_BEHAVIOR_ID: &str = "live-researcher";
 const FAST_WORKER_BEHAVIOR_ID: &str = "live-fast-worker";
 const REVIEWER_BEHAVIOR_ID: &str = "live-reviewer";
@@ -110,27 +99,8 @@ fn live_enabled() -> bool {
     std::env::var("GENTS_LIVE_SUBAGENT").as_deref() == Ok("1")
 }
 
-fn live_endpoint() -> String {
-    std::env::var("GENTS_LIVE_SUBAGENT_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string())
-}
-
-fn live_model() -> String {
-    std::env::var("GENTS_LIVE_SUBAGENT_MODEL").unwrap_or_else(|_| DEFAULT_LIVE_MODEL.to_string())
-}
-
 fn backgrounding_live_enabled() -> bool {
     std::env::var("GENTS_LIVE_BACKGROUNDING").as_deref() == Ok("1")
-}
-
-fn backgrounding_live_endpoint() -> String {
-    std::env::var("GENTS_LIVE_BACKGROUNDING_ENDPOINT")
-        .unwrap_or_else(|_| DEFAULT_LIVE_ENDPOINT.to_string())
-}
-
-fn backgrounding_live_model() -> String {
-    std::env::var("GENTS_LIVE_BACKGROUNDING_MODEL")
-        .unwrap_or_else(|_| DEFAULT_BACKGROUNDING_MODEL.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -145,9 +115,8 @@ async fn live_local_subagent_delegation() -> Result<()> {
         return Ok(());
     }
 
-    let endpoint = live_endpoint();
-    let model = live_model();
-    assert_endpoint_reachable(&endpoint).await;
+    let target = live_target();
+    target.assert_reachable().await;
 
     let db = test_db("subagent-live-local").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("subagent-live-local"));
@@ -155,7 +124,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
 
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, &target).await;
 
     // Orchestrator behavior: system prompt instructs delegation to the
     // researcher subagent (foreground is fine locally).
@@ -163,7 +132,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         db.node.as_ref(),
         &orchestrator_behavior_id,
         &agent_did,
-        &model,
+        &target,
         &profile_id,
         ORCHESTRATOR_SYSTEM_PROMPT,
         None,
@@ -176,7 +145,7 @@ async fn live_local_subagent_delegation() -> Result<()> {
         db.node.as_ref(),
         RESEARCHER_BEHAVIOR_ID,
         &agent_did,
-        &model,
+        &target,
         &profile_id,
         "You answer the user's question concisely and factually in one short sentence.",
         Some("Researches factual questions and returns a concise factual answer."),
@@ -329,9 +298,8 @@ async fn live_standard_backgrounding_uses_real_inference() -> Result<()> {
     }
     init_live_test_tracing();
 
-    let endpoint = backgrounding_live_endpoint();
-    let model = backgrounding_live_model();
-    assert_model_available(&endpoint, &model).await;
+    let target = live_target();
+    assert_model_available(&target).await;
 
     let workspace = tempfile::tempdir().expect("backgrounding live workspace");
     let child_release = workspace.path().join("release-child");
@@ -405,12 +373,12 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
     let agent_did = identity.did().to_string();
     let orchestrator_behavior_id = default_behavior_id_for_agent(&agent_did);
     let profile_id = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db.node.as_ref(), &agent_did, &endpoint).await;
+    upsert_live_backend(db.node.as_ref(), &agent_did, &target).await;
     configure_behavior(
         db.node.as_ref(),
         &orchestrator_behavior_id,
         &agent_did,
-        &model,
+        &target,
         &profile_id,
         &parent_system_prompt,
         None,
@@ -421,7 +389,7 @@ Wait for that foreground tool call to finish, then reply exactly CHILD_MANAGED_S
         db.node.as_ref(),
         BACKGROUND_WORKER_BEHAVIOR_ID,
         &agent_did,
-        &model,
+        &target,
         &profile_id,
         &child_system_prompt,
         Some("Runs a deliberately blocked background integration-test job."),
@@ -1122,9 +1090,8 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         return Ok(());
     }
 
-    let endpoint = live_endpoint();
-    let model = live_model();
-    assert_endpoint_reachable(&endpoint).await;
+    let target = live_target();
+    target.assert_reachable().await;
 
     // Two REAL P2P-enabled nodes, two distinct DIDs.
     let db_a = test_p2p_db("subagent-live-a").await;
@@ -1138,12 +1105,12 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
     // --- Node B: host the fast-worker and reviewer behaviors owned by DID-B. ---
     let profile_b =
         default_inference_profile_id_for_behavior(&default_behavior_id_for_agent(&did_b));
-    upsert_live_backend(db_b.node.as_ref(), &did_b, &endpoint).await;
+    upsert_live_backend(db_b.node.as_ref(), &did_b, &target).await;
     configure_behavior(
         db_b.node.as_ref(),
         FAST_WORKER_BEHAVIOR_ID,
         &did_b,
-        &model,
+        &target,
         &profile_b,
         CROSS_NODE_FAST_WORKER_SYSTEM_PROMPT,
         Some("Delegates its draft to the reviewer before returning it."),
@@ -1154,7 +1121,7 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
         db_b.node.as_ref(),
         REVIEWER_BEHAVIOR_ID,
         &did_b,
-        &model,
+        &target,
         &profile_b,
         "When asked to review the capital of France, reply exactly REVIEWER_OK: Paris is the capital of France.",
         Some("Reviews the fast worker's factual answer."),
@@ -1182,12 +1149,12 @@ async fn live_cross_node_subagent_delegation() -> Result<()> {
 
     // --- Node A: host the orchestrator owned by DID-A. ---
     let profile_a = default_inference_profile_id_for_behavior(&orchestrator_behavior_id);
-    upsert_live_backend(db_a.node.as_ref(), &did_a, &endpoint).await;
+    upsert_live_backend(db_a.node.as_ref(), &did_a, &target).await;
     configure_behavior(
         db_a.node.as_ref(),
         &orchestrator_behavior_id,
         &did_a,
-        &model,
+        &target,
         &profile_a,
         CROSS_NODE_NESTED_ORCHESTRATOR_SYSTEM_PROMPT,
         None,
@@ -1502,28 +1469,18 @@ Do not answer before the reviewer completes.";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-async fn assert_endpoint_reachable(endpoint: &str) {
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
+async fn assert_model_available(target: &InferenceTarget) {
+    let model = target.model();
+    let url = format!("{}/models", target.endpoint().trim_end_matches('/'));
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .expect("reqwest client");
-    let resp = tokio::time::timeout(Duration::from_secs(20), client.get(&url).send()).await;
-    match resp {
-        Ok(Ok(r)) if r.status().is_success() => {}
-        Ok(Ok(r)) => panic!("live endpoint {url} returned status {}", r.status()),
-        Ok(Err(e)) => panic!("live endpoint {url} unreachable: {e}"),
-        Err(_) => panic!("live endpoint {url} timed out (not reachable)"),
+    let mut request = client.get(&url);
+    if let Some(key) = target.auth().resolve_api_key().expect("target credential") {
+        request = request.bearer_auth(key);
     }
-}
-
-async fn assert_model_available(endpoint: &str, model: &str) {
-    let url = format!("{}/models", endpoint.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("reqwest client");
-    let response = tokio::time::timeout(Duration::from_secs(20), client.get(&url).send())
+    let response = tokio::time::timeout(Duration::from_secs(20), request.send())
         .await
         .unwrap_or_else(|_| panic!("live endpoint {url} timed out"))
         .unwrap_or_else(|error| panic!("live endpoint {url} unreachable: {error}"));
@@ -1677,23 +1634,8 @@ fn assert_standard_backgrounding_tool_surfaces(
     }
 }
 
-/// Upsert the live inference backend document (OpenAI-compatible vLLM).
-async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, endpoint: &str) {
-    let backend = InferenceBackend {
-        agent_did: agent_did.to_string(),
-        backend_id: LIVE_BACKEND_ID.to_string(),
-        name: LIVE_BACKEND_ID.to_string(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
-        endpoint: endpoint.to_string(),
-        auth: BackendAuth::Unauthenticated,
-        connect_timeout_secs: None,
-        discovery_timeout_secs: None,
-        max_concurrent: Some(4),
-        max_queue_depth: Some(100),
-        enabled: true,
-        tags: Vec::new(),
-    };
+async fn upsert_live_backend(node: &EmbeddedNode, agent_did: &str, target: &InferenceTarget) {
+    let backend = target.backend(agent_did);
     apply_fixture_documents(
         node,
         vec![(
@@ -1710,7 +1652,7 @@ async fn configure_behavior(
     node: &EmbeddedNode,
     behavior_id: &str,
     agent_did: &str,
-    model: &str,
+    target: &InferenceTarget,
     inference_profile_id: &str,
     system_prompt: &str,
     description: Option<&str>,
@@ -1722,13 +1664,10 @@ async fn configure_behavior(
     let context_id = format!("{behavior_id}:context");
     let sampling_id = format!("{behavior_id}:live-sampling");
     let profile = InferenceProfile {
-        agent_did: agent_did.to_string(),
         profile_id: inference_profile_id.to_string(),
-        backend_id: LIVE_BACKEND_ID.to_string(),
-        model_name: model.to_string(),
         sampling_id: Some(sampling_id.clone()),
         reasoning_effort: Some(ReasoningEffort::High),
-        ..Default::default()
+        ..target.profile(agent_did)
     };
     let sampling = InferenceSampling {
         agent_did: agent_did.to_string(),

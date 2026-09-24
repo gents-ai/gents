@@ -740,7 +740,7 @@ async fn native_stage_waits_for_exact_subscription_configuration() {
         .await
         .unwrap();
     let observer = std::sync::Arc::new(ActivationObserver::default());
-    let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(
+    let (agent, runtime) = crate::support::live_inference::boot_live_agent_with_options(
         &db,
         identity,
         gents::DocumentRuntimeOptions {

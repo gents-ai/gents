@@ -6,8 +6,8 @@
 //!
 //! Stewards post their status report through a tool whose `Args` carry the
 //! report body as a JSON string and the per-finding details as a JSON array of
-//! strings (the `findings` array-param shape called out in the d4f raw-escape
-//! memory). When the model emits a ~5–8 KB markdown body that contains
+//! strings (the `findings` array-param shape observed to emit raw escapes).
+//! When the model emits a ~5–8 KB markdown body that contains
 //! single-backslash sequences (`\d+`, Windows paths `C:\temp`), embedded
 //! newlines, and backticks, the tool-call `arguments` string that reaches the
 //! client either:

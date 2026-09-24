@@ -3,7 +3,7 @@
   "description": "Least-privilege lsp tool against rust-analyzer on the Gents workspace. Not a CI gate.",
   "init": {
     "inference_url": "${GENTS_EXP_ENDPOINT:-http://127.0.0.1:8080/v1}",
-    "model_name": "${GENTS_EXP_MODEL:-d4f}",
+    "model_name": "${GENTS_EXP_MODEL:-GLM-5.3-Flash-NVFP4}",
     "backend_preset": "vllm",
     "openai_wire_api": "chat-completions",
     "tool_package": "readonly",

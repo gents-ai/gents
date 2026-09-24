@@ -12,8 +12,7 @@ use serde_json::Value;
 use tracing::Instrument;
 
 use crate::support::live_inference::{
-    bind_d4f_backend_for_model, bind_openrouter_backend_for_model, boot_d4f_agent_with_options,
-    D4F_BACKEND_ID, OPENROUTER_BACKEND_ID,
+    bind_target, boot_live_agent_with_options, targets_dir, InferenceTarget,
 };
 use crate::support::test_db_in;
 
@@ -157,79 +156,8 @@ const EVAL_FIXTURES: &[reporting::EvidenceSource] = &[
     ),
 ];
 
-#[derive(Clone, Copy, Debug)]
-enum LiveProvider {
-    D4f,
-    OpenRouter,
-}
-
-impl LiveProvider {
-    fn from_env() -> Self {
-        match std::env::var("GENTS_LIVE_CONFIG_PROVIDER")
-            .unwrap_or_else(|_| "d4f".to_owned())
-            .to_ascii_lowercase()
-            .as_str()
-        {
-            "d4f" => Self::D4f,
-            "openrouter" => {
-                assert!(
-                    std::env::var("OPENROUTER_API_KEY").is_ok_and(|key| !key.trim().is_empty()),
-                    "OPENROUTER_API_KEY must be non-empty for the OpenRouter configurator eval"
-                );
-                Self::OpenRouter
-            }
-            value => panic!(
-                "unsupported GENTS_LIVE_CONFIG_PROVIDER {value:?}; expected d4f or openrouter"
-            ),
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::D4f => "d4f",
-            Self::OpenRouter => "openrouter",
-        }
-    }
-
-    fn backend_id(self) -> &'static str {
-        match self {
-            Self::D4f => D4F_BACKEND_ID,
-            Self::OpenRouter => OPENROUTER_BACKEND_ID,
-        }
-    }
-
-    fn endpoint(self) -> String {
-        match self {
-            Self::D4f => crate::support::live_inference::d4f_endpoint(),
-            Self::OpenRouter => gents::inference_setup::OPENROUTER_ENDPOINT.to_owned(),
-        }
-    }
-}
-
 fn live_enabled() -> bool {
     std::env::var("GENTS_LIVE_CONFIG").as_deref() == Ok("1")
-}
-
-fn model_name() -> String {
-    std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "GLM-5.3-Flash-NVFP4".to_owned())
-}
-
-fn eval_models() -> Vec<String> {
-    let mut models = std::env::var("GENTS_LIVE_CONFIG_MODELS")
-        .ok()
-        .map(|models| {
-            models
-                .split(',')
-                .map(str::trim)
-                .filter(|model| !model.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|models| !models.is_empty())
-        .unwrap_or_else(|| vec![model_name()]);
-    let mut seen = std::collections::HashSet::new();
-    models.retain(|model| seen.insert(model.clone()));
-    models
 }
 
 fn eval_runs() -> usize {
@@ -389,11 +317,13 @@ async fn install_setup_configurator(
 async fn install_eval_profiles(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
-    backend_id: &str,
-    model: &str,
+    target: &InferenceTarget,
     setup_behavior_id: &str,
 ) {
-    let reasoning_effort = eval_reasoning_effort().expect("valid eval reasoning effort");
+    let base = target.profile(agent_did);
+    let reasoning_effort = eval_reasoning_effort()
+        .expect("valid eval reasoning effort")
+        .or(base.reasoning_effort);
     let sampling = InferenceSampling {
         agent_did: agent_did.to_owned(),
         sampling_id: EVAL_SAMPLING_ID.to_owned(),
@@ -406,24 +336,18 @@ async fn install_eval_profiles(
     let profiles = [("high", "High"), ("medium", "Medium"), ("low", "Low")]
         .into_iter()
         .map(|(profile_id, display_name)| InferenceProfile {
-            agent_did: agent_did.to_owned(),
             profile_id: profile_id.to_owned(),
-            backend_id: backend_id.to_owned(),
-            model_name: model.to_owned(),
             display_name: Some(display_name.to_owned()),
             sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
             reasoning_effort,
-            ..Default::default()
+            ..base.clone()
         })
         .chain(std::iter::once(InferenceProfile {
-            agent_did: agent_did.to_owned(),
             profile_id: setup_profile,
-            backend_id: backend_id.to_owned(),
-            model_name: model.to_owned(),
             display_name: Some("Live default behavior".to_owned()),
             sampling_id: Some(EVAL_SAMPLING_ID.to_owned()),
             reasoning_effort,
-            ..Default::default()
+            ..base.clone()
         }));
     let documents = std::iter::once((
         Collection::InferenceSampling,
@@ -679,8 +603,7 @@ async fn verify_configuration(
 }
 
 async fn run_eval_trial(
-    provider: LiveProvider,
-    model: String,
+    target: &InferenceTarget,
     trial: usize,
     artifacts: &std::path::Path,
 ) -> reporting::TrialResult {
@@ -700,31 +623,18 @@ async fn run_eval_trial(
     let workspace = artifacts.join("workspace");
     std::fs::create_dir_all(&workspace).expect("create isolated workspace");
     let user_home = workspace.to_string_lossy().into_owned();
-    tracing::info!(target: "gents::configurator_eval", model, trial, artifacts = %artifacts.display(), "retained eval artifacts");
+    tracing::info!(target: "gents::configurator_eval", target = %target.name, trial, artifacts = %artifacts.display(), "retained eval artifacts");
     let identity: Arc<dyn AgentIdentity> = Arc::new(
         gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)
             .expect("retained trial principal identity"),
     );
-    let (agent_did, setup_behavior_id) = match provider {
-        LiveProvider::D4f => {
-            bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
-        }
-        LiveProvider::OpenRouter => {
-            bind_openrouter_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await
-        }
-    };
-    install_eval_profiles(
-        db.node.as_ref(),
-        &agent_did,
-        provider.backend_id(),
-        &model,
-        &setup_behavior_id,
-    )
-    .await;
+    let (agent_did, setup_behavior_id) =
+        bind_target(db.node.as_ref(), identity.as_ref(), target).await;
+    install_eval_profiles(db.node.as_ref(), &agent_did, target, &setup_behavior_id).await;
     install_eval_workspace_root(db.node.as_ref(), &user_home).await;
     install_setup_configurator(db.node.as_ref(), &agent_did, &setup_behavior_id, &user_home).await;
     let observer = Arc::new(stages::ActivationObserver::default());
-    let (agent, runtime) = boot_d4f_agent_with_options(
+    let (agent, runtime) = boot_live_agent_with_options(
         &db,
         identity,
         gents::DocumentRuntimeOptions {
@@ -764,8 +674,8 @@ async fn run_eval_trial(
                     &agent_did,
                     &setup_behavior_id,
                     &user_home,
-                    provider.backend_id(),
-                    &model,
+                    target.backend_id(),
+                    target.model(),
                 )
                 .await
             }),
@@ -807,8 +717,8 @@ async fn run_eval_trial(
                         &agent_did,
                         &setup_behavior_id,
                         &user_home,
-                        provider.backend_id(),
-                        &model,
+                        target.backend_id(),
+                        target.model(),
                     )
                     .await
                 }),
@@ -834,8 +744,8 @@ async fn run_eval_trial(
                         &agent_did,
                         &setup_behavior_id,
                         &user_home,
-                        provider.backend_id(),
-                        &model,
+                        target.backend_id(),
+                        target.model(),
                     )
                     .await
                 }),
@@ -845,8 +755,8 @@ async fn run_eval_trial(
         }
         let report = reporting::TrialResult {
             case_id: EVAL_CASE_ID,
-            provider: provider.name(),
-            model,
+            target: target.name.clone(),
+            model: target.model().to_owned(),
             trial,
             passed: failures.is_empty(),
             trial_failure_kind: None,
@@ -932,8 +842,7 @@ async fn trial_database_homes_are_isolated_and_retained() {
 }
 
 async fn run_retained_trial(
-    provider: LiveProvider,
-    model: String,
+    target: InferenceTarget,
     trial: usize,
     artifacts: std::path::PathBuf,
 ) -> reporting::TrialResult {
@@ -942,21 +851,21 @@ async fn run_retained_trial(
     tracing::info!(target: "gents::configurator_eval", artifacts = %artifacts.display(), "starting trial");
     let work = async {
         if maintenance_suite() {
-            host_maintenance::run_trial(model.clone(), trial, &artifacts).await
+            host_maintenance::run_trial(&target, trial, &artifacts).await
         } else if host_suite() {
-            host_scenarios::run_trial(model.clone(), trial, &artifacts).await
+            host_scenarios::run_trial(&target, trial, &artifacts).await
         } else if monitor_suite() {
-            onboarding_scenarios::run_monitor_trial(model.clone(), trial, &artifacts).await
+            onboarding_scenarios::run_monitor_trial(&target, trial, &artifacts).await
         } else {
-            Ok(run_eval_trial(provider, model.clone(), trial, &artifacts).await)
+            Ok(run_eval_trial(&target, trial, &artifacts).await)
         }
     };
     let report = match AssertUnwindSafe(work).catch_unwind().await {
         Ok(Ok(report)) => report,
         failure => reporting::TrialResult {
             case_id: suite_id(),
-            provider: provider.name(),
-            model,
+            target: target.name.clone(),
+            model: target.model().to_owned(),
             trial,
             passed: false,
             trial_failure_kind: Some("infrastructure".into()),
@@ -1002,13 +911,13 @@ async fn live_configurator_progressive_eval_matrix() {
             "off,gents::configurator_eval=info",
         ))
         .try_init();
-    let models = eval_models();
+    let targets = InferenceTarget::selected_all().unwrap_or_else(|error| panic!("{error:#}"));
+    if host_suite() {
+        for target in &targets {
+            host::require_host_target(target).unwrap_or_else(|error| panic!("{error:#}"));
+        }
+    }
     let runs = eval_runs();
-    let provider = LiveProvider::from_env();
-    assert!(
-        !(monitor_suite() || host_suite()) || matches!(provider, LiveProvider::D4f),
-        "monitor-mailbox currently supports the local D4F provider only"
-    );
     let concurrency = eval_concurrency();
     let stage_timeout = stages::stage_timeout().expect("valid stage deadline");
     let directory = std::path::PathBuf::from(
@@ -1020,9 +929,8 @@ async fn live_configurator_progressive_eval_matrix() {
         directory.clone(),
         suite_id(),
         suite_cases(),
-        models.clone(),
+        targets.iter().map(reporting::TargetLabel::new).collect(),
         runs,
-        provider.name(),
         concurrency,
         stage_timeout.as_secs(),
         if maintenance_suite() {
@@ -1035,7 +943,6 @@ async fn live_configurator_progressive_eval_matrix() {
             reporting::RunProvenance::current(
                 EVAL_COHORT,
                 EVAL_GRADER,
-                provider.endpoint(),
                 EVAL_SAMPLING_ID,
                 EVAL_TEMPERATURE,
                 EVAL_TOP_P,
@@ -1047,18 +954,23 @@ async fn live_configurator_progressive_eval_matrix() {
     )
     .expect("initialize eval report");
     run_report.save().expect("initialize run report");
-    let trials = models
+    let trials = targets
         .into_iter()
         .enumerate()
-        .flat_map(|(index, model)| (1..=runs).map(move |trial| (index, model.clone(), trial)));
+        .flat_map(|(index, target)| (1..=runs).map(move |trial| (index, target.clone(), trial)));
     let mut results = futures::stream::iter(trials)
-        .map(|(index, model, trial)| {
+        .map(|(index, target, trial)| {
             let artifacts = directory
                 .join("trials")
-                .join(format!("model-{:03}-trial-{trial:03}", index + 1));
-            let span =
-                tracing::info_span!(target: "gents::configurator_eval", "trial", %model, trial);
-            run_retained_trial(provider, model, trial, artifacts).instrument(span)
+                .join(format!("target-{:03}-trial-{trial:03}", index + 1));
+            let span = tracing::info_span!(
+                target: "gents::configurator_eval",
+                "trial",
+                target = %target.name,
+                model = target.model(),
+                trial
+            );
+            run_retained_trial(target, trial, artifacts).instrument(span)
         })
         .buffer_unordered(concurrency);
     while let Some(result) = results.next().await {
@@ -1074,4 +986,66 @@ async fn live_configurator_progressive_eval_matrix() {
         run_report.completed(),
         directory.join("report.json").display(),
     );
+}
+
+#[test]
+fn checked_in_targets_decode_through_runtime_configuration() {
+    let mut names = std::fs::read_dir(targets_dir())
+        .expect("inference targets directory")
+        .map(|entry| entry.expect("target entry").path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| path.file_stem().unwrap().to_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    names.sort();
+    assert!(!names.is_empty(), "no checked-in inference targets");
+    for name in names {
+        let target = InferenceTarget::load(&name).unwrap_or_else(|error| panic!("{error:#}"));
+        assert_eq!(target.name, name);
+        assert!(
+            !matches!(
+                target.auth(),
+                gents::document_config::BackendAuth::ApiKey { .. }
+            ),
+            "{name} stores a key"
+        );
+        let backend = target.backend("did:key:owner");
+        assert_eq!(backend.agent_did, "did:key:owner");
+        gents::document_config::InferenceBackend::from_value(
+            &serde_json::to_value(&backend).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            target.profile("did:key:owner").backend_id,
+            backend.backend_id
+        );
+    }
+}
+
+#[test]
+fn targets_reject_extra_documents_owners_and_dangling_profiles() {
+    let backend = serde_json::json!({
+        "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
+        "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "unauthenticated"}
+    });
+    let profile = serde_json::json!({"profile_id": "p", "backend_id": "b", "model_name": "m"});
+    let decode = |value| InferenceTarget::decode("t".into(), value);
+    let target = decode(serde_json::json!({
+        "agent_principal": {}, "inference_backends": [backend], "inference_profiles": [profile]
+    }))
+    .unwrap();
+    assert_eq!((target.model(), target.backend_id()), ("m", "b"));
+    for invalid in [
+        serde_json::json!({"agent_principal": {}, "inference_backends": [backend]}),
+        serde_json::json!({"agent_principal": {}, "inference_backends": [backend, backend], "inference_profiles": [profile]}),
+        serde_json::json!({"agent_principal": {"display_name": "x"}, "inference_backends": [backend], "inference_profiles": [profile]}),
+        serde_json::json!({"agent_principal": {"agent_did": "did:key:other"}, "inference_backends": [backend], "inference_profiles": [profile]}),
+        serde_json::json!({"agent_principal": {}, "inference_backends": [backend], "inference_profiles": [{"profile_id": "p", "backend_id": "missing", "model_name": "m"}]}),
+        serde_json::json!({"agent_principal": {}, "inference_backends": [backend], "inference_profiles": [profile], "contexts": [{"context_id": "c"}]}),
+        serde_json::json!({"agent_principal": {}, "inference_backends": [{"backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible", "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "environment", "variable": " "}}], "inference_profiles": [profile]}),
+    ] {
+        assert!(decode(invalid.clone()).is_err(), "accepted {invalid}");
+    }
 }

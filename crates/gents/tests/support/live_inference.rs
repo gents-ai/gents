@@ -1,18 +1,23 @@
-//! Shared backend binding, runtime boot and durable observation for evals.
+//! Inference targets, backend binding, runtime boot and durable observation
+//! for live tests and evals.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use gents::config_client::DesiredStateApplyPlan;
 use gents::defra_node::EmbeddedNode;
 use gents::document_config::{
-    AgentBehavior, AgentPrincipal, BackendAuth, InferenceBackend, InferenceProfile,
+    AgentBehavior, AgentPrincipal, BackendAuth, ConfigReferences, InferenceBackend,
+    InferenceProfile,
 };
 use gents::graphql::escape_graphql_string;
+use gents::pack::{decode_pack_config, PackInstallOptions};
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     ensure_agent_principal, AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions,
-    Gents, OpenAiWireApi, ToolCeiling,
+    Gents, ToolCeiling,
 };
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
 use gents_protocol::output::{OutputSegment, TranscriptMessage};
@@ -22,59 +27,226 @@ use serde::Deserialize;
 use crate::support::interrupt::{wait_for_runtime_ready, BootedAgent};
 use crate::support::{first_optional_row, TestDb};
 
-pub fn d4f_enabled() -> bool {
-    std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
+/// Names the inference targets for live tests and evals: a comma-separated
+/// list of target names (files under `scripts/evals/targets/`) or paths to
+/// target files. Relative paths resolve against the workspace root.
+pub const EVAL_TARGET_VARIABLE: &str = "GENTS_EVAL_TARGET";
+
+/// Owner bound while validating a target; binding replaces it with the
+/// principal under test. Target files must not author `agent_did`.
+const TARGET_VALIDATION_OWNER: &str = "did:key:inference-target-validation";
+
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 
-pub const D4F_BACKEND_ID: &str = "backend-d4f-live";
-pub const OPENROUTER_BACKEND_ID: &str = "backend-openrouter-live";
-
-/// Live backend endpoint/model, overridable for workstation deployments.
-pub fn d4f_endpoint() -> String {
-    std::env::var("GENTS_D4F_ENDPOINT")
-        .unwrap_or_else(|_| "http://workstation-1:8000/v1".to_string())
+pub fn targets_dir() -> PathBuf {
+    workspace_root().join("scripts/evals/targets")
 }
 
-fn d4f_model() -> String {
-    std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "GLM-5.3-Flash-NVFP4".to_string())
+/// One inference target: a canonical configuration bundle (the
+/// `pack_config.json` shape) that authors exactly one `InferenceBackend` and
+/// one `InferenceProfile` selecting its model. Decoding and validation use the
+/// runtime's own configuration owners, so a target is exactly what an operator
+/// could apply. Credentials are selected through `BackendAuth` (for example an
+/// environment variable name), never stored in the file.
+#[derive(Clone, Debug)]
+pub struct InferenceTarget {
+    pub name: String,
+    backend: InferenceBackend,
+    profile: InferenceProfile,
 }
 
-pub async fn bind_d4f_backend(
+impl InferenceTarget {
+    /// Resolve a target name or path.
+    pub fn load(selector: &str) -> Result<Self> {
+        let selector = selector.trim();
+        anyhow::ensure!(!selector.is_empty(), "inference target selector is blank");
+        let path = if selector.contains('/') || selector.ends_with(".json") {
+            let path = PathBuf::from(selector);
+            if path.is_absolute() {
+                path
+            } else {
+                workspace_root().join(path)
+            }
+        } else {
+            targets_dir().join(format!("{selector}.json"))
+        };
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .with_context(|| format!("inference target path has no name: {}", path.display()))?
+            .to_owned();
+        let bytes = std::fs::read(&path)
+            .with_context(|| format!("reading inference target {}", path.display()))?;
+        let value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing inference target {}", path.display()))?;
+        Self::decode(name, value)
+            .with_context(|| format!("invalid inference target {}", path.display()))
+    }
+
+    pub fn decode(name: String, value: serde_json::Value) -> Result<Self> {
+        let config = decode_pack_config(
+            value,
+            Some(&PackInstallOptions {
+                agent_did: TARGET_VALIDATION_OWNER.to_owned(),
+            }),
+            &|variable| std::env::var(variable).ok(),
+            &|_, _, reference| anyhow::bail!("inference targets have no sidecars: {reference}"),
+        )?;
+        let authored = serde_json::to_value(&config)?;
+        let authored = authored.as_object().context("configuration bundle")?;
+        for key in authored.keys() {
+            anyhow::ensure!(
+                matches!(
+                    key.as_str(),
+                    "agent_principal" | "inference_backends" | "inference_profiles"
+                ),
+                "an inference target authors only one backend and one profile, not {key}"
+            );
+        }
+        anyhow::ensure!(
+            authored["agent_principal"]
+                .as_object()
+                .is_some_and(|principal| principal.len() == 1),
+            "an inference target's agent_principal must be empty; the test binds its principal"
+        );
+        let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+        ConfigReferences::from_documents(
+            TARGET_VALIDATION_OWNER,
+            plan.documents()
+                .iter()
+                .map(|document| (document.collection, document.add.clone())),
+        )?
+        .validate()?;
+        let [backend] = <[InferenceBackend; 1]>::try_from(config.inference_backends)
+            .map_err(|_| anyhow::anyhow!("an inference target has exactly one backend"))?;
+        let [profile] = <[InferenceProfile; 1]>::try_from(config.inference_profiles)
+            .map_err(|_| anyhow::anyhow!("an inference target has exactly one profile"))?;
+        backend.validate()?;
+        profile.validate()?;
+        anyhow::ensure!(backend.enabled, "inference target backend is disabled");
+        Ok(Self {
+            name,
+            backend,
+            profile,
+        })
+    }
+
+    /// Every target named by `GENTS_EVAL_TARGET`, in order, without duplicates.
+    pub fn selected_all() -> Result<Vec<Self>> {
+        let value = std::env::var(EVAL_TARGET_VARIABLE).map_err(|_| {
+            anyhow::anyhow!(
+                "set {EVAL_TARGET_VARIABLE} to one or more inference targets (names in {} or paths)",
+                targets_dir().display()
+            )
+        })?;
+        let mut seen = std::collections::BTreeSet::new();
+        let targets = value
+            .split(',')
+            .map(str::trim)
+            .filter(|selector| !selector.is_empty())
+            .map(Self::load)
+            .filter(|target| {
+                target
+                    .as_ref()
+                    .map_or(true, |target| seen.insert(target.name.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        anyhow::ensure!(
+            !targets.is_empty(),
+            "{EVAL_TARGET_VARIABLE} names no inference target"
+        );
+        Ok(targets)
+    }
+
+    /// The single target a live test runs against.
+    pub fn selected() -> Result<Self> {
+        let mut targets = Self::selected_all()?;
+        anyhow::ensure!(
+            targets.len() == 1,
+            "this live test runs against one inference target; {EVAL_TARGET_VARIABLE} names {}",
+            targets.len()
+        );
+        Ok(targets.remove(0))
+    }
+
+    pub fn model(&self) -> &str {
+        &self.profile.model_name
+    }
+
+    pub fn endpoint(&self) -> &str {
+        &self.backend.endpoint
+    }
+
+    pub fn backend_id(&self) -> &str {
+        &self.backend.backend_id
+    }
+
+    pub fn provider_kind(&self) -> BackendProviderKind {
+        self.backend.provider_kind
+    }
+
+    pub fn auth(&self) -> &BackendAuth {
+        &self.backend.auth
+    }
+
+    /// The target backend owned by `agent_did`.
+    pub fn backend(&self, agent_did: &str) -> InferenceBackend {
+        InferenceBackend {
+            agent_did: agent_did.to_owned(),
+            ..self.backend.clone()
+        }
+    }
+
+    /// The target's model selection owned by `agent_did`. Callers that install
+    /// several profiles replace `profile_id` and their own eval settings.
+    pub fn profile(&self, agent_did: &str) -> InferenceProfile {
+        InferenceProfile {
+            agent_did: agent_did.to_owned(),
+            ..self.profile.clone()
+        }
+    }
+
+    pub async fn assert_reachable(&self) {
+        let url = format!("{}/models", self.endpoint().trim_end_matches('/'));
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .build()
+            .expect("reqwest client");
+        let mut request = client.get(&url);
+        if let Some(key) = self
+            .backend
+            .auth
+            .resolve_api_key()
+            .unwrap_or_else(|error| panic!("target {} credential: {error:#}", self.name))
+        {
+            request = request.bearer_auth(key);
+        }
+        let name = &self.name;
+        match tokio::time::timeout(Duration::from_secs(20), request.send()).await {
+            Ok(Ok(r)) if r.status().is_success() => {}
+            Ok(Ok(r)) => panic!(
+                "target {name} endpoint {url} returned status {}",
+                r.status()
+            ),
+            Ok(Err(e)) => panic!("target {name} endpoint {url} unreachable: {e}"),
+            Err(_) => panic!("target {name} endpoint {url} timed out (not reachable)"),
+        }
+    }
+}
+
+/// The one target selected for a live test; panics with the selection rule.
+pub fn live_target() -> InferenceTarget {
+    InferenceTarget::selected().unwrap_or_else(|error| panic!("{error:#}"))
+}
+
+/// Bind one isolated live-test principal to a target: its backend, its model
+/// selection as the default behavior's profile, and that behavior.
+pub async fn bind_target(
     node: &EmbeddedNode,
     identity: &dyn AgentIdentity,
-) -> (String, String) {
-    bind_d4f_backend_for_model(node, identity, &d4f_model()).await
-}
-
-/// Bind one isolated live-test principal to an explicit model.
-///
-/// Eval harnesses use this entry point instead of mutating process environment
-/// so multiple model trials remain deterministic and can eventually run in
-/// parallel safely.
-pub async fn bind_d4f_backend_for_model(
-    node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
-    model: &str,
-) -> (String, String) {
-    bind_live_backend_for_model(node, identity, model, d4f_backend).await
-}
-
-/// Bind one isolated live-test principal to OpenRouter without copying the
-/// operator's credential into DefraDB. Runtime auth resolves the key from the
-/// named host environment variable at the provider boundary.
-pub async fn bind_openrouter_backend_for_model(
-    node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
-    model: &str,
-) -> (String, String) {
-    bind_live_backend_for_model(node, identity, model, openrouter_backend).await
-}
-
-async fn bind_live_backend_for_model(
-    node: &EmbeddedNode,
-    identity: &dyn AgentIdentity,
-    model: &str,
-    backend: fn(&str) -> InferenceBackend,
+    target: &InferenceTarget,
 ) -> (String, String) {
     let agent_did = identity.did().to_string();
     let mut principal = ensure_agent_principal(node, &agent_did)
@@ -83,13 +255,10 @@ async fn bind_live_backend_for_model(
     let behavior_id = default_behavior_id_for_agent(&agent_did);
     let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
     principal.default_behavior_id = Some(behavior_id.clone());
-    let backend = backend(&agent_did);
+    let backend = target.backend(&agent_did);
     let profile = InferenceProfile {
-        agent_did: agent_did.clone(),
         profile_id: profile_id.clone(),
-        backend_id: backend.backend_id.clone(),
-        model_name: model.to_owned(),
-        ..Default::default()
+        ..target.profile(&agent_did)
     };
     let behavior = AgentBehavior {
         behavior_id: behavior_id.clone(),
@@ -104,47 +273,7 @@ async fn bind_live_backend_for_model(
     };
 
     apply_live_backend_documents(node, principal, backend, profile, behavior).await;
-
-    debug_assert_eq!(behavior_id, default_behavior_id_for_agent(&agent_did));
     (agent_did, behavior_id)
-}
-
-fn d4f_backend(agent_did: &str) -> InferenceBackend {
-    InferenceBackend {
-        agent_did: agent_did.to_string(),
-        backend_id: D4F_BACKEND_ID.to_string(),
-        name: D4F_BACKEND_ID.to_string(),
-        provider_kind: BackendProviderKind::OpenAiCompatible,
-        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
-        endpoint: d4f_endpoint(),
-        auth: BackendAuth::Unauthenticated,
-        connect_timeout_secs: None,
-        discovery_timeout_secs: None,
-        max_concurrent: Some(4),
-        max_queue_depth: Some(100),
-        enabled: true,
-        tags: Vec::new(),
-    }
-}
-
-fn openrouter_backend(agent_did: &str) -> InferenceBackend {
-    InferenceBackend {
-        agent_did: agent_did.to_string(),
-        backend_id: OPENROUTER_BACKEND_ID.to_string(),
-        name: "OpenRouter live eval".to_string(),
-        provider_kind: BackendProviderKind::OpenRouter,
-        openai_wire_api: Some(OpenAiWireApi::ChatCompletions),
-        endpoint: gents::inference_setup::OPENROUTER_ENDPOINT.to_string(),
-        auth: BackendAuth::Environment {
-            variable: "OPENROUTER_API_KEY".to_string(),
-        },
-        connect_timeout_secs: None,
-        discovery_timeout_secs: None,
-        max_concurrent: Some(4),
-        max_queue_depth: Some(100),
-        enabled: true,
-        tags: Vec::new(),
-    }
 }
 
 async fn apply_live_backend_documents(
@@ -154,9 +283,7 @@ async fn apply_live_backend_documents(
     profile: InferenceProfile,
     behavior: AgentBehavior,
 ) {
-    use gents::config_client::{
-        apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
-    };
+    use gents::config_client::{apply_desired_state_plan, DesiredStateApplyDocument};
     let plan = DesiredStateApplyPlan::new(
         [
             (Collection::AgentPrincipal, serde_json::to_value(principal)),
@@ -184,16 +311,16 @@ async fn apply_live_backend_documents(
     .expect("upsert live backend");
 }
 
-pub async fn boot_d4f_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
-    boot_d4f_agent_with_ceiling(db, identity, ToolCeiling::meta_only()).await
+pub async fn boot_live_agent(db: &TestDb, identity: Arc<dyn AgentIdentity>) -> Result<BootedAgent> {
+    boot_live_agent_with_ceiling(db, identity, ToolCeiling::meta_only()).await
 }
 
-pub async fn boot_d4f_agent_with_ceiling(
+pub async fn boot_live_agent_with_ceiling(
     db: &TestDb,
     identity: Arc<dyn AgentIdentity>,
     tool_ceiling: ToolCeiling,
 ) -> Result<BootedAgent> {
-    Ok(boot_d4f_agent_with_options(
+    Ok(boot_live_agent_with_options(
         db,
         identity,
         DocumentRuntimeOptions {
@@ -205,7 +332,7 @@ pub async fn boot_d4f_agent_with_ceiling(
     .0)
 }
 
-pub async fn boot_d4f_agent_with_options(
+pub async fn boot_live_agent_with_options(
     db: &TestDb,
     identity: Arc<dyn AgentIdentity>,
     options: DocumentRuntimeOptions,
@@ -216,21 +343,6 @@ pub async fn boot_d4f_agent_with_options(
     let handle = tokio::spawn(agent.clone().run(shutdown_rx));
     wait_for_runtime_ready(db.node.as_ref(), &agent_did).await;
     Ok((BootedAgent::new(shutdown_tx, handle, agent_did), agent))
-}
-
-pub async fn assert_d4f_reachable() {
-    let url = format!("{}/models", d4f_endpoint().trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .expect("reqwest client");
-    let resp = tokio::time::timeout(Duration::from_secs(20), client.get(&url).send()).await;
-    match resp {
-        Ok(Ok(r)) if r.status().is_success() => {}
-        Ok(Ok(r)) => panic!("d4f endpoint {url} returned status {}", r.status()),
-        Ok(Err(e)) => panic!("d4f endpoint {url} unreachable: {e}"),
-        Err(_) => panic!("d4f endpoint {url} timed out (not reachable)"),
-    }
 }
 
 fn is_terminal(state: &str) -> bool {

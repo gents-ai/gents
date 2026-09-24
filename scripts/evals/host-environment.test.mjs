@@ -48,10 +48,12 @@ test(
       });
       const did = await principal(graphql);
       await original.inject("api-permission");
-      const fork = await control(
-        ["fork", original.id, join(directory, "snapshot")],
-        { GENTS_D4F_ENDPOINT: endpoint },
-      );
+      const fork = await control([
+        "fork",
+        original.id,
+        join(directory, "snapshot"),
+        endpoint,
+      ]);
       candidate = new HostEnvironment(fork.container_id);
       assert.equal(fork.original_container_id, original.id);
       await assert.rejects(
@@ -319,3 +321,14 @@ test(
     }
   },
 );
+
+test("host start takes its inference endpoint and model from the coordinator", async () => {
+  await assert.rejects(
+    control(["start"], {}),
+    /start requires inference endpoint and model/,
+  );
+  await assert.rejects(
+    control(["start", "http://127.0.0.1:8000/v1"], {}),
+    /start requires inference endpoint and model/,
+  );
+});

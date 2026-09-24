@@ -44,11 +44,11 @@ graph DSL still supplies the event topology; it does not own goal creation.
 
 ## Run (anyone with a gents install + a model endpoint)
 
-1. Init once (example uses DeepSeek V4 Flash on workstation-1):
+1. Init once (example uses the GLM-5.3 Flash vLLM deployment on workstation-1):
 
    ```bash
    gents init --home <home> --inference-url http://127.0.0.1:8080/v1 \
-     --backend-preset vllm --openai-wire-api chat-completions --model-name d4f \
+     --backend-preset vllm --openai-wire-api chat-completions --model-name GLM-5.3-Flash-NVFP4 \
      --tool-package minimal
    ```
 

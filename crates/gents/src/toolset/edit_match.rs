@@ -592,7 +592,7 @@ mod tests {
     // (the file-side-drift direction is already covered by exact substring).
     #[test]
     fn trailing_whitespace_drift_matches_via_ladder() {
-        let content = "{\n  \"max_turns\": 20,\n  \"model\": \"d4f\"\n}";
+        let content = "{\n  \"max_turns\": 20,\n  \"model\": \"fixture-model\"\n}";
         let out = decide(
             content,
             &req("  \"max_turns\": 20,   ", "  \"max_turns\": 250,"),
@@ -604,7 +604,7 @@ mod tests {
                 assert_eq!(strategy, Strategy::TrailingWs);
                 assert!(result.contains("\"max_turns\": 250,"), "{result}");
                 // Unchanged parts stay byte-identical.
-                assert!(result.contains("\"model\": \"d4f\""));
+                assert!(result.contains("\"model\": \"fixture-model\""));
             }
             other => panic!("expected applied, got {other:?}"),
         }

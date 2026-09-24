@@ -53,10 +53,11 @@ export async function renderReport(directory, { now = Date.now() } = {}) {
     readJson(join(directory, "execution.json")),
   ]);
   if (!report && !execution) throw new Error(`No eval report in ${directory}`);
-  for (const document of [report, execution]) {
-    if (document && document.schema_version !== 1)
-      throw new Error("Unsupported eval report version");
-  }
+  if (
+    (report && report.schema_version !== 2) ||
+    (execution && execution.schema_version !== 1)
+  )
+    throw new Error("Unsupported eval report version");
   const lines = [`\nConfigurator eval — ${text(directory)}`];
   const outcome = assessRun(report, execution, now);
   lines.push(
@@ -91,7 +92,7 @@ export async function renderReport(directory, { now = Date.now() } = {}) {
         `Cohort: ${text(report.provenance.cohort)}`,
         `Source: ${text(source?.commit || "unknown")}${source?.dirty ? " (dirty)" : ""}`,
         `Grader: ${text(report.provenance.grader?.id || "unknown")} ${text(report.provenance.grader?.sha256 || "unknown")}`,
-        `Inference: ${report.models.map(text).join(", ")} @ ${text(inference?.endpoint || "unknown")}`,
+        `Inference: ${report.targets.map((target) => `${text(target.name)} (${text(target.model)} @ ${text(target.endpoint)})`).join(", ")}`,
         `Sampling: temperature=${sampling.temperature ?? "provider default"}, top_p=${sampling.top_p ?? "provider default"}, seed=${sampling.seed ?? "provider default"}`,
         `Requested reasoning effort: ${text(inference?.requested_reasoning_effort ?? "server default")} (provider enforcement not measured)`,
         `Fixture hashes: ${Object.keys(report.provenance.fixture_sha256 || {}).length}`,
@@ -99,7 +100,7 @@ export async function renderReport(directory, { now = Date.now() } = {}) {
     }
     for (const summary of report.summaries) {
       lines.push(
-        `\n${text(summary.model)} — full workflow ${rate(summary.counts.pass_rate)}`,
+        `\n${text(summary.target)} (${text(summary.model)}) — full workflow ${rate(summary.counts.pass_rate)}`,
       );
       lines.push(
         "  Case                      Pass  Fail  Skip  Unreported  Pass rate",

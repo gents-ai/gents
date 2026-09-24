@@ -2148,7 +2148,7 @@ async fn edit_file_success_reports_strategy_hashes_and_diff() {
 #[tokio::test]
 async fn edit_file_not_found_error_carries_closest_match() {
     let root = temp_root("gents-edit-closest");
-    std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: d4f\n").unwrap();
+    std::fs::write(root.join("a.yaml"), "max_turns: 20\nmodel: fixture-model\n").unwrap();
     let tool = EditFileTool::new(ToolContext::new(root, false).unwrap());
     let err = crate::llm::tool::Tool::call(
         &tool,

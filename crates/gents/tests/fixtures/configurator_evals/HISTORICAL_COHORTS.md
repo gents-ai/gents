@@ -146,16 +146,16 @@ with request/session attribution, retains a raw `*-outcome.json` containing the
 observed request/provider/tool states, and then publishes its immutable acceptance
 receipt. Stage evidence also includes elapsed time, answer, inference calls and
 tool calls. Report provenance records the source revision/dirty state, grader
-digest, endpoint, effective sampling and compiled fixture hashes. Files may contain model
+digest, inference targets, effective sampling and compiled fixture hashes. Files may contain model
 transcripts; do not commit raw trial evidence or credentials. No subjective
 grading is required for the initial deterministic acceptance path.
 
-`make live-configurator-eval` defaults to ten trials per model. For example:
+`make live-configurator-eval` defaults to ten trials per inference target.
+`GENTS_EVAL_TARGET` names one or more targets from `scripts/evals/targets/`
+(or paths to target files). For example:
 
 ```sh
-GENTS_LIVE_CONFIG_PROVIDER=d4f \
-GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 \
-GENTS_LIVE_CONFIG_MODELS=GLM-5.3-Flash-NVFP4 \
+GENTS_EVAL_TARGET=workstation-1,openrouter \
 GENTS_LIVE_CONFIG_RUNS=10 \
 make live-configurator-eval
 ```
@@ -170,7 +170,7 @@ Each run lives in `~/.gents-eval/progressive-configurator-{timestamp}-{unique}`
 (`GENTS_EVAL_ROOT` overrides the parent). `report.json` checkpoints completed
 trials and owns the aggregates; `execution.json` records the launcher outcome
 and source revision; `runner.log` retains console diagnostics. Trial workspaces
-and evidence live under `trials/model-NNN-trial-NNN/`, alongside a retained
+and evidence live under `trials/target-NNN-trial-NNN/`, alongside a retained
 `home-*` database directory with its node identity. Trials use independent embedded
 databases in the test process, not separate CLI processes or OS sandboxes.
 The private run directory contains identities and potentially sensitive transcripts;

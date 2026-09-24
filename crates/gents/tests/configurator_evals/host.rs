@@ -5,11 +5,55 @@ use gents::{Collection, ConfigAccess};
 use serde_json::Value;
 
 use super::{reporting, stages};
+use crate::support::live_inference::InferenceTarget;
 
 pub(super) struct Host {
     id: String,
     pub access: ConfigAccess,
     evidence: PathBuf,
+    inference_endpoint: String,
+}
+
+/// The container runtime is provisioned with `gents init --inference-url`,
+/// which configures an unauthenticated OpenAI-compatible backend, and host
+/// credentials never enter the container.
+/// The host controller provisions from these arguments only, so the
+/// container runtime and the Rust runner use the same selected target.
+fn start_arguments(target: &InferenceTarget) -> Result<[&str; 3]> {
+    require_host_target(target)?;
+    Ok(["start", target.endpoint(), target.model()])
+}
+
+#[test]
+fn host_start_provisions_the_selected_target_model() {
+    let target = InferenceTarget::load("workstation-1").unwrap();
+    assert_eq!(
+        start_arguments(&target).unwrap(),
+        [
+            "start",
+            "http://workstation-1:8000/v1",
+            "GLM-5.3-Flash-NVFP4"
+        ]
+    );
+    assert_eq!(
+        start_arguments(&target).unwrap()[1..],
+        [target.endpoint(), target.model()]
+    );
+    let openrouter = InferenceTarget::load("openrouter").unwrap();
+    assert!(start_arguments(&openrouter).is_err());
+}
+
+pub(super) fn require_host_target(target: &InferenceTarget) -> Result<()> {
+    ensure!(
+        target.provider_kind() == gents::BackendProviderKind::OpenAiCompatible
+            && matches!(
+                target.auth(),
+                gents::document_config::BackendAuth::Unauthenticated
+            ),
+        "host suites support only unauthenticated OpenAI-compatible inference targets; {} is not one",
+        target.name
+    );
+    Ok(())
 }
 
 async fn control(args: &[&str]) -> Result<Value> {
@@ -367,9 +411,9 @@ impl Host {
             .await
     }
 
-    pub async fn start(evidence: &Path) -> Result<Self> {
-        let receipt = control(&["start"]).await?;
-        Self::from_start_receipt(evidence, receipt).await
+    pub async fn start(evidence: &Path, target: &InferenceTarget) -> Result<Self> {
+        let receipt = control(&start_arguments(target)?).await?;
+        Self::from_start_receipt(evidence, receipt, target.endpoint().to_owned()).await
     }
 
     pub async fn fork(&self, evidence: &Path) -> Result<Self> {
@@ -381,12 +425,17 @@ impl Host {
             snapshot
                 .to_str()
                 .context("non-UTF8 candidate snapshot path")?,
+            &self.inference_endpoint,
         ])
         .await?;
-        Self::from_start_receipt(evidence, receipt).await
+        Self::from_start_receipt(evidence, receipt, self.inference_endpoint.clone()).await
     }
 
-    async fn from_start_receipt(evidence: &Path, receipt: Value) -> Result<Self> {
+    async fn from_start_receipt(
+        evidence: &Path,
+        receipt: Value,
+        inference_endpoint: String,
+    ) -> Result<Self> {
         let id = receipt["container_id"]
             .as_str()
             .context("container ID missing")?
@@ -403,6 +452,7 @@ impl Host {
             id,
             access: ConfigAccess::Graphql(endpoint),
             evidence: evidence.into(),
+            inference_endpoint,
         })
     }
 
@@ -532,10 +582,10 @@ async fn batched_configuration_snapshot_matches_individual_reads() -> Result<()>
 }
 
 #[tokio::test]
-#[ignore = "container: requires source-built gents-eval-runtime image and explicit inference settings"]
+#[ignore = "container: requires source-built gents-eval-runtime image and GENTS_EVAL_TARGET"]
 async fn isolated_host_runtime_survives_restart_without_changing_configuration() -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut host = Host::start(root.path()).await?;
+    let mut host = Host::start(root.path(), &InferenceTarget::selected()?).await?;
     let result: Result<()> = async {
         host.configure_trial().await?;
         host.wait_for_activation().await?;

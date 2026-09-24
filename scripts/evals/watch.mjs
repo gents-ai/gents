@@ -80,7 +80,7 @@ export function stageUsageFromEvidence(documents) {
   });
 }
 
-async function trialSnapshot(directory, model, trial, caseIds, cache) {
+async function trialSnapshot(directory, target, trial, caseIds, cache) {
   const evidence = join(directory, "evidence");
   let names;
   try {
@@ -88,7 +88,7 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
   } catch (error) {
     if (error.code === "ENOENT")
       return {
-        model,
+        target,
         trial,
         cases: caseIds.map(() => undefined),
         current: "queued",
@@ -168,7 +168,7 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
       : "non-pass"
     : progress?.data.stage || inputs[0]?.data.stage || "starting";
   return {
-    model,
+    target,
     trial,
     current,
     finished: Boolean(finished),
@@ -190,7 +190,7 @@ async function trialSnapshot(directory, model, trial, caseIds, cache) {
     events: receipts.map(({ data, modified }) => ({
       ...data,
       modified,
-      model,
+      target,
       trial,
     })),
   };
@@ -221,19 +221,19 @@ export async function snapshotRun(directory, cache = new Map()) {
     readJson(join(directory, "execution.json")),
   ]);
   if (!report) return { execution, trials: [], cases: [], directory };
-  if (report.schema_version !== 1)
+  if (report.schema_version !== 2)
     throw new Error("Unsupported eval report version");
   const cases = report.summaries[0]?.cases.map((entry) => entry.case_id) || [];
   const trials = await Promise.all(
-    report.models.flatMap((model, index) =>
-      Array.from({ length: report.runs_per_model }, (_, trial) =>
+    report.targets.flatMap((target, index) =>
+      Array.from({ length: report.runs_per_target }, (_, trial) =>
         trialSnapshot(
           join(
             directory,
             "trials",
-            `model-${String(index + 1).padStart(3, "0")}-trial-${String(trial + 1).padStart(3, "0")}`,
+            `target-${String(index + 1).padStart(3, "0")}-trial-${String(trial + 1).padStart(3, "0")}`,
           ),
-          model,
+          target.name,
           trial + 1,
           cases,
           cache,
@@ -286,7 +286,7 @@ export function renderDashboard(
     );
   else {
     lines.push(
-      `${report.models.map(text).join(" · ")}   n=${report.runs_per_model}   concurrency=${report.concurrency}   reasoning=${text(report.provenance?.inference?.requested_reasoning_effort ?? "server default")}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
+      `${report.targets.map((target) => `${text(target.name)} ${text(target.model)}`).join(" · ")}   n=${report.runs_per_target}   concurrency=${report.concurrency}   reasoning=${text(report.provenance?.inference?.requested_reasoning_effort ?? "server default")}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
     );
     lines.push(
       `Reported tokens  IN ${number(knownInput ? totals.input : null)}  OUT ${number(known ? totals.output : null)}   |   ${totals.calls} inference calls   ${totals.tools} saved tool calls`,
@@ -297,9 +297,9 @@ export function renderDashboard(
     lines.push(
       "STAGES  " + cases.map((name, i) => `${i + 1} ${name}`).join(" · "),
     );
-    const multiple = report.models.length > 1;
+    const multiple = report.targets.length > 1;
     lines.push(
-      `${multiple ? "Model         " : ""}Trial  ${cases.map((_, i) => i + 1).join(" ")}   Current work          Request       Age     In tok    Out tok  Calls  Sample age`,
+      `${multiple ? "Target        " : ""}Trial  ${cases.map((_, i) => i + 1).join(" ")}   Current work          Request       Age     In tok    Out tok  Calls  Sample age`,
     );
     const ordered = [...trials].sort(
       (a, b) =>
@@ -324,7 +324,7 @@ export function renderDashboard(
           ? `${trial.current}:${trial.lifecycleState}`
           : trial.current;
       lines.push(
-        `${multiple ? text(trial.model).slice(0, 13).padEnd(14) : ""}${String(trial.trial).padStart(3)}    ${trial.cases
+        `${multiple ? text(trial.target).slice(0, 13).padEnd(14) : ""}${String(trial.trial).padStart(3)}    ${trial.cases
           .map(mark)
           .join(" ")
           .padEnd(cases.length * 2 - 1)}   ${text(
@@ -353,7 +353,7 @@ export function renderDashboard(
       .sort((a, b) => b.modified - a.modified)
       .slice(0, recentLimit)) {
       lines.push(
-        `${mark(event)}  ${multiple ? `${text(event.model)} ` : ""}#${event.trial} ${event.case_id}  ${duration(event.elapsed_ms)}${event.error ? `  ${text(event.error)}` : ""}`,
+        `${mark(event)}  ${multiple ? `${text(event.target)} ` : ""}#${event.trial} ${event.case_id}  ${duration(event.elapsed_ms)}${event.error ? `  ${text(event.error)}` : ""}`,
       );
     }
   }
@@ -417,11 +417,11 @@ export function startDashboard(
               );
             previous = status;
             for (const trial of snapshot.trials) {
-              const key = `${trial.model}:${trial.trial}`;
+              const key = `${trial.target}:${trial.trial}`;
               const state = `${trial.current} ${trial.cases.map(mark).join(" ")} in=${number(trial.usage.input)} out=${number(trial.usage.output)} calls=${trial.usage.calls}`;
               if (trialChanges.get(key) !== state)
                 output.write(
-                  `${text(trial.model)} #${trial.trial}  ${text(state)}\n`,
+                  `${text(trial.target)} #${trial.trial}  ${text(state)}\n`,
                 );
               trialChanges.set(key, state);
             }

@@ -9,8 +9,8 @@
 //! continuation.
 //!
 //! ```bash
-//! GENTS_D4F_LIVE=1 cargo test -p gents --features live-e2e --test e2e_live \
-//!   d4f_live_seeds_reach_the_provider \
+//! GENTS_EVAL_TARGET=workstation-1 cargo test -p gents --features live-e2e --test e2e_live \
+//!   live_seeds_reach_the_provider \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
 
@@ -28,7 +28,7 @@ use serde::Deserialize;
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
 use crate::support::live_inference::{
-    bind_d4f_backend, boot_d4f_agent, wait_for_assistant_answer, wait_for_request_terminal,
+    bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
 use crate::support::{create_agent_message, test_db};
 
@@ -42,51 +42,44 @@ struct RenderedRequestRow {
     request_json: String,
 }
 
-fn d4f_enabled() -> bool {
-    std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
-async fn d4f_live_seeds_reach_the_provider() {
-    assert!(
-        d4f_enabled(),
-        "set GENTS_D4F_LIVE=1 and pass --ignored to run the live seed qualification"
-    );
+#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
+async fn live_seeds_reach_the_provider() {
+    let target = live_target();
 
-    let db = test_db("d4f-live-seed").await;
-    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("d4f-live-seed"));
-    let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
+    let db = test_db("live-seed").await;
+    let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("live-seed"));
+    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
 
     let profile_id = default_inference_profile_id_for_behavior(&behavior_id);
     configure_seed_and_compaction(db.node.as_ref(), &agent_did, &behavior_id, &profile_id).await;
 
     // Create requests before boot so every provider call resolves the same
     // profile-owned sampling document before the daemon can claim them.
-    let profile_request_id = "req-d4f-profile-seed";
+    let profile_request_id = "req-live-profile-seed";
     create_runtime_request(
         db.node.as_ref(),
         &agent_did,
         &behavior_id,
         profile_request_id,
-        "session-d4f-profile-seed",
+        "session-live-profile-seed",
         "Reply with the single lowercase word: profile",
     )
     .await;
 
-    let second_request_id = "req-d4f-second-profile-seed";
+    let second_request_id = "req-live-second-profile-seed";
     create_runtime_request(
         db.node.as_ref(),
         &agent_did,
         &behavior_id,
         second_request_id,
-        "session-d4f-second-profile-seed",
+        "session-live-second-profile-seed",
         "Reply with the single lowercase word: second",
     )
     .await;
 
-    let compaction_request_id = "req-d4f-compaction-seed";
-    let compaction_session_id = "session-d4f-compaction-seed";
+    let compaction_request_id = "req-live-compaction-seed";
+    let compaction_session_id = "session-live-compaction-seed";
     create_runtime_request(
         db.node.as_ref(),
         &agent_did,
@@ -98,7 +91,9 @@ async fn d4f_live_seeds_reach_the_provider() {
     .await;
     seed_compaction_history(db.node.as_ref(), compaction_session_id).await;
 
-    let agent = boot_d4f_agent(&db, identity).await.expect("boot d4f agent");
+    let agent = boot_live_agent(&db, identity)
+        .await
+        .expect("boot live agent");
 
     for (request_id, expected_seed, expect_compaction) in [
         (profile_request_id, PROFILE_SEED, false),
@@ -109,14 +104,15 @@ async fn d4f_live_seeds_reach_the_provider() {
             wait_for_request_terminal(db.node.as_ref(), request_id, Duration::from_secs(120)).await;
         assert_eq!(
             terminal, "completed",
-            "d4f must accept and complete seeded request {request_id}"
+            "target {} must accept and complete seeded request {request_id}",
+            target.name
         );
 
         let answer =
             wait_for_assistant_answer(db.node.as_ref(), request_id, Duration::from_secs(30)).await;
         assert!(
             !answer.trim().is_empty(),
-            "seeded d4f request {request_id} must persist a non-empty response"
+            "seeded request {request_id} must persist a non-empty response"
         );
 
         let rows = rendered_requests(db.node.as_ref(), request_id).await;

@@ -4,7 +4,7 @@ These cases extend the existing `e2e_configurator` target. They do not define a
 second runner or report format. Default tests validate fixture bounds, canonical
 inference document shapes, pending prerequisites, sampling, and prompt authority.
 The ignored `live_onboarding_behavioral_acceptance` test runs one serial retained
-diagnostic against an explicitly selected D4F endpoint.
+diagnostic against the inference target named by `GENTS_EVAL_TARGET`.
 
 ## Coverage
 
@@ -29,8 +29,7 @@ Run one trial at concurrency one from the repository root:
 
 ```sh
 GENTS_LIVE_ONBOARDING=1 \
-GENTS_D4F_ENDPOINT=http://workstation-2:8000/v1 \
-GENTS_D4F_MODEL=GLM-5.3-Flash-NVFP4 \
+GENTS_EVAL_TARGET=workstation-2 \
 GENTS_LIVE_CONFIG_STAGE_TIMEOUT_SECS=1800 \
 GENTS_EVAL_ROOT="$PWD/.gents-eval" \
 cargo test -p gents --test e2e_configurator \
@@ -39,7 +38,7 @@ cargo test -p gents --test e2e_configurator \
 ```
 
 The test creates a unique retained directory below `GENTS_EVAL_ROOT`. It records
-the effective endpoint, model, sampling values, concurrency and stage budget in
+the target name, endpoint, model, sampling values, concurrency and stage budget in
 `run-settings.json`. Prompts, request observations, inference diagnostics and
 tool outcomes are retained under `evidence/`, outside the model-writable
 `workspace/agent-root`. The synthetic foreign source contains a fake secret
@@ -75,17 +74,16 @@ scheduled recipient propagation, or a repair handoff. Those require separate
 acceptance with the real client identity and explicit repair approval.
 
 ```sh
-GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 \
-GENTS_D4F_MODEL=GLM-5.3-Flash-NVFP4 make live-mailbox-eval
+GENTS_EVAL_TARGET=workstation-1 make live-mailbox-eval
 
 # A single diagnostic trial:
 GENTS_LIVE_CONFIG_RUNS=1 GENTS_LIVE_CONFIG_CONCURRENCY=1 \
-GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 make live-mailbox-eval
+GENTS_EVAL_TARGET=workstation-1 make live-mailbox-eval
 
 # Request thinking at high effort on Setup and every seeded working profile:
 GENTS_LIVE_CONFIG_REASONING_EFFORT=high \
 GENTS_LIVE_CONFIG_RUNS=30 GENTS_LIVE_CONFIG_CONCURRENCY=30 \
-GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 make live-mailbox-eval
+GENTS_EVAL_TARGET=workstation-1 make live-mailbox-eval
 
 # Watch or replay the retained directory printed by the runner:
 node scripts/evals/watch.mjs <run-directory>

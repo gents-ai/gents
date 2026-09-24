@@ -424,23 +424,23 @@ test-evals:
 	$(CARGO) test -p gents --test e2e_configurator
 
 live-configurator-eval:
-	node scripts/evals/run-configurator.mjs $(CARGO)
+	GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} node scripts/evals/run-configurator.mjs $(CARGO)
 
 .PHONY: live-mailbox-eval
 .PHONY: live-host-steward-eval
 live-host-steward-eval:
-	GENTS_EVAL_SUITE=host-steward GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
+	GENTS_EVAL_SUITE=host-steward GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
 
 .PHONY: test-host-eval-environment
 .PHONY: live-host-maintenance-eval
 live-host-maintenance-eval:
-	GENTS_EVAL_SUITE=host-maintenance GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
+	GENTS_EVAL_SUITE=host-maintenance GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-1} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-1} node scripts/evals/run-configurator.mjs $(CARGO)
 
 test-host-eval-environment:
 	GENTS_HOST_FIXTURE_TEST=1 node --test scripts/evals/host-environment.test.mjs
 
 live-mailbox-eval:
-	GENTS_EVAL_SUITE=monitor-mailbox GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-10} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-10} node scripts/evals/run-configurator.mjs $(CARGO)
+	GENTS_EVAL_SUITE=monitor-mailbox GENTS_EVAL_TARGET=$${GENTS_EVAL_TARGET:-workstation-1} GENTS_LIVE_CONFIG_RUNS=$${GENTS_LIVE_CONFIG_RUNS:-10} GENTS_LIVE_CONFIG_CONCURRENCY=$${GENTS_LIVE_CONFIG_CONCURRENCY:-10} node scripts/evals/run-configurator.mjs $(CARGO)
 
 test-agent-e2e:
 	$(CARGO) test -p gents --test e2e_lifecycle

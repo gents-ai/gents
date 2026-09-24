@@ -78,7 +78,7 @@ const counts = {
 };
 const report = {
   stage_timeout_secs: 1800,
-  schema_version: 1,
+  schema_version: 2,
   status: "running",
   planned: 4,
   completed: 3,
@@ -88,7 +88,8 @@ const report = {
   elapsed_ms: 1200,
   summaries: [
     {
-      model: "model\x1b[31m",
+      target: "target\x1b[31m",
+      model: "model",
       counts,
       fixture_or_harness_failures: 1,
       cases: [
@@ -110,7 +111,7 @@ test("saved report displays canonical counts without reclassifying inconclusive 
   assert.ok(!output.includes("\x1b"));
   await writeFile(
     join(directory, "report.json"),
-    JSON.stringify({ ...report, schema_version: 2 }),
+    JSON.stringify({ ...report, schema_version: 1 }),
   );
   await assert.rejects(renderReport(directory), /Unsupported/);
 });
@@ -165,13 +166,14 @@ test("report renders provenance without treating missing sampling as zero", asyn
     join(directory, "report.json"),
     JSON.stringify({
       ...report,
-      models: ["model"],
+      targets: [
+        { name: "target", model: "model", endpoint: "http://inference.test/v1" },
+      ],
       provenance: {
         cohort: "new-cohort",
         source: { commit: "abc123", dirty: true },
         grader: { id: "grader-v1", sha256: "def456" },
         inference: {
-          endpoint: "http://inference.test/v1",
           requested_reasoning_effort: "high",
           effective_sampling: { temperature: 1, top_p: 0.95, seed: null },
         },
@@ -185,6 +187,7 @@ test("report renders provenance without treating missing sampling as zero", asyn
   assert.match(output, /temperature=1, top_p=0.95, seed=provider default/);
   assert.match(output, /Fixture hashes: 1/);
   assert.match(output, /Requested reasoning effort: high/);
+  assert.match(output, /Inference: target \(model @ http:\/\/inference.test\/v1\)/);
 });
 
 async function fakeRun(script, overrides = {}) {

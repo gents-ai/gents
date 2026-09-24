@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn a_set_variable_wins_over_its_default() {
         assert_eq!(
-            expand("${MODEL:-d4f}", &[("MODEL", "other-model")]).unwrap(),
+            expand("${MODEL:-default-model}", &[("MODEL", "other-model")]).unwrap(),
             "other-model"
         );
     }

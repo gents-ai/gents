@@ -26,7 +26,7 @@ impl EvidenceSource {
 #[derive(Debug, Serialize)]
 pub struct TrialResult {
     pub case_id: &'static str,
-    pub provider: &'static str,
+    pub target: String,
     pub model: String,
     pub trial: usize,
     pub passed: bool,
@@ -36,6 +36,26 @@ pub struct TrialResult {
     pub assistant_answer_excerpt: Option<String>,
     pub artifacts: Option<String>,
     pub cases: Vec<CaseResult>,
+}
+
+/// The inference target a matrix row ran against, as selected by name.
+#[derive(Clone, Debug, Serialize)]
+pub struct TargetLabel {
+    name: String,
+    model: String,
+    endpoint: String,
+    provider_kind: gents::BackendProviderKind,
+}
+
+impl TargetLabel {
+    pub fn new(target: &crate::support::live_inference::InferenceTarget) -> Self {
+        Self {
+            name: target.name.clone(),
+            model: target.model().to_owned(),
+            endpoint: target.endpoint().to_owned(),
+            provider_kind: target.provider_kind(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -61,7 +81,6 @@ struct GraderRevision {
 
 #[derive(Clone, Debug, Serialize)]
 struct InferenceRevision {
-    endpoint: String,
     requested_reasoning_effort: Option<gents::config::ReasoningEffort>,
     sampling_id: &'static str,
     effective_sampling: serde_json::Value,
@@ -101,7 +120,6 @@ impl RunProvenance {
     pub fn current(
         cohort: &'static str,
         grader: &'static str,
-        endpoint: String,
         sampling_id: &'static str,
         temperature: f64,
         top_p: f64,
@@ -133,7 +151,6 @@ impl RunProvenance {
                 sha256: source_digest(grader_sources)?,
             },
             inference: InferenceRevision {
-                endpoint,
                 requested_reasoning_effort: super::eval_reasoning_effort()?,
                 sampling_id,
                 effective_sampling: serde_json::json!({
@@ -169,9 +186,8 @@ pub struct RunReport {
     directory: PathBuf,
     suite: &'static str,
     case_catalog: &'static [CaseId],
-    models: Vec<String>,
+    targets: Vec<TargetLabel>,
     runs: usize,
-    provider: &'static str,
     concurrency: usize,
     stage_timeout_secs: u64,
     started_at: String,
@@ -185,22 +201,28 @@ impl RunReport {
         directory: PathBuf,
         suite: &'static str,
         case_catalog: &'static [CaseId],
-        models: Vec<String>,
+        targets: Vec<TargetLabel>,
         runs: usize,
-        provider: &'static str,
         concurrency: usize,
         stage_timeout_secs: u64,
         provenance: RunProvenance,
     ) -> Result<Self> {
         ensure!(!suite.is_empty(), "eval suite ID must not be empty");
         validate_case_catalog(case_catalog)?;
+        let mut names = std::collections::BTreeSet::new();
+        for target in &targets {
+            ensure!(
+                names.insert(target.name.as_str()),
+                "duplicate eval target: {}",
+                target.name
+            );
+        }
         Ok(Self {
             directory,
             suite,
             case_catalog,
-            models,
+            targets,
             runs,
-            provider,
             concurrency,
             stage_timeout_secs,
             started_at: chrono::Utc::now().to_rfc3339(),
@@ -226,14 +248,11 @@ impl RunReport {
             result.case_id
         );
         ensure!(
-            result.provider == self.provider,
-            "trial provider mismatch: expected {}, got {}",
-            self.provider,
-            result.provider
-        );
-        ensure!(
-            self.models.contains(&result.model),
-            "unplanned trial model: {}",
+            self.targets
+                .iter()
+                .any(|target| target.name == result.target && target.model == result.model),
+            "unplanned trial target: {} ({})",
+            result.target,
             result.model
         );
         ensure!(
@@ -245,9 +264,9 @@ impl RunReport {
             !self
                 .results
                 .iter()
-                .any(|saved| saved.model == result.model && saved.trial == result.trial),
-            "duplicate trial result for model {} trial {}",
-            result.model,
+                .any(|saved| saved.target == result.target && saved.trial == result.trial),
+            "duplicate trial result for target {} trial {}",
+            result.target,
             result.trial
         );
         if let Some(kind) = result.trial_failure_kind.as_deref() {
@@ -306,11 +325,11 @@ impl RunReport {
 
     fn snapshot(&self) -> serde_json::Value {
         let mut summaries = Vec::new();
-        for model in &self.models {
+        for target in &self.targets {
             let results = self
                 .results
                 .iter()
-                .filter(|result| &result.model == model)
+                .filter(|result| result.target == target.name)
                 .collect::<Vec<_>>();
             let counts = Counts {
                 passed: results.iter().filter(|result| result.passed).count(),
@@ -352,20 +371,21 @@ impl RunReport {
                 }));
             }
             summaries.push(serde_json::json!({
-                "model": model, "counts": counts.summary(self.runs), "cases": cases,
+                "target": target.name, "model": target.model,
+                "counts": counts.summary(self.runs), "cases": cases,
                 "fixture_or_harness_failures": results.iter().filter(|result| result.terminal_state.is_none()).count(),
                 "trial_failure_kinds": trial_failure_kinds,
             }));
         }
-        let planned = self.models.len() * self.runs;
+        let planned = self.targets.len() * self.runs;
         serde_json::json!({
-            "schema_version": 1, "suite": self.suite, "provider": self.provider,
+            "schema_version": 2, "suite": self.suite,
             "outcome_taxonomy": {
                 "case_statuses": ["passed", "failed", "skipped"],
                 "failure_kinds": EvaluationFailure::KINDS,
                 "skip_kinds": ["prerequisite"],
             },
-            "models": self.models, "runs_per_model": self.runs, "concurrency": self.concurrency,
+            "targets": self.targets, "runs_per_target": self.runs, "concurrency": self.concurrency,
             "stage_timeout_secs": self.stage_timeout_secs,
             "provenance": self.provenance,
             "started_at": self.started_at, "updated_at": chrono::Utc::now().to_rfc3339(),
@@ -410,6 +430,15 @@ fn immutable_evidence_writer_never_replaces_an_existing_receipt() {
     assert_eq!(saved["verdict"], "original");
 }
 
+fn test_target() -> TargetLabel {
+    TargetLabel {
+        name: "target".into(),
+        model: "model".into(),
+        endpoint: "http://inference.test/v1".into(),
+        provider_kind: gents::BackendProviderKind::OpenAiCompatible,
+    }
+}
+
 #[test]
 fn report_preserves_partial_results_and_failure_categories() {
     let directory = tempfile::tempdir().unwrap();
@@ -423,15 +452,13 @@ fn report_preserves_partial_results_and_failure_categories() {
         directory.path().into(),
         "test-suite",
         CASES,
-        vec!["model".into()],
+        vec![test_target()],
         2,
-        "d4f",
         1,
         1800,
         RunProvenance::current(
             "test-cohort",
             "test-grader",
-            "http://inference.test/v1".to_owned(),
             "test-sampling",
             1.0,
             0.95,
@@ -470,6 +497,10 @@ fn report_preserves_partial_results_and_failure_categories() {
         CASES.len()
     );
     assert_eq!(initial["suite"], "test-suite");
+    assert_eq!(initial["targets"][0]["name"], "target");
+    assert_eq!(initial["targets"][0]["model"], "model");
+    assert_eq!(initial["targets"][0]["provider_kind"], "OpenAiCompatible");
+    assert_eq!(initial["summaries"][0]["target"], "target");
     assert!(initial["outcome_taxonomy"]["failure_kinds"]
         .as_array()
         .unwrap()
@@ -483,7 +514,7 @@ fn report_preserves_partial_results_and_failure_categories() {
     report
         .record(TrialResult {
             case_id: "test-suite",
-            provider: "d4f",
+            target: "target".into(),
             model: "model".into(),
             trial: 1,
             passed: false,
@@ -518,7 +549,7 @@ fn report_preserves_partial_results_and_failure_categories() {
     report
         .record(TrialResult {
             case_id: "test-suite",
-            provider: "d4f",
+            target: "target".into(),
             model: "model".into(),
             trial: 2,
             passed: false,
@@ -552,7 +583,6 @@ fn report_keeps_model_grader_and_infrastructure_failures_distinct() {
     let provenance = RunProvenance::current(
         "test-cohort",
         "test-grader",
-        "http://inference.test/v1".into(),
         "test-sampling",
         1.0,
         0.95,
@@ -564,9 +594,8 @@ fn report_keeps_model_grader_and_infrastructure_failures_distinct() {
         tempfile::tempdir().unwrap().keep(),
         "test-suite",
         CASES,
-        vec!["model".into()],
+        vec![test_target()],
         3,
-        "d4f",
         1,
         1800,
         provenance,
@@ -580,7 +609,7 @@ fn report_keeps_model_grader_and_infrastructure_failures_distinct() {
         report
             .record(TrialResult {
                 case_id: "test-suite",
-                provider: "d4f",
+                target: "target".into(),
                 model: "model".into(),
                 trial,
                 passed: false,
@@ -615,15 +644,13 @@ fn report_retains_trial_failure_after_all_cases_pass() {
         directory.path().into(),
         "test-suite",
         CASES,
-        vec!["model".into()],
+        vec![test_target()],
         1,
-        "d4f",
         1,
         1800,
         RunProvenance::current(
             "test-cohort",
             "test-grader",
-            "http://inference.test/v1".into(),
             "test-sampling",
             1.0,
             0.95,
@@ -635,7 +662,7 @@ fn report_retains_trial_failure_after_all_cases_pass() {
     .unwrap();
     let trial = |passed| TrialResult {
         case_id: "test-suite",
-        provider: "d4f",
+        target: "target".into(),
         model: "model".into(),
         trial: 1,
         passed,
@@ -653,6 +680,12 @@ fn report_retains_trial_failure_after_all_cases_pass() {
         }],
     };
     assert!(report.record(trial(true)).is_err());
+    assert!(report
+        .record(TrialResult {
+            target: "unplanned".into(),
+            ..trial(false)
+        })
+        .is_err());
     report.record(trial(false)).unwrap();
     report.save().unwrap();
     let snapshot = report.snapshot();
