@@ -126,7 +126,7 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
                 line_count += 1;
             }
 
-            if result.is_empty() && exceeds_bytes && limits.max_lines > 0 {
+            if line_count == 0 && exceeds_bytes && limits.max_lines > 0 {
                 let mut end = limits.max_bytes.min(original_bytes);
                 while !text.is_char_boundary(end) {
                     end -= 1;
@@ -176,7 +176,7 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
                 }
             }
 
-            if result.is_empty() && exceeds_bytes && limits.max_lines > 0 {
+            if included == 0 && exceeds_bytes && limits.max_lines > 0 {
                 let mut start = original_bytes.saturating_sub(limits.max_bytes);
                 while !text.is_char_boundary(start) {
                     start += 1;
@@ -356,6 +356,31 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn an_empty_line_that_fits_keeps_the_line_budget() {
+        // The empty line is a whole line; the byte fallback must not add a
+        // second one past max_lines.
+        let limits = TruncationLimits {
+            max_lines: 1,
+            max_bytes: 3,
+        };
+        let head = truncate("\nabcdefgh", TruncationMode::Head, &limits);
+        assert!(
+            head.text.starts_with("\n\n[Showing lines 1-1 of 2"),
+            "{:?}",
+            head.text
+        );
+        assert_eq!(head.returned_bytes, 0);
+
+        let tail = truncate("abcdefgh\n\n", TruncationMode::Tail, &limits);
+        assert!(
+            tail.text.starts_with("[Showing lines 2-2 of 2"),
+            "{:?}",
+            tail.text
+        );
+        assert_eq!(tail.returned_bytes, 0);
     }
 
     #[test]
