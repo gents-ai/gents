@@ -96,7 +96,7 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        prompt.clone(),
+        TaggedMessage::unassociated(prompt.clone()),
         Vec::new(),
         Arc::new(Vec::new()),
         owned_config(0),
@@ -115,8 +115,14 @@ async fn generated_authored_input_is_durable_before_provider_stream_entry() {
     let (collected, ()) = tokio::time::timeout(Duration::from_secs(30), async {
         tokio::join!(
             async {
-                let collected =
-                    collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+                let collected = collect_owned_scripted_stream(
+                    stream,
+                    &hook,
+                    &writer,
+                    &mut lifecycle,
+                    gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+                )
+                .await;
                 assert_eq!(collected.error, None, "{}", case.name);
                 assert!(
                     !model.seen_requests().await.is_empty(),
