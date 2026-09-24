@@ -336,6 +336,9 @@ pub(super) struct HttpRequestData {
 }
 
 pub(super) fn read_http_request(stream: &mut TcpStream) -> anyhow::Result<HttpRequestData> {
+    // macOS accepts inherit the listener's nonblocking mode; a read timeout
+    // alone does not stop an early WouldBlock from closing the fixture socket.
+    stream.set_nonblocking(false)?;
     // Avoid turning scheduler starvation in the full parallel test suite into
     // a synthetic provider failure after accept() but before all headers land.
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
