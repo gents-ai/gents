@@ -33,26 +33,22 @@ pub fn pack_origin_from_tags(tags: &[String]) -> Result<Option<&str>> {
     Ok(origin)
 }
 
-/// Publish a prepared document pack through the canonical desired-state owner.
-/// The principal and bound inference documents are retained, never rewritten.
+/// Publish a prepared document pack through the canonical desired-state owner
+/// and record what it created (see [`super::installation`]). The principal
+/// and bound inference documents are retained, never rewritten.
 pub(super) async fn apply_pack_documents(
     access: &ConfigAccess,
+    owner: &str,
+    pack: &super::installation::PackIdentity,
     config: &PackConfig,
-) -> Result<crate::config_client::DesiredStateApplyCounts> {
-    let bundle = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
-    let documents = bundle
-        .documents()
-        .iter()
-        .filter(|document| document.collection != Collection::AgentPrincipal)
-        .cloned()
-        .collect::<Vec<_>>();
+    policy: super::installation::DriftPolicy,
+) -> Result<super::installation::InstallReport> {
+    let documents = super::installation::installable_documents(config)?;
     access
         .transact("pack.documents.install", |txn| {
-            let documents = &documents;
+            let documents = documents.clone();
             Box::pin(async move {
-                let plan = prepare_pack_plan_in_txn(txn, documents, false).await?;
-                crate::config_client::validate_desired_state_plan(txn, &plan).await?;
-                crate::config_client::apply_desired_state_plan(txn, &plan).await
+                super::installation::install_in_txn(txn, owner, pack, documents, policy).await
             })
         })
         .await

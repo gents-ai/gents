@@ -556,6 +556,8 @@ pub(crate) enum PackCommand {
     Graph(PackGraphArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
+    /// Remove what a pack install created, and its record.
+    Remove(PackRemoveArgs),
     /// Remove superseded generated asset-cache versions without run history.
     Prune(PackPruneArgs),
     /// Run, initialize or seed a pack's experiment.json scenario.
@@ -691,6 +693,39 @@ pub(crate) struct PackInstallArgs {
         help = "Pack registry base URL, used when the pack is not bundled in this binary. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) drift: PackDriftArgs,
+}
+
+/// What to do with pack documents someone edited since the pack wrote them.
+#[derive(clap::Args, Clone, Copy, Debug, Default)]
+pub(crate) struct PackDriftArgs {
+    #[arg(long, conflicts_with = "keep", help = "Replace edited pack documents")]
+    pub(crate) overwrite: bool,
+    #[arg(long, help = "Leave edited pack documents as they are")]
+    pub(crate) keep: bool,
+}
+
+impl PackDriftArgs {
+    pub(crate) fn policy(self) -> gents::pack::DriftPolicy {
+        if self.overwrite {
+            gents::pack::DriftPolicy::Overwrite
+        } else if self.keep {
+            gents::pack::DriftPolicy::Keep
+        } else {
+            gents::pack::DriftPolicy::Refuse
+        }
+    }
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackRemoveArgs {
+    #[arg(help = "The installed pack, as name or namespace/name")]
+    pub(crate) package: String,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[command(flatten)]
+    pub(crate) drift: PackDriftArgs,
 }
 
 #[derive(clap::Args)]

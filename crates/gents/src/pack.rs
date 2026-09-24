@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 mod inference;
+mod installation;
 pub mod interpolate;
 mod loader;
 mod provenance;
@@ -12,6 +13,7 @@ pub use inference::{
     bind_pack_install_config, inspect_pack_inference_bindings, install_pack_documents,
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
+pub use installation::{remove_pack, DriftPolicy, InstallReport, PackIdentity};
 pub use loader::{decode_pack_config, load_pack_config};
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};
 pub use provenance::{pack_document_digests, pack_origin_from_tags, pack_origin_tag};

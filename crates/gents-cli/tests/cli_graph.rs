@@ -99,7 +99,10 @@ fn document_pack_installs_without_seeding_and_is_idempotent() -> Result<()> {
     let before = support::read_json_file(&before_root.join("pack_config.json"))?;
     let second = run_cli_json(temp.path(), &args)?;
     anyhow::ensure!(
-        second["apply"] == first["apply"] && second["digest"] == first["digest"],
+        second["apply"]["counts"] == first["apply"]["counts"]
+            && second["apply"]["created"] == serde_json::json!([])
+            && second["apply"]["replaced"] == first["apply"]["created"]
+            && second["digest"] == first["digest"],
         "{second}"
     );
     let after_root = temp.path().join("after");

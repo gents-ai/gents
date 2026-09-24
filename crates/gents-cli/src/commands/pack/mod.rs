@@ -64,6 +64,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,
+        PackCommand::Remove(args) => remove(args).await,
         PackCommand::Prune(args) => prune(args),
         PackCommand::Scenario(PackScenarioCommand::Run(args)) => scenario::run(args).await,
         PackCommand::Scenario(PackScenarioCommand::Init(args)) => scenario::init_pack(args).await,
@@ -351,6 +352,39 @@ fn prune(args: PackPruneArgs) -> Result<()> {
     }))
 }
 
+/// `gents pack remove`: deletes what the pack's install created, keeping
+/// documents it adopted, and forgets the install.
+async fn remove(args: PackRemoveArgs) -> Result<()> {
+    let (namespace, name) = split_namespace(&args.package);
+    let (access, _) =
+        crate::resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref())
+            .await?;
+    let owner = super::config::binding::resolve_target_agent_did(
+        args.scope.agent_did.as_deref(),
+        if args.scope.agent_did.is_some() {
+            None
+        } else if args.scope.graphql.is_some() {
+            Some(ManifestAgentDidBindingArg::Live)
+        } else {
+            Some(ManifestAgentDidBindingArg::Home)
+        },
+        args.scope.home.as_deref(),
+        args.scope.graphql.as_deref(),
+        Some(&access),
+    )
+    .await?;
+    let report = gents::pack::remove_pack(
+        &access,
+        &owner,
+        &format!("{namespace}/{name}"),
+        args.drift.policy(),
+    )
+    .await?;
+    crate::print_json(
+        &json!({ "pack": format!("{namespace}/{name}"), "owner": owner, "removed": report }),
+    )
+}
+
 async fn install(args: PackInstallArgs) -> Result<()> {
     let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
@@ -539,6 +573,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                         output: args.output,
                         force_rebind_concrete_did: false,
                         registry: args.registry.clone(),
+                        drift: args.drift,
                     },
                     false,
                 )
@@ -547,7 +582,23 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             let schemas = super::schema::apply_pack_schemas_if_present(&access, temp.path())
                 .await
                 .context("pack install schemas")?;
-            let apply = gents::pack::install_pack_documents(&access, &desired).await?;
+            let identity = gents::pack::PackIdentity {
+                coordinate: format!(
+                    "{}/{}",
+                    pack.manifest().metadata.namespace,
+                    pack.manifest().name
+                ),
+                version: pack.manifest().version.clone(),
+                digest: pack.digest().to_owned(),
+            };
+            let apply = gents::pack::install_pack_documents(
+                &access,
+                &owner,
+                &identity,
+                &desired,
+                args.drift.policy(),
+            )
+            .await?;
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "source": pack.label(),

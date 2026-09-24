@@ -582,6 +582,11 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
         gents_protocol::schemas::SESSION_HYDRATION_REQUEST,
         "bafyreicmpatd7phppn77232g3pmarwsf6h55vw3rqxv3ymqzyalqub7sum"
     ),
+    baseline_entry!(
+        gents_protocol::schemas::PACK_INSTALLATION_NAME,
+        gents_protocol::schemas::PACK_INSTALLATION,
+        "bafyreibktspmin2inr42cv4lw6gbwbbzkvtktjehjl4bwwhmi6vnas3v6q"
+    ),
 ];
 
 /// Future schema evolution starts here, after the canonical baseline lands.
