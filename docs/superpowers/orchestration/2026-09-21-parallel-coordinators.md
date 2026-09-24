@@ -336,3 +336,10 @@ removed first (clean, pushed) so every branch is free to check out.
   completion `stages`/`usage`/`anchor`) unchanged, outcome kinds unchanged, the embedded canary as
   acceptance and a query-shape unit test; Opus implementer, Opus review. Tips 4 to 7 and the side
   branch restack onto it.
+- 2026-09-24 rebase: tip 3 `feat/eval-runner` `75556ded9` → `29aed3a37` (fix commit on top,
+  3 files +253/−130): observe.rs reads tool calls and assistant messages through
+  `run_timeline_fetch`, budget exhaustion from `AgentRequest.failure_reason`, tool failure from
+  `lifecycle_state = failed`; contract types unchanged (`responses` kept, always empty); a new
+  test runs every observe query against an embedded home's schema. Eval lib 96/0, embedded canary
+  10/0 (was 8/2). Behavior note: tool-call evidence now spans the request plus its direct children
+  (main's timeline scope); no shipped check reads it yet.
