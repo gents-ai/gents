@@ -103,3 +103,20 @@ wizard tip (branch 7) is tested in full by CI. Gate policy from branch 3 on: `ca
 --check`, `cargo check --workspace --all-targets`, `lake build` only when the rebase touched
 proofs, and the desktop bindings drift test at tips 2 and 6. The full gate runs once, at the
 wizard tip; a failure there is bisected down to the tip that introduced it and fixed there.
+
+## Addendum 2 (2026-09-24, evening): PR 1 must catch up with main
+
+The maintainer's PR 1 tip `10f64b5bb` sits on main @ `bb50f9259` (the GitHub stack base), and main
+has since moved to `575db1eb2` (72 commits). GitHub reports #1653 not mergeable (one conflict:
+`crates/gents/tests/conformance/coverage.rs`, the same consumer-registration pattern as before), and
+no CI run is created for any PR in the stack while its base PR is dirty. Task, in this order:
+
+1. `git rebase --onto origin/main bb50f9259 feat/guarded-publication` (three commits; resolve
+   coverage.rs by keeping main's structure and PR 1's `publishIf` consumer). Light gate plus
+   `cargo test -p gents --lib config_client::desired_state` and the conformance suite for
+   `publishIf` (the PR 1 body names them); `lake build`.
+2. Restack 2 to 7 and the side branch onto the new tips in the same order and with the same old
+   parent tips as the ledger's last table (contract's old parent is `10f64b5bb`). `rerere` replays
+   the resolutions. Light gates below; the full gate at the wizard tip; the side branch's eval
+   tests as before.
+3. Report the table (old tip, new tip, gate) and stand down. Nothing is pushed.
