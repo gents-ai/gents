@@ -12,7 +12,9 @@ use gents::config_client::{
 };
 use gents::document_config::{EvalDefinition, EvalSplit};
 use gents::eval::runner::embedded::EmbeddedHome;
-use gents::pack::{interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions};
+use gents::pack::{
+    interpolate, is_valid_pack_name, load_pack_config, PackInstallOptions, PackManifest,
+};
 use gents::{Collection, ConfigAccess};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -309,9 +311,24 @@ fn escape_strings(value: &mut Value) {
 async fn round_trip(dir: &Path, expected: &EvalDefinition) -> Result<EvalDefinition> {
     let (manifest, assets) = read_pack(dir)?;
     let home = EmbeddedHome::create_temp("eval-init-roundtrip").await?;
+    let result = install_and_read_back(&home, &manifest, &assets, expected).await;
+    // A dropped node tears itself down unawaited; close the store cleanly on
+    // every path before its directory goes. Shutdown reports no error, so
+    // the body's result is what returns.
+    home.node.shutdown().await;
+    result
+}
+
+/// [`round_trip`]'s work inside the scratch `home`.
+async fn install_and_read_back(
+    home: &EmbeddedHome,
+    manifest: &PackManifest,
+    assets: &BTreeMap<String, Vec<u8>>,
+    expected: &EvalDefinition,
+) -> Result<EvalDefinition> {
     let owner = home.did().to_owned();
     let config = load_pack_config(
-        &manifest,
+        manifest,
         &PackInstallOptions {
             agent_did: owner.clone(),
         },
@@ -389,7 +406,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use gents::eval::checks::CheckRegistry;
-    use gents::pack::{PackKind, PackManifest};
+    use gents::pack::PackKind;
     use serde_json::json;
 
     use super::*;
@@ -531,43 +548,45 @@ mod tests {
 
         let home = EmbeddedHome::create_temp("init-write").await.unwrap();
         let owner = home.did().to_owned();
-        gents::ensure_agent_principal(home.node.as_ref(), &owner)
-            .await
-            .unwrap();
-        let (manifest, assets) = read_pack(&out).unwrap();
-        let config = load_pack_config(
-            &manifest,
-            &PackInstallOptions {
-                agent_did: owner.clone(),
-            },
-            &|path| Ok(assets[path].clone()),
-            &|_| None,
-        )
-        .unwrap();
-        let plan = DesiredStateApplyPlan::from_pack_config(&config).unwrap();
-        let access = ConfigAccess::Local(home.node.clone());
-        access
-            .transact("cli.eval.init.test_install", |txn| {
-                let plan = &plan;
-                Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-            })
-            .await
-            .unwrap();
-        let found = access
-            .transact("cli.eval.init.test_read", |txn| {
-                let owner = owner.as_str();
-                Box::pin(async move {
-                    read_desired_state_record_in_txn(
-                        txn,
-                        Collection::EvalDefinition,
-                        owner,
-                        "canary-quality",
-                    )
-                    .await
+        // Every step reports rather than panics, so the node is shut down
+        // before any assertion can fail.
+        let found = async {
+            gents::ensure_agent_principal(home.node.as_ref(), &owner).await?;
+            let (manifest, assets) = read_pack(&out)?;
+            let config = load_pack_config(
+                &manifest,
+                &PackInstallOptions {
+                    agent_did: owner.clone(),
+                },
+                &|path| Ok(assets[path].clone()),
+                &|_| None,
+            )?;
+            let plan = DesiredStateApplyPlan::from_pack_config(&config)?;
+            let access = ConfigAccess::Local(home.node.clone());
+            access
+                .transact("cli.eval.init.test_install", |txn| {
+                    let plan = &plan;
+                    Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
                 })
-            })
-            .await
-            .unwrap();
+                .await?;
+            access
+                .transact("cli.eval.init.test_read", |txn| {
+                    let owner = owner.as_str();
+                    Box::pin(async move {
+                        read_desired_state_record_in_txn(
+                            txn,
+                            Collection::EvalDefinition,
+                            owner,
+                            "canary-quality",
+                        )
+                        .await
+                    })
+                })
+                .await
+        }
+        .await;
+        home.node.shutdown().await;
+        let found = found.unwrap();
         let (_, value) = found.expect("the definition installed");
         assert_eq!(value["definition_id"], "canary-quality");
     }

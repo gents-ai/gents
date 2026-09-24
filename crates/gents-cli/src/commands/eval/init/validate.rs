@@ -124,7 +124,10 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
                 );
                 match capture {
                     EvalCapture::Documents {
-                        collection, fields, ..
+                        collection,
+                        fields,
+                        filter,
+                        ..
                     } => match dossier.collections.get(collection) {
                         None => {
                             let known: Vec<&str> =
@@ -138,6 +141,13 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
                             for field in fields.iter().filter(|field| !known.contains(*field)) {
                                 messages.insert(format!(
                                     "{at}: collection {collection} has no field {field:?}"
+                                ));
+                            }
+                            let mut keys = BTreeSet::new();
+                            filter_fields(filter, &mut keys);
+                            for key in keys.into_iter().filter(|key| !known.contains(*key)) {
+                                messages.insert(format!(
+                                    "{at}: filter key {key:?} is not a field of collection {collection}"
                                 ));
                             }
                         }
@@ -157,6 +167,29 @@ fn capture_conformance(definition: &EvalDefinition, dossier: &Dossier) -> BTreeS
         }
     }
     messages
+}
+
+/// The field names a DefraDB filter object tests: its keys, through the
+/// `_and`, `_or` and `_not` combinators. A field's own value holds operators
+/// (`_eq`, `_in`, …), not fields, and `_docID` names the document itself.
+fn filter_fields<'a>(filter: &'a Value, keys: &mut BTreeSet<&'a str>) {
+    let Some(object) = filter.as_object() else {
+        return;
+    };
+    for (key, value) in object {
+        match key.as_str() {
+            "_and" | "_or" => value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .for_each(|filter| filter_fields(filter, keys)),
+            "_not" => filter_fields(value, keys),
+            "_docID" => {}
+            field => {
+                keys.insert(field);
+            }
+        }
+    }
 }
 
 /// Step 6: every split is populated and validation meets its floor.
@@ -355,6 +388,28 @@ pub(crate) mod tests {
         first_stage(&mut draft)["capture"][0]["fields"] = json!(["item_id", "colour"]);
         let message = only_message(&draft, &FLOOR_ONE);
         assert!(message.contains("colour"), "{message}");
+    }
+
+    #[test]
+    fn a_capture_filter_tests_only_fields_of_its_collection() {
+        let mut draft = good();
+        first_stage(&mut draft)["capture"][0]["filter"] = json!({
+            "label": {"_eq": "one"},
+            "_docID": {"_eq": "bae-1"},
+            "_or": [{"item_id": {"_eq": "a"}}, {"_not": {"colour": {"_eq": "red"}}}],
+        });
+        let message = only_message(&draft, &FLOOR_ONE);
+        assert!(
+            message.contains("case train-a stage answer capture items"),
+            "{message}"
+        );
+        assert!(message.contains("CanaryItem"), "{message}");
+        assert!(message.contains("\"colour\""), "{message}");
+
+        let mut draft = good();
+        first_stage(&mut draft)["capture"][0]["filter"] =
+            json!({"_and": [{"label": {"_eq": "one"}}, {"item_id": {"_in": ["a"]}}]});
+        assert_eq!(check(&draft, &FLOOR_ONE), Ok(()));
     }
 
     #[test]
