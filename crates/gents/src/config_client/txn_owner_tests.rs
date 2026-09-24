@@ -253,6 +253,79 @@ async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
 }
 
 #[tokio::test]
+async fn armed_mutation_pause_does_not_consume_an_out_of_scope_write() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type ArmedMutationPauseProbe { value: String }")
+        .await
+        .unwrap();
+    let armed = Arc::new(Notify::new());
+    let trigger = Arc::new(Notify::new());
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let armed_for_scope = Arc::clone(&armed);
+    let trigger_for_scope = Arc::clone(&trigger);
+    let mut scoped = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
+        1,
+        Arc::clone(&reached),
+        Arc::clone(&release),
+        async {
+            armed_for_scope.notify_one();
+            trigger_for_scope.notified().await;
+            ConfigAccess::transact_local(&node, None, "test.armed_mutation_pause", |txn| {
+                Box::pin(async move {
+                    txn.execute(r#"mutation { create_ArmedMutationPauseProbe(input: { value: "scoped" }) { _docID } }"#)
+                        .await?;
+                    Ok::<_, anyhow::Error>(())
+                })
+            })
+            .await
+        },
+    ));
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            () = armed.notified() => {}
+            result = &mut scoped => panic!("armed scope completed before its trigger: {result:?}"),
+        }
+    })
+    .await
+    .expect("pause scope was not armed");
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        ConfigAccess::transact_local(&node, None, "test.outside_armed_mutation_pause", |txn| {
+            Box::pin(async move {
+                txn.execute(r#"mutation { create_ArmedMutationPauseProbe(input: { value: "outside" }) { _docID } }"#)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }),
+    )
+    .await
+    .expect("out-of-scope write was intercepted by the armed pause")
+    .expect("out-of-scope write committed");
+
+    trigger.notify_one();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            () = reached.notified() => {}
+            result = &mut scoped => panic!("scoped mutation bypassed its armed pause: {result:?}"),
+        }
+    })
+    .await
+    .expect("scoped first mutation did not reach its pause");
+    release.notify_one();
+    let (result, fired) = tokio::time::timeout(Duration::from_secs(30), scoped)
+        .await
+        .expect("scoped transaction did not resume after release");
+    result.expect("scoped transaction committed after release");
+    assert!(
+        fired,
+        "outside write consumed the armed first-mutation pause"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
     let node = EmbeddedNode::builder().build().await.unwrap();
     let node_ref = &node;

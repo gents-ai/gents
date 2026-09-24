@@ -2902,8 +2902,8 @@ async fn every_generated_native_execution_script_runs_to_completion() {
     );
 }
 
-/// Fixture-time gate experiment: this binds a generated lease-ordering trace to
-/// the real transaction owner, not to host clock jumps or OS suspension.
+/// In-process, fixture-time gate experiment: this binds a generated lease-ordering
+/// trace to the real transaction owner, not to host clock jumps or OS suspension.
 #[tokio::test]
 async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
     use crate::config_client::ConfigApplyTxn;
@@ -2995,13 +2995,17 @@ async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
         .expect("generated native request");
     let stale_expiry = stale.execution_lease_expires_at.as_deref().unwrap();
     let physical_generation = symbolic_generation(*generation);
-    let physical_recovery_generation = symbolic_generation(*expected_generation);
     let physical_fresh_generation = symbolic_generation(*fresh_generation);
+    let stale_deadline = DateTime::parse_from_rfc3339(stale_expiry)
+        .unwrap()
+        .with_timezone(&Utc);
     assert_eq!(
-        DateTime::parse_from_rfc3339(stale_expiry)
-            .unwrap()
-            .with_timezone(&Utc),
+        stale_deadline,
         native.fixture_time(*expected_deadline).unwrap()
+    );
+    assert!(
+        native.fixture_time(*recovery_now).unwrap() >= stale_deadline,
+        "recovery must be due against its stale deadline before renewal wins"
     );
     assert_eq!(
         stale.execution_generation.as_deref(),
@@ -3040,7 +3044,7 @@ async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
         crate::lifecycle::recover_expired_generation_with_facts(
             &node,
             &stale,
-            &physical_recovery_generation,
+            &physical_generation,
             stale_expiry,
             physical_fresh_generation,
             native.fixture_time(*recovery_now).unwrap(),
