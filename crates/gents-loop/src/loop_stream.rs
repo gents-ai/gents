@@ -874,6 +874,7 @@ where
                         &mut new_messages,
                         &mut accumulator,
                         stream.message_id.clone(),
+                        accepted_source.clone(),
                         pending_results,
                     ) {
                         yield item;

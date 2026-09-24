@@ -17,7 +17,7 @@ use std::sync::{Mutex, OnceLock};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use rig::completion::message::ReasoningContent;
+use gents_protocol::message::ReasoningContent;
 use rig::completion::{CompletionError, CompletionRequest};
 use rig::http_client::{
     self, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
@@ -462,10 +462,12 @@ impl MessagesSseState {
                     self.last_reasoning_index = Some(index);
                     events.push(RawStreamingChoice::Reasoning {
                         id: None,
-                        content: ReasoningContent::Text {
-                            text,
-                            signature: Some(signature),
-                        },
+                        content: crate::llm::rig_compat::to_rig_reasoning_part(
+                            &ReasoningContent::Text {
+                                text,
+                                signature: Some(signature),
+                            },
+                        ),
                     });
                 }
                 Some(PendingBlock::Redacted { index, data }) => {
@@ -478,7 +480,9 @@ impl MessagesSseState {
                     self.last_reasoning_index = Some(index);
                     events.push(RawStreamingChoice::Reasoning {
                         id: None,
-                        content: ReasoningContent::Redacted { data },
+                        content: crate::llm::rig_compat::to_rig_reasoning_part(
+                            &ReasoningContent::Redacted { data },
+                        ),
                     });
                 }
                 None => {}

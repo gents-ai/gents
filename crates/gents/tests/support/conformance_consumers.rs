@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint",
+        },
+        ConformanceConsumer::RustTest {
             id: "gents_protocol::transcript::tests::generated_reasoning_visibility_matches_persisted_presentation",
             package: "gents-protocol",
             source_path: "crates/gents-protocol/src/transcript.rs",

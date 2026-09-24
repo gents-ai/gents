@@ -143,25 +143,31 @@ pub fn to_rig_reasoning(reasoning: &message::Reasoning) -> rig::completion::mess
     rig_reasoning.content = reasoning
         .content
         .iter()
-        .map(|item| match item {
-            message::ReasoningContent::Text { text, signature } => {
-                rig::completion::message::ReasoningContent::Text {
-                    text: text.clone(),
-                    signature: signature.clone(),
-                }
-            }
-            message::ReasoningContent::Encrypted(data) => {
-                rig::completion::message::ReasoningContent::Encrypted(data.clone())
-            }
-            message::ReasoningContent::Redacted { data } => {
-                rig::completion::message::ReasoningContent::Redacted { data: data.clone() }
-            }
-            message::ReasoningContent::Summary(text) => {
-                rig::completion::message::ReasoningContent::Summary(text.clone())
-            }
-        })
+        .map(to_rig_reasoning_part)
         .collect();
     rig_reasoning
+}
+
+pub fn to_rig_reasoning_part(
+    part: &message::ReasoningContent,
+) -> rig::completion::message::ReasoningContent {
+    match part {
+        message::ReasoningContent::Text { text, signature } => {
+            rig::completion::message::ReasoningContent::Text {
+                text: text.clone(),
+                signature: signature.clone(),
+            }
+        }
+        message::ReasoningContent::Encrypted(data) => {
+            rig::completion::message::ReasoningContent::Encrypted(data.clone())
+        }
+        message::ReasoningContent::Redacted { data } => {
+            rig::completion::message::ReasoningContent::Redacted { data: data.clone() }
+        }
+        message::ReasoningContent::Summary(text) => {
+            rig::completion::message::ReasoningContent::Summary(text.clone())
+        }
+    }
 }
 
 fn to_rig_source_kind(
@@ -287,33 +293,39 @@ pub fn from_rig_reasoning(reasoning: &rig::completion::message::Reasoning) -> me
         content: reasoning
             .content
             .iter()
-            .map(|item| match item {
-                rig::completion::message::ReasoningContent::Text { text, signature } => {
-                    message::ReasoningContent::Text {
-                        text: text.clone(),
-                        signature: signature.clone(),
-                    }
-                }
-                rig::completion::message::ReasoningContent::Encrypted(data) => {
-                    message::ReasoningContent::Encrypted(data.clone())
-                }
-                rig::completion::message::ReasoningContent::Redacted { data } => {
-                    message::ReasoningContent::Redacted { data: data.clone() }
-                }
-                rig::completion::message::ReasoningContent::Summary(text) => {
-                    message::ReasoningContent::Summary(text.clone())
-                }
-                other => {
-                    tracing::warn!(
-                        ?other,
-                        "unsupported rig reasoning content stubbed at the inbound seam"
-                    );
-                    message::ReasoningContent::Summary(format!(
-                        "[unsupported reasoning content: {other:?}]"
-                    ))
-                }
-            })
+            .map(from_rig_reasoning_part)
             .collect(),
+    }
+}
+
+pub fn from_rig_reasoning_part(
+    part: &rig::completion::message::ReasoningContent,
+) -> message::ReasoningContent {
+    match part {
+        rig::completion::message::ReasoningContent::Text { text, signature } => {
+            message::ReasoningContent::Text {
+                text: text.clone(),
+                signature: signature.clone(),
+            }
+        }
+        rig::completion::message::ReasoningContent::Encrypted(data) => {
+            message::ReasoningContent::Encrypted(data.clone())
+        }
+        rig::completion::message::ReasoningContent::Redacted { data } => {
+            message::ReasoningContent::Redacted { data: data.clone() }
+        }
+        rig::completion::message::ReasoningContent::Summary(text) => {
+            message::ReasoningContent::Summary(text.clone())
+        }
+        other => {
+            tracing::warn!(
+                ?other,
+                "unsupported rig reasoning content stubbed at the inbound seam"
+            );
+            message::ReasoningContent::Summary(format!(
+                "[unsupported reasoning content: {other:?}]"
+            ))
+        }
     }
 }
 

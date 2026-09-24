@@ -1095,6 +1095,27 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "PromptAssemblyClaudeReplayCases".to_string(),
         ));
     }
+    for (domain, present) in [
+        (
+            "PromptAssemblyAssistantOrderCases",
+            !snapshot.prompt_assembly_assistant_order_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyModeSanitizeCases",
+            !snapshot.prompt_assembly_mode_sanitize_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyClaudeNarrowingCases",
+            !snapshot.prompt_assembly_claude_narrowing_cases.is_empty(),
+        ),
+        (
+            "PromptAssemblyClaudeCheckpointCases",
+            !snapshot.prompt_assembly_claude_checkpoint_cases.is_empty(),
+        ),
+    ] {
+        assert!(present, "{domain} must emit cases");
+        emitted.insert(("prompt_assembly_cases".to_string(), domain.to_string()));
+    }
     if !snapshot.rendered_capture_cases.is_empty() {
         emitted.insert((
             "rendered_capture_cases".to_string(),
