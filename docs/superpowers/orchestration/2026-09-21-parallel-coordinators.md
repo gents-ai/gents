@@ -272,3 +272,10 @@ ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree a
   Orchestrator's conditions: fall back to the shared-target amendment on any OOM, timeout or 2×
   slowdown; the final reviewer reads the authoring contract against spec §3 line by line;
   cherry-picks stay trailer-free.
+- 2026-09-24: `eval-init` Tasks 1 to 3 complete, review clean, `feat/eval-init-wizard` @ `15b2c76a5`
+  (4 commits on `cfc7eae7e`). Fix round 1: `gents eval checks` answers before `EvalContext::resolve`
+  (needs no home); the runner's `validate_purpose` now accepts `pilot` (plan defect: Task 3 named
+  exposure and compare but not the freeze-time purpose check). Build fallback triggered: B's target
+  was cold, so B uses A's shared target, one build at a time. Task 4 committed in B (`1a07834bc`)
+  with a fix: its worked example had invented a check name and now uses registered checks only.
+  Tasks 5 to 7 run as one dispatch in A. Minors deferred to the final review, ledgered.
