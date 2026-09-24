@@ -1537,8 +1537,12 @@ async fn start_managed_runtime_pairing(
     {
         return;
     }
+    let cancel = tokio_util::sync::CancellationToken::new();
+    managed.pairing_cancel = Some(cancel.clone());
     managed.pairing_task = Some(tauri::async_runtime::spawn(async move {
-        if let Err(error) = ensure_managed_runtime_pairing(core, &agent_home, &target).await {
+        if let Err(error) =
+            ensure_managed_runtime_pairing(core, &agent_home, &target, &cancel).await
+        {
             tracing::warn!(
                 target: "gents_desktop::managed_server",
                 agent_did = %target.agent_did,
@@ -1556,7 +1560,10 @@ const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
 /// Fetch the managed runtime's `/status`, retrying within
 /// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or has not yet
 /// published its replicated schema.
-async fn fetch_managed_runtime_status(graphql: &str) -> Result<serde_json::Value, String> {
+async fn fetch_managed_runtime_status(
+    graphql: &str,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<serde_json::Value, String> {
     let mut status_url = reqwest::Url::parse(graphql)
         .map_err(|error| format!("parsing managed runtime GraphQL URL: {error}"))?;
     status_url.set_path("/status");
@@ -1564,9 +1571,12 @@ async fn fetch_managed_runtime_status(graphql: &str) -> Result<serde_json::Value
     status_url.set_fragment(None);
     let deadline = tokio::time::Instant::now() + MANAGED_SCHEMA_PUBLISH_WINDOW;
     loop {
-        let fetched = fetch_runtime_connection_payload(status_url.as_str())
-            .await
-            .map_err(|error| format!("{error:#}"));
+        let fetched = tokio::select! {
+            fetched = fetch_runtime_connection_payload(status_url.as_str()) => {
+                fetched.map_err(|error| format!("{error:#}"))
+            }
+            () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
+        };
         let published = fetched.as_ref().is_ok_and(|status| {
             !status
                 .get(gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD)
@@ -1575,7 +1585,10 @@ async fn fetch_managed_runtime_status(graphql: &str) -> Result<serde_json::Value
         if published || tokio::time::Instant::now() >= deadline {
             return fetched;
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::select! {
+            () = tokio::time::sleep(Duration::from_millis(500)) => {}
+            () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
+        }
     }
 }
 
@@ -1594,7 +1607,8 @@ async fn observe_managed_runtime_schema(
     let endpoint = observation
         .endpoint()
         .ok_or_else(|| "managed runtime route has no endpoint".to_string())?;
-    let status = fetch_managed_runtime_status(endpoint).await?;
+    let status =
+        fetch_managed_runtime_status(endpoint, &tokio_util::sync::CancellationToken::new()).await?;
     core.finish_runtime_schema_observation(&observation, &status)
         .await
         .map_err(|error| format!("{error:#}"))
@@ -1604,6 +1618,7 @@ async fn ensure_managed_runtime_pairing(
     core: Arc<ClientCore>,
     agent_home: &std::path::Path,
     target: &ManagedPairingTarget,
+    cancel: &tokio_util::sync::CancellationToken,
 ) -> Result<(), String> {
     if core.peer_records().await.iter().any(|peer| {
         peer.agent_did == target.agent_did
@@ -1614,7 +1629,7 @@ async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
-    let status = fetch_managed_runtime_status(&target.graphql)
+    let status = fetch_managed_runtime_status(&target.graphql, cancel)
         .await
         .map_err(|error| format!("loading managed runtime enrollment offer: {error}"))?;
     let enrollment = core
@@ -1686,14 +1701,21 @@ fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPairingTarget> 
 }
 
 pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
-    let tasks = {
+    // The schema observation's only write is synchronous after its last
+    // await, so aborting it cannot leave partial state. Pairing is awaited
+    // because authoring must unwind replication state; only its wait for the
+    // runtime's status is cancelled.
+    let task = {
         let mut managed = state.managed_server.lock().await;
-        [
-            managed.pairing_task.take(),
-            managed.schema_observation_task.take(),
-        ]
+        if let Some(observation) = managed.schema_observation_task.take() {
+            observation.abort();
+        }
+        if let Some(cancel) = managed.pairing_cancel.take() {
+            cancel.cancel();
+        }
+        managed.pairing_task.take()
     };
-    for task in tasks.into_iter().flatten() {
+    if let Some(task) = task {
         if let Err(error) = task.await {
             tracing::warn!(
                 target: "gents_desktop::managed_server",
@@ -3684,6 +3706,7 @@ mod tests {
         hold: Arc<std::sync::atomic::AtomicBool>,
         received: Arc<tokio::sync::Notify>,
         release: Arc<tokio::sync::Notify>,
+        requests: Arc<std::sync::atomic::AtomicUsize>,
         task: tokio::task::JoinHandle<()>,
     }
 
@@ -3698,8 +3721,13 @@ mod tests {
             let hold = Arc::new(std::sync::atomic::AtomicBool::new(false));
             let received = Arc::new(tokio::sync::Notify::new());
             let release = Arc::new(tokio::sync::Notify::new());
-            let (task_hold, task_received, task_release) =
-                (hold.clone(), received.clone(), release.clone());
+            let requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (task_hold, task_received, task_release, task_requests) = (
+                hold.clone(),
+                received.clone(),
+                release.clone(),
+                requests.clone(),
+            );
             let task = tokio::spawn(async move {
                 loop {
                     let Ok((mut stream, _)) = listener.accept().await else {
@@ -3713,6 +3741,7 @@ mod tests {
                             Ok(read) => request.extend_from_slice(&buffer[..read]),
                         }
                     }
+                    task_requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     if task_hold.load(std::sync::atomic::Ordering::SeqCst) {
                         task_received.notify_one();
                         task_release.notified().await;
@@ -3729,6 +3758,7 @@ mod tests {
                 hold,
                 received,
                 release,
+                requests,
                 task,
             }
         }
@@ -3837,6 +3867,64 @@ mod tests {
             .await
             .schema_observation_task
             .is_none());
+        server.task.abort();
+        core.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn drain_cancels_pairing_while_it_waits_for_the_runtime_status() {
+        use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+
+        let (temp, state) = orchestration_state();
+        let agent_did = "did:key:starting-runtime";
+        let core = Arc::new(
+            ClientCore::start_with_paths_and_options(
+                DesktopPaths::from_root(temp.path().join("client")),
+                ClientCoreOptions::local_only(),
+            )
+            .await
+            .expect("client core"),
+        );
+        let server = StatusServer::start(
+            serde_json::json!({
+                "agent_did": agent_did,
+                gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: null,
+            })
+            .to_string(),
+        )
+        .await;
+        start_managed_runtime_pairing(
+            &state,
+            Arc::clone(&core),
+            temp.path().join("agent"),
+            ManagedPairingTarget {
+                agent_name: "Starting".to_string(),
+                agent_did: agent_did.to_string(),
+                graphql: server.graphql(),
+            },
+        )
+        .await;
+        assert!(state.managed_server.lock().await.pairing_task.is_some());
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while server.requests.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("pairing is waiting for the runtime status");
+
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            drain_managed_runtime_pairing(&state),
+        )
+        .await
+        .expect("drain does not wait out the status publish window");
+        let managed = state.managed_server.lock().await;
+        assert!(managed.pairing_task.is_none());
+        assert!(managed.pairing_cancel.is_none());
+        assert!(managed.schema_observation_task.is_none());
+        drop(managed);
+
         server.task.abort();
         core.shutdown().await.expect("shutdown");
     }

@@ -345,12 +345,14 @@ impl ClientSyncStateOwner {
             .records()
             .into_iter()
             .filter(|record| {
-                record.agent_did == runtime_did && record.graphql.as_deref() == endpoint
+                record.agent_did == runtime_did
+                    && same_endpoint(record.graphql.as_deref(), endpoint)
             })
             .collect::<Vec<_>>();
-        (!expected.is_empty()).then(|| RuntimeSchemaObservation {
+        let bound_endpoint = expected.first()?.graphql.clone();
+        Some(RuntimeSchemaObservation {
             runtime_did: runtime_did.to_string(),
-            endpoint: endpoint.map(str::to_string),
+            endpoint: bound_endpoint,
             sequence: self
                 .schema_observation_sequence
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
@@ -594,6 +596,21 @@ impl RuntimeSchemaObservation {
     }
 }
 
+/// Endpoints match when they parse to the same URL, so formatting such as
+/// scheme or host case and an explicit default port cannot unbind a route.
+fn same_endpoint(configured: Option<&str>, target: Option<&str>) -> bool {
+    match (configured, target) {
+        (None, None) => true,
+        (Some(configured), Some(target)) => {
+            match (reqwest::Url::parse(configured), reqwest::Url::parse(target)) {
+                (Ok(configured), Ok(target)) => configured == target,
+                _ => configured == target,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// Bind `status` to `runtime_did` and compare its advertised versions.
 /// `null` means the runtime has not read its own node yet and is not a skew.
 fn compare_runtime_status(
@@ -798,6 +815,26 @@ mod tests {
             .record_runtime_schema(&observation, &local, &status(&runtime.agent_did, &local))
             .unwrap();
         assert!(owner.snapshot().peer_schema_skew.is_empty());
+    }
+
+    #[test]
+    fn route_endpoints_compare_as_parsed_urls() {
+        let configured = Some("http://127.0.0.1:9181/api/v0/graphql");
+        for equivalent in [
+            "HTTP://127.0.0.1:9181/api/v0/graphql",
+            "http://127.0.0.1:9181/api/v0/graphql",
+        ] {
+            assert!(same_endpoint(configured, Some(equivalent)), "{equivalent}");
+        }
+        assert!(same_endpoint(
+            Some("http://localhost:80/api/v0/graphql"),
+            Some("http://LOCALHOST/api/v0/graphql"),
+        ));
+        assert!(!same_endpoint(
+            configured,
+            Some("http://127.0.0.1:9182/api/v0/graphql")
+        ));
+        assert!(!same_endpoint(configured, None));
     }
 
     #[tokio::test]
