@@ -1,1461 +1,53 @@
 use super::*;
+use crate::types::ReconstructionState;
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[path = "../../../../../crates/gents/src/lean_vocab_test/support.rs"]
 mod lean_vocab_test;
 
-use gents::llm::message::{
-    AssistantContent, Message, Text, ToolCall, ToolFunction, ToolResult, ToolResultContent,
-    UserContent,
-};
-use gents_protocol::request_lifecycle::RequestLifecycleState;
 use lean_vocab_test::{
-    lean_desktop_client_shell_cases, lean_request_lifecycle_operator_ui_cases,
-    lean_response_transition_cases, lean_transcript_cases, LeanClientShellCase,
-    LeanResponseTransitionCase, LeanTranscriptCase,
+    lean_desktop_client_shell_cases, lean_live_overlay_cases,
+    lean_request_lifecycle_operator_ui_cases, lean_transcript_cases,
 };
-use serde_json::json;
 
-#[test]
-fn session_snapshot_projects_durable_goal_state() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        goals: vec![GoalRow {
-            goal_id: "goal-1".to_string(),
-            creation_key: None,
-            session_id: "session-goal".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            objective: Some("Ship the durable controller".to_string()),
-            tags: Vec::new(),
-            status: Some("active".to_string()),
-            token_budget: Some(50_000),
-            tokens_used: Some(1_200),
-            active_time_seconds: Some(42),
-            active_started_at: Some("2026-07-15T00:00:00Z".to_string()),
-            consecutive_blocked_audits: Some(2),
-            last_blocked_request_id: Some("request-2".to_string()),
-            last_blocked_reason: Some("needs approval".to_string()),
-            last_continued_from_request_id: Some("request-2".to_string()),
-            continuation_sequence: Some(3),
-            wrapup_requested: Some(false),
-            wrapup_completed: Some(false),
-            infrastructure_retry_count: Some(0),
-            last_failure: None,
-            completion_evidence: None,
-            created_at: Some("2026-07-15T00:00:00Z".to_string()),
-            updated_at: Some("2026-07-15T00:01:00Z".to_string()),
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store_for_agent(
-        &store,
-        Some("did:test:amy"),
-        "session-goal",
-        None,
-    )
-    .expect("goal-only session snapshot");
-    let goal = snapshot.goal.expect("durable goal projection");
-    assert_eq!(goal.goal_id, "goal-1");
-    assert_eq!(
-        goal.objective.as_deref(),
-        Some("Ship the durable controller")
-    );
-    assert_eq!(goal.status.as_deref(), Some("active"));
-    assert_eq!(goal.token_budget, Some(50_000));
-    assert_eq!(goal.tokens_used, 1_200);
-    assert_eq!(goal.active_time_seconds, 42);
-    assert_eq!(goal.consecutive_blocked_audits, 2);
-    assert_eq!(goal.continuation_sequence, 3);
-}
-
-#[test]
-fn session_snapshot_uses_canonical_session_without_materialized_observation() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: None,
-            tags: Vec::new(),
-            provenance: None,
-            observation: None,
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("follow up question".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Completed),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:01:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("done".to_string()),
-            reasoning: None,
-            status: Some("complete".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: Some(2),
-            materialized_at: Some("2026-04-21T12:01:05Z".to_string()),
-            created_at: Some("2026-04-21T12:01:01Z".to_string()),
-            completed_at: Some("2026-04-21T12:01:05Z".to_string()),
-            interrupted_at: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot =
-        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
-    assert_eq!(snapshot.session_id, "session-1");
-    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:amy"));
-    assert_eq!(snapshot.behavior_id.as_deref(), Some("amy-default"));
-    assert_eq!(snapshot.status.as_deref(), Some("active"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-1"));
-}
-
-#[test]
-fn session_snapshot_prefers_tracked_request_over_stale_session_latest_request() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
+fn session(requester_did: Option<&str>) -> AgentSession {
+    AgentSession {
+        session_id: "session-1".into(),
+        agent_did: "did:test:amy".into(),
+        requester_did: requester_did.map(str::to_owned),
+        behavior_id: "amy-default".into(),
+        created_at: "2026-04-21T12:00:00Z".into(),
+        closed_at: None,
+        title: Some(SessionTitle {
+            text: "conversation".into(),
+            source: SessionTitleSource::Generated,
+        }),
+        tags: Vec::new(),
+        provenance: None,
+        observation: Some(SessionObservation {
+            last_activity_at: "2026-04-21T12:02:00Z".into(),
+            preview: Some("turn two".into()),
+            latest_request: Some(SessionRequestObservation {
+                request_doc_id: "req-2".into(),
+                request_id: "req-2".into(),
+                lifecycle_state: RequestLifecycleState::Processing,
             }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:02:00Z".to_string(),
-                preview: Some("turn two".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".into(),
-                    request_id: "req-1".into(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![
-            AgentRequestRow {
-                doc_id: Some("req-1".to_string()),
-                request_id: "req-1".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn one".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Completed),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:00:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-                ..Default::default()
-            },
-            AgentRequestRow {
-                doc_id: Some("req-2".to_string()),
-                request_id: "req-2".to_string(),
-                agent_did: Some("did:test:amy".to_string()),
-                behavior_id: Some("amy-default".to_string()),
-                session_id: Some("session-1".to_string()),
-                content: Some("turn two".to_string()),
-                lifecycle_state: Some(RequestLifecycleState::Processing),
-                execution_origin: Some("interactive".to_string()),
-                created_at: Some("2026-04-21T12:01:00Z".to_string()),
-                retry_count: Some(0),
-                max_retries: Some(3),
-                ..Default::default()
-            },
-        ],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-2".to_string(),
-            request_id: Some("req-2".to_string()),
-            request_doc_id: Some("req-2".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("streaming reply".to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:01:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: None,
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: Some("req-1".to_string()),
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("turn one")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-2"))
-        .expect("session snapshot");
-
-    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
-    assert_eq!(snapshot.turn_state.as_deref(), Some("streaming"));
-    assert_eq!(
-        snapshot
-            .pending_turn
-            .as_ref()
-            .map(|turn| turn.request_id.as_str()),
-        Some("req-2")
-    );
-    assert_eq!(
-        snapshot
-            .active_response_overlay
-            .as_ref()
-            .and_then(|response| response.content.as_deref()),
-        Some("streaming reply")
-    );
-}
-
-#[test]
-fn session_snapshot_does_not_report_unobserved_preferred_request() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:00:01Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-old".into(),
-                    request_id: "req-old".into(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-old".to_string()),
-            request_id: "req-old".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Completed),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: Some("req-old".to_string()),
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("turn one")),
-            reasoning: None,
-            timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-new"))
-        .expect("session snapshot");
-
-    assert_eq!(
-        snapshot.latest_request_id.as_deref(),
-        Some("req-old"),
-        "Proofs.ClientShell.C9: an awaiting request retires only after the matching request is observed"
-    );
-    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
-    assert!(snapshot.pending_turn.is_none());
-}
-
-#[test]
-fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
-    let cases = lean_desktop_client_shell_cases();
-    assert_eq!(
-        cases.len(),
-        22,
-        "desktop ClientShell contract surface should include every selected-session case"
-    );
-
-    for case in cases {
-        let name = case.name.as_str();
-        let store = client_shell_contract_store(case);
-        let selected_session_id = contract_session_id(
-            case.desktop_selected_session_id
-                .expect("contract case should select a session"),
-        );
-        let preferred_request_id = case.desktop_preferred_request_id.map(contract_request_id);
-
-        let snapshot = build_session_snapshot_from_store(
-            &store,
-            &selected_session_id,
-            preferred_request_id.as_deref(),
-        );
-
-        assert_eq!(
-            snapshot.is_some(),
-            case.desktop_snapshot_present,
-            "case {name} snapshot presence drifted from Lean-selected observation"
-        );
-
-        let Some(snapshot) = snapshot else {
-            continue;
-        };
-
-        assert_eq!(
-            snapshot.latest_request_id.as_deref(),
-            case.desktop_expected_latest_request_id
-                .map(contract_request_id)
-                .as_deref(),
-            "case {name} should project the Lean-observed latest request"
-        );
-        assert_eq!(
-            snapshot.turn_state.as_deref(),
-            case.desktop_expected_turn_state.as_deref(),
-            "case {name} should project the Lean-derived turn state"
-        );
-        if let Some(expect_pending) = case.desktop_expect_pending_turn {
-            assert_eq!(
-                snapshot.pending_turn.is_some(),
-                expect_pending,
-                "case {name} pending-turn projection drifted from Lean"
-            );
-        }
+        }),
     }
 }
 
-#[test]
-fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
-    let cases = lean_request_lifecycle_operator_ui_cases();
-    assert!(
-        !cases.is_empty(),
-        "request-lifecycle operator UI contract cases should be emitted"
-    );
-
-    let mut saw_nonterminal_turn = false;
-    let mut saw_terminal_turn = false;
-
-    for case in cases {
-        let name = case.name.as_str();
-        let observed_turn = case
-            .desktop_observed_turn_state
-            .as_deref()
-            .expect("request-lifecycle UI cases must observe a request turn");
-        let lifecycle_state = request_state_for_turn(Some(observed_turn));
-        saw_nonterminal_turn |= matches!(observed_turn, "waitingForClaim" | "streaming");
-        saw_terminal_turn |= !matches!(observed_turn, "waitingForClaim" | "streaming");
-
-        let store = client_shell_contract_store(case);
-        let selected_session_id = contract_session_id(
-            case.desktop_selected_session_id
-                .expect("request-lifecycle UI cases should select a session"),
-        );
-        let preferred_request_id = case.desktop_preferred_request_id.map(contract_request_id);
-        let snapshot = build_session_snapshot_from_store(
-            &store,
-            &selected_session_id,
-            preferred_request_id.as_deref(),
-        )
-        .expect("request-lifecycle UI case should build a desktop session snapshot");
-
-        assert_eq!(
-            snapshot.latest_request_id.as_deref(),
-            case.desktop_expected_latest_request_id
-                .map(contract_request_id)
-                .as_deref(),
-            "case {name} should bind the UI snapshot to the observed lifecycle request"
-        );
-        assert_eq!(
-            snapshot.turn_state.as_deref(),
-            Some(observed_turn),
-            "case {name} should expose request lifecycle state as the UI turn state"
-        );
-        if let Some(expect_pending) = case.desktop_expect_pending_turn {
-            assert_eq!(
-                snapshot.pending_turn.is_some(),
-                expect_pending,
-                "case {name} pending-turn visibility drifted from lifecycle state"
-            );
-        }
-        if let Some(pending_turn) = snapshot.pending_turn.as_ref() {
-            assert_eq!(
-                pending_turn.lifecycle_state.as_deref(),
-                Some(lifecycle_state.as_str()),
-                "case {name} should carry the raw lifecycle state for UI badges"
-            );
-        }
-    }
-
-    assert!(
-        saw_nonterminal_turn && saw_terminal_turn,
-        "request-lifecycle UI cases should cover active and terminal turn bindings"
-    );
-}
-
-#[test]
-fn session_snapshot_streaming_response_overlay_consumes_generated_transition_cases() {
-    let cases = lean_response_transition_cases();
-    assert_eq!(
-        cases.len(),
-        12,
-        "desktop streaming renderer should consume every Lean response transition case"
-    );
-
-    for case in cases {
-        let store = streaming_response_contract_store(case);
-        let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-            .unwrap_or_else(|| panic!("case {} should produce a session snapshot", case.name));
-
-        assert_eq!(
-            snapshot
-                .latest_response
-                .as_ref()
-                .and_then(|response| response.status.as_deref()),
-            Some(case.post_status.as_str()),
-            "case {} should expose the Lean post response status",
-            case.name
-        );
-        assert_eq!(
-            snapshot
-                .latest_response
-                .as_ref()
-                .and_then(|response| response.token_count)
-                .map(|count| count as usize),
-            Some(case.post_token_count),
-            "case {} should expose the Lean post token count",
-            case.name
-        );
-        assert_eq!(
-            snapshot
-                .latest_response
-                .as_ref()
-                .and_then(|response| response.materialized_message_sequence)
-                .map(|sequence| sequence as usize),
-            case.post_materialized_seq,
-            "case {} should expose the Lean materialization sequence",
-            case.name
-        );
-
-        // Hiding the live overlay must not erase the partial turn the operator
-        // was reading: Lean `recover_interrupted_keeps_content` and
-        // `set_interrupted_at_does_not_change_status` keep a nonEmpty live tail
-        // on a response whose overlay is hidden, so the projected response must
-        // still carry that tail after the production conversion.
-        if case.post_live_tail == "nonEmpty" {
-            let (expected_content, expected_reasoning) = streaming_case_tail(case);
-            let response = snapshot
-                .latest_response
-                .as_ref()
-                .unwrap_or_else(|| panic!("case {} should project a response", case.name));
-            assert_eq!(
-                response.content.as_deref(),
-                expected_content.as_deref(),
-                "case {} must preserve the streamed content tail on the projected response even when the live overlay is hidden",
-                case.name
-            );
-            assert_eq!(
-                response.reasoning.as_deref(),
-                expected_reasoning.as_deref(),
-                "case {} must preserve the streamed reasoning tail on the projected response even when the live overlay is hidden",
-                case.name
-            );
-        }
-        if let Some(expected_error_reason) = case.error_reason.as_deref() {
-            let response = snapshot
-                .latest_response
-                .as_ref()
-                .unwrap_or_else(|| panic!("case {} should project a response", case.name));
-            assert_eq!(
-                response.error_message.as_deref(),
-                Some(expected_error_reason),
-                "case {} must surface the Lean error reason as the projected response error message",
-                case.name
-            );
-        }
-
-        let expected_live_overlay = streaming_case_should_render_live_overlay(case);
-        assert_eq!(
-            snapshot.active_response_overlay.is_some(),
-            expected_live_overlay,
-            "case {} active overlay visibility should follow the Lean streaming post state",
-            case.name
-        );
-
-        let live_items = snapshot
-            .timeline_items
-            .iter()
-            .filter_map(|item| match item {
-                RenderedTimelineItem::LiveAssistant {
-                    content, reasoning, ..
-                } => Some((content.as_deref(), reasoning.as_deref())),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            live_items.len(),
-            usize::from(expected_live_overlay),
-            "case {} should render exactly the Lean-visible live assistant item count",
-            case.name
-        );
-        if expected_live_overlay {
-            let (expected_content, expected_reasoning) = streaming_case_tail(case);
-            assert_eq!(
-                live_items[0],
-                (expected_content.as_deref(), expected_reasoning.as_deref()),
-                "case {} live assistant item should carry the Lean live tail",
-                case.name
-            );
-        }
-    }
-}
-
-#[test]
-fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
-    let cases = lean_transcript_cases();
-    assert_eq!(
-        cases.len(),
-        7,
-        "desktop transcript rendering should consume every generated Lean transcript case"
-    );
-
-    for case in cases {
-        let store = transcript_contract_store(case);
-        let snapshot = build_session_snapshot_from_store(&store, "session-1", Some("req-1"))
-            .unwrap_or_else(|| panic!("case {} should produce a session snapshot", case.name));
-
-        assert_eq!(
-            snapshot.messages.len(),
-            case.post_message_count,
-            "case {} should expose the Lean durable message count to the desktop renderer",
-            case.name
-        );
-        assert_eq!(
-            snapshot.tool_calls.len(),
-            case.post_tool_call_count,
-            "case {} should expose the Lean durable tool-call count to the desktop renderer",
-            case.name
-        );
-
-        let hidden_tool_result_rows = snapshot
-            .messages
-            .iter()
-            .filter(|message| message.has_tool_results)
-            .count();
-        assert_eq!(
-            hidden_tool_result_rows,
-            transcript_contract_tool_result_rows(case),
-            "case {} should keep Lean tool-result transcript rows out of chat-message rendering",
-            case.name
-        );
-
-        let rendered_tool_groups = snapshot
-            .timeline_items
-            .iter()
-            .filter_map(|item| match item {
-                RenderedTimelineItem::ToolGroup {
-                    message_sequence,
-                    tools,
-                    ..
-                } => Some((*message_sequence, tools)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let rendered_tool_count = rendered_tool_groups
-            .iter()
-            .map(|(_, tools)| tools.len())
-            .sum::<usize>();
-        assert_eq!(
-            rendered_tool_count, case.post_tool_call_count,
-            "case {} should render every Lean tool-call row in transcript tool groups",
-            case.name
-        );
-
-        if case.post_tool_call_count > 0 {
-            assert_eq!(
-                rendered_tool_groups.len(),
-                1,
-                "case {} should render one grouped tool-call block",
-                case.name
-            );
-            assert_eq!(
-                rendered_tool_groups[0].0,
-                transcript_contract_tool_group_sequence(case),
-                "case {} should attach rendered tools to the Lean assistant sequence",
-                case.name
-            );
-        }
-
-        let rendered_kinds = snapshot
-            .timeline_items
-            .iter()
-            .map(|item| match item {
-                RenderedTimelineItem::UserMessage { .. } => "user",
-                RenderedTimelineItem::AssistantMessage { .. } => "assistant",
-                RenderedTimelineItem::ToolGroup { .. } => "tools",
-                RenderedTimelineItem::PendingUserTurn { .. } => "pending",
-                RenderedTimelineItem::LiveAssistant { .. } => "live",
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            rendered_kinds,
-            transcript_contract_rendered_kinds(case),
-            "case {} transcript timeline shape should follow the Lean post-state",
-            case.name
-        );
-    }
-}
-
-#[test]
-fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
-    let submitted = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:00:01Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: None,
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Pending),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        ..ClientStoreRows::default()
-    });
-    let submitted_snapshot =
-        build_session_snapshot_from_store(&submitted, "session-1", Some("req-1"))
-            .expect("submitted snapshot");
-    assert_eq!(
-        submitted_snapshot.latest_request_id.as_deref(),
-        Some("req-1")
-    );
-    assert_eq!(
-        submitted_snapshot.turn_state.as_deref(),
-        Some("waitingForClaim")
-    );
-    assert_eq!(
-        submitted_snapshot
-            .pending_turn
-            .as_ref()
-            .map(|turn| turn.request_id.as_str()),
-        Some("req-1")
-    );
-
-    let streaming = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:00:02Z".to_string(),
-                preview: Some("turn one".to_string()),
-                latest_request: None,
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Processing),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("streaming reply".to_string()),
-            reasoning: None,
-            status: Some("streaming".to_string()),
-            error_message: None,
-            token_count: Some(12),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-04-21T12:00:01Z".to_string()),
-            completed_at: None,
-            interrupted_at: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-    let streaming_snapshot =
-        build_session_snapshot_from_store(&streaming, "session-1", Some("req-1"))
-            .expect("streaming snapshot");
-    assert_eq!(streaming_snapshot.turn_state.as_deref(), Some("streaming"));
-    assert_eq!(
-        streaming_snapshot
-            .active_response_overlay
-            .as_ref()
-            .and_then(|response| response.content.as_deref()),
-        Some("streaming reply")
-    );
-
-    let completed = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:00:05Z".to_string(),
-                preview: Some("final answer".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".into(),
-                    request_id: "req-1".into(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("turn one".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Completed),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("final answer".to_string()),
-            reasoning: None,
-            status: Some("complete".to_string()),
-            error_message: None,
-            token_count: Some(34),
-            progress_seq: Some(2),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: Some(2),
-            materialized_at: Some("2026-04-21T12:00:05Z".to_string()),
-            created_at: Some("2026-04-21T12:00:01Z".to_string()),
-            completed_at: Some("2026-04-21T12:00:05Z".to_string()),
-            interrupted_at: None,
-        }],
-        messages: vec![
-            AgentMessageRow {
-                message_key: "msg-1".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: Some("req-1".to_string()),
-                requester_did: None,
-                sequence: Some(1),
-                role: Some("user".to_string()),
-                content: Some(user_message_json("turn one")),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-            },
-            AgentMessageRow {
-                message_key: "msg-2".to_string(),
-                session_id: Some("session-1".to_string()),
-                request_id: Some("req-1".to_string()),
-                requester_did: None,
-                sequence: Some(2),
-                role: Some("assistant".to_string()),
-                content: Some(
-                    "{\"role\":\"assistant\",\"content\":[{\"text\":\"final answer\"}]}"
-                        .to_string(),
-                ),
-                reasoning: None,
-                timestamp: Some("2026-04-21T12:00:05Z".to_string()),
-            },
-        ],
-        ..ClientStoreRows::default()
-    });
-    let completed_snapshot =
-        build_session_snapshot_from_store(&completed, "session-1", Some("req-1"))
-            .expect("completed snapshot");
-    assert_eq!(completed_snapshot.turn_state.as_deref(), Some("completed"));
-    assert!(completed_snapshot.active_response_overlay.is_none());
-    assert!(completed_snapshot.pending_turn.is_none());
-}
-
-#[test]
-fn session_snapshot_derives_cancel_cause_for_interrupted_response_and_cancelled_tool_call() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-05-20T10:30:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "cancel cause test".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-05-20T10:32:20Z".to_string(),
-                preview: Some("user question".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".into(),
-                    request_id: "req-1".into(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("user question".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Interrupted),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-05-20T10:30:00Z".to_string()),
-            claimed_at: Some("2026-05-20T10:30:01Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            interrupt_requested_at: Some("2026-05-20T10:32:14Z".to_string()),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("partial response before interrupt".to_string()),
-            reasoning: None,
-            status: Some("interrupted".to_string()),
-            error_message: None,
-            token_count: Some(8),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-05-20T10:30:02Z".to_string()),
-            completed_at: None,
-            interrupted_at: Some("2026-05-20T10:32:15Z".to_string()),
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("user question")),
-            reasoning: None,
-            timestamp: Some("2026-05-20T10:30:00Z".to_string()),
-        }],
-        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
-            partial_output_tail: None,
-            partial_output_seq: None,
-            tool_call_key: "tool-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            message_sequence: Some(2),
-            tool_name: Some("bash".to_string()),
-            tool_call_id: Some("call-1".to_string()),
-            args: Some("{\"command\":\"ls\"}".to_string()),
-            result: None,
-            status: Some("cancelled".to_string()),
-            lifecycle_state: Some("cancelled".to_string()),
-            child_request_id: None,
-            await_mode: None,
-            cancel_policy: None,
-            started_at: Some("2026-05-20T10:31:00Z".to_string()),
-            deadline_at: None,
-            completed_at: Some("2026-05-20T10:32:16Z".to_string()),
-            selected_service_id: None,
-            selected_tool_name: None,
-            tool_failure_class: None,
-            denial_reason: None,
-            denied_argv: None,
-            denied_command: None,
-            denied_argument: None,
-            denied_subcommand: None,
-            denied_prefix: None,
-            policy_mode: None,
-            policy_network: None,
-            cancel_cause: None,
-            latency_ms: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot =
-        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
-
-    let response_cancel_cause = snapshot
-        .latest_response
-        .as_ref()
-        .and_then(|r| r.cancel_cause.as_ref())
-        .expect("interrupted response should have a derived cancel_cause");
-    assert_eq!(
-        response_cancel_cause.cause, "interrupted",
-        "interrupted response cause should be 'interrupted'"
-    );
-    assert_eq!(
-        response_cancel_cause.source, "responseInterruptedAt",
-        "interrupted response source should be 'responseInterruptedAt'"
-    );
-
-    let tool_group = snapshot
-        .timeline_items
-        .iter()
-        .find_map(|item| match item {
-            RenderedTimelineItem::ToolGroup { tools, .. } => Some(tools),
-            _ => None,
-        })
-        .expect("timeline should contain a ToolGroup");
-    let tool = tool_group
-        .iter()
-        .find(|t| t.tool_name == "bash")
-        .expect("bash tool call");
-    let tool_cancel_cause = tool
-        .cancel_cause
-        .as_ref()
-        .expect("cancelled tool call should have a derived cancel_cause");
-    assert_eq!(
-        tool_cancel_cause.cause, "userCancelled",
-        "cancelled tool call cause should be 'userCancelled'"
-    );
-    assert_eq!(
-        tool_cancel_cause.source, "requestInterrupt",
-        "cancelled tool call source should be 'requestInterrupt'"
-    );
-}
-
-#[test]
-fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_policy() {
-    let store = ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:amy".to_string(),
-            requester_did: None,
-            behavior_id: "amy-default".to_string(),
-            created_at: "2026-05-20T10:30:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "cascade cancel test".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-05-20T10:32:20Z".to_string(),
-                preview: Some("subagent request".to_string()),
-                latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-child".into(),
-                    request_id: "req-child".into(),
-                    lifecycle_state: RequestLifecycleState::Processing,
-                }),
-            }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-child".to_string()),
-            request_id: "req-child".to_string(),
-            agent_did: Some("did:test:amy".to_string()),
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("subagent task".to_string()),
-            lifecycle_state: Some(RequestLifecycleState::Interrupted),
-            execution_origin: Some("subagent".to_string()),
-            created_at: Some("2026-05-20T10:30:00Z".to_string()),
-            claimed_at: Some("2026-05-20T10:30:01Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            caused_by_parent_request_id: Some("req-parent".to_string()),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-child".to_string(),
-            request_id: Some("req-child".to_string()),
-            request_doc_id: Some("req-child".to_string()),
-            agent_did: Some("did:test:amy".to_string()),
-            requester_did: None,
-            behavior_id: Some("amy-default".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("partial subagent response".to_string()),
-            reasoning: None,
-            status: Some("interrupted".to_string()),
-            error_message: None,
-            token_count: Some(5),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            created_at: Some("2026-05-20T10:30:02Z".to_string()),
-            completed_at: None,
-            interrupted_at: Some("2026-05-20T10:32:15Z".to_string()),
-        }],
-        messages: vec![AgentMessageRow {
-            message_key: "msg-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            sequence: Some(1),
-            role: Some("user".to_string()),
-            content: Some(user_message_json("subagent task")),
-            reasoning: None,
-            timestamp: Some("2026-05-20T10:30:00Z".to_string()),
-        }],
-        tool_calls: vec![gents_protocol::row::AgentToolCallRow {
-            partial_output_tail: None,
-            partial_output_seq: None,
-            tool_call_key: "tool-cascade-1".to_string(),
-            session_id: Some("session-1".to_string()),
-            request_id: None,
-            requester_did: None,
-            message_sequence: Some(2),
-            tool_name: Some("read_file".to_string()),
-            tool_call_id: Some("call-cascade-1".to_string()),
-            args: Some("{\"path\":\"/tmp/foo\"}".to_string()),
-            result: None,
-            status: Some("cancelled".to_string()),
-            lifecycle_state: Some("cancelled".to_string()),
-            child_request_id: None,
-            await_mode: None,
-            cancel_policy: Some("cascade".to_string()),
-            started_at: Some("2026-05-20T10:31:00Z".to_string()),
-            deadline_at: None,
-            completed_at: Some("2026-05-20T10:32:16Z".to_string()),
-            selected_service_id: None,
-            selected_tool_name: None,
-            tool_failure_class: None,
-            denial_reason: None,
-            denied_argv: None,
-            denied_command: None,
-            denied_argument: None,
-            denied_subcommand: None,
-            denied_prefix: None,
-            policy_mode: None,
-            policy_network: None,
-            cancel_cause: None,
-            latency_ms: None,
-        }],
-        ..ClientStoreRows::default()
-    });
-
-    let snapshot =
-        build_session_snapshot_from_store(&store, "session-1", None).expect("session snapshot");
-
-    let tool_group = snapshot
-        .timeline_items
-        .iter()
-        .find_map(|item| match item {
-            RenderedTimelineItem::ToolGroup { tools, .. } => Some(tools),
-            _ => None,
-        })
-        .expect("timeline should contain a ToolGroup");
-    let tool = tool_group
-        .iter()
-        .find(|t| t.tool_name == "read_file")
-        .expect("read_file tool call");
-    let tool_cancel_cause = tool
-        .cancel_cause
-        .as_ref()
-        .expect("cascade-cancelled tool call should have a derived cancel_cause");
-    assert_eq!(
-        tool_cancel_cause.cause, "interrupted",
-        "cascade-cancelled tool call cause should be 'interrupted'"
-    );
-    assert_eq!(
-        tool_cancel_cause.source, "parentCascade",
-        "cascade-cancelled tool call source should be 'parentCascade'"
-    );
-}
-
-fn transcript_contract_store(case: &LeanTranscriptCase) -> ClientStore {
-    ClientStore::from_rows(ClientStoreRows {
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:contract-agent".to_string()),
-            behavior_id: Some("contract-behavior".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: transcript_contract_request_content(case),
-            lifecycle_state: Some(RequestLifecycleState::Completed),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        messages: transcript_contract_messages(case),
-        tool_calls: transcript_contract_tool_calls(case),
-        ..ClientStoreRows::default()
-    })
-}
-
-fn transcript_contract_messages(case: &LeanTranscriptCase) -> Vec<AgentMessageRow> {
-    match case.name.as_str() {
-        "ordering_user_assistant_tool_result"
-        | "dedupe_duplicate_reuses_sequence"
-        | "completed_tool_pair_closed" => vec![
-            transcript_message_row(
-                "msg-user",
-                1,
-                "user",
-                user_message_json(&format!("{} prompt", case.name)),
-            ),
-            transcript_message_row(
-                "msg-assistant-tool",
-                case.assistant_sequence,
-                "assistant",
-                transcript_assistant_tool_call_message_json(&transcript_contract_result_id(case)),
-            ),
-            transcript_message_row(
-                "msg-tool-result",
-                case.result_sequence,
-                "user",
-                transcript_tool_result_message_json(
-                    &transcript_contract_result_id(case),
-                    &format!("payload-{}", case.payload_hash),
-                ),
-            ),
-        ],
-        "distinct_result_ids_append_distinct_rows" => vec![
-            transcript_message_row(
-                "msg-seed-result",
-                1,
-                "user",
-                transcript_tool_result_message_json(
-                    "result-10",
-                    &format!("payload-{}", case.payload_hash),
-                ),
-            ),
-            transcript_message_row(
-                "msg-distinct-result",
-                case.result_sequence,
-                "user",
-                transcript_tool_result_message_json(
-                    &transcript_contract_result_id(case),
-                    &format!("payload-{}", case.payload_hash),
-                ),
-            ),
-        ],
-        "explicit_drain_terminalizes_ownership" => vec![transcript_message_row(
-            "msg-drain-assistant-tool",
-            case.assistant_sequence,
-            "assistant",
-            transcript_assistant_tool_call_message_json("result-drain"),
-        )],
-        "drop_abandon_not_strong_drain" => Vec::new(),
-        "parallel_results_share_assistant_turn" => {
-            let result_ids = transcript_contract_result_ids(case);
-            let mut rows = vec![
-                transcript_message_row(
-                    "msg-user",
-                    1,
-                    "user",
-                    user_message_json(&format!("{} prompt", case.name)),
-                ),
-                transcript_message_row(
-                    "msg-assistant-parallel-tools",
-                    case.assistant_sequence,
-                    "assistant",
-                    transcript_assistant_parallel_tool_call_message_json(&result_ids),
-                ),
-            ];
-            for (index, result_id) in result_ids.iter().enumerate() {
-                rows.push(transcript_message_row(
-                    &format!("msg-tool-result-{index}"),
-                    case.result_sequence + index,
-                    "user",
-                    transcript_tool_result_message_json(
-                        result_id,
-                        &format!("payload-{}", case.payload_hash),
-                    ),
-                ));
-            }
-            rows
-        }
-        other => panic!("unsupported Lean transcript case {other:?}"),
-    }
-}
-
-fn transcript_contract_request_content(case: &LeanTranscriptCase) -> Option<String> {
-    matches!(
-        case.name.as_str(),
-        "ordering_user_assistant_tool_result"
-            | "dedupe_duplicate_reuses_sequence"
-            | "completed_tool_pair_closed"
-            | "parallel_results_share_assistant_turn"
-    )
-    .then(|| format!("{} prompt", case.name))
-}
-
-fn transcript_contract_tool_calls(
-    case: &LeanTranscriptCase,
-) -> Vec<gents_protocol::row::AgentToolCallRow> {
-    let lifecycle_state = transcript_contract_tool_lifecycle(case);
-    let result_ids = transcript_contract_result_ids(case);
-    (0..case.post_tool_call_count)
-        .map(|index| gents_protocol::row::AgentToolCallRow {
-            partial_output_tail: None,
-            partial_output_seq: None,
-            tool_call_key: format!("tool-{}-{index}", case.name),
-            session_id: Some("session-1".to_string()),
-            request_id: Some("req-1".to_string()),
-            requester_did: None,
-            message_sequence: transcript_contract_tool_group_sequence(case),
-            tool_name: Some("read".to_string()),
-            tool_call_id: Some(result_ids[index].clone()),
-            args: Some(r#"{"file_path":"/tmp/transcript-contract.txt"}"#.to_string()),
-            result: (lifecycle_state == "completed")
-                .then(|| format!("payload-{}", case.payload_hash)),
-            status: Some(lifecycle_state.to_string()),
-            lifecycle_state: Some(lifecycle_state.to_string()),
-            child_request_id: None,
-            await_mode: None,
-            cancel_policy: None,
-            started_at: Some("2026-04-21T12:00:01Z".to_string()),
-            deadline_at: None,
-            completed_at: (lifecycle_state != "running")
-                .then(|| "2026-04-21T12:00:05Z".to_string()),
-            selected_service_id: None,
-            selected_tool_name: None,
-            tool_failure_class: None,
-            denial_reason: None,
-            denied_argv: None,
-            denied_command: None,
-            denied_argument: None,
-            denied_subcommand: None,
-            denied_prefix: None,
-            policy_mode: None,
-            policy_network: None,
-            cancel_cause: None,
-            latency_ms: None,
-        })
-        .collect()
-}
-
-fn transcript_message_row(
-    message_key: &str,
-    sequence: usize,
-    role: &str,
-    content: String,
-) -> AgentMessageRow {
-    AgentMessageRow {
-        message_key: message_key.to_string(),
-        session_id: Some("session-1".to_string()),
-        request_id: Some("req-1".to_string()),
-        requester_did: None,
-        sequence: Some(sequence as i64),
-        role: Some(role.to_string()),
-        content: Some(content),
-        reasoning: None,
-        timestamp: Some("2026-04-21T12:00:00Z".to_string()),
-    }
-}
-
-fn transcript_assistant_tool_call_message_json(model_call_id: &str) -> String {
-    serde_json::to_string(&Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::ToolCall(ToolCall {
-            id: model_call_id.to_string(),
-            call_id: Some(model_call_id.to_string()),
-            function: ToolFunction {
-                name: "read".to_string(),
-                arguments: json!({ "file_path": "/tmp/transcript-contract.txt" }),
-            },
-            signature: None,
-            additional_params: None,
-        })],
-    })
-    .expect("serialize assistant tool-call message")
-}
-
-fn transcript_assistant_parallel_tool_call_message_json(call_ids: &[String]) -> String {
-    serde_json::to_string(&Message::Assistant {
-        id: None,
-        content: call_ids
-            .iter()
-            .map(|call_id| {
-                AssistantContent::ToolCall(ToolCall {
-                    id: call_id.clone(),
-                    call_id: Some(call_id.clone()),
-                    function: ToolFunction {
-                        name: "read".to_string(),
-                        arguments: json!({ "file_path": "/tmp/transcript-contract.txt" }),
-                    },
-                    signature: None,
-                    additional_params: None,
-                })
-            })
-            .collect(),
-    })
-    .expect("serialize parallel assistant tool-call message")
-}
-
-fn transcript_tool_result_message_json(result_id: &str, text: &str) -> String {
-    serde_json::to_string(&Message::User {
-        content: vec![UserContent::ToolResult(ToolResult {
-            id: result_id.to_string(),
-            call_id: Some(result_id.to_string()),
-            content: vec![ToolResultContent::Text(Text {
-                text: text.to_string(),
-            })],
-        })],
-    })
-    .expect("serialize tool-result message")
-}
-
-fn transcript_contract_result_id(case: &LeanTranscriptCase) -> String {
-    if case.logical_result_id == 0 {
-        format!("result-{}", case.name)
-    } else {
-        format!("result-{}", case.logical_result_id)
-    }
-}
-
-fn transcript_contract_result_ids(case: &LeanTranscriptCase) -> Vec<String> {
-    if case.post_tool_call_count <= 1 {
-        return vec![transcript_contract_result_id(case)];
-    }
-    (0..case.post_tool_call_count)
-        .map(|index| format!("result-{}", case.logical_result_id as usize + index))
-        .collect()
-}
-
-// Pair closure is an observation of durable rows, not a tool lifecycle state.
-fn transcript_contract_tool_lifecycle(case: &LeanTranscriptCase) -> &'static str {
-    match case.action.as_str() {
-        "cancel_fail_or_timeout_in_flight" => "cancelled",
-        "abandon_hook_ownership" => "running",
-        "append_user_begin_tool_persist_assistant_complete_result"
-        | "observe_duplicate_tool_result"
-        | "complete_tool_with_result"
-        | "persist_assistant_once_then_complete_each_parallel_result" => "completed",
-        // Orphan durable result rows have no corresponding tool-call lifecycle.
-        "append_distinct_tool_result" => "running",
-        other => panic!("unsupported Lean transcript action {other:?}"),
-    }
-}
-
-fn transcript_contract_tool_group_sequence(case: &LeanTranscriptCase) -> Option<i64> {
-    (case.assistant_sequence > 0).then_some(case.assistant_sequence as i64)
-}
-
-fn transcript_contract_tool_result_rows(case: &LeanTranscriptCase) -> usize {
-    match case.name.as_str() {
-        "ordering_user_assistant_tool_result"
-        | "dedupe_duplicate_reuses_sequence"
-        | "completed_tool_pair_closed" => 1,
-        "distinct_result_ids_append_distinct_rows" => 2,
-        "parallel_results_share_assistant_turn" => 3,
-        "explicit_drain_terminalizes_ownership" | "drop_abandon_not_strong_drain" => 0,
-        other => panic!("unsupported Lean transcript case {other:?}"),
-    }
-}
-
-fn transcript_contract_rendered_kinds(case: &LeanTranscriptCase) -> Vec<&'static str> {
-    match case.name.as_str() {
-        "ordering_user_assistant_tool_result"
-        | "dedupe_duplicate_reuses_sequence"
-        | "completed_tool_pair_closed"
-        | "parallel_results_share_assistant_turn" => vec!["user", "tools"],
-        "distinct_result_ids_append_distinct_rows" => Vec::new(),
-        "explicit_drain_terminalizes_ownership" | "drop_abandon_not_strong_drain" => {
-            vec!["tools"]
-        }
-        other => panic!("unsupported Lean transcript case {other:?}"),
+fn request(id: &str, state: RequestLifecycleState) -> AgentRequestRow {
+    AgentRequestRow {
+        doc_id: Some(id.into()),
+        request_id: id.into(),
+        agent_did: Some("did:test:amy".into()),
+        behavior_id: Some("amy-default".into()),
+        session_id: Some("session-1".into()),
+        content: Some(format!("{id} prompt")),
+        lifecycle_state: Some(state),
+        execution_origin: Some("interactive".into()),
+        created_at: Some("2026-04-21T12:00:00Z".into()),
+        ..Default::default()
     }
 }
 
@@ -1467,93 +59,10 @@ fn contract_request_id(id: usize) -> String {
     format!("req-{id}")
 }
 
-fn client_shell_contract_store(case: &LeanClientShellCase) -> ClientStore {
-    let session_id = contract_session_id(
-        case.desktop_selected_session_id
-            .expect("ClientShell desktop case should select a session"),
-    );
-    let observed_request_id = case.desktop_observed_request_id.map(contract_request_id);
-    let turn_state = case.desktop_observed_turn_state.as_deref();
-    let lifecycle_state = request_state_for_turn(turn_state);
-
-    let mut rows = ClientStoreRows::default();
-
-    if case.desktop_snapshot_present {
-        rows.sessions.push(AgentSession {
-            session_id: session_id.clone(),
-            agent_did: "did:test:contract-agent".to_string(),
-            requester_did: None,
-            behavior_id: "contract-behavior".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
-            closed_at: None,
-            title: Some(SessionTitle {
-                text: "contract conversation".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
-            tags: Vec::new(),
-            provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:01:00Z".to_string(),
-                preview: Some("contract prompt".to_string()),
-                latest_request: (observed_request_id.clone()).map(|request_id: String| {
-                    SessionRequestObservation {
-                        request_doc_id: request_id.clone(),
-                        request_id,
-                        lifecycle_state,
-                    }
-                }),
-            }),
-        });
-    }
-
-    if let Some(request_id) = observed_request_id {
-        rows.requests.push(AgentRequestRow {
-            doc_id: Some(request_id.clone()),
-            request_id: request_id.clone(),
-            agent_did: Some("did:test:contract-agent".to_string()),
-            behavior_id: Some("contract-behavior".to_string()),
-            session_id: Some(session_id),
-            content: Some("contract prompt".to_string()),
-            lifecycle_state: Some(lifecycle_state),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:01:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        });
-
-        if let Some(response_status) = response_status_for_turn(turn_state) {
-            rows.responses.push(AgentResponseRow {
-                response_key: format!("resp-{request_id}"),
-                request_doc_id: Some(request_id.clone()),
-                request_id: Some(request_id),
-                agent_did: Some("did:test:contract-agent".to_string()),
-                requester_did: None,
-                behavior_id: Some("contract-behavior".to_string()),
-                session_id: rows.requests.last().and_then(|row| row.session_id.clone()),
-                content: Some("contract response".to_string()),
-                reasoning: None,
-                status: Some(response_status.to_string()),
-                error_message: None,
-                token_count: Some(12),
-                progress_seq: Some(1),
-                reasoning_progress_seq: Some(0),
-                materialized_message_sequence: None,
-                materialized_at: None,
-                created_at: Some("2026-04-21T12:01:01Z".to_string()),
-                completed_at: None,
-                interrupted_at: None,
-            });
-        }
-    }
-
-    ClientStore::from_rows(rows)
-}
-
 fn request_state_for_turn(turn_state: Option<&str>) -> RequestLifecycleState {
     match turn_state {
         Some("waitingForClaim") => RequestLifecycleState::Pending,
-        Some("streaming") => RequestLifecycleState::Processing,
+        Some("running") => RequestLifecycleState::Processing,
         Some("completed") => RequestLifecycleState::Completed,
         Some("failed") => RequestLifecycleState::Failed,
         Some("superseded") => RequestLifecycleState::Superseded,
@@ -1563,123 +72,718 @@ fn request_state_for_turn(turn_state: Option<&str>) -> RequestLifecycleState {
     }
 }
 
-fn response_status_for_turn(turn_state: Option<&str>) -> Option<&'static str> {
-    match turn_state {
-        Some("streaming") => Some("streaming"),
-        Some("completed") => Some("complete"),
-        Some("failed") => Some("error"),
-        Some("waitingForClaim") | Some("superseded") | Some("interrupted") | None => None,
-        Some(other) => panic!("unsupported Lean ClientShell turn state {other:?}"),
-    }
-}
-
-fn streaming_response_contract_store(case: &LeanResponseTransitionCase) -> ClientStore {
-    let (content, reasoning) = streaming_case_tail(case);
-    let lifecycle_state = case.expected_request_state.as_deref().map_or_else(
-        || request_lifecycle_for_streaming_post_status(case.post_status.as_str()),
-        |state| RequestLifecycleState::parse(state).expect("Lean request lifecycle vocabulary"),
+fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> ClientStore {
+    let mut rows = ClientStoreRows::default();
+    let session_id = contract_session_id(
+        case.desktop_selected_session_id
+            .expect("desktop contract case should select a session"),
     );
-
-    ClientStore::from_rows(ClientStoreRows {
-        sessions: vec![AgentSession {
-            session_id: "session-1".to_string(),
-            agent_did: "did:test:contract-agent".to_string(),
+    let request_id = case.desktop_observed_request_id.map(contract_request_id);
+    if case.desktop_snapshot_present {
+        rows.sessions.push(AgentSession {
+            session_id: session_id.clone(),
+            agent_did: "did:test:contract-agent".into(),
             requester_did: None,
-            behavior_id: "contract-behavior".to_string(),
-            created_at: "2026-04-21T12:00:00Z".to_string(),
+            behavior_id: "contract-behavior".into(),
+            created_at: "2026-04-21T12:00:00Z".into(),
             closed_at: None,
-            title: Some(SessionTitle {
-                text: "streaming response contract".to_string(),
-                source: SessionTitleSource::Generated,
-            }),
+            title: None,
             tags: Vec::new(),
             provenance: None,
-            observation: Some(SessionObservation {
-                last_activity_at: "2026-04-21T12:01:00Z".to_string(),
-                preview: Some("contract prompt".to_string()),
+            observation: request_id.clone().map(|request_id| SessionObservation {
+                last_activity_at: "2026-04-21T12:01:00Z".into(),
+                preview: Some("contract prompt".into()),
                 latest_request: Some(SessionRequestObservation {
-                    request_doc_id: "req-1".into(),
-                    request_id: "req-1".into(),
-                    lifecycle_state: RequestLifecycleState::Processing,
+                    request_doc_id: request_id.clone(),
+                    request_id,
+                    lifecycle_state: request_state_for_turn(
+                        case.desktop_observed_turn_state.as_deref(),
+                    ),
                 }),
             }),
-        }],
-        requests: vec![AgentRequestRow {
-            doc_id: Some("req-1".to_string()),
-            request_id: "req-1".to_string(),
-            agent_did: Some("did:test:contract-agent".to_string()),
-            behavior_id: Some("contract-behavior".to_string()),
-            session_id: Some("session-1".to_string()),
-            content: Some("contract prompt".to_string()),
-            lifecycle_state: Some(lifecycle_state),
-            execution_origin: Some("interactive".to_string()),
-            created_at: Some("2026-04-21T12:00:00Z".to_string()),
-            retry_count: Some(0),
-            max_retries: Some(3),
-            ..Default::default()
-        }],
-        responses: vec![AgentResponseRow {
-            response_key: "resp-1".to_string(),
-            request_id: Some("req-1".to_string()),
-            request_doc_id: Some("req-1".to_string()),
-            agent_did: Some("did:test:contract-agent".to_string()),
-            requester_did: None,
-            behavior_id: Some("contract-behavior".to_string()),
-            session_id: Some("session-1".to_string()),
-            content,
-            reasoning,
-            status: Some(case.post_status.clone()),
-            error_message: case.error_reason.clone(),
-            token_count: Some(case.post_token_count as i64),
-            progress_seq: Some(1),
-            reasoning_progress_seq: Some(0),
-            materialized_message_sequence: case
-                .post_materialized_seq
-                .map(|sequence| sequence as i64),
-            materialized_at: case
-                .post_materialized_seq
-                .map(|_| "2026-04-21T12:01:05Z".to_string()),
-            created_at: Some("2026-04-21T12:00:01Z".to_string()),
-            completed_at: matches!(case.post_status.as_str(), "complete" | "error")
-                .then(|| "2026-04-21T12:01:05Z".to_string()),
-            interrupted_at: (case.action == "set_interrupted_at")
-                .then(|| "2026-04-21T12:01:03Z".to_string()),
-        }],
-        ..ClientStoreRows::default()
-    })
-}
-
-fn streaming_case_should_render_live_overlay(case: &LeanResponseTransitionCase) -> bool {
-    case.post_status == "streaming"
-        && case.post_live_tail == "nonEmpty"
-        && case.post_materialized_seq.is_none()
-        && case.action != "set_interrupted_at"
-}
-
-fn streaming_case_tail(case: &LeanResponseTransitionCase) -> (Option<String>, Option<String>) {
-    if case.post_live_tail != "nonEmpty" {
-        return (None, None);
+        });
     }
-    if case.action == "write_reasoning" {
-        return (
-            None,
-            Some(format!(
-                "{} reasoning live tail",
-                case.name.replace('_', " ")
+    if let Some(request_id) = request_id {
+        rows.requests.push(AgentRequestRow {
+            doc_id: Some(request_id.clone()),
+            request_id,
+            agent_did: Some("did:test:contract-agent".into()),
+            behavior_id: Some("contract-behavior".into()),
+            session_id: Some(session_id),
+            content: Some("contract prompt".into()),
+            lifecycle_state: Some(request_state_for_turn(
+                case.desktop_observed_turn_state.as_deref(),
             )),
-        );
+            execution_origin: Some("interactive".into()),
+            ..Default::default()
+        });
     }
-    (
-        Some(format!("{} content live tail", case.name.replace('_', " "))),
+    ClientStore::from_rows(rows)
+}
+
+#[test]
+fn session_snapshot_projects_durable_goal_state() {
+    let goal = GoalRow {
+        goal_id: "goal-1".into(),
+        creation_key: None,
+        session_id: "session-1".into(),
+        agent_did: "did:test:amy".into(),
+        objective: Some("Ship the durable controller".into()),
+        tags: Vec::new(),
+        status: Some("active".into()),
+        token_budget: Some(50_000),
+        tokens_used: Some(1_200),
+        active_time_seconds: Some(42),
+        active_started_at: None,
+        consecutive_blocked_audits: Some(2),
+        last_blocked_request_id: None,
+        last_blocked_reason: Some("needs approval".into()),
+        last_continued_from_request_id: None,
+        continuation_sequence: Some(3),
+        wrapup_requested: Some(false),
+        wrapup_completed: Some(false),
+        infrastructure_retry_count: Some(0),
+        last_failure: None,
+        completion_evidence: None,
+        created_at: None,
+        updated_at: None,
+    };
+    let snapshot = build_session_snapshot_from_store_for_agent(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            goals: vec![goal],
+            ..ClientStoreRows::default()
+        }),
+        Some("did:test:amy"),
+        "session-1",
         None,
     )
+    .expect("snapshot");
+    let goal = snapshot.goal.expect("goal");
+    assert_eq!(
+        goal.objective.as_deref(),
+        Some("Ship the durable controller")
+    );
+    assert_eq!(
+        (
+            goal.tokens_used,
+            goal.consecutive_blocked_audits,
+            goal.continuation_sequence
+        ),
+        (1_200, 2, 3)
+    );
 }
 
-fn request_lifecycle_for_streaming_post_status(status: &str) -> RequestLifecycleState {
-    match status {
-        "streaming" => RequestLifecycleState::Processing,
-        "complete" => RequestLifecycleState::Completed,
-        "error" => RequestLifecycleState::Failed,
-        other => panic!("unsupported Lean streaming response post status {other:?}"),
+#[test]
+fn session_observation_selects_the_exact_latest_request_identity() {
+    let rows = ClientStoreRows {
+        sessions: vec![session(None)],
+        requests: vec![
+            request("req-1", RequestLifecycleState::Completed),
+            request("req-2", RequestLifecycleState::Processing),
+        ],
+        ..ClientStoreRows::default()
+    };
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "session-1", None)
+            .expect("snapshot");
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
+}
+
+#[test]
+fn requester_scope_does_not_cross_canonical_output_facts() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![session(None), session(Some("did:test:other"))],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message_for_agent(
+        &mut rows,
+        "owner",
+        "session-1",
+        None,
+        1,
+        MessageRole::User,
+        "owner prompt",
+        "did:test:amy",
+        None,
+    );
+    push_canonical_text_message_for_agent(
+        &mut rows,
+        "other",
+        "session-1",
+        None,
+        2,
+        MessageRole::User,
+        "other prompt",
+        "did:test:amy",
+        Some("did:test:other"),
+    );
+    let store = ClientStore::from_rows(rows);
+    let snapshot = build_session_snapshot_from_store_for_agent(
+        &store,
+        Some("did:test:amy"),
+        "session-1",
+        None,
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.messages.len(), 1);
+    assert_eq!(snapshot.messages[0].message_key, "owner");
+}
+
+#[test]
+fn canonical_transcript_keeps_partial_reconstruction_explicit() {
+    let mut rows = ClientStoreRows {
+        sessions: vec![session(None)],
+        requests: vec![request("req-1", RequestLifecycleState::Processing)],
+        ..ClientStoreRows::default()
+    };
+    push_canonical_text_message(
+        &mut rows,
+        "incomplete",
+        "session-1",
+        Some("req-1"),
+        1,
+        MessageRole::Assistant,
+        "must not be fabricated",
+    );
+    rows.output_segments.clear();
+    let snapshot =
+        build_session_snapshot_from_store(&ClientStore::from_rows(rows), "session-1", None)
+            .expect("snapshot");
+    assert!(
+        matches!(snapshot.timeline_items.as_slice(), [RenderedTimelineItem::AssistantMessage { reconstruction, content: None, .. }] if reconstruction.state == ReconstructionState::Loading)
+    );
+}
+
+#[test]
+fn session_snapshot_uses_canonical_session_without_materialized_observation() {
+    let mut session = session(None);
+    session.observation = None;
+    let store = ClientStore::from_rows(ClientStoreRows {
+        sessions: vec![session],
+        requests: vec![request("req-1", RequestLifecycleState::Completed)],
+        ..ClientStoreRows::default()
+    });
+    let snapshot = build_session_snapshot_from_store(&store, "session-1", None).expect("snapshot");
+    assert_eq!(snapshot.session_id, "session-1");
+    assert_eq!(snapshot.agent_did.as_deref(), Some("did:test:amy"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+}
+
+#[test]
+fn session_snapshot_prefers_tracked_request_over_stale_session_latest_request() {
+    let mut old = request("req-1", RequestLifecycleState::Completed);
+    old.created_at = Some("2026-04-21T12:00:00Z".into());
+    let mut latest = request("req-2", RequestLifecycleState::Processing);
+    latest.created_at = Some("2026-04-21T12:01:00Z".into());
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![old, latest],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        None,
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-2"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("running"));
+}
+
+#[test]
+fn session_snapshot_does_not_report_unobserved_preferred_request() {
+    let mut session = session(None);
+    session
+        .observation
+        .as_mut()
+        .expect("observation")
+        .latest_request = Some(SessionRequestObservation {
+        request_doc_id: "req-old".into(),
+        request_id: "req-old".into(),
+        lifecycle_state: RequestLifecycleState::Processing,
+    });
+    let old = AgentRequestRow {
+        doc_id: Some("req-old".into()),
+        request_id: "req-old".into(),
+        agent_did: Some("did:test:amy".into()),
+        session_id: Some("session-1".into()),
+        lifecycle_state: Some(RequestLifecycleState::Completed),
+        ..Default::default()
+    };
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session],
+            requests: vec![old],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        Some("req-new"),
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.latest_request_id.as_deref(), Some("req-old"));
+    assert_eq!(snapshot.turn_state.as_deref(), Some("completed"));
+}
+
+#[test]
+fn session_snapshot_projection_consumes_generated_client_shell_contract_cases() {
+    let cases = lean_desktop_client_shell_cases();
+    assert_eq!(cases.len(), 22);
+    for case in cases {
+        let session_id = contract_session_id(
+            case.desktop_selected_session_id
+                .expect("desktop case selects a session"),
+        );
+        let preferred = case.desktop_preferred_request_id.map(contract_request_id);
+        let snapshot = build_session_snapshot_from_store(
+            &client_shell_contract_store(case),
+            &session_id,
+            preferred.as_deref(),
+        );
+        assert_eq!(
+            snapshot.is_some(),
+            case.desktop_snapshot_present,
+            "{}",
+            case.name
+        );
+        if let Some(snapshot) = snapshot {
+            assert_eq!(
+                snapshot.latest_request_id.as_deref(),
+                case.desktop_expected_latest_request_id
+                    .map(contract_request_id)
+                    .as_deref(),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                snapshot.turn_state.as_deref(),
+                case.desktop_expected_turn_state.as_deref(),
+                "{}",
+                case.name
+            );
+            if let Some(expected_pending) = case.desktop_expect_pending_turn {
+                assert_eq!(
+                    snapshot.pending_turn.is_some(),
+                    expected_pending,
+                    "{}",
+                    case.name
+                );
+            }
+        }
     }
+}
+
+#[test]
+fn session_snapshot_binds_request_lifecycle_operator_ui_cases() {
+    let cases = lean_request_lifecycle_operator_ui_cases();
+    let mut saw_active = false;
+    let mut saw_terminal = false;
+    for case in cases {
+        let session_id = contract_session_id(
+            case.desktop_selected_session_id
+                .expect("operator UI case selects a session"),
+        );
+        let expected = case
+            .desktop_observed_turn_state
+            .as_deref()
+            .expect("operator UI case observes a turn");
+        saw_active |= matches!(expected, "waitingForClaim" | "running");
+        saw_terminal |= !matches!(expected, "waitingForClaim" | "running");
+        let preferred = case.desktop_preferred_request_id.map(contract_request_id);
+        let snapshot = build_session_snapshot_from_store(
+            &client_shell_contract_store(case),
+            &session_id,
+            preferred.as_deref(),
+        )
+        .expect("snapshot");
+        assert_eq!(
+            snapshot.turn_state.as_deref(),
+            Some(expected),
+            "{}",
+            case.name
+        );
+        if let Some(pending) = snapshot.pending_turn.as_ref() {
+            assert_eq!(
+                pending.lifecycle_state.as_deref(),
+                Some(request_state_for_turn(Some(expected)).as_str()),
+                "{}",
+                case.name
+            );
+        }
+    }
+    assert!(saw_active && saw_terminal);
+}
+
+#[test]
+fn session_snapshot_live_overlay_consumes_generated_contract_cases() {
+    let cases = lean_live_overlay_cases();
+    for case in cases {
+        let lifecycle = if case.turn_terminal {
+            RequestLifecycleState::Completed
+        } else {
+            RequestLifecycleState::Processing
+        };
+        let mut request = request("req-2", lifecycle);
+        request.doc_id = Some("req-2".into());
+        // `has_durable_owner` is the timeline's materialized user-message
+        // owner, not provider-source liveness. A supplied live output already
+        // carries the current execution owner.
+        request.execution_generation = case
+            .live_output_available
+            .then(|| "generation-1".to_string());
+        request.execution_lease_secs = case.live_output_available.then_some(300);
+        request.execution_lease_expires_at = case
+            .live_output_available
+            .then(|| "2026-04-21T12:05:00Z".to_string());
+        let mut rows = ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![request],
+            ..ClientStoreRows::default()
+        };
+        if case.has_durable_owner {
+            push_canonical_text_message(
+                &mut rows,
+                &format!("{}-owner", case.name),
+                "session-1",
+                Some("req-2"),
+                1,
+                MessageRole::Assistant,
+                "materialized answer",
+            );
+        }
+        if case.live_output_available && !case.has_durable_owner {
+            let mut runs = Vec::new();
+            let mut payload = String::new();
+            if case.has_content {
+                payload.push('C');
+                runs.push(SegmentRun {
+                    stream: 0,
+                    bytes: 1,
+                    declaration: Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::Text,
+                    }),
+                });
+            }
+            if case.has_reasoning {
+                payload.push('R');
+                runs.push(SegmentRun {
+                    stream: u32::from(case.has_content),
+                    bytes: 1,
+                    declaration: Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: u32::from(case.has_content),
+                        payload: StreamPayload::Reasoning,
+                    }),
+                });
+            }
+            rows.output_segments.push(OutputSegmentRow {
+                doc_id: format!("{}-open", case.name),
+                segment: OutputSegment {
+                    agent_did: "did:test:amy".into(),
+                    requester_did: None,
+                    session_id: "session-1".into(),
+                    request_doc_id: "req-2".into(),
+                    source: OutputSource::ProviderTurn {
+                        scope: gents_protocol::rendered_request::CaptureScope {
+                            kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                            seq: 0,
+                        },
+                        turn_index: 0,
+                        attempt: 0,
+                    },
+                    writer: OutputWriter::RequestExecution {
+                        execution_generation: "generation-1".into(),
+                    },
+                    ordinal: Some(0),
+                    runs,
+                    payload,
+                    close: None,
+                    created_at: "2026-04-21T12:00:00Z".into(),
+                },
+            });
+        }
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(rows),
+            "session-1",
+            Some("req-2"),
+        )
+        .unwrap_or_else(|| panic!("case {} should produce a snapshot", case.name));
+        assert_eq!(
+            snapshot
+                .timeline_items
+                .iter()
+                .any(|item| matches!(item, RenderedTimelineItem::LiveAssistant { .. })),
+            case.expect_overlay,
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn session_snapshot_transcript_rendering_consumes_generated_transcript_cases() {
+    let cases = lean_transcript_cases();
+    assert_eq!(cases.len(), 11);
+    for case in cases {
+        let mut rows = ClientStoreRows {
+            sessions: vec![session(None)],
+            ..ClientStoreRows::default()
+        };
+        for sequence in 0..case.post_message_count {
+            push_canonical_text_message(
+                &mut rows,
+                &format!("{}-message-{sequence}", case.name),
+                "session-1",
+                Some("req-1"),
+                u32::try_from(sequence + 1).expect("contract sequence"),
+                if sequence == 0 {
+                    MessageRole::User
+                } else {
+                    MessageRole::Assistant
+                },
+                &format!("{} payload {sequence}", case.name),
+            );
+        }
+        for index in 0..case.post_tool_call_count {
+            rows.tool_calls.push(
+                serde_json::from_value(serde_json::json!({
+                    "_docID": format!("{}-tool-{index}", case.name),
+                    "agent_did": "did:test:amy",
+                    "request_doc_id": "req-1",
+                    "tool_call_key": format!("{}-tool-{index}", case.name),
+                    "session_id": "session-1",
+                    "request_id": "req-1",
+                    "message_sequence": case.assistant_sequence,
+                    "tool_name": "read",
+                    "tool_call_id": format!("result-{}", case.logical_result_id + index),
+                    "status": if case.expected_pair_closed { "completed" } else { "running" },
+                    "lifecycle_state": if case.expected_pair_closed { "completed" } else { "running" }
+                }))
+                .expect("canonical tool-call envelope"),
+            );
+        }
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(rows),
+            "session-1",
+            Some("req-1"),
+        )
+        .unwrap_or_else(|| panic!("case {} should produce a snapshot", case.name));
+        assert_eq!(
+            snapshot.messages.len(),
+            case.post_message_count,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            snapshot.tool_calls.len(),
+            case.post_tool_call_count,
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            snapshot
+                .timeline_items
+                .iter()
+                .filter_map(|item| match item {
+                    RenderedTimelineItem::ToolGroup {
+                        message_sequence,
+                        tools,
+                        ..
+                    } => {
+                        Some((*message_sequence, tools.len()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            if case.post_tool_call_count == 0 {
+                Vec::new()
+            } else {
+                vec![(
+                    Some(case.assistant_sequence as i64),
+                    case.post_tool_call_count,
+                )]
+            },
+            "{} tool pairing/group sequence drifted",
+            case.name
+        );
+        assert!(
+            case.expected_ordered,
+            "{} must retain transcript ordering",
+            case.name
+        );
+        if case.expected_duplicate_reused_sequence {
+            assert_eq!(
+                case.pre_message_count, case.post_message_count,
+                "{} duplicate observation must not append a message",
+                case.name
+            );
+            assert_eq!(
+                case.result_sequence, case.post_message_count,
+                "{} must retain the original tool-result sequence",
+                case.name
+            );
+        }
+    }
+}
+
+#[test]
+fn session_snapshot_stays_renderable_across_single_turn_observation_updates() {
+    let mut submitted = session(None);
+    submitted
+        .observation
+        .as_mut()
+        .expect("observation")
+        .latest_request
+        .as_mut()
+        .expect("request")
+        .lifecycle_state = RequestLifecycleState::Pending;
+    let pending = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![submitted],
+            requests: vec![request("req-2", RequestLifecycleState::Pending)],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        Some("req-2"),
+    )
+    .expect("pending");
+    assert_eq!(pending.turn_state.as_deref(), Some("waitingForClaim"));
+    let complete = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![request("req-2", RequestLifecycleState::Completed)],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        Some("req-2"),
+    )
+    .expect("complete");
+    assert_eq!(complete.turn_state.as_deref(), Some("completed"));
+}
+
+#[test]
+fn session_snapshot_derives_cancel_causes_from_request_and_tool() {
+    let mut interrupted = request("req-2", RequestLifecycleState::Interrupted);
+    interrupted.failure_reason = Some("completion cancelled".into());
+    interrupted.interrupt_requested_at = Some("2026-04-21T12:03:00Z".into());
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![interrupted],
+            tool_calls: vec![serde_json::from_value(serde_json::json!({
+                "_docID": "cancelled-tool-doc",
+                "tool_call_key": "cancelled-tool",
+                "tool_call_id": "cancelled-call",
+                "agent_did": "did:test:amy",
+                "session_id": "session-1",
+                "request_id": "req-2",
+                "request_doc_id": "req-2",
+                "tool_name": "bash",
+                "lifecycle_state": "cancelled",
+                "completed_at": "2026-04-21T12:03:01Z"
+            }))
+            .expect("cancelled tool lifecycle row")],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        Some("req-2"),
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("interrupted"));
+    let outcome = snapshot.latest_request_outcome.expect("request outcome");
+    assert_eq!(
+        outcome.failure_reason.as_deref(),
+        Some("completion cancelled")
+    );
+    let cause = outcome.cancel_cause.expect("cancel cause");
+    assert_eq!(cause.cause, "userCancelled");
+    assert_eq!(cause.source, "requestInterrupt");
+    assert_eq!(snapshot.tool_calls.len(), 1);
+    let tool_cause = snapshot.tool_calls[0]
+        .cancel_cause
+        .as_ref()
+        .expect("cancelled tool retains request interrupt evidence");
+    assert_eq!(tool_cause.cause, "userCancelled");
+    assert_eq!(tool_cause.source, "requestInterrupt");
+    assert_eq!(tool_cause.at.as_deref(), Some("2026-04-21T12:03:00Z"));
+}
+
+#[test]
+fn tool_cancel_cause_uses_only_its_physical_request_owner() {
+    for request_doc_id in [Some("req-1"), Some("missing-request"), None] {
+        let mut latest = request("req-2", RequestLifecycleState::Interrupted);
+        latest.interrupt_requested_at = Some("2026-04-21T12:03:00Z".into());
+        let snapshot = build_session_snapshot_from_store(
+            &ClientStore::from_rows(ClientStoreRows {
+                sessions: vec![session(None)],
+                requests: vec![request("req-1", RequestLifecycleState::Completed), latest],
+                tool_calls: vec![serde_json::from_value(serde_json::json!({
+                    "_docID": "cancelled-tool-doc",
+                    "tool_call_key": "cancelled-tool",
+                    "tool_call_id": "cancelled-call",
+                    "agent_did": "did:test:amy",
+                    "session_id": "session-1",
+                    "request_id": "req-2",
+                    "request_doc_id": request_doc_id,
+                    "tool_name": "bash",
+                    "lifecycle_state": "cancelled"
+                }))
+                .expect("cancelled tool lifecycle row")],
+                ..ClientStoreRows::default()
+            }),
+            "session-1",
+            Some("req-2"),
+        )
+        .expect("snapshot");
+        assert_eq!(snapshot.tool_calls.len(), 1);
+        let cause = snapshot.tool_calls[0].cancel_cause.as_ref().expect("cause");
+        assert_eq!(cause.cause, "unknown", "owner={request_doc_id:?}");
+        assert_eq!(cause.source, "unresolved", "owner={request_doc_id:?}");
+    }
+}
+
+#[test]
+fn session_snapshot_projects_failed_request_reason_without_response_storage() {
+    let mut failed = request("req-2", RequestLifecycleState::Failed);
+    failed.failure_reason = Some("provider exploded".into());
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![failed],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        Some("req-2"),
+    )
+    .expect("snapshot");
+    let outcome = snapshot.latest_request_outcome.expect("request outcome");
+    assert_eq!(outcome.failure_reason.as_deref(), Some("provider exploded"));
+    assert!(outcome.cancel_cause.is_none());
+    assert!(snapshot.retry_eligibility.eligible);
+}
+
+#[test]
+fn session_snapshot_derives_interrupted_cause_for_child_request_with_cascade_policy() {
+    let mut child = request("req-2", RequestLifecycleState::Interrupted);
+    child.caused_by_parent_request_id = Some("parent".into());
+    let snapshot = build_session_snapshot_from_store(
+        &ClientStore::from_rows(ClientStoreRows {
+            sessions: vec![session(None)],
+            requests: vec![child],
+            ..ClientStoreRows::default()
+        }),
+        "session-1",
+        Some("req-2"),
+    )
+    .expect("snapshot");
+    assert_eq!(snapshot.turn_state.as_deref(), Some("interrupted"));
+    let cause = snapshot
+        .latest_request_outcome
+        .expect("request outcome")
+        .cancel_cause
+        .expect("cancel cause");
+    assert_eq!(cause.cause, "interrupted");
+    assert_eq!(cause.source, "requestLifecycle");
 }

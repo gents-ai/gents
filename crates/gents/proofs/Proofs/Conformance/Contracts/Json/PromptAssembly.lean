@@ -5,6 +5,15 @@ namespace Conformance.Contracts
 
 open Conformance.ContractCases
 
+def currentInputCaseJson (witness : CurrentInputCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+  ",\"current_request\":" ++ jsonString witness.currentRequest ++
+  ",\"headers\":" ++ jsonArray (witness.headers.map fun row =>
+    "{\"request\":" ++ jsonString row.request ++ ",\"kind\":" ++ jsonString row.kind ++ "}") ++
+  ",\"retained_indices\":" ++ jsonArray (witness.retainedIndices.map toString) ++ "}"
+
+def currentInputCasesJson : String := jsonArray (currentInputCases.map currentInputCaseJson)
+
 def jsonNatArray (values : List Nat) : String :=
   jsonArray (values.map toString)
 

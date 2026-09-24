@@ -129,26 +129,29 @@ def exactRuntimeInternalEvidence
   evidence.targetAgent = request.targetAgent ∧
   admission.issuerDid = request.targetAgent ∧
   admission.signerDid = request.targetAgent ∧
-  request.requesterDid = request.targetAgent ∧
   evidence.targetRuntimeAttestationValid = true ∧
   evidence.sourceBindingCurrent = true ∧
   match admission.runtimeSourceKind with
   | .localChild =>
+      request.requesterDid = request.targetAgent ∧
       admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
       evidence.sourceDocumentBindingCurrent = true ∧
       evidence.sourceToolCallBindingCurrent = true ∧
       evidence.targetPolicyAllows = true
   | .crossPrincipalChild =>
       admission.bridgeAuthorDid ≠ "" ∧
+      request.requesterDid = admission.bridgeAuthorDid ∧
       evidence.bridgeAuthorDid = admission.bridgeAuthorDid ∧
       evidence.sourceToolCallBindingCurrent = true ∧
       evidence.bridgeAuthorBindingCurrent = true ∧
       evidence.bridgeAuthorAuthorizationFresh = true ∧
       evidence.targetCrossPrincipalPolicyAllows = true
   | .localControl =>
+      request.requesterDid = request.targetAgent ∧
       admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
       evidence.sourceDocumentBindingCurrent = true
   | .automatedTrigger =>
+      request.requesterDid = request.targetAgent ∧
       admission.bridgeAuthorDid = "" ∧ evidence.bridgeAuthorDid = "" ∧
       evidence.triggerConfigDocumentBindingCurrent = true ∧
       evidence.targetPolicyAllows = true
@@ -276,6 +279,7 @@ structure AgentRequestAdmissionObservation where
   signerMatchesTarget : Bool
   signerMatchesIssuer : Bool
   requesterMatchesIssuer : Bool
+  requesterMatchesBridgeAuthor : Bool
   currentApproval : Bool
   exactGeneration : Bool
   authorizationFresh : Bool
@@ -304,20 +308,24 @@ def projectAgentRequestAdmission (observation : AgentRequestAdmissionObservation
       observation.requesterMatchesTarget
   | .runtimeInternal =>
       observation.runtimeEvidencePresent &&
-      observation.signerMatchesIssuer && observation.requesterMatchesIssuer &&
-      observation.signerMatchesTarget && observation.requesterMatchesTarget &&
+      observation.signerMatchesIssuer && observation.signerMatchesTarget &&
       observation.targetRuntimeAttestationValid && observation.sourceBindingCurrent &&
       match observation.runtimeSourceKind with
       | .localChild =>
+          observation.requesterMatchesIssuer && observation.requesterMatchesTarget &&
           observation.sourceDocumentBindingCurrent &&
           observation.sourceToolCallBindingCurrent && observation.targetPolicyAllows
       | .crossPrincipalChild =>
+          observation.requesterMatchesBridgeAuthor &&
           observation.sourceToolCallBindingCurrent &&
           observation.bridgeAuthorBindingCurrent &&
           observation.bridgeAuthorAuthorizationFresh &&
           observation.targetCrossPrincipalPolicyAllows
-      | .localControl => observation.sourceDocumentBindingCurrent
+      | .localControl =>
+          observation.requesterMatchesIssuer && observation.requesterMatchesTarget &&
+          observation.sourceDocumentBindingCurrent
       | .automatedTrigger =>
+          observation.requesterMatchesIssuer && observation.requesterMatchesTarget &&
           observation.triggerConfigDocumentBindingCurrent && observation.targetPolicyAllows
 
 /--

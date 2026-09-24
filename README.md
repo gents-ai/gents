@@ -16,32 +16,70 @@ creating a second identity.
 Linux desktops use the `.deb` or AppImage on that same release. Each installer
 has a checksum in `SHA256SUMS-desktop-*.txt`.
 
+Build the `gents` binary from this repo when you want the CLI on PATH:
+
 ```bash
-brew install llama.cpp
-llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
-
-# Install the Codex CLI separately and make sure `codex` is on PATH.
-# `gents chat` remains the dependency-free fallback UI.
-# Build the `gents` binary from this repo when you want the CLI on PATH:
-#   cargo build -p gents-cli --release
-
-gents init      # provision a safe read-only agent under ~/.gents
-gents server    # start the runtime (embedded DefraDB + GraphQL + P2P)
-gents codex     # launch Codex against the Gents app-server shim
+cargo build -p gents-cli --release
 ```
 
-For worked document-driven scenarios, use `gents pack list` and see the
-[pack catalog and authoring guide](packs/README.md).
-
-The binary also carries an immutable catalog of useful graphs. Cataloging is
-read-only. Interactive init can configure OpenAI API access, ChatGPT/Codex
-OAuth, Grok OAuth, Claude subscription OAuth, a local model, or a custom
-endpoint. A bundled graph inherits that default backend when it is installed:
+`gents init` provisions a local agent home under `~/.gents` with one inference
+backend. Pick the block below for the provider you want — `gents init` with no
+backend flags defaults to a local `llama.cpp` server:
 
 ```bash
-gents init                 # choose ChatGPT / Codex, Grok, or Claude and complete OAuth
-gents server               # keep this running in another terminal
+# Local model (default)
+brew install llama.cpp
+llama-server -hf google/gemma-4-12B-it-qat-q4_0-gguf   # local inference on :8080
+gents init
 
+# OpenAI API key
+gents init --backend-preset openai --model-name gpt-4.1
+
+# OpenRouter API key
+gents init --backend-preset openrouter --model-name MODEL
+
+# ChatGPT / Codex subscription (OAuth)
+gents init --backend-preset chatgpt-codex
+gents codex-login
+
+# Grok / xAI subscription (OAuth)
+gents init --backend-preset xai-oauth
+gents grok-login
+
+# Claude subscription (OAuth)
+gents init --backend-preset claude-cli-subscription
+gents claude-login
+
+# Any other OpenAI-compatible endpoint
+gents init --inference-url http://HOST:PORT/v1 --model-name MODEL
+```
+
+Then start the runtime and talk to it. `gents chat` is the dependency-free
+terminal UI; it works the same way no matter which provider you picked above:
+
+```bash
+gents server    # keep this running in another terminal; embedded DefraDB + GraphQL + P2P
+gents chat      # chat in the terminal
+```
+
+If you'd rather use the `codex` terminal UI (nicer editing, same read-only tool
+boundary chosen at `gents init`), install the `codex` CLI separately and put it
+on PATH (`GENTS_CODEX_BIN` to point at a different binary). Despite the name,
+it talks to whichever provider you configured above — it is only a terminal UI,
+not tied to using OpenAI/ChatGPT for inference:
+
+```bash
+gents codex     # requires `codex` on PATH; works with any provider from gents init
+```
+
+New to Gents? Read the [beginner guide](docs/getting-started.md) and the
+[glossary](docs/glossary.md) for what these terms mean.
+
+For worked document-driven scenarios, use `gents pack list` and see the
+[pack catalog and authoring guide](packs/README.md). A bundled graph inherits
+the default backend configured above when it is installed:
+
+```bash
 gents pack show code_review
 gents pack install code_review
 

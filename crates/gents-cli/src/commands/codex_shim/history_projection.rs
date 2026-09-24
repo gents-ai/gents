@@ -6,7 +6,7 @@ use gents_codex_protocol as codex;
 use gents_codex_protocol::MessagePhase;
 use gents_protocol::client_protocol::{derive_persisted_attempt, RequestLifecycleState};
 use gents_protocol::row::AgentRequestRow;
-use gents_protocol::transcript::present_persisted_message;
+use gents_protocol::transcript::{present_message, PresentedMessageRole};
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Value};
 
@@ -16,39 +16,18 @@ use super::command_projection::{
 };
 use super::compaction_projection::context_compaction_item;
 use super::progress::{
-    codex_turn_status, decode_gents_tool_call_progress, gents_tool_item, terminal_error_message,
+    codex_turn_status, gents_tool_item, hydrate_gents_tool_call_progress, terminal_error_message,
     GentsToolCallProgress,
 };
 use super::protocol::{
     absolute_path, agent_message_item_with_phase, timestamp_seconds, turn_value,
 };
-use super::store::{hydrate_materialized_response_content, query_node_json};
+use super::store::query_node_json;
 use super::subagent_projection::{
     attach_subagent_link, collab_tool_item, load_authorized_subagent_threads_for_root,
 };
 use super::thread_projection::CodexThreadRecord;
 use super::ShimState;
-
-#[derive(Debug, Clone, Deserialize)]
-struct ResponseRow {
-    request_id: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    content: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    reasoning: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    status: String,
-    #[serde(default)]
-    error_message: Option<String>,
-    #[serde(default)]
-    materialized_message_sequence: Option<i64>,
-    #[serde(default)]
-    materialized_at: Option<String>,
-    #[serde(default)]
-    completed_at: Option<String>,
-    #[serde(default)]
-    interrupted_at: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 struct ToolRow {
@@ -68,15 +47,12 @@ struct CompactionRow {
     call_seq: i64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 struct MessageRow {
+    doc_id: String,
+    request_doc_id: Option<String>,
     sequence: i64,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    role: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    content: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    reasoning: String,
+    message: gents_protocol::message::Message,
 }
 
 fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<String, D::Error>
@@ -112,28 +88,13 @@ pub(super) async fn load_thread_turns(
                 input
                 execution_origin
             }}
-            AgentResponse(
-                filter: {{ {session_scope} }},
-                order: {{ created_at: ASC }}
-            ) {{
-                request_id
-                request_doc_id
-                agent_did
-                requester_did
-                session_id
-                content
-                reasoning
-                status
-                error_message
-                materialized_message_sequence
-                materialized_at
-                completed_at
-                interrupted_at
-            }}
             AgentToolCall(
                 filter: {{ {session_scope} }},
                 order: {{ started_at: ASC }}
             ) {{
+                _docID
+                agent_did
+                requester_did
                 tool_call_key
                 request_doc_id
                 request_id
@@ -144,8 +105,6 @@ pub(super) async fn load_thread_turns(
                 lifecycle_state
                 await_mode
                 child_request_id
-                args
-                result
                 started_at
                 completed_at
                 selected_service_id
@@ -159,12 +118,10 @@ pub(super) async fn load_thread_turns(
                 filter: {{ {session_scope} }},
                 order: {{ sequence: ASC }}
             ) {{
-                sequence
-                role
-                content
-                reasoning
+                {}
             }}
         }}"#,
+        gents::session::canonical_rows::AGENT_MESSAGE_FIELDS,
     );
     let response = query_node_json(&state.node, &query).await?;
 
@@ -185,7 +142,7 @@ pub(super) async fn load_thread_turns(
             "duplicate scoped request label in history"
         );
     }
-    for collection in ["AgentResponse", "AgentToolCall"] {
+    for collection in ["AgentToolCall"] {
         for row in raw_rows(&response, collection) {
             if collection == "AgentToolCall"
                 && row.get("request_id").is_none_or(Value::is_null)
@@ -208,8 +165,9 @@ pub(super) async fn load_thread_turns(
             );
         }
     }
-    let responses = decode_response_rows(state, &response).await?;
-    let mut tools = decode_tool_rows(&response).context("decoding AgentToolCall history rows")?;
+    let mut tools = decode_tool_rows(state, &response, owner, &record.session_id, requester)
+        .await
+        .context("decoding AgentToolCall history rows")?;
     let root_session_id = record
         .subagent
         .as_ref()
@@ -219,19 +177,8 @@ pub(super) async fn load_thread_turns(
     for tool in &mut tools {
         attach_subagent_link(&mut tool.progress, &subagent_links);
     }
-    let messages = decode_rows::<MessageRow>(&response, "AgentMessage")
-        .context("decoding AgentMessage rows")?;
+    let messages = decode_canonical_message_rows(state, &response).await?;
     let compactions = load_completed_compactions(state, &requests).await?;
-
-    let mut responses_by_request = BTreeMap::<String, ResponseRow>::new();
-    for response in responses {
-        anyhow::ensure!(
-            responses_by_request
-                .insert(response.request_id.clone(), response)
-                .is_none(),
-            "duplicate response for physical request"
-        );
-    }
 
     let mut tools_by_request = BTreeMap::<String, Vec<ToolRow>>::new();
     for tool in tools {
@@ -262,7 +209,6 @@ pub(super) async fn load_thread_turns(
     let turns = project_request_turns(
         record,
         requests,
-        &responses_by_request,
         &tools_by_request,
         &compactions_by_request,
         &messages_by_sequence,
@@ -325,8 +271,8 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
     let mut saw_assistant = false;
 
     for message in messages {
-        let role = message.role.trim();
-        if role.eq_ignore_ascii_case("user") {
+        let presentation = present_message(&message.message);
+        if presentation.role == PresentedMessageRole::User {
             finish_message_turn(
                 &mut turns,
                 current_id.take(),
@@ -334,20 +280,19 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
                 saw_assistant,
             );
             saw_assistant = false;
-            current_id = Some(format!("gents-message-turn-{}", message.sequence));
-            let presentation = present_persisted_message(&message.role, &message.content);
+            current_id = Some(format!("gents-message-turn-{}", message.doc_id));
             if !presentation.body_markdown.trim().is_empty() {
                 current_items.push(codex::ThreadItem::UserMessage {
-                    id: format!("gents-user-message-{}", message.sequence),
+                    id: format!("gents-user-message-{}", message.doc_id),
                     content: vec![codex::UserInput::Text {
                         text: presentation.body_markdown,
                         text_elements: Vec::new(),
                     }],
                 });
             }
-        } else if role.eq_ignore_ascii_case("assistant") {
+        } else if presentation.role == PresentedMessageRole::Assistant {
             if current_id.is_none() {
-                current_id = Some(format!("gents-message-turn-{}", message.sequence));
+                current_id = Some(format!("gents-message-turn-{}", message.doc_id));
             }
             saw_assistant |= append_assistant_message_items(
                 &mut current_items,
@@ -381,7 +326,6 @@ fn finish_message_turn(
 fn project_request_turns(
     record: &CodexThreadRecord,
     requests: Vec<AgentRequestRow>,
-    responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
     compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
@@ -414,7 +358,6 @@ fn project_request_turns(
             record,
             &root_id,
             &group,
-            responses_by_request,
             tools_by_request,
             compactions_by_request,
             messages_by_sequence,
@@ -552,7 +495,6 @@ fn project_turn_group(
     record: &CodexThreadRecord,
     turn_id: &str,
     requests: &[AgentRequestRow],
-    responses_by_request: &BTreeMap<String, ResponseRow>,
     tools_by_request: &BTreeMap<String, Vec<ToolRow>>,
     compactions_by_request: &BTreeMap<String, Vec<CompactionRow>>,
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
@@ -561,11 +503,8 @@ fn project_turn_group(
         return turn_value(turn_id, codex::TurnStatus::Completed, Vec::new(), None);
     };
     let tail_request = requests.last().unwrap_or(first_request);
-    let tail_response = responses_by_request.get(&tail_request.request_id);
-
     let mut items = Vec::new();
     for request in requests {
-        let response = responses_by_request.get(&request.request_id);
         let tools = tools_by_request
             .get(&request.request_id)
             .cloned()
@@ -578,22 +517,21 @@ fn project_turn_group(
             record,
             &mut items,
             request,
-            response,
             tools,
             compactions,
             messages_by_sequence,
         );
     }
 
-    let status = turn_status(tail_request, tail_response);
+    let status = turn_status(tail_request);
     let error = (status == codex::TurnStatus::Failed)
-        .then(|| turn_error(tail_request, tail_response))
+        .then(|| turn_error(tail_request))
         .flatten();
     let started_at = first_request
         .created_at
         .as_deref()
         .and_then(timestamp_seconds);
-    let completed_at = turn_completed_timestamp(tail_request, tail_response);
+    let completed_at = turn_completed_timestamp(tail_request);
     let duration_ms = started_at
         .zip(completed_at)
         .map(|(started, completed)| (completed - started).max(0) * 1000);
@@ -614,7 +552,6 @@ fn append_request_items(
     record: &CodexThreadRecord,
     items: &mut Vec<codex::ThreadItem>,
     request: &AgentRequestRow,
-    response: Option<&ResponseRow>,
     mut tools: Vec<ToolRow>,
     compactions: &[CompactionRow],
     messages_by_sequence: &BTreeMap<i64, MessageRow>,
@@ -625,7 +562,6 @@ fn append_request_items(
             .map(RequestLifecycleState::as_str)
             .unwrap_or_default(),
         false,
-        response.map(|row| row.status.trim()),
     )
     .is_some_and(|state| state.is_terminal());
     tools.sort_by(|left, right| {
@@ -665,53 +601,44 @@ fn append_request_items(
         }
     }
 
-    if let Some(response) = response {
-        let rendered_materialized = response
-            .materialized_message_sequence
-            .and_then(|sequence| {
-                if rendered_assistant_sequences.contains(&sequence) {
-                    return Some(true);
-                }
-                let message = messages_by_sequence.get(&sequence)?;
-                append_assistant_message_items(items, sequence, message, true).then_some(true)
-            })
-            .unwrap_or(false);
-
-        if !rendered_materialized && !response.reasoning.trim().is_empty() {
-            items.push(codex::ThreadItem::Reasoning {
-                id: format!("gents-reasoning-{}", request.request_id),
-                summary: Vec::new(),
-                content: vec![response.reasoning.clone()],
-            });
-        }
-        if !rendered_materialized && !response.content.trim().is_empty() {
-            items.push(agent_message_item_with_phase(
-                &format!("gents-{}", request.request_id),
-                &response.content,
-                Some(MessagePhase::FinalAnswer),
-            ));
-        }
+    let request_doc_id = request.doc_id.as_deref();
+    let remaining = messages_by_sequence
+        .iter()
+        .filter(|(sequence, message)| {
+            !rendered_assistant_sequences.contains(sequence)
+                && message.request_doc_id.as_deref() == request_doc_id
+                && present_message(&message.message).role == PresentedMessageRole::Assistant
+        })
+        .map(|(sequence, message)| (*sequence, message))
+        .collect::<Vec<_>>();
+    let last_sequence = remaining.last().map(|(sequence, _)| *sequence);
+    for (sequence, message) in remaining {
+        append_assistant_message_items(
+            items,
+            sequence,
+            message,
+            projection_settled && Some(sequence) == last_sequence,
+        );
     }
 }
 
 fn append_assistant_message_items(
     items: &mut Vec<codex::ThreadItem>,
-    sequence: i64,
+    _sequence: i64,
     message: &MessageRow,
     final_answer: bool,
 ) -> bool {
-    if !message.role.trim().eq_ignore_ascii_case("assistant") {
+    let presentation = present_message(&message.message);
+    if presentation.role != PresentedMessageRole::Assistant {
         return false;
     }
-    let presentation = present_persisted_message(&message.role, &message.content);
     let mut appended = false;
-    if let Some(reasoning) = (!message.reasoning.trim().is_empty())
-        .then(|| message.reasoning.clone())
-        .or(presentation.reasoning_markdown)
+    if let Some(reasoning) = presentation
+        .reasoning_markdown
         .filter(|value| !value.trim().is_empty())
     {
         items.push(codex::ThreadItem::Reasoning {
-            id: format!("gents-reasoning-message-{sequence}"),
+            id: format!("gents-reasoning-message-{}", message.doc_id),
             summary: Vec::new(),
             content: vec![reasoning],
         });
@@ -724,7 +651,7 @@ fn append_assistant_message_items(
             MessagePhase::Commentary
         };
         items.push(agent_message_item_with_phase(
-            &format!("gents-message-{sequence}"),
+            &format!("gents-message-{}", message.doc_id),
             &presentation.body_markdown,
             Some(phase),
         ));
@@ -756,32 +683,22 @@ fn project_tool(
     }
 }
 
-fn turn_status(request: &AgentRequestRow, response: Option<&ResponseRow>) -> codex::TurnStatus {
+fn turn_status(request: &AgentRequestRow) -> codex::TurnStatus {
     let Some(lifecycle_state) = request.lifecycle_state.map(RequestLifecycleState::as_str) else {
         return codex::TurnStatus::Failed;
     };
-    let response_status = response
-        .and_then(|response| normalized_nonempty(&response.status))
-        .unwrap_or_default();
-
-    derive_persisted_attempt(lifecycle_state, false, Some(&response_status))
+    derive_persisted_attempt(lifecycle_state, false)
         .map(codex_turn_status)
         .unwrap_or(codex::TurnStatus::Failed)
 }
 
-fn turn_error(
-    request: &AgentRequestRow,
-    response: Option<&ResponseRow>,
-) -> Option<codex::TurnError> {
-    let response_status = response.map(|row| row.status.as_str()).unwrap_or_default();
-    let response_error = response.and_then(|row| row.error_message.as_deref());
+fn turn_error(request: &AgentRequestRow) -> Option<codex::TurnError> {
     let lifecycle_state = request
         .lifecycle_state
         .map(RequestLifecycleState::as_str)
         .unwrap_or_default();
     terminal_error_message(
-        response_status,
-        response_error,
+        None,
         lifecycle_state,
         request.failure_reason.as_deref().unwrap_or_default(),
     )
@@ -792,58 +709,100 @@ fn turn_error(
     })
 }
 
-fn turn_completed_timestamp(
-    request: &AgentRequestRow,
-    response: Option<&ResponseRow>,
-) -> Option<i64> {
-    response
-        .and_then(|response| {
-            response
-                .completed_at
-                .as_deref()
-                .or(response.interrupted_at.as_deref())
-                .or(response.materialized_at.as_deref())
-        })
-        .or(request.terminalized_at.as_deref())
+fn turn_completed_timestamp(request: &AgentRequestRow) -> Option<i64> {
+    request
+        .terminalized_at
+        .as_deref()
         .and_then(timestamp_seconds)
 }
 
-async fn decode_response_rows(state: &ShimState, response: &Value) -> Result<Vec<ResponseRow>> {
-    let mut rows = Vec::new();
-    for mut row in raw_rows(response, "AgentResponse") {
-        hydrate_materialized_response_content(&state.node, &mut row).await?;
-        rows.push(serde_json::from_value(row).context("decoding AgentResponse history row")?);
+async fn decode_canonical_message_rows(
+    state: &ShimState,
+    response: &Value,
+) -> Result<Vec<MessageRow>> {
+    let access = gents::config_client::ConfigAccess::Local(state.node.clone());
+    let mut messages = Vec::new();
+    let mut physical_ids = BTreeSet::new();
+    for raw in raw_rows(response, "AgentMessage") {
+        let observed = gents::session::canonical_rows::decode_transcript_message_row(&raw)
+            .context("decoding canonical AgentMessage header")?;
+        anyhow::ensure!(
+            physical_ids.insert(observed.doc_id.clone()),
+            "duplicate physical AgentMessage row in history"
+        );
+        let (header, message) = gents::session::load_canonical_message(
+            &access,
+            &observed.doc_id,
+            &observed.message.agent_did,
+            observed.message.requester_did.as_deref(),
+        )
+        .await
+        .with_context(|| format!("reconstructing canonical header {}", observed.doc_id))?;
+        anyhow::ensure!(
+            header == observed.message,
+            "canonical history header changed during exact physical reconstruction"
+        );
+        messages.push(MessageRow {
+            doc_id: observed.doc_id,
+            request_doc_id: header.request_doc_id,
+            sequence: i64::from(header.sequence),
+            message,
+        });
     }
-    Ok(rows)
+    Ok(messages)
 }
 
-fn decode_tool_rows(response: &Value) -> Result<Vec<ToolRow>> {
-    raw_rows(response, "AgentToolCall")
-        .into_iter()
-        .map(|row| {
-            let message_sequence = row
-                .get("message_sequence")
-                .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
-                .unwrap_or(0);
-            let request_id = row
-                .get("request_id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let started_at = row
-                .get("started_at")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            let progress = decode_gents_tool_call_progress(&row)
-                .with_context(|| format!("decoding AgentToolCall progress row: {row}"))?;
-            Ok(ToolRow {
-                request_id,
-                message_sequence,
-                started_at,
-                progress,
-            })
-        })
-        .collect()
+async fn decode_tool_rows(
+    state: &ShimState,
+    response: &Value,
+    owner: &str,
+    session_id: &str,
+    requester: Option<&str>,
+) -> Result<Vec<ToolRow>> {
+    let access = gents::config_client::ConfigAccess::Local(state.node.clone());
+    let mut tools = Vec::new();
+    for row in raw_rows(response, "AgentToolCall") {
+        if row.get("request_doc_id").is_none_or(Value::is_null) {
+            // Forked transcript facts have no executable request owner and
+            // are not Codex command items for a request turn.
+            continue;
+        }
+        let message_sequence = row
+            .get("message_sequence")
+            .and_then(|value| value.as_i64().or_else(|| value.as_u64().map(|v| v as i64)))
+            .unwrap_or(0);
+        let request_id = row
+            .get("request_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let started_at = row
+            .get("started_at")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned);
+        let request_doc_id = row
+            .get("request_doc_id")
+            .and_then(Value::as_str)
+            .context("history tool row omitted physical request")?;
+        let progress = hydrate_gents_tool_call_progress(
+            &access,
+            &row,
+            owner,
+            session_id,
+            requester,
+            request_doc_id,
+        )
+        .await
+        .with_context(|| format!("reconstructing AgentToolCall progress row: {row}"))?
+        .context("terminal AgentToolCall has no canonical delivery yet")?;
+        tools.push(ToolRow {
+            request_id,
+            message_sequence,
+            started_at,
+            progress,
+        });
+    }
+    Ok(tools)
 }
 
 fn decode_rows<T>(response: &Value, collection: &str) -> Result<Vec<T>>
@@ -930,11 +889,6 @@ fn paginate_by_id<T>(
     }
 }
 
-fn normalized_nonempty(value: &str) -> Option<String> {
-    let value = value.trim().to_ascii_lowercase();
-    (!value.is_empty()).then_some(value)
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -945,8 +899,22 @@ mod tests {
         serde_json::from_value(value).expect("canonical AgentRequest test row")
     }
 
+    fn message_row(
+        doc_id: &str,
+        request_doc_id: Option<&str>,
+        sequence: i64,
+        message: gents_protocol::message::Message,
+    ) -> MessageRow {
+        MessageRow {
+            doc_id: doc_id.to_string(),
+            request_doc_id: request_doc_id.map(ToOwned::to_owned),
+            sequence,
+            message,
+        }
+    }
+
     #[test]
-    fn replicated_nullable_history_scalars_decode_as_empty_text() {
+    fn replicated_nullable_request_scalars_decode_without_legacy_transcript_fields() {
         let response = json!({
             "data": {
                 "AgentRequest": [{
@@ -957,18 +925,6 @@ mod tests {
                     "failure_reason": null,
                     "input": null,
                     "execution_origin": null
-                }],
-                "AgentResponse": [{
-                    "request_id": "request-1",
-                    "content": null,
-                    "reasoning": null,
-                    "status": null
-                }],
-                "AgentMessage": [{
-                    "sequence": 1,
-                    "role": null,
-                    "content": null,
-                    "reasoning": null
                 }]
             }
         });
@@ -976,38 +932,19 @@ mod tests {
         let requests = decode_rows::<AgentRequestRow>(&response, "AgentRequest").unwrap();
         assert_eq!(requests[0].content, None);
         assert_eq!(requests[0].failure_reason, None);
-        let responses = decode_rows::<ResponseRow>(&response, "AgentResponse").unwrap();
-        assert_eq!(responses[0].reasoning, "");
-        let messages = decode_rows::<MessageRow>(&response, "AgentMessage").unwrap();
-        assert_eq!(messages[0].role, "");
     }
 
     #[test]
-    fn completed_request_overrides_error_response_status() {
+    fn completed_status_depends_only_on_request_lifecycle() {
         let request = request_row(json!({
             "request_id": "request-1",
             "content": "Inspect the repo",
             "lifecycle_state": "completed",
             "input": null,
-            "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
-        let response = ResponseRow {
-            request_id: request.request_id.clone(),
-            content: "Done".to_string(),
-            reasoning: String::new(),
-            status: "error".to_string(),
-            error_message: Some("stale response error".to_string()),
-            materialized_message_sequence: None,
-            materialized_at: None,
-            completed_at: None,
-            interrupted_at: None,
-        };
 
-        assert_eq!(
-            turn_status(&request, Some(&response)),
-            codex::TurnStatus::Completed
-        );
+        assert_eq!(turn_status(&request), codex::TurnStatus::Completed);
     }
 
     #[test]
@@ -1040,7 +977,6 @@ mod tests {
             &record,
             &mut items,
             &request,
-            None,
             Vec::new(),
             &[],
             &BTreeMap::new(),
@@ -1054,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn turn_completion_timing_prefers_response_then_request_terminalization() {
+    fn turn_completion_timing_uses_canonical_request_terminalization() {
         let request = request_row(json!({
             "request_id": "request-1",
             "content": "",
@@ -1062,33 +998,10 @@ mod tests {
             "created_at": "2026-07-15T10:00:00Z",
             "terminalized_at": "2026-07-15T10:00:05Z",
             "input": null,
-            "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
-        let mut response = ResponseRow {
-            request_id: request.request_id.clone(),
-            content: String::new(),
-            reasoning: String::new(),
-            status: "complete".to_string(),
-            error_message: None,
-            materialized_message_sequence: None,
-            materialized_at: Some("2026-07-15T10:00:04Z".to_string()),
-            completed_at: Some("2026-07-15T10:00:03Z".to_string()),
-            interrupted_at: None,
-        };
-
         assert_eq!(
-            turn_completed_timestamp(&request, Some(&response)),
-            timestamp_seconds("2026-07-15T10:00:03Z")
-        );
-        response.completed_at = None;
-        assert_eq!(
-            turn_completed_timestamp(&request, Some(&response)),
-            timestamp_seconds("2026-07-15T10:00:04Z")
-        );
-        response.materialized_at = None;
-        assert_eq!(
-            turn_completed_timestamp(&request, Some(&response)),
+            turn_completed_timestamp(&request),
             timestamp_seconds("2026-07-15T10:00:05Z")
         );
     }
@@ -1117,17 +1030,6 @@ mod tests {
             "execution_origin": "interactive",
             "execution_origin": "interactive"
         }));
-        let response = ResponseRow {
-            request_id: request.request_id.clone(),
-            content: String::new(),
-            reasoning: String::new(),
-            status: "complete".to_string(),
-            error_message: None,
-            materialized_message_sequence: Some(4),
-            materialized_at: None,
-            completed_at: None,
-            interrupted_at: None,
-        };
         let first_tool = ToolRow {
             request_id: request.request_id.clone(),
             message_sequence: 2,
@@ -1163,21 +1065,21 @@ mod tests {
         let messages_by_sequence = BTreeMap::from([
             (
                 2,
-                MessageRow {
-                    sequence: 2,
-                    role: "assistant".to_string(),
-                    content: r#"{"role":"assistant","id":null,"content":[{"id":"call-1","call_id":null,"function":{"name":"list_files","arguments":{"path":"."}},"signature":null,"additional_params":null},{"text":"Before the tool call."}]}"#.to_string(),
-                    reasoning: String::new(),
-                },
+                message_row(
+                    "header-2",
+                    None,
+                    2,
+                    serde_json::from_str(r#"{"role":"assistant","id":null,"content":[{"id":"call-1","call_id":null,"function":{"name":"list_files","arguments":{"path":"."}},"signature":null,"additional_params":null},{"text":"Before the tool call."}]}"#).unwrap(),
+                ),
             ),
             (
                 4,
-                MessageRow {
-                    sequence: 4,
-                    role: "assistant".to_string(),
-                    content: r#"{"role":"assistant","id":null,"content":[{"text":"Final answer after tools."}]}"#.to_string(),
-                    reasoning: String::new(),
-                },
+                message_row(
+                    "header-4",
+                    None,
+                    4,
+                    gents_protocol::message::Message::assistant("Final answer after tools."),
+                ),
             ),
         ]);
 
@@ -1186,7 +1088,6 @@ mod tests {
             &record,
             &mut items,
             &request,
-            Some(&response),
             vec![first_tool, second_tool],
             &[],
             &messages_by_sequence,
@@ -1261,26 +1162,23 @@ mod tests {
             call_state: "completed".to_string(),
             call_seq: 1,
         }];
-        let response = ResponseRow {
-            request_id: request.request_id.clone(),
-            content: "Done".to_string(),
-            reasoning: String::new(),
-            status: "complete".to_string(),
-            error_message: None,
-            materialized_message_sequence: None,
-            materialized_at: None,
-            completed_at: None,
-            interrupted_at: None,
-        };
+        let messages = BTreeMap::from([(
+            2,
+            message_row(
+                "header-done",
+                None,
+                2,
+                gents_protocol::message::Message::assistant("Done"),
+            ),
+        )]);
         let mut items = Vec::new();
         append_request_items(
             &record,
             &mut items,
             &request,
-            Some(&response),
             Vec::new(),
             &compactions,
-            &BTreeMap::new(),
+            &messages,
         );
 
         assert!(matches!(items[0], codex::ThreadItem::UserMessage { .. }));
@@ -1294,20 +1192,18 @@ mod tests {
     #[test]
     fn project_message_turns_renders_structured_persisted_messages() {
         let turns = project_message_turns(vec![
-            MessageRow {
-                sequence: 1,
-                role: "user".to_string(),
-                content: r#"{"role":"user","content":[{"type":"text","text":"Hello from stored user JSON."}]}"#
-                    .to_string(),
-                reasoning: String::new(),
-            },
-            MessageRow {
-                sequence: 2,
-                role: "assistant".to_string(),
-                content: r#"{"role":"assistant","id":null,"content":[{"text":"Hello from stored assistant JSON."}]}"#
-                    .to_string(),
-                reasoning: String::new(),
-            },
+            message_row(
+                "user-header",
+                None,
+                1,
+                gents_protocol::message::Message::user("Hello from stored user JSON."),
+            ),
+            message_row(
+                "assistant-header",
+                None,
+                2,
+                gents_protocol::message::Message::assistant("Hello from stored assistant JSON."),
+            ),
         ]);
 
         assert_eq!(turns.len(), 1);
@@ -1330,18 +1226,29 @@ mod tests {
     }
 
     #[test]
-    fn persisted_reasoning_field_is_the_authoritative_replay_source() {
+    fn canonical_native_reasoning_is_the_authoritative_replay_source() {
         let mut items = Vec::new();
         let appended = append_assistant_message_items(
             &mut items,
             4,
-            &MessageRow {
-                sequence: 4,
-                role: "assistant".to_string(),
-                content: r#"{"role":"assistant","id":null,"content":[{"reasoning":"legacy embedded reasoning"},{"text":"answer"}]}"#
-                    .to_string(),
-                reasoning: "durable dedicated reasoning".to_string(),
-            },
+            &message_row(
+                "reasoning-header",
+                None,
+                4,
+                gents_protocol::message::Message::Assistant {
+                    id: None,
+                    content: vec![
+                        gents_protocol::message::AssistantContent::Reasoning(
+                            gents_protocol::message::Reasoning::new("durable canonical reasoning"),
+                        ),
+                        gents_protocol::message::AssistantContent::Text(
+                            gents_protocol::message::Text {
+                                text: "answer".into(),
+                            },
+                        ),
+                    ],
+                },
+            ),
             true,
         );
 
@@ -1349,7 +1256,7 @@ mod tests {
         assert!(matches!(
             &items[0],
             codex::ThreadItem::Reasoning { summary, content, .. }
-                if summary.is_empty() && content == &["durable dedicated reasoning"]
+                if summary.is_empty() && content == &["durable canonical reasoning"]
         ));
     }
 }

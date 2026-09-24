@@ -1,7 +1,4 @@
-import type {
-  DerivedCancelCauseView,
-  RenderedTimelineItem,
-} from "@source-inc/gents-desktop-client";
+import type { RenderedTimelineItem } from "@source-inc/gents-desktop-client";
 import { memo } from "react";
 
 import {
@@ -15,13 +12,9 @@ import { ToolGroup } from "./ToolGroup.js";
 export const TimelineItem = memo(function TimelineItem({
   item,
   animateAssistantReveal,
-  responseCancelCause,
-  responseMaterializedSequence,
 }: {
   item: RenderedTimelineItem;
   animateAssistantReveal?: boolean;
-  responseCancelCause?: DerivedCancelCauseView | null;
-  responseMaterializedSequence?: number | null;
 }) {
   switch (item.kind) {
     case "userMessage":
@@ -31,8 +24,6 @@ export const TimelineItem = memo(function TimelineItem({
         <AssistantMessageItem
           item={item}
           animateReveal={animateAssistantReveal}
-          responseCancelCause={responseCancelCause}
-          responseMaterializedSequence={responseMaterializedSequence}
         />
       );
     case "toolGroup":
@@ -44,12 +35,7 @@ export const TimelineItem = memo(function TimelineItem({
     case "pendingUserTurn":
       return <PendingUserTurnItem item={item} />;
     case "liveAssistant":
-      return (
-        <LiveAssistantItem
-          item={item}
-          responseCancelCause={responseCancelCause}
-        />
-      );
+      return <LiveAssistantItem item={item} />;
     default:
       return null;
   }

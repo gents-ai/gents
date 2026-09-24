@@ -12,7 +12,7 @@ The bridge and tool-call models terminalize work, the transcript model appends
 messages, and the session model coalesces and claims wake requests. This module
 composes those seams into the model-facing background-completion contract:
 
-1. an in-flight assistant wait call is durably reserved before it can block;
+1. an assistant wait header and pending call are durably published before dispatch;
 2. only a terminal parent-visible tool may produce a completion notification;
 3. the notification is appended after the reserved assistant row;
 4. without a canonical Goal, a coalesced wake is enqueued only after that append exists; and
@@ -42,11 +42,19 @@ structure NotifiedCompletion where
   preTranscript : Transcript.TranscriptState
   transcript : Transcript.TranscriptState
   terminal : isTerminal completion.toolState
-  appended :
-    transcript =
-      preTranscript.appendUserMessage
-        completion.notificationMessageId
-        Transcript.MessageKind.ordinary
+  /-- Fresh publication retains the executable append equation. Recovery may
+  instead observe the exact immutable row in a transcript that has since
+  advanced; in that case `freshAppend` is false and `durable` is authoritative. -/
+  freshAppend : Bool
+  appended : freshAppend = true →
+    transcript = preTranscript.appendUserMessage
+      completion.notificationMessageId Transcript.MessageKind.ordinary
+  durable : ∃ row,
+    row ∈ transcript.messages ∧
+    row.messageId = completion.notificationMessageId ∧
+    row.sessionId = transcript.sessionId ∧
+    row.role = Transcript.MessageRole.user ∧
+    row.kind = Transcript.MessageKind.ordinary
 
 /-- Append the model-visible notification. Live work cannot enter this stage. -/
 def appendNotification?
@@ -62,7 +70,15 @@ def appendNotification?
             completion.notificationMessageId
             Transcript.MessageKind.ordinary
       , terminal := h_terminal
-      , appended := rfl
+      , freshAppend := true
+      , appended := fun _ => rfl
+      , durable := by
+          refine ⟨{ messageId := completion.notificationMessageId
+                    , sessionId := pre.sessionId
+                    , sequence := pre.nextSeq
+                    , role := .user
+                    , kind := .ordinary }, ?_, rfl, rfl, rfl, rfl⟩
+          simp [Transcript.TranscriptState.appendUserMessage]
       }
   else
     none
@@ -193,18 +209,7 @@ def HasNotification (notified : NotifiedCompletion) : Prop :=
 theorem notified_completion_has_durable_message
     (notified : NotifiedCompletion) :
     HasNotification notified := by
-  let row : Transcript.MessageRow :=
-    { messageId := notified.completion.notificationMessageId
-    , sessionId := notified.preTranscript.sessionId
-    , sequence := notified.preTranscript.nextSeq
-    , role := .user
-    , kind := .ordinary
-    }
-  refine ⟨row, ?_, rfl, ?_, rfl, rfl⟩
-  · rw [notified.appended]
-    simp [Transcript.TranscriptState.appendUserMessage, row]
-  · rw [notified.appended]
-    rfl
+  exact notified.durable
 
 theorem goal_owned_delivery_retains_notification_without_wake
     (status : Goals.Status) (notified : NotifiedCompletion)
@@ -226,6 +231,44 @@ theorem claimed_continuation_sees_terminal_notification
     notified_completion_has_durable_message continuation.queued.notified,
     continuation.activeWake⟩
 
+/-- End-to-end evidence retained by a claimed background continuation. This
+connects the actual notification publication (fresh when applicable), the
+same-session coalesced enqueue, and the subsequent queue claim. -/
+theorem claimed_continuation_retains_publication_enqueue_claim_chain
+    (continuation : Continuation) :
+    isTerminal continuation.queued.notified.completion.toolState ∧
+      HasNotification continuation.queued.notified ∧
+      continuation.queued.preQueue.sessionId =
+        continuation.queued.notified.transcript.sessionId ∧
+      (continuation.queued.notified.completion.wake.source = .backgroundCompletion ∧
+        continuation.queued.notified.completion.wake.coalesceWellFormed
+          continuation.queued.preQueue.sessionId) ∧
+      SessionQueue.containsCoalescedQueueKey
+        continuation.queued.preQueue.pending
+        SessionQueue.QueueSource.backgroundCompletion
+        continuation.queued.preQueue.sessionId = false ∧
+      SessionQueue.step? continuation.queued.preQueue
+        (.coalescePending continuation.queued.notified.completion.wake) =
+          some continuation.queued.queue ∧
+      SessionQueue.step? continuation.queued.queue .claimNext =
+        some continuation.queue ∧
+      continuation.queue.active =
+        some continuation.queued.notified.completion.wake.requestId ∧
+      (continuation.queued.notified.freshAppend = true →
+        continuation.queued.notified.transcript =
+          continuation.queued.notified.preTranscript.appendUserMessage
+            continuation.queued.notified.completion.notificationMessageId
+            Transcript.MessageKind.ordinary) := by
+  exact ⟨continuation.queued.notified.terminal,
+    continuation.queued.notified.durable,
+    continuation.queued.sameSession,
+    continuation.queued.wakeWellFormed,
+    continuation.queued.wakeKeyMissing,
+    continuation.queued.enqueued,
+    continuation.claimed,
+    continuation.activeWake,
+    continuation.queued.notified.appended⟩
+
 /-! ## Executable canonical acceptance witness -/
 
 def canonicalTranscript : Transcript.TranscriptState :=
@@ -234,7 +277,6 @@ def canonicalTranscript : Transcript.TranscriptState :=
   , messages := []
   , toolCalls := []
   , inFlight := ∅
-  , assistantTurn := none
   }
 
 /-- The model-visible wait call is persisted before execution blocks. This is
@@ -244,12 +286,12 @@ assistant row's sequence 3. -/
 def canonicalWaitTurn : Transcript.AssistantTurn :=
   { sessionId := canonicalTranscript.sessionId
   , sequence := canonicalTranscript.nextSeq
-  , callIds := {51}
+  , callIds := [51]
   }
 
 def canonicalWaitReservedTranscript : Transcript.TranscriptState :=
-  let started := canonicalTranscript.beginAssistantToolCall 51
-  started.persistAssistantMessage 40 canonicalWaitTurn
+  let published := canonicalTranscript.publishAcceptedAssistant 40 canonicalWaitTurn
+  published.dispatchToolCall 51
 
 def canonicalWake : SessionQueue.QueueEntry :=
   { requestId := 901
@@ -628,7 +670,6 @@ structure WakeAttemptSnapshot where
   wakeRequestId : RequestId
   throughSequence : Nat
   bindings : List NotificationBinding
-  terminalState : RequestState
   deriving DecidableEq, Repr
 
 def WakeAttemptSnapshot.attemptedBindings
@@ -638,8 +679,8 @@ def WakeAttemptSnapshot.attemptedBindings
       binding.sequence ≤ snapshot.throughSequence
 
 def WakeAttemptSnapshot.acknowledgedBindings
-    (snapshot : WakeAttemptSnapshot) : List NotificationBinding :=
-  if snapshot.terminalState = .completed then snapshot.attemptedBindings else []
+    (snapshot : WakeAttemptSnapshot) (terminalState : RequestState) : List NotificationBinding :=
+  if terminalState = .completed then snapshot.attemptedBindings else []
 
 theorem successor_binding_after_cutoff_not_attempted
     (snapshot : WakeAttemptSnapshot)
@@ -649,15 +690,15 @@ theorem successor_binding_after_cutoff_not_attempted
   simp [WakeAttemptSnapshot.attemptedBindings, Nat.not_le.mpr h_after]
 
 theorem completed_attempt_acknowledges_exact_snapshot
-    (snapshot : WakeAttemptSnapshot)
-    (h_completed : snapshot.terminalState = .completed) :
-    snapshot.acknowledgedBindings = snapshot.attemptedBindings := by
+    (snapshot : WakeAttemptSnapshot) (terminalState : RequestState)
+    (h_completed : terminalState = .completed) :
+    snapshot.acknowledgedBindings terminalState = snapshot.attemptedBindings := by
   simp [WakeAttemptSnapshot.acknowledgedBindings, h_completed]
 
 theorem failed_attempt_acknowledges_nothing
-    (snapshot : WakeAttemptSnapshot)
-    (h_failed : snapshot.terminalState = .failed) :
-    snapshot.acknowledgedBindings = [] := by
+    (snapshot : WakeAttemptSnapshot) (terminalState : RequestState)
+    (h_failed : terminalState = .failed) :
+    snapshot.acknowledgedBindings terminalState = [] := by
   simp [WakeAttemptSnapshot.acknowledgedBindings, h_failed]
 
 def attemptedBindingFixture : NotificationBinding :=
@@ -666,44 +707,41 @@ def attemptedBindingFixture : NotificationBinding :=
 def successorBindingFixture : NotificationBinding :=
   { messageId := 42, sequence := 6, wakeRequestId := 902 }
 
-def completedSnapshotFixture : WakeAttemptSnapshot :=
+def canonicalSnapshotFixture : WakeAttemptSnapshot :=
   { wakeRequestId := 901
   , throughSequence := 5
   , bindings := [attemptedBindingFixture, successorBindingFixture]
-  , terminalState := .completed
   }
 
-def failedSnapshotFixture : WakeAttemptSnapshot :=
-  { completedSnapshotFixture with terminalState := .failed }
-
 theorem canonical_completed_snapshot_acknowledges_owned_notification :
-    completedSnapshotFixture.acknowledgedBindings = [attemptedBindingFixture] := by
+    canonicalSnapshotFixture.acknowledgedBindings .completed = [attemptedBindingFixture] := by
   native_decide
 
 theorem canonical_successor_notification_excluded_from_active_snapshot :
-    successorBindingFixture ∉ completedSnapshotFixture.attemptedBindings := by
+    successorBindingFixture ∉ canonicalSnapshotFixture.attemptedBindings := by
   native_decide
 
 theorem canonical_failed_snapshot_retains_unacknowledged_notification :
-    failedSnapshotFixture.acknowledgedBindings = [] ∧
-      failedSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
+    canonicalSnapshotFixture.acknowledgedBindings .failed = [] ∧
+      canonicalSnapshotFixture.attemptedBindings = [attemptedBindingFixture] := by
   native_decide
 
 /-! ## Crash-boundary recovery
 
 Acknowledgement is not a second mutable protocol step.  It is a projection of
-the durable claim snapshot and the recovered request terminal state.  This
-closes the four crash boundaries in the delivery protocol: before claim there
-is no attempted snapshot to acknowledge; an inference failure retains the
-snapshot for bounded redrive; a committed successful response repairs the
-request to completed; and a crash while a reader projects acknowledgement
-cannot create a partially acknowledged state.
+the durable claim snapshot and the authoritative request terminal state.  This
+closes the three reachable crash boundaries in the delivery protocol: before
+claim there is no attempted snapshot to acknowledge; an unfinished claimed
+attempt remains owned until the existing lease/recovery owner terminalizes it; and a
+crash while a reader projects acknowledgement cannot create a partially
+acknowledged state.  Canonical request completion and terminal-output selection
+commit together; there is no response-only state that can repair an unfinished
+request to completed.
 -/
 
 inductive DeliveryCrashPoint where
   | beforeClaim
   | duringInference
-  | afterResponsePersistence
   | duringAcknowledgement
   deriving DecidableEq, Repr
 
@@ -714,45 +752,40 @@ structure WakeRecoveryProjection where
   retryEligible : Bool
   deriving DecidableEq, Repr
 
-inductive DurableResponseState where
-  | absent
-  | completed
-  | failed
-  deriving DecidableEq, Repr
-
 structure WakeRecoveryInput where
   requestState : RequestState
   claimSnapshot : Option WakeAttemptSnapshot
-  responseState : DurableResponseState
   deriving DecidableEq, Repr
 
 def attemptedFromSnapshot : Option WakeAttemptSnapshot → List NotificationBinding
   | none => []
   | some snapshot => snapshot.attemptedBindings
 
-/-- Existing terminal request outcomes win. Responses repair only unfinished
-requests; an observed unfinished attempt without a response becomes failed.
-Without a claim, preserve the current admission state. This projection does
-not authorize retries: `redriveWakeFromRows?` still applies authoritative head,
-physical parent, ownership and budget gates. -/
+/-- Request lifecycle is authoritative. A claim snapshot neither completes nor
+fails unfinished work; the existing lease/recovery owner must first commit a
+terminal outcome. Canonical output never repairs request lifecycle here:
+successful completion already committed its exact terminal selection with the
+request owner. This projection does not itself authorize retries:
+`redriveWakeFromRows?` still applies authoritative head, physical parent,
+ownership and budget gates to an actually failed request. -/
 def recoverWakeDelivery (input : WakeRecoveryInput) : WakeRecoveryProjection :=
   let attempted := attemptedFromSnapshot input.claimSnapshot
-  let state :=
-    if isTerminal input.requestState then input.requestState
-    else match input.responseState with
-      | .completed => .completed
-      | .failed => .failed
-      | .absent => if input.claimSnapshot.isSome then .failed else input.requestState
-  { requestState := state
+  { requestState := input.requestState
   , attemptedBindings := attempted
-  , acknowledgedBindings := if state = .completed then attempted else []
-  , retryEligible := state == .failed && input.claimSnapshot.isSome
+  , acknowledgedBindings := if input.requestState = .completed then attempted else []
+  , retryEligible := input.requestState == .failed && input.claimSnapshot.isSome
   }
 
-theorem recovery_preserves_terminal_request (input : WakeRecoveryInput)
-    (h : isTerminal input.requestState) :
+theorem recovery_preserves_request (input : WakeRecoveryInput) :
     (recoverWakeDelivery input).requestState = input.requestState := by
-  simp [recoverWakeDelivery, h]
+  rfl
+
+theorem live_claim_acknowledges_nothing_and_cannot_redrive
+    (input : WakeRecoveryInput)
+    (h : input.requestState = .claimed ∨ input.requestState = .processing) :
+    (recoverWakeDelivery input).acknowledgedBindings = [] ∧
+      (recoverWakeDelivery input).retryEligible = false := by
+  rcases h with h | h <;> simp [recoverWakeDelivery, h]
 
 theorem recovery_does_not_retry_cancelled_wake (input : WakeRecoveryInput)
     (h : input.requestState = .interrupted ∨ input.requestState = .superseded ∨
@@ -760,31 +793,18 @@ theorem recovery_does_not_retry_cancelled_wake (input : WakeRecoveryInput)
     (recoverWakeDelivery input).retryEligible = false := by
   rcases h with h | h | h <;> simp [recoverWakeDelivery, h, isTerminal]
 
-theorem recovery_without_attempt_preserves_request (input : WakeRecoveryInput)
-    (hclaim : input.claimSnapshot = none) (hresponse : input.responseState = .absent) :
-    (recoverWakeDelivery input).requestState = input.requestState := by
-  simp [recoverWakeDelivery, hclaim, hresponse]
-
 def deliveryCrashInput : DeliveryCrashPoint → WakeRecoveryInput
   | .beforeClaim =>
       { requestState := .pending
       , claimSnapshot := none
-      , responseState := .absent
       }
   | .duringInference =>
       { requestState := .processing
-      , claimSnapshot := some failedSnapshotFixture
-      , responseState := .absent
-      }
-  | .afterResponsePersistence =>
-      { requestState := .processing
-      , claimSnapshot := some completedSnapshotFixture
-      , responseState := .completed
+      , claimSnapshot := some canonicalSnapshotFixture
       }
   | .duringAcknowledgement =>
       { requestState := .completed
-      , claimSnapshot := some completedSnapshotFixture
-      , responseState := .completed
+      , claimSnapshot := some canonicalSnapshotFixture
       }
 
 def recoverDeliveryCrash (point : DeliveryCrashPoint) : WakeRecoveryProjection :=
@@ -802,15 +822,9 @@ def deliveryCrashRecoveryAccepted : DeliveryCrashPoint → Bool
   | .duringInference =>
       let recovered := recoverDeliveryCrash .duringInference
       decide
-        (recovered.requestState = .failed ∧
+        (recovered.requestState = .processing ∧
          recovered.attemptedBindings = [attemptedBindingFixture] ∧
          recovered.acknowledgedBindings = [] ∧
-         recovered.retryEligible = true)
-  | .afterResponsePersistence =>
-      let recovered := recoverDeliveryCrash .afterResponsePersistence
-      decide
-        (recovered.requestState = .completed ∧
-         recovered.acknowledgedBindings = recovered.attemptedBindings ∧
          recovered.retryEligible = false)
   | .duringAcknowledgement =>
       let recovered := recoverDeliveryCrash .duringAcknowledgement
@@ -823,12 +837,8 @@ theorem restart_before_claim_preserves_pending_delivery :
     deliveryCrashRecoveryAccepted .beforeClaim = true := by
   native_decide
 
-theorem inference_failure_retains_snapshot_for_redrive :
+theorem live_inference_retains_snapshot_without_redrive :
     deliveryCrashRecoveryAccepted .duringInference = true := by
-  native_decide
-
-theorem committed_response_recovers_exact_acknowledgement :
-    deliveryCrashRecoveryAccepted .afterResponsePersistence = true := by
   native_decide
 
 theorem acknowledgement_projection_has_no_partial_crash_state :

@@ -18,6 +18,7 @@ describe("Transcript cancel cause surfacing", () => {
             statusKind: "error",
             status: "cancelled",
             presentation: { kind: "generic", summary: null, input: null, output: null },
+            reconstruction: { state: "ready" },
             cancelCause: {
               cause: "userCancelled",
               source: "requestInterrupt",
@@ -60,6 +61,7 @@ describe("Transcript cancel cause surfacing", () => {
               body: "",
               fallbackOutput: null,
             },
+            reconstruction: { state: "ready" },
           },
         ],
       },
@@ -82,6 +84,7 @@ describe("Transcript cancel cause surfacing", () => {
             statusKind: "error",
             status: "cancelled",
             presentation: { kind: "generic", summary: null, input: null, output: null },
+            reconstruction: { state: "ready" },
             cancelCause: {
               cause: "deadline",
               source: "toolLifecycle",
@@ -102,19 +105,20 @@ describe("Transcript cancel cause surfacing", () => {
 describe("Transcript assistant-turn cancel cause", () => {
   const interruptedCause: DerivedCancelCauseView = {
     cause: "interrupted",
-    source: "responseInterruptedAt",
+    source: "requestLifecycle",
     confidence: "direct",
     at: "2026-05-20T10:36:11Z",
-    evidence: ["AgentResponse.interrupted_at = 2026-05-20T10:36:11Z"],
+    evidence: ['AgentRequest.lifecycle_state = "interrupted"'],
   };
 
-  it("renders badge on the assistantMessage whose sequence matches latestResponse.materializedMessageSequence", () => {
+  it("renders a standalone request cause without attaching it to an assistant message", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "userMessage",
         itemKey: "u-1",
         sequence: 1,
         content: "tell me about X",
+        reconstruction: { state: "ready" },
       },
       {
         kind: "assistantMessage",
@@ -122,21 +126,16 @@ describe("Transcript assistant-turn cancel cause", () => {
         sequence: 2,
         content: "partial response",
         reasoning: null,
+        reconstruction: { state: "ready" },
       },
     ];
-    render(
-      <MessageList
-        timelineItems={items}
-        responseCancelCause={interruptedCause}
-        responseMaterializedSequence={2}
-      />,
-    );
+    render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(
       screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
     ).toBeInTheDocument();
   });
 
-  it("does NOT render the badge on older assistant messages whose sequence does not match", () => {
+  it("renders one standalone badge when prior assistant messages exist", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "assistantMessage",
@@ -144,6 +143,7 @@ describe("Transcript assistant-turn cancel cause", () => {
         sequence: 2,
         content: "older completed turn",
         reasoning: null,
+        reconstruction: { state: "ready" },
       },
       {
         kind: "assistantMessage",
@@ -151,19 +151,16 @@ describe("Transcript assistant-turn cancel cause", () => {
         sequence: 4,
         content: "most recent turn",
         reasoning: null,
+        reconstruction: { state: "ready" },
       },
     ];
-    render(
-      <MessageList
-        timelineItems={items}
-        responseCancelCause={interruptedCause}
-        responseMaterializedSequence={4}
-      />,
-    );
-    expect(screen.getAllByText(/interrupted/i)).toHaveLength(1);
+    render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
+    expect(
+      screen.getAllByText(/interrupted/i, { selector: ".cause-badge" }),
+    ).toHaveLength(1);
   });
 
-  it("renders badge on the liveAssistant overlay when responseCancelCause is present", () => {
+  it("renders a standalone badge while a live assistant overlay is present", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "liveAssistant",
@@ -172,15 +169,13 @@ describe("Transcript assistant-turn cancel cause", () => {
         reasoning: null,
       },
     ];
-    render(
-      <MessageList timelineItems={items} responseCancelCause={interruptedCause} />,
-    );
+    render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(
       screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
     ).toBeInTheDocument();
   });
 
-  it("does NOT render badge when responseCancelCause is null", () => {
+  it("does NOT render badge when requestCancelCause is null", () => {
     const items: RenderedTimelineItem[] = [
       {
         kind: "assistantMessage",
@@ -188,15 +183,10 @@ describe("Transcript assistant-turn cancel cause", () => {
         sequence: 2,
         content: "normal turn",
         reasoning: null,
+        reconstruction: { state: "ready" },
       },
     ];
-    render(
-      <MessageList
-        timelineItems={items}
-        responseCancelCause={null}
-        responseMaterializedSequence={2}
-      />,
-    );
+    render(<MessageList timelineItems={items} requestCancelCause={null} />);
     expect(screen.queryByText(/interrupted/i)).not.toBeInTheDocument();
   });
 
@@ -207,18 +197,13 @@ describe("Transcript assistant-turn cancel cause", () => {
         itemKey: "u-1",
         sequence: 2,
         content: "user prompt",
+        reconstruction: { state: "ready" },
       },
     ];
-    render(
-      <MessageList
-        timelineItems={items}
-        responseCancelCause={interruptedCause}
-        responseMaterializedSequence={2}
-      />,
-    );
+    render(<MessageList timelineItems={items} requestCancelCause={interruptedCause} />);
     expect(
       screen.getByText(/interrupted/i, { selector: ".cause-badge" }),
     ).toBeInTheDocument();
-    expect(screen.getByText(/responseInterruptedAt/i)).toBeInTheDocument();
+    expect(screen.getByText(/requestLifecycle/i)).toBeInTheDocument();
   });
 });

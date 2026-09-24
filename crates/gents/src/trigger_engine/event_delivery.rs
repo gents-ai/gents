@@ -245,7 +245,7 @@ pub(crate) struct GroupRecord {
     pub(crate) doc_id: String,
     pub(crate) state: EventGroupState,
 }
-const GROUP_FIELDS:&str="group_key agent_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason";
+const GROUP_FIELDS: &str = "group_key agent_did consumer correlation consumer_config_key first_seen_at quiesced_at quiesced_reason";
 fn decode_group(
     response: &Value,
     delivery: Delivery<'_>,
@@ -275,7 +275,11 @@ fn decode_group(
         .transpose()
 }
 fn group_query(delivery: Delivery<'_>, correlation: &str) -> String {
-    format!("{{EventGroupState(filter:{{agent_did:{{_eq:\"{}\"}},group_key:{{_eq:\"{}\"}}}},limit:2){{_docID {GROUP_FIELDS}}}}}",escape_graphql_string(delivery.owner()),escape_graphql_string(&delivery.group_key(correlation)))
+    format!(
+        "{{EventGroupState(filter:{{agent_did:{{_eq:\"{}\"}},group_key:{{_eq:\"{}\"}}}},limit:2){{_docID {GROUP_FIELDS}}}}}",
+        escape_graphql_string(delivery.owner()),
+        escape_graphql_string(&delivery.group_key(correlation))
+    )
 }
 
 pub(crate) async fn load_or_create_group(

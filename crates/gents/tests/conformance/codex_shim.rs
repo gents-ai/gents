@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     let cases = lean_codex_shim_projection_cases();
-    assert_eq!(cases.len(), 12);
+    assert_eq!(cases.len(), 13);
 
     for case in cases {
         assert_eq!(
@@ -16,6 +16,10 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             "{} should cite terminal coherence",
             case.witness
         );
+        // `is_superseded` is an independent observation input, not a derived
+        // alias for the lifecycle state. The model exercises both a superseded
+        // lifecycle with no override and a processing lifecycle with one.
+        // Compare their native projection below, without rewriting either input.
         if case.local_interrupt_acked {
             assert!(
                 case.interruptible_request_state,
@@ -42,13 +46,13 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             // witnesses below.
             let head = gents_protocol::client_protocol::project_persisted_attempt(
                 &case.request_state,
-                false,
-                case.response_status.as_deref(),
+                case.is_superseded,
             )
             .unwrap_or_else(|| panic!("{}: invalid lifecycle vocabulary", case.witness));
             use gents_protocol::client_protocol::ClientTurnState;
             let phase = match head.turn_state {
-                ClientTurnState::WaitingForClaim | ClientTurnState::Streaming => "inProgress",
+                ClientTurnState::WaitingForClaim => "inProgress",
+                ClientTurnState::Running => "inProgress",
                 ClientTurnState::Completed => "completed",
                 ClientTurnState::Failed => "failed",
                 ClientTurnState::Superseded | ClientTurnState::Interrupted => "interrupted",
@@ -74,15 +78,16 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(
         names,
         [
-            "codex_shim.projection.pending_no_response",
-            "codex_shim.projection.claimed_no_response",
-            "codex_shim.projection.processing_streaming_response",
-            "codex_shim.projection.nonterminal_complete_response",
-            "codex_shim.projection.nonterminal_error_response",
+            "codex_shim.projection.workspace_binding_pending",
+            "codex_shim.projection.pending",
+            "codex_shim.projection.claimed",
+            "codex_shim.projection.processing",
+            "codex_shim.projection.input_required",
             "codex_shim.projection.completed_request",
             "codex_shim.projection.failed_request",
             "codex_shim.projection.dead_request",
             "codex_shim.projection.superseded_request",
+            "codex_shim.projection.supersession_override",
             "codex_shim.projection.interrupted_request",
             "codex_shim.projection.local_interrupt_preempts_core_state",
             "codex_shim.projection.local_interrupt_input_required",
@@ -91,29 +96,36 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         .collect::<BTreeSet<_>>()
     );
 
-    let pending = lean_codex_shim_projection_case("codex_shim.projection.pending_no_response");
+    let pending = lean_codex_shim_projection_case("codex_shim.projection.pending");
     assert_eq!(pending.request_state, "pending");
-    assert_eq!(pending.response_status, None);
+    assert!(!pending.is_superseded);
     assert!(!pending.local_interrupt_acked);
     assert_eq!(pending.projected_phase, "inProgress");
     assert!(!pending.terminal);
     assert!(!pending.effectively_terminal);
     assert!(!pending.interruptible_request_state);
-    assert_eq!(
-        pending.lean_theorems,
-        vec![
-            "deriveAttempt_total".to_string(),
-            "lifecycle_transition_monotonic".to_string(),
-            "terminal_coherence".to_string(),
-            "CodexShim.projectClientTurnState_terminal".to_string(),
-            "CodexShim.projection_without_local_interrupt".to_string(),
-            "CodexShim.codex_turn_terminates_precisely".to_string(),
-        ]
-    );
+    assert!(pending
+        .lean_theorems
+        .contains(&"deriveAttempt_total".to_string()));
+    assert!(pending
+        .lean_theorems
+        .contains(&"lifecycle_transition_monotonic".to_string()));
+    assert!(pending
+        .lean_theorems
+        .contains(&"terminal_coherence".to_string()));
+    assert!(pending
+        .lean_theorems
+        .contains(&"CodexShim.projectClientTurnState_terminal".to_string()));
+    assert!(pending
+        .lean_theorems
+        .contains(&"CodexShim.projection_without_local_interrupt".to_string()));
+    assert!(pending
+        .lean_theorems
+        .contains(&"CodexShim.codex_turn_terminates_precisely".to_string()));
 
     let completed = lean_codex_shim_projection_case("codex_shim.projection.completed_request");
     assert_eq!(completed.request_state, "completed");
-    assert_eq!(completed.response_status.as_deref(), Some("error"));
+    assert!(!completed.is_superseded);
     assert!(!completed.local_interrupt_acked);
     assert_eq!(completed.projected_phase, "completed");
     assert!(completed.terminal);
@@ -123,14 +135,19 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
         .lean_theorems
         .contains(&"terminal_coherence".to_string()));
 
+    let supersession =
+        lean_codex_shim_projection_case("codex_shim.projection.supersession_override");
+    assert_eq!(supersession.request_state, "processing");
+    assert!(supersession.is_superseded);
+    assert!(!supersession.local_interrupt_acked);
+    assert_eq!(supersession.projected_phase, "interrupted");
+    assert!(supersession.terminal);
+    assert!(supersession.effectively_terminal);
+
     let local_interrupt = lean_codex_shim_projection_case(
         "codex_shim.projection.local_interrupt_preempts_core_state",
     );
     assert_eq!(local_interrupt.request_state, "processing");
-    assert_eq!(
-        local_interrupt.response_status.as_deref(),
-        Some("streaming")
-    );
     assert!(local_interrupt.local_interrupt_acked);
     assert_eq!(local_interrupt.projected_phase, "interrupted");
     assert!(local_interrupt.terminal);
@@ -203,14 +220,11 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     let tool_cases = lean_codex_shim_subagent_tool_cases();
     assert_eq!(tool_cases.len(), 9);
     let status_cases = lean_codex_shim_subagent_status_cases();
-    assert_eq!(status_cases.len(), 12);
+    assert_eq!(status_cases.len(), 10);
     for case in status_cases {
-        let head = gents_protocol::client_protocol::project_persisted_attempt(
-            &case.request_state,
-            false,
-            case.response_status.as_deref(),
-        )
-        .unwrap_or_else(|| panic!("{}: invalid client head", case.witness));
+        let head =
+            gents_protocol::client_protocol::project_persisted_attempt(&case.request_state, false)
+                .unwrap_or_else(|| panic!("{}: invalid client head", case.witness));
         use gents_protocol::client_protocol::{ClientTurnState, RequestLifecycleState};
         let expected = match (head.turn_state, head.request_state) {
             (ClientTurnState::Completed, _) => ("completed", true),
@@ -221,9 +235,8 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
             (ClientTurnState::WaitingForClaim, RequestLifecycleState::Pending) => {
                 ("pendingInit", false)
             }
-            (ClientTurnState::WaitingForClaim | ClientTurnState::Streaming, _) => {
-                ("running", false)
-            }
+            (ClientTurnState::WaitingForClaim, _) => ("running", false),
+            (ClientTurnState::Running, _) => ("running", false),
         };
         assert_eq!(case.projected_agent_status, expected.0, "{}", case.witness);
         assert_eq!(case.terminal, expected.1, "{}", case.witness);
@@ -279,18 +292,15 @@ pub(super) fn generated_codex_shim_projection_cases_pin_adapter_mapping() {
     assert_eq!(shape.replay_stages, ["user", "compaction", "modelItems"]);
 
     let thread_status_cases = lean_codex_shim_thread_status_cases();
-    assert_eq!(thread_status_cases.len(), 13);
+    assert_eq!(thread_status_cases.len(), 11);
     for case in thread_status_cases {
         use gents_protocol::client_protocol::ClientTurnState;
         let head = case.request_state.as_deref().and_then(|request_state| {
-            gents_protocol::client_protocol::project_persisted_attempt(
-                request_state,
-                false,
-                case.response_status.as_deref(),
-            )
+            gents_protocol::client_protocol::project_persisted_attempt(request_state, false)
         });
         let expected = match head.map(|head| head.turn_state) {
-            Some(ClientTurnState::WaitingForClaim | ClientTurnState::Streaming) => "active",
+            Some(ClientTurnState::WaitingForClaim) => "active",
+            Some(ClientTurnState::Running) => "active",
             Some(ClientTurnState::Failed) => "systemError",
             Some(
                 ClientTurnState::Completed

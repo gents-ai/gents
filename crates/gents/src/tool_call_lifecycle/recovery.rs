@@ -23,14 +23,13 @@ use crate::interrupt::interrupt_request;
 
 use super::{
     subagent_request::create_subagent_request_with_request_id_and_workspace,
-    subagent_workspace::{
-        complete_lineage_from_bridge, resolve_child_workspace, ParentWorkspaceStamp,
-    },
-    AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallState,
+    subagent_workspace::{resolve_child_workspace, ParentWorkspaceStamp},
+    AwaitMode, CancelCause, CancelPolicy, ChildTerminal, FailureClass, ToolCallLifecycle,
+    ToolCallState,
 };
 
 async fn execute_mutation_with_retry(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     mutation: &str,
     operation: &'static str,
 ) -> Result<defra_node::QueryResponse> {
@@ -99,6 +98,8 @@ struct RunningToolCallRow {
     request_id: Option<String>,
     #[serde(default)]
     request_doc_id: Option<String>,
+    #[serde(default)]
+    requester_did: Option<String>,
     /// Immutable owner principal stamped at create. Recovery scopes by this
     /// field — `request_id` alone is not unique across agents.
     #[serde(default)]
@@ -108,7 +109,9 @@ struct RunningToolCallRow {
     #[serde(default)]
     tool_name: String,
     #[serde(default)]
-    args: String,
+    delegated_input: Option<gents_protocol::output::DelegatedToolInput>,
+    #[serde(default)]
+    delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
     #[serde(default)]
     started_at: Option<String>,
     #[serde(default)]
@@ -124,6 +127,8 @@ struct RunningToolCallRow {
     #[serde(default)]
     spawn_target_did: Option<String>,
     #[serde(default)]
+    spawn_behavior_id: Option<String>,
+    #[serde(default)]
     unclaimed_deadline_at: Option<String>,
 }
 
@@ -134,7 +139,11 @@ struct TerminalBackgroundToolRow {
     #[serde(default)]
     request_id: Option<String>,
     #[serde(default)]
+    request_doc_id: Option<String>,
+    #[serde(default)]
     agent_did: Option<String>,
+    #[serde(default)]
+    requester_did: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
@@ -143,8 +152,6 @@ struct TerminalBackgroundToolRow {
     tool_name: String,
     #[serde(default)]
     status: String,
-    #[serde(default)]
-    result: String,
     #[serde(default)]
     lifecycle_state: Option<String>,
     #[serde(default)]
@@ -156,21 +163,11 @@ struct TerminalBackgroundToolRow {
 #[derive(Debug, Deserialize)]
 struct SpawnArgs {
     name: String,
-    agent_did: String,
-    behavior_id: String,
     prompt: String,
     #[serde(default)]
     deadline: Option<String>,
     #[serde(default)]
     workspace: Option<crate::background_tools::SpawnWorkspaceArg>,
-    #[serde(default)]
-    workspace_id: Option<String>,
-    #[serde(default)]
-    workspace_authority: Option<String>,
-    #[serde(default)]
-    workspace_owner_agent_did: Option<String>,
-    #[serde(default)]
-    workspace_seal_hash: Option<String>,
 }
 
 impl SpawnArgs {
@@ -190,7 +187,7 @@ enum RecoveryOutcome {
 
 impl super::ToolCallLifecycle {
     pub async fn recover_all(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
     ) -> Result<ToolCallRecoveryReport> {
         let materialized_children = recover_orphan_subagent_children(node, agent_did).await?;
@@ -234,7 +231,7 @@ impl super::ToolCallLifecycle {
     /// 3. Interrupt pending (queued) descendants whose parent request is
     ///    already terminal — they can never legally run.
     pub async fn reconcile_subagent_liveness(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
     ) -> Result<SubagentLivenessReport> {
         let mut report = SubagentLivenessReport::default();
@@ -299,7 +296,7 @@ impl super::ToolCallLifecycle {
     /// Covers running native tool calls stranded under a terminal parent with
     /// no executor active.
     pub async fn reconcile_terminal_parent_owned_tools(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
     ) -> Result<TerminalParentToolReport> {
         let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
@@ -450,7 +447,7 @@ impl super::ToolCallLifecycle {
     /// an empty registry after restart (or panic cleanup) re-applies the same
     /// classifier used by startup recovery.
     pub async fn reconcile_orphaned_background_tools(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
         executions: &crate::hook::BackgroundExecutionRegistry,
     ) -> Result<OrphanedBackgroundToolReport> {
@@ -521,7 +518,7 @@ impl super::ToolCallLifecycle {
     /// advances to `completed` only after
     /// both side effects converge, so transient failures remain discoverable.
     pub async fn reconcile_background_completion_side_effects(
-        node: &EmbeddedNode,
+        node: &std::sync::Arc<EmbeddedNode>,
         agent_did: &str,
     ) -> Result<BackgroundCompletionSideEffectReport> {
         let rows = load_pending_background_completion_rows(node, agent_did).await?;
@@ -546,22 +543,38 @@ impl super::ToolCallLifecycle {
                 tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without session_id");
                 continue;
             };
-            let Some(tool_call_id) = non_empty(row.tool_call_id.as_deref()) else {
-                tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without tool_call_id");
-                continue;
-            };
             let Some((status, reason)) = background_completion_projection(&row) else {
                 continue;
             };
 
+            let Some(request_doc_id) = non_empty(row.request_doc_id.as_deref()) else {
+                tracing::warn!(doc_id = %row.doc_id, "skipping completion redrive without request_doc_id");
+                continue;
+            };
+            let output = match crate::background_tools::canonical_tool_output(
+                node,
+                &row.doc_id,
+                request_doc_id,
+                session_id,
+                agent_did,
+                row.requester_did.as_deref(),
+            )
+            .await
+            {
+                Ok(output) => output,
+                Err(error) => {
+                    tracing::warn!(doc_id = %row.doc_id, error = %error, "canonical background output is unresolved");
+                    continue;
+                }
+            };
             match crate::background_completion::append_background_tool_completion(
                 node,
                 session_id,
                 request_id,
-                tool_call_id,
+                &row.doc_id,
                 &row.tool_name,
                 status,
-                &row.result,
+                &output,
                 reason,
             )
             .await
@@ -569,7 +582,7 @@ impl super::ToolCallLifecycle {
                 Ok(()) => report.side_effects_converged += 1,
                 Err(error) => tracing::warn!(
                     doc_id = %row.doc_id,
-                    tool_call_id,
+                    tool_call_id = row.tool_call_id.as_deref().unwrap_or(""),
                     error = %error,
                     "failed to redrive background completion side effects"
                 ),
@@ -589,21 +602,192 @@ impl super::ToolCallLifecycle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lifecycle::{ClaimOutcome, RequestLifecycle, RequestTerminalOutcome};
+    use crate::llm::message::{AssistantContent, Message, Text, ToolCall, ToolFunction};
+    use crate::streaming::DefraStreamWriter;
+
+    /// Mirrors `claimed_request` in `tool_call_lifecycle/delivery.rs`, with the
+    /// child's immutable parent provenance stamped at create so the descendant
+    /// edge corroborates the physical joins. The child's answer is a real
+    /// `DefraStreamWriter` accepted native publication, terminalized through
+    /// the owned completion loop with an exact terminal `Message` selection.
+    async fn materialized_completed_child(
+        node: &std::sync::Arc<EmbeddedNode>,
+        child_request_id: &str,
+        child_agent_did: &str,
+    ) {
+        let row = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                escape_graphql_string(child_request_id),
+                crate::watcher::AGENT_REQUEST_FIELDS,
+            ))
+            .await;
+        let row: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&row, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            child_request_id,
+            child_agent_did,
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+        let writer =
+            DefraStreamWriter::new(node.clone(), child_agent_did, std::time::Duration::ZERO);
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        writer
+            .start_provider_attempt(
+                &lifecycle.request().doc_id,
+                0,
+                0,
+                "inference.1".parse().unwrap(),
+            )
+            .await;
+        let message = Message::Assistant {
+            id: Some("child-answer".into()),
+            content: vec![AssistantContent::Text(Text {
+                text: "Durable child answer".into(),
+            })],
+        };
+        let published = writer
+            .publish_native_turn(&lifecycle, 0, 0, &message)
+            .await
+            .unwrap();
+        lifecycle
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::Message {
+                    message_doc_id: published.message_doc_id,
+                },
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn published_parent_bridge(node: &std::sync::Arc<EmbeddedNode>) -> (String, String) {
+        let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "parent", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", retry_parent_request: "", retry_root_request: "parent", superseded_by_request: "", content: "Parent request", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+        assert!(!created.has_errors(), "{:#?}", created.errors);
+        let row = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "parent" }} }}) {{ {} }} }}"#,
+                crate::watcher::AGENT_REQUEST_FIELDS,
+            ))
+            .await;
+        let row: gents_protocol::row::AgentRequestRow =
+            crate::graphql::first_row(&row, "AgentRequest")
+                .unwrap()
+                .unwrap();
+        let mut lifecycle = RequestLifecycle::new_with_agent_did(
+            node.clone(),
+            "parent",
+            "did:test:parent",
+            row.try_into().unwrap(),
+            60,
+        );
+        assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+        let writer =
+            DefraStreamWriter::new(node.clone(), "did:test:parent", std::time::Duration::ZERO);
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        writer
+            .start_provider_attempt(
+                &lifecycle.request().doc_id,
+                0,
+                0,
+                "inference.1".parse().unwrap(),
+            )
+            .await;
+        let message = Message::Assistant {
+            id: Some("parent-spawn".into()),
+            content: vec![AssistantContent::ToolCall(ToolCall {
+                id: "bridge".into(),
+                call_id: None,
+                function: ToolFunction::new(
+                    crate::toolset::SPAWN_SUBAGENT_TOOL_NAME.into(),
+                    serde_json::json!({"behavior_id":"child","prompt":"Child request","await_mode":"foreground"}),
+                ),
+                signature: None,
+                additional_params: None,
+            })],
+        };
+        let published = writer
+            .publish_native_turn_with_spawn_admissions(
+                &lifecycle,
+                0,
+                0,
+                &message,
+                &[crate::streaming::SpawnAdmissionPlan {
+                    tool_call_id: "bridge".into(),
+                    child_request_id: "child".into(),
+                    spawn_target_did: "did:test:child".into(),
+                    spawn_behavior_id: "child".into(),
+                    delegated_workspace: None,
+                    await_mode: AwaitMode::Foreground,
+                }],
+            )
+            .await
+            .unwrap();
+        let accepted = published.accepted_tools.into_iter().next().unwrap();
+        let bridge_doc = accepted.tool_call_doc_id.clone();
+        let mut bridge = ToolCallLifecycle::from_accepted(
+            node.clone(),
+            "did:test:parent".into(),
+            None,
+            accepted,
+            lifecycle.claimed_deadline_at().unwrap(),
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+        )
+        .unwrap();
+        bridge.start_running().await.unwrap();
+        (lifecycle.request().doc_id.clone(), bridge_doc)
+    }
 
     #[tokio::test]
     async fn completed_child_recovery_hydrates_materialized_answer_with_exact_scope() {
-        let node = EmbeddedNode::builder()
-            .build()
-            .await
-            .expect("embedded node");
-        crate::ensure_runtime_schemas(&node)
-            .await
-            .expect("runtime schemas");
-        async fn create(node: &EmbeddedNode, collection: &str, input: &str) -> String {
+        let fixture_name = "recovery-completed-child";
+        let child_request_id = format!("child-{fixture_name}");
+        let crate::tool_call_lifecycle::admission_fixture::PublishedAdmission {
+            node,
+            path,
+            tool: bridge,
+            ..
+        } = crate::tool_call_lifecycle::admission_fixture::published_admission(
+            crate::tool_call_lifecycle::admission_fixture::PublishedAdmissionOptions {
+                name: fixture_name.into(),
+                real_identity: true,
+                await_mode: AwaitMode::Foreground,
+                cancel_policy: CancelPolicy::Cascade,
+                start_running: true,
+                request_created_at: None,
+                spawn_plan: Some(crate::streaming::SpawnAdmissionPlan {
+                    tool_call_id: "bridge-native-tool".into(),
+                    child_request_id: child_request_id.clone(),
+                    spawn_target_did: "did:test:test".into(),
+                    spawn_behavior_id: "general".into(),
+                    delegated_workspace: None,
+                    await_mode: AwaitMode::Foreground,
+                }),
+            },
+        )
+        .await
+        .expect("publish canonical foreground subagent bridge");
+        async fn create(
+            node: &std::sync::Arc<EmbeddedNode>,
+            collection: &str,
+            input: serde_json::Value,
+        ) -> String {
             let result = node
-                .execute(&format!(
-                    "mutation {{ create_{collection}(input: {{ {input} }}) {{ _docID }} }}"
-                ))
+                .execute_request_with_retry(
+                    defra_node::QueryRequest::new(format!(
+                        "mutation($input: {collection}MutationInputArg!) {{ create_{collection}(input: $input) {{ _docID }} }}"
+                    )).with_variables(serde_json::json!({"input": input})),
+                    defra_node::ExecuteRetryPolicy::default(),
+                )
                 .await;
             assert!(!result.has_errors(), "{collection}: {:?}", result.errors);
             crate::graphql::single_mutation_document(&result, &format!("create_{collection}"))
@@ -614,54 +798,67 @@ mod tests {
                 .expect("created document ID")
                 .to_string()
         }
-        let parent_doc = create(&node, "AgentRequest", r#"request_id: "parent", agent_did: "did:test:parent", behavior_id: "parent", session_id: "parent-session", content: "Parent request", created_at: "2026-09-01T00:00:00Z", lifecycle_state: "running""#).await;
-        let bridge_doc = create(
+        let parent_request_id = "request-recovery-completed-child";
+        let parent_doc = bridge.request_doc_id().unwrap().to_owned();
+        let bridge_doc = bridge.doc_id().unwrap().to_owned();
+        crate::tool_call_lifecycle::create_subagent_request_with_request_id(
             &node,
-            "AgentToolCall",
-            &format!(
-                r#"
-            tool_call_key: "bridge", tool_call_id: "bridge", request_id: "parent",
-            request_doc_id: "{}", agent_did: "did:test:parent", session_id: "parent-session",
-            tool_name: "run_subagent", args: "{{}}", status: "running", lifecycle_state: "running",
-            await_mode: "foreground", child_request_id: "child", spawn_target_did: "did:test:child"
-        "#,
-                escape_graphql_string(&parent_doc)
-            ),
+            child_request_id.clone(),
+            parent_request_id.into(),
+            parent_doc.clone(),
+            bridge.tool_call_id().to_owned(),
+            bridge_doc.clone(),
+            0,
+            bridge.agent_did().to_owned(),
+            "general".into(),
+            "Child request".into(),
+            None,
+        )
+        .await
+        .expect("materialize signed child through the accepted bridge");
+        // The child is a real claimed request whose answer was accepted through
+        // `DefraStreamWriter` and terminalized with an exact `Message` selection.
+        materialized_completed_child(&node, &child_request_id, bridge.agent_did()).await;
+        // Newer canonical rows sharing logical labels must not displace the
+        // exact child's answer: their physical identities differ from the
+        // child's own. The decoys keep the same negative-control geometry as
+        // the retired `AgentResponse` decoy — a foreign agent DID and a
+        // foreign physical child document, so no exact-scope join can adopt
+        // them. The foreign `AgentMessage` header alone is inert: the terminal
+        // selection pins the child's own header, and reconstruction reads
+        // payload bytes only through the child's exact `AgentOutputSegment`s.
+        create(
+            &node,
+            "AgentMessage",
+            serde_json::json!({
+                "message_key": "foreign", "session_id": "child-session",
+                "agent_did": "did:test:foreign",
+                "publication": {"kind": "request_execution", "execution_generation": "foreign-gen"},
+                "outcome": "complete", "sequence": 8, "role": "assistant", "blocks": null,
+                "created_at": "2026-09-02T00:00:00Z"
+            }),
         )
         .await;
-        let child_doc = create(&node, "AgentRequest", &format!(r#"
-            request_id: "child", agent_did: "did:test:child", behavior_id: "child", session_id: "child-session",
-            content: "Child request", created_at: "2026-09-01T00:00:01Z", subagent_depth: 1,
-            lifecycle_state: "completed", caused_by_parent_request_id: "parent", caused_by_parent_request_doc_id: "{}",
-            caused_by_parent_tool_call_id: "bridge", caused_by_parent_tool_call_doc_id: "{}"
-        "#, escape_graphql_string(&parent_doc), escape_graphql_string(&bridge_doc))).await;
-        create(&node, "AgentMessage", &format!(r#"
-            message_key: "answer", request_id: "child", request_doc_id: "{}", agent_did: "did:test:child",
-            session_id: "child-session", sequence: 7, role: "assistant", content: "Durable child answer"
-        "#, escape_graphql_string(&child_doc))).await;
-        create(&node, "AgentResponse", &format!(r#"
-            response_key: "answer", request_id: "child", request_doc_id: "{}", agent_did: "did:test:child",
-            session_id: "child-session", content: "", status: "complete", materialized_message_sequence: 7,
-            created_at: "2026-09-01T00:00:00Z"
-        "#, escape_graphql_string(&child_doc))).await;
-        // Newer rows sharing logical labels must not displace the exact child's answer.
-        create(&node, "AgentResponse", r#"
-            response_key: "foreign", request_id: "child", request_doc_id: "foreign-child-doc", agent_did: "did:test:foreign",
-            session_id: "child-session", content: "Foreign preview", status: "complete", materialized_message_sequence: 8,
-            created_at: "2026-09-02T00:00:00Z"
-        "#).await;
-        create(&node, "AgentMessage", r#"
-            message_key: "foreign", request_id: "child", request_doc_id: "foreign-child-doc", agent_did: "did:test:foreign",
-            session_id: "child-session", sequence: 8, role: "assistant", content: "Foreign answer"
-        "#).await;
-        let mut row: RunningToolCallRow = serde_json::from_value(serde_json::json!({
-            "_docID": bridge_doc, "request_id": "parent", "request_doc_id": "foreign-parent-doc",
-            "agent_did": "did:test:parent", "session_id": "parent-session", "tool_call_id": "bridge",
-            "tool_name": "run_subagent", "args": "{}", "await_mode": "foreground",
-            "child_request_id": "child", "spawn_target_did": "did:test:child"
-        })).unwrap();
+        create(&node, "AgentOutputSegment", serde_json::json!({
+            "agent_did": "did:test:foreign", "session_id": "child-session",
+            "request_doc_id": "foreign-child-doc",
+            "source": {"kind": "provider_turn", "scope": "inference.1", "turn_index": 0, "attempt": 0},
+            "writer": {"kind": "request_execution", "execution_generation": "foreign-gen"},
+            "ordinal": 0, "runs": [{"stream": 0, "bytes": 14,
+                "declaration": {"block_index": 0, "part_index": 0, "payload": {"kind": "text"}}}],
+            "payload": "Foreign answer",
+            "close": {"kind": "closed", "outcome": "complete", "segments": 1, "stream_bytes": [14]},
+            "created_at": "2026-09-02T00:00:00Z"
+        })).await;
+        let mut row = load_running_tool_call_rows_for_agent(&node, bridge.agent_did())
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|row| row.doc_id == bridge_doc)
+            .expect("accepted bridge remains an exact running recovery row");
+        row.request_doc_id = Some("foreign-parent-doc".into());
         assert!(
-            recover_bridge_terminal_child(&node, "did:test:parent", &row)
+            recover_bridge_terminal_child(&node, bridge.agent_did(), &row)
                 .await
                 .is_err()
         );
@@ -672,15 +869,16 @@ mod tests {
                 .is_err()
         );
         assert!(
-            recover_bridge_terminal_child(&node, "did:test:parent", &row)
+            recover_bridge_terminal_child(&node, bridge.agent_did(), &row)
                 .await
                 .unwrap()
         );
-        let stored = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state result }} }}"#, escape_graphql_string(&row.doc_id))).await;
+        let stored = node.execute(&format!(r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#, escape_graphql_string(&row.doc_id))).await;
         assert!(!stored.has_errors(), "{:?}", stored.errors);
         let tool = &stored.data.as_ref().unwrap()["AgentToolCall"][0];
         assert_eq!(tool["lifecycle_state"], "completed");
-        assert_eq!(tool["result"], "Durable child answer");
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).expect("remove recovery fixture database");
     }
 
     #[test]
@@ -735,12 +933,13 @@ mod tests {
         let row = TerminalBackgroundToolRow {
             doc_id: "doc-1".to_string(),
             request_id: Some("request-1".to_string()),
+            request_doc_id: Some("request-doc-1".to_string()),
             agent_did: Some("did:test:agent".to_string()),
+            requester_did: None,
             session_id: Some("session-1".to_string()),
             tool_call_id: Some("tool-1".to_string()),
             tool_name: "test_tool".to_string(),
             status: "completionPending:tool_failed".to_string(),
-            result: "tool-controlled text says background tool panicked".to_string(),
             lifecycle_state: Some("failed".to_string()),
             cancel_cause: None,
             child_request_id: None,
@@ -756,12 +955,13 @@ mod tests {
         let row = TerminalBackgroundToolRow {
             doc_id: "doc-custom".to_string(),
             request_id: Some("request-custom".to_string()),
+            request_doc_id: Some("request-doc-custom".to_string()),
             agent_did: Some("did:test:agent".to_string()),
+            requester_did: None,
             session_id: Some("session-custom".to_string()),
             tool_call_id: Some("tool-custom".to_string()),
             tool_name: "test_tool".to_string(),
             status: "completionPending:operator requested drain".to_string(),
-            result: String::new(),
             lifecycle_state: Some("cancelled".to_string()),
             cancel_cause: Some("userCancelled".to_string()),
             child_request_id: None,
@@ -796,7 +996,50 @@ mod tests {
     }
 }
 
-async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+async fn load_accepted_spawn_arguments(
+    node: &std::sync::Arc<EmbeddedNode>,
+    row: &RunningToolCallRow,
+) -> Result<String> {
+    if let Some(delegated) = &row.delegated_input {
+        return Ok(delegated.arguments.clone());
+    }
+    let agent_did = non_empty(row.agent_did.as_deref()).context("tool row omitted agent_did")?;
+    let request_doc_id =
+        non_empty(row.request_doc_id.as_deref()).context("tool row omitted request_doc_id")?;
+    let accepted = super::ToolCallLifecycle::load_accepted_for_dispatch(
+        node,
+        &row.doc_id,
+        agent_did,
+        &row.session_id,
+        row.requester_did.as_deref(),
+    )
+    .await?;
+    anyhow::ensure!(
+        accepted.request_doc_id == request_doc_id,
+        "accepted tool binding crossed physical request identity"
+    );
+    let stream = crate::session::load_canonical_payload_from_node(
+        node,
+        request_doc_id,
+        agent_did,
+        row.requester_did.as_deref(),
+        &accepted.arguments,
+    )
+    .await?;
+    anyhow::ensure!(
+        matches!(
+            stream.declaration.payload,
+            gents_protocol::output::StreamPayload::ToolArguments { .. }
+        ),
+        "accepted tool arguments are not native JSON"
+    );
+    Ok(stream.text)
+}
+
+async fn recover_orphan_subagent_children(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+) -> Result<usize> {
     let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
     let mut materialized = 0;
 
@@ -848,7 +1091,19 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         };
 
-        let spawn_args = match serde_json::from_str::<SpawnArgs>(&row.args) {
+        let accepted_arguments = match load_accepted_spawn_arguments(node, &row).await {
+            Ok(arguments) => arguments,
+            Err(error) => {
+                tracing::warn!(
+                    doc_id = %row.doc_id,
+                    request_id = %parent_request_id,
+                    error = %error,
+                    "cannot materialize orphan subagent child without exact accepted arguments"
+                );
+                continue;
+            }
+        };
+        let spawn_args = match serde_json::from_str::<SpawnArgs>(&accepted_arguments) {
             Ok(spawn_args) => spawn_args,
             Err(error) => {
                 tracing::warn!(
@@ -875,41 +1130,18 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             .await?;
             continue;
         };
-        let Some(args_target_did) = non_empty(Some(&spawn_args.agent_did)) else {
+        let Some(row_spawn_behavior_id) = non_empty(row.spawn_behavior_id.as_deref()) else {
             fail_unauthorized_orphan_subagent_tool_call(
                 node,
                 &row,
-                "/agent_did",
+                "/spawn_behavior_id",
                 "",
-                "subagent arguments are missing agent_did",
+                "subagent tool call is missing immutable spawn_behavior_id",
                 &[],
             )
             .await?;
             continue;
         };
-        if row_spawn_target_did != args_target_did {
-            let failed = fail_unauthorized_orphan_subagent_tool_call(
-                node,
-                &row,
-                "/agent_did",
-                args_target_did,
-                "subagent target DID args do not match immutable spawn_target_did",
-                &[],
-            )
-            .await?;
-            tracing::warn!(
-                doc_id = %row.doc_id,
-                request_id = %parent_request_id,
-                session_id = %row.session_id,
-                tool_call_id = %row.tool_call_id,
-                child_request_id = %child_request_id,
-                spawn_target_did = %row_spawn_target_did,
-                args_agent_did = %args_target_did,
-                failed_tool_call = failed,
-                "cannot materialize orphan subagent child because target DID fields differ"
-            );
-            continue;
-        }
 
         let parent_depth = parent
             .subagent_depth
@@ -978,6 +1210,49 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             continue;
         }
 
+        let Some(target) = authorization
+            .resolve_target(spawn_args.target_name())
+            .cloned()
+        else {
+            fail_unauthorized_orphan_subagent_tool_call(
+                node,
+                &row,
+                "/name",
+                spawn_args.target_name(),
+                "subagent target disappeared after authorization",
+                &authorization.allowed_target_names(),
+            )
+            .await?;
+            continue;
+        };
+        if target.target_agent_did.as_str() != row_spawn_target_did
+            || target.behavior_id.as_str() != row_spawn_behavior_id
+        {
+            let failed = fail_unauthorized_orphan_subagent_tool_call(
+                node,
+                &row,
+                "/name",
+                spawn_args.target_name(),
+                "resolved target does not match immutable spawn route",
+                &authorization.allowed_target_names(),
+            )
+            .await?;
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                session_id = %row.session_id,
+                tool_call_id = %row.tool_call_id,
+                child_request_id = %child_request_id,
+                spawn_target_did = %row_spawn_target_did,
+                spawn_behavior_id = %row_spawn_behavior_id,
+                resolved_target_did = %target.target_agent_did,
+                resolved_behavior_id = %target.behavior_id,
+                failed_tool_call = failed,
+                "cannot materialize orphan subagent child because immutable route drifted"
+            );
+            continue;
+        }
+
         let child_agent_did = row_spawn_target_did.to_string();
         let Some(parent_request_doc_id) = row
             .request_doc_id
@@ -992,27 +1267,42 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             );
             continue;
         };
+        let delegated_workspace = row
+            .delegated_workspace
+            .as_ref()
+            .map(|workspace| crate::lifecycle::WorkspaceLineage {
+                workspace_id: Some(workspace.workspace_id.clone()),
+                workspace_owner_agent_did: Some(workspace.workspace_owner_agent_did.clone()),
+                workspace_authority: Some(workspace.workspace_authority.clone()),
+                workspace_seal_hash: workspace.workspace_seal_hash.clone(),
+            })
+            .unwrap_or_default();
+        if let Err(error) = delegated_workspace.require_authority_if_workspace_id() {
+            tracing::warn!(
+                doc_id = %row.doc_id,
+                request_id = %parent_request_id,
+                tool_call_id = %row.tool_call_id,
+                error = %error,
+                "cannot materialize orphan subagent child from malformed immutable workspace provenance"
+            );
+            continue;
+        }
         let parent_workspace = ParentWorkspaceStamp::from_fields(
             parent
                 .agent_did
                 .as_deref()
                 .context("workspace parent request lacks agent_did")?,
-            parent.workspace_id.as_deref(),
-            parent.workspace_owner_agent_did.as_deref(),
-            parent.workspace_authority.as_deref(),
-            parent.workspace_seal_hash.as_deref(),
+            delegated_workspace.workspace_id.as_deref(),
+            delegated_workspace.workspace_owner_agent_did.as_deref(),
+            delegated_workspace.workspace_authority.as_deref(),
+            delegated_workspace.workspace_seal_hash.as_deref(),
         );
         let operator_tool_root = crate::workspace::process_operator_tool_root();
         let workspace = match resolve_child_workspace(
             node,
             &parent_workspace,
             spawn_args.workspace.as_ref(),
-            complete_lineage_from_bridge(
-                spawn_args.workspace_id.as_deref(),
-                spawn_args.workspace_owner_agent_did.as_deref(),
-                spawn_args.workspace_authority.as_deref(),
-                spawn_args.workspace_seal_hash.as_deref(),
-            ),
+            None,
             &child_agent_did,
             &row.tool_call_id,
             &parent_request_id,
@@ -1042,7 +1332,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
             row.doc_id.clone(),
             parent_depth,
             child_agent_did,
-            spawn_args.behavior_id,
+            row_spawn_behavior_id.to_string(),
             spawn_args.prompt,
             deadline,
             workspace,
@@ -1076,7 +1366,7 @@ async fn recover_orphan_subagent_children(node: &EmbeddedNode, agent_did: &str) 
 }
 
 async fn fail_unauthorized_orphan_subagent_tool_call(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
     path: &str,
     requested: &str,
@@ -1089,15 +1379,16 @@ async fn fail_unauthorized_orphan_subagent_tool_call(
     fail_running_subagent_tool_call(
         node,
         &row.doc_id,
-        row.started_at.as_deref(),
-        row.deadline_at.as_deref(),
         &payload,
         FailureClass::ServiceUnavailable,
     )
     .await
 }
 
-async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) -> Result<usize> {
+async fn recover_stuck_running_tool_calls(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+) -> Result<usize> {
     let rows = load_running_tool_call_rows_for_agent(node, agent_did).await?;
 
     let mut recovered = 0;
@@ -1215,7 +1506,7 @@ async fn recover_stuck_running_tool_calls(node: &EmbeddedNode, agent_did: &str) 
 }
 
 async fn append_recovered_background_tool_completion(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
     outcome: RecoveryOutcome,
 ) {
@@ -1233,7 +1524,7 @@ async fn append_recovered_background_tool_completion(
         node,
         &row.session_id,
         parent_request_id,
-        &row.tool_call_id,
+        &row.doc_id,
         &row.tool_name,
         status,
         "",
@@ -1254,7 +1545,7 @@ async fn append_recovered_background_tool_completion(
 
 /// Running tool rows owned by `agent_did` (immutable scope key on create).
 async fn load_running_tool_call_rows_for_agent(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
     let escaped = escape_graphql_string(agent_did);
@@ -1268,12 +1559,14 @@ async fn load_running_tool_call_rows_for_agent(
 /// Running bridge rows only (`child_request_id` set) — the periodic liveness
 /// sweep's scope, filtered server-side so the 5s tick never pays for
 /// non-subagent tool rows.
-async fn load_running_subagent_bridge_rows(node: &EmbeddedNode) -> Result<Vec<RunningToolCallRow>> {
+async fn load_running_subagent_bridge_rows(
+    node: &std::sync::Arc<EmbeddedNode>,
+) -> Result<Vec<RunningToolCallRow>> {
     load_running_tool_call_rows_with_filter(node, r#", child_request_id: { _ne: "" }"#).await
 }
 
 async fn load_running_tool_call_rows_with_filter(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     extra_filter: &str,
 ) -> Result<Vec<RunningToolCallRow>> {
     let query = format!(
@@ -1284,11 +1577,13 @@ async fn load_running_tool_call_rows_with_filter(
             _docID
             request_id
             request_doc_id
+            requester_did
             agent_did
             session_id
             tool_call_id
             tool_name
-            args
+            delegated_input
+            delegated_workspace
             started_at
             deadline_at
             await_mode
@@ -1296,6 +1591,7 @@ async fn load_running_tool_call_rows_with_filter(
             cancel_cause
             child_request_id
             spawn_target_did
+            spawn_behavior_id
             unclaimed_deadline_at
         }}
     }}"#
@@ -1333,7 +1629,7 @@ async fn load_running_tool_call_rows_with_filter(
 }
 
 async fn load_pending_background_completion_rows(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
 ) -> Result<Vec<TerminalBackgroundToolRow>> {
     let agent_did = escape_graphql_string(agent_did);
@@ -1347,12 +1643,13 @@ async fn load_pending_background_completion_rows(
             }}) {{
                 _docID
                 request_id
+                request_doc_id
                 agent_did
+                requester_did
                 session_id
                 tool_call_id
                 tool_name
                 status
-                result
                 lifecycle_state
                 cancel_cause
                 child_request_id
@@ -1416,7 +1713,7 @@ fn background_completion_projection(
 }
 
 async fn lookup_parent_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     request_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
@@ -1480,7 +1777,7 @@ async fn lookup_parent_request(
 /// releases its queued children; a parent row that has not replicated yet
 /// yields `None` and the child is conservatively left pending.
 async fn interrupt_queued_descendants_of_terminal_parents(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
 ) -> Result<usize> {
     let escaped_agent_did = escape_graphql_string(agent_did);
@@ -1590,7 +1887,7 @@ async fn interrupt_queued_descendants_of_terminal_parents(
 /// pending request ids are referenced by an `AgentToolCall` bridge as its
 /// child (`child_request_id == request_id`)?
 async fn load_bridged_child_ids(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     child_request_ids: &[&str],
 ) -> Result<std::collections::HashSet<String>> {
     if child_request_ids.is_empty() {
@@ -1630,7 +1927,7 @@ async fn load_bridged_child_ids(
 }
 
 async fn interrupt_pending_descendant_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     doc_id: &str,
     agent_did: &str,
     parent_request_id: &str,
@@ -1672,7 +1969,10 @@ async fn interrupt_pending_descendant_row(
         .is_some_and(response_has_documents))
 }
 
-async fn child_request_exists(node: &EmbeddedNode, request_id: &str) -> Result<bool> {
+async fn child_request_exists(
+    node: &std::sync::Arc<EmbeddedNode>,
+    request_id: &str,
+) -> Result<bool> {
     let escaped_request_id = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
@@ -1698,7 +1998,7 @@ async fn child_request_exists(node: &EmbeddedNode, request_id: &str) -> Result<b
 }
 
 async fn recover_bridge_terminal_child(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     row: &RunningToolCallRow,
 ) -> Result<bool> {
@@ -1753,9 +2053,13 @@ async fn recover_bridge_terminal_child(
     );
 
     if child_request_completed(&child) {
-        let result = load_child_completion_result(node, &edge)
-            .await?
-            .unwrap_or_else(|| format!("child request {child_request_id} completed"));
+        let Some(result) = crate::background_tools::load_child_final_response(node, &edge).await?
+        else {
+            // The completed lifecycle may replicate before its terminal
+            // selection or the selected message's immutable dependencies.
+            // Leave the bridge running so recovery retries the exact result.
+            return Ok(false);
+        };
         recover_bridge_completed_row(node, row, &result).await?;
         ensure_background_subagent_projection_side_effects(node, agent_did, row, child_request_id)
             .await?;
@@ -1772,7 +2076,7 @@ async fn recover_bridge_terminal_child(
 }
 
 async fn ensure_background_subagent_projection_side_effects(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     row: &RunningToolCallRow,
     child_request_id: &str,
@@ -1796,7 +2100,7 @@ async fn ensure_background_subagent_projection_side_effects(
 }
 
 async fn terminalize_expired_local_child_request(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     row: &RunningToolCallRow,
 ) -> Result<bool> {
@@ -1812,7 +2116,7 @@ async fn terminalize_expired_local_child_request(
 /// `terminalize_expired_local_child_request` over a preloaded child liveness
 /// row, so the periodic sweep can batch the reads.
 async fn terminalize_expired_child_with_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     agent_did: &str,
     row: &RunningToolCallRow,
     child: &AgentRequestRow,
@@ -1856,7 +2160,7 @@ async fn terminalize_expired_child_with_row(
 }
 
 async fn load_request_liveness_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<Option<AgentRequestRow>> {
     let escaped_request_id = escape_graphql_string(request_id);
@@ -1875,7 +2179,6 @@ async fn load_request_liveness_row(
                 requester_did
                 execution_generation
                 execution_lease_expires_at
-                execution_progress_seq
                 deadline
             }}
         }}"#
@@ -1900,7 +2203,7 @@ async fn load_request_liveness_row(
 /// Batched form of `load_child_liveness_row`: one `_in` query for every
 /// bridge's child on the periodic tick, keyed by `request_id`.
 async fn load_child_liveness_rows(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     child_request_ids: &[&str],
 ) -> Result<std::collections::HashMap<String, AgentRequestRow>> {
     if child_request_ids.is_empty() {
@@ -1925,7 +2228,6 @@ async fn load_child_liveness_rows(
                 requester_did
                 execution_generation
                 execution_lease_expires_at
-                execution_progress_seq
                 deadline
             }}
         }}"#
@@ -1951,13 +2253,13 @@ async fn load_child_liveness_rows(
 }
 
 async fn mark_child_request_dead(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     child: &AgentRequestRow,
     reason: &str,
 ) -> Result<bool> {
     match child.lifecycle_state {
         Some(RequestLifecycleState::Claimed | RequestLifecycleState::Processing) => {
-            return Ok(crate::lifecycle::revoke_execution_generation(
+            return Ok(crate::lifecycle::revoke_execution_preserving_output(
                 node,
                 child,
                 crate::lifecycle::RequestTerminalOutcome::Dead,
@@ -2013,240 +2315,108 @@ async fn mark_child_request_dead(
         .is_some_and(response_has_documents))
 }
 
-async fn load_child_completion_result(
-    node: &EmbeddedNode,
-    child_edge: &crate::background_tools::ChildEdge,
-) -> Result<Option<String>> {
-    // The response preview is cleared once the final assistant message is
-    // materialized. Keep the transcript hydration owner shared with waiters.
-    if let Some(answer) =
-        crate::background_tools::load_child_final_response(node, child_edge).await?
-    {
-        if !answer.trim().is_empty() {
-            return Ok(Some(answer));
-        }
-    }
-    #[derive(Deserialize)]
-    struct ResponseRow {
-        content: Option<String>,
-    }
-    let child_request_id = &child_edge.child_request_id;
-    let Some(child_doc_id) =
-        crate::request_binding::resolve_request_doc_id(node, child_request_id).await?
-    else {
-        return Ok(None);
-    };
-    let query = format!(
-        r#"{{ AgentResponse(filter: {{
-        request_doc_id: {{ _eq: "{}" }}, request_id: {{ _eq: "{}" }},
-        agent_did: {{ _eq: "{}" }}, session_id: {{ _eq: "{}" }}
-    }}, order: {{ created_at: DESC }}, limit: 1) {{ content }} }}"#,
-        escape_graphql_string(&child_doc_id),
-        escape_graphql_string(child_request_id),
-        escape_graphql_string(&child_edge.child_agent_did),
-        escape_graphql_string(&child_edge.child_session_id)
-    );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "query child response for bridge recovery failed: {:?}",
-        response.errors
-    );
-    let rows: Vec<ResponseRow> = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .cloned()
-        .map(serde_json::from_value)
-        .transpose()?
-        .unwrap_or_default();
-    Ok(rows
-        .into_iter()
-        .next()
-        .and_then(|row| row.content)
-        .filter(|content| !content.trim().is_empty()))
-}
-
 async fn recover_bridge_completed_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
     child_result: &str,
 ) -> Result<()> {
-    let now = Utc::now();
-    let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
-    let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
-    let latency_ms = (now - started_at).num_milliseconds().max(0);
-    let escaped_doc_id = escape_graphql_string(&row.doc_id);
-    let escaped_result = escape_graphql_string(child_result);
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    result: "{escaped_result}",
-                    status: "completed",
-                    lifecycle_state: "completed",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    completed_at: "{completed_at}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null
-                }}
-            ) {{ _docID }}
-        }}"#,
-        started_at = started_at.to_rfc3339(),
-        deadline_at = deadline_at.to_rfc3339(),
-        completed_at = now.to_rfc3339(),
+    let mut lifecycle = load_recovery_lifecycle(node, row).await?;
+    if lifecycle.state == ToolCallState::Completed {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        lifecycle.bridge_complete(child_result.to_owned()).await?,
+        "bridge completion recovery lost its running compare"
     );
-
-    execute_mutation_with_retry(node, &mutation, "recover_bridge_completed_child")
-        .await
-        .context("recover bridge completed child mutation")?;
     Ok(())
 }
 
 async fn recover_bridge_failed_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
     terminal: &ChildTerminal,
 ) -> Result<()> {
-    let now = Utc::now();
-    let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
-    let deadline_at = parse_datetime(row.deadline_at.as_deref()).unwrap_or(now);
-    let latency_ms = (now - started_at).num_milliseconds().max(0);
-    let escaped_doc_id = escape_graphql_string(&row.doc_id);
-    let projected = terminal.projected_state().as_str();
-    let cancel_cause_field = if terminal.projected_state() == ToolCallState::Cancelled {
-        let cause = row
-            .cancel_cause
-            .as_deref()
-            .and_then(CancelCause::from_persisted)
-            .unwrap_or(CancelCause::Interrupted)
-            .as_str();
-        format!(r#"cancel_cause: "{cause}","#)
-    } else {
-        String::new()
-    };
-    let optional_fields = match terminal {
-        ChildTerminal::Failed {
-            reason,
-            failure_class,
-        } => {
-            let escaped_reason = escape_graphql_string(reason);
-            let failure_class = failure_class.as_str();
-            format!(
-                r#"result: "{escaped_reason}",
-                    tool_failure_class: "{failure_class}","#
-            )
-        }
-        _ => String::new(),
-    };
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    {optional_fields}
-                    {cancel_cause_field}
-                    status: "completed",
-                    lifecycle_state: "{projected}",
-                    started_at: "{started_at}",
-                    deadline_at: "{deadline_at}",
-                    completed_at: "{completed_at}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null
-                }}
-            ) {{ _docID }}
-        }}"#,
-        started_at = started_at.to_rfc3339(),
-        deadline_at = deadline_at.to_rfc3339(),
-        completed_at = now.to_rfc3339(),
+    let mut lifecycle = load_recovery_lifecycle(node, row).await?;
+    if lifecycle.state == terminal.projected_state() {
+        return Ok(());
+    }
+    anyhow::ensure!(
+        lifecycle.bridge_failure(terminal.clone()).await?,
+        "bridge failure recovery lost its running compare"
     );
-
-    execute_mutation_with_retry(node, &mutation, "recover_bridge_terminal_child")
-        .await
-        .context("recover bridge terminal child mutation")?;
     Ok(())
+}
+
+async fn load_recovery_lifecycle(
+    node: &std::sync::Arc<EmbeddedNode>,
+    row: &RunningToolCallRow,
+) -> Result<ToolCallLifecycle> {
+    let agent_did = row
+        .agent_did
+        .as_deref()
+        .context("recovery row omitted agent_did")?;
+    ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        &row.doc_id,
+        agent_did,
+        &row.session_id,
+        row.requester_did.as_deref(),
+    )
+    .await?
+    .context("recovery physical tool row disappeared")
 }
 
 /// Terminalize a running tool-call row. Returns `Ok(true)` when the
 /// compare-and-set updated the row, `Ok(false)` when a concurrent writer
 /// already left `running` (first terminal wins — do not overwrite).
 async fn recover_tool_call_row(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     row: &RunningToolCallRow,
     deadline_at: Option<DateTime<Utc>>,
     outcome: RecoveryOutcome,
     completion_side_effects_owed: bool,
     remote_cancel_intent_at: Option<DateTime<Utc>>,
 ) -> Result<bool> {
-    let now = Utc::now();
-    let started_at = parse_datetime(row.started_at.as_deref()).unwrap_or(now);
-    let latency_ms = (now - started_at).num_milliseconds().max(0);
-    let escaped_doc_id = escape_graphql_string(&row.doc_id);
-    let escaped_result = escape_graphql_string(&outcome.result_text(deadline_at));
-    let started_at_str = started_at.to_rfc3339();
-    let completed_at_str = now.to_rfc3339();
-    let deadline_field = deadline_at
-        .map(|deadline| format!(r#", deadline_at: "{}""#, deadline.to_rfc3339()))
-        .unwrap_or_default();
-    let failure_class_field = outcome
-        .failure_class()
-        .map(|failure| format!(r#", tool_failure_class: "{}""#, failure.as_str()))
-        .unwrap_or_default();
-    let cancel_cause_field = outcome
-        .cancel_cause(row.cancel_cause.as_deref())
-        .map(|cause| format!(r#", cancel_cause: "{}""#, cause.as_str()))
-        .unwrap_or_default();
-    let remote_cancel_intent_fields = remote_cancel_intent_at
-        .map(|at| {
-            format!(
-                r#", cancel_cascade_intent_at: "{}", cancel_pending_remote_ack: true"#,
-                escape_graphql_string(&at.to_rfc3339())
-            )
-        })
-        .unwrap_or_default();
-    let terminal_status = if is_background_tool_row(row) && completion_side_effects_owed {
-        format!("completionPending:{}", outcome.notification_reason())
-    } else {
-        "completed".to_string()
-    };
-
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    result: "{escaped_result}",
-                    status: "{terminal_status}",
-                    lifecycle_state: "{lifecycle_state}",
-                    started_at: "{started_at_str}"{deadline_field},
-                    completed_at: "{completed_at_str}",
-                    latency_ms: {latency_ms},
-                    unclaimed_deadline_at: null{failure_class_field}{cancel_cause_field}{remote_cancel_intent_fields}
-                }}
-            ) {{ _docID }}
-        }}"#,
-        lifecycle_state = outcome.lifecycle_state().as_str(),
-    );
-
-    let response = execute_mutation_with_retry(node, &mutation, "recover_running_tool_call")
-        .await
-        .context("recover running tool call mutation")?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("update_AgentToolCall"))
-        .is_some_and(response_has_documents))
+    let _ = completion_side_effects_owed;
+    let mut lifecycle = load_recovery_lifecycle(node, row).await?;
+    if lifecycle.state != ToolCallState::Running {
+        return Ok(false);
+    }
+    let result = outcome.result_text(deadline_at);
+    match outcome {
+        RecoveryOutcome::TimedOut => lifecycle.timeout().await,
+        RecoveryOutcome::Cancelled | RecoveryOutcome::BackgroundInterrupted => {
+            lifecycle
+                .cancel_during_run_from_recovery(
+                    outcome
+                        .cancel_cause(row.cancel_cause.as_deref())
+                        .unwrap_or(CancelCause::Interrupted),
+                    remote_cancel_intent_at,
+                    outcome.notification_reason(),
+                )
+                .await
+        }
+        RecoveryOutcome::Failed | RecoveryOutcome::UnclaimedCrossDeploymentSpawn => {
+            let failure_class = outcome.failure_class().unwrap_or(FailureClass::External);
+            if is_background_tool_row(row) || child_request_id(row).is_some() {
+                // Background native tools and linked children are bridge-owned
+                // rows. Their terminal write must use the bridge transition;
+                // `fail_owned` deliberately rejects them so a native executor
+                // cannot bypass the bridge owner.
+                lifecycle
+                    .bridge_failure_with_completion_reason(
+                        ChildTerminal::Failed {
+                            reason: result,
+                            failure_class,
+                        },
+                        outcome.notification_reason(),
+                    )
+                    .await
+            } else {
+                lifecycle.fail_owned(&result, failure_class, None).await
+            }
+        }
+    }
 }
 
 fn parse_datetime(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -2400,7 +2570,7 @@ fn cascade_child_request_id(row: &RunningToolCallRow) -> Option<&str> {
 }
 
 async fn child_request_is_locally_owned(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     local_did: &str,
     child_request_id: &str,
 ) -> Result<bool> {

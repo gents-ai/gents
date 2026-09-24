@@ -160,18 +160,18 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
             .await
             .context("submitting chat request from the enrolled desktop")?;
 
-            let (request_id, _, _) =
+            let (request_id, runtime_session, _) =
                 wait_for_runtime_agent_request(&graphql, core.node(), &agent_did, &prompt).await?;
-            let runtime_response = wait_for_complete_agent_response(
+            let runtime_text = wait_for_complete_agent_response(
                 &graphql,
                 &request_id,
+                &runtime_session,
                 Duration::from_secs(240),
             )
             .await?;
-            let runtime_text = response_visible_text(&runtime_response);
             anyhow::ensure!(
                 runtime_text.contains(&reply_token),
-                "live inference response missing {reply_token}: {runtime_response}"
+                "live inference response missing {reply_token}: {runtime_text}"
             );
 
             wait_for_client_complete_response(&core, &session_id, &agent_did, &request_id, &reply_token).await?;
@@ -382,120 +382,115 @@ async fn wait_for_runtime_agent_request(
     }
 }
 
-async fn assistant_message_text(graphql: &str, request_id: &str) -> Result<String> {
-    let response = graphql_query(
-        graphql,
-        &format!(
-            r#"{{
-                AgentMessage(filter: {{ request_id: {{ _eq: "{}" }} }}) {{
-                    role content
-                }}
-            }}"#,
-            escape_graphql_string(request_id),
-        ),
-    )
-    .await?;
-    Ok(response
-        .pointer("/data/AgentMessage")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|row| {
-            row.get("role")
-                .and_then(Value::as_str)
-                .is_some_and(|role| role == "assistant" || role == "agent")
-        })
-        .filter_map(|row| {
-            row.get("content").and_then(Value::as_str).map(|content| {
-                gents_protocol::transcript::present_persisted_message("assistant", content)
-                    .body_markdown
-            })
-        })
-        .collect::<Vec<_>>()
-        .join("\n"))
-}
-
-fn response_visible_text(row: &Value) -> String {
-    row.get("content")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
+/// Poll the canonical request-output owner until the runtime request reaches a
+/// terminal lifecycle with visible selected content. Terminal selection lives
+/// on `AgentRequest.terminal_output`; the exact physical request row is decoded
+/// through the canonical `AgentRequestRow` owner and its presentation is
+/// reconstructed from the selected canonical header and its segments — never
+/// from inline message content or a response document.
 async fn wait_for_complete_agent_response(
     graphql: &str,
     request_id: &str,
+    session: &str,
     timeout: Duration,
-) -> Result<Value> {
+) -> Result<String> {
     let deadline = Instant::now() + timeout;
-    let mut empty_complete_since = None::<Instant>;
+    let mut empty_terminal_since = None::<Instant>;
     loop {
         let response = graphql_query(
             graphql,
             &format!(
                 r#"{{
-                    AgentResponse(
-                        filter: {{ request_id: {{ _eq: "{}" }} }},
+                    AgentRequest(
+                        filter: {{
+                            request_id: {{ _eq: "{}" }},
+                            session_id: {{ _eq: "{}" }}
+                        }},
+                        order: {{ created_at: DESC }},
                         limit: 1
                     ) {{
-                        request_id
-                        status
-                        content
-                        reasoning
-                        error_message
+                        _docID agent_did requester_did session_id request_id
+                        lifecycle_state failure_reason terminal_output
                     }}
                 }}"#,
                 escape_graphql_string(request_id),
+                escape_graphql_string(session),
             ),
         )
         .await?;
-        if let Ok(row) = first_graphql_row(&response, "AgentResponse") {
-            match row.get("status").and_then(Value::as_str) {
-                Some("complete") => {
-                    let mut visible = response_visible_text(row);
-                    if visible.trim().is_empty() {
-                        visible = assistant_message_text(graphql, request_id).await?;
-                    }
-                    if !visible.trim().is_empty() {
-                        let mut row = row.clone();
-                        if let Some(map) = row.as_object_mut() {
-                            map.insert("content".to_string(), Value::String(visible));
-                        }
-                        return Ok(row);
-                    }
-                    if empty_complete_since
-                        .get_or_insert_with(Instant::now)
-                        .elapsed()
-                        >= Duration::from_secs(15)
-                    {
-                        let messages = assistant_message_text(graphql, request_id).await?;
-                        bail!(
-                            "live inference completed with empty content for {request_id}: {row}; messages={messages:?}"
+        if let Ok(row) = first_graphql_row(&response, "AgentRequest") {
+            let request: gents_protocol::row::AgentRequestRow = serde_json::from_value(row.clone())
+                .context("decoding canonical AgentRequest row")?;
+            // Requester/session lineage must survive the runtime round trip
+            // before the terminal output is observed for this physical row.
+            anyhow::ensure!(
+                request.session_id.as_deref() == Some(session)
+                    && request
+                        .agent_did
+                        .as_deref()
+                        .is_some_and(|did| !did.is_empty())
+                    && request
+                        .requester_did
+                        .as_deref()
+                        .is_some_and(|did| !did.is_empty()),
+                "canonical AgentRequest row lost requester/session lineage for {request_id}: {row}"
+            );
+            if request
+                .lifecycle_state
+                .is_some_and(|state| state.as_str() == "failed")
+            {
+                bail!(
+                    "live inference failed for {request_id}: failure_reason={:?}; row={row}",
+                    request.failure_reason
+                );
+            }
+            if request.is_terminal() {
+                let output = gents::session::observe_request_output(
+                    &gents::ConfigAccess::Graphql(graphql.to_owned()),
+                    &request,
+                )
+                .await?;
+                let visible = match &output {
+                    gents::session::CanonicalRequestOutput::TerminalMessage {
+                        header,
+                        presentation,
+                        ..
+                    } => {
+                        anyhow::ensure!(
+                            header.request_doc_id.as_deref() == request.doc_id.as_deref()
+                                && header.session_id == session,
+                            "canonical terminal header does not match the physical request for {request_id}: header={header:?}; row={row}"
                         );
+                        Some(presentation.body_markdown.clone())
                     }
+                    gents::session::CanonicalRequestOutput::TerminalNoMessage => bail!(
+                        "live inference completed without a canonical terminal message for {request_id}: {output:?}"
+                    ),
+                    gents::session::CanonicalRequestOutput::Denied
+                    | gents::session::CanonicalRequestOutput::Invalid
+                    | gents::session::CanonicalRequestOutput::Conflicted
+                    | gents::session::CanonicalRequestOutput::Retracted => bail!(
+                        "canonical terminal output is not presentable for {request_id}: {output:?}"
+                    ),
+                    _ => None,
+                };
+                if let Some(visible) = visible.filter(|text| !text.trim().is_empty()) {
+                    return Ok(visible);
                 }
-                Some("error") => {
-                    bail!("live inference returned an error response for {request_id}: {row}")
+                if empty_terminal_since
+                    .get_or_insert_with(Instant::now)
+                    .elapsed()
+                    >= Duration::from_secs(15)
+                {
+                    bail!(
+                        "live inference produced no visible canonical terminal content for {request_id} within 15s of the first terminal observation: {row}; output={output:?}"
+                    );
                 }
-                _ => {}
             }
         }
         if Instant::now() >= deadline {
-            let messages = graphql_query(
-                graphql,
-                &format!(
-                    r#"{{
-                        AgentMessage(filter: {{ request_id: {{ _eq: "{}" }} }}) {{
-                            role content
-                        }}
-                    }}"#,
-                    escape_graphql_string(request_id),
-                ),
-            )
-            .await
-            .unwrap_or_else(|error| serde_json::json!({ "error": error.to_string() }));
             bail!(
-                "timed out waiting for complete AgentResponse with visible text for {request_id}; last={response}; messages={messages}"
+                "timed out waiting for canonical terminal output with visible text for {request_id}; last={response}"
             );
         }
         sleep(Duration::from_millis(250)).await;
@@ -526,56 +521,58 @@ async fn wait_for_client_complete_response(
         )
         .await?;
         let snapshot = core.store().snapshot();
-        let response_text = snapshot
-            .responses
-            .iter()
-            .filter(|row| row.request_id.as_deref() == Some(request_id))
-            .map(|row| row.content.as_deref().unwrap_or_default())
-            .collect::<Vec<_>>()
-            .join("\n");
         let message_text = page
             .store
-            .messages
+            .transcript_messages
             .iter()
-            .filter(|row| row.request_id.as_deref() == Some(request_id))
-            .filter(|row| matches!(row.role.as_deref(), Some("assistant" | "agent")))
-            .map(|row| {
-                gents_protocol::transcript::present_persisted_message(
-                    "assistant",
-                    row.content.as_deref().unwrap_or_default(),
-                )
-                .body_markdown
+            .filter(|row| {
+                row.message.request_doc_id.as_deref().is_some_and(|doc| {
+                    snapshot.requests.iter().any(|request| {
+                        request.doc_id.as_deref() == Some(doc) && request.request_id == request_id
+                    })
+                })
             })
+            .filter_map(|row| {
+                match gents_desktop_core::client::canonical_output::project_canonical_message(
+                    row,
+                    &page.store.output_segments,
+                    &[],
+                    &[],
+                ) {
+                    gents_desktop_core::client::canonical_output::CanonicalMessageProjection::Ready(message) => {
+                        Some(message)
+                    }
+                    _ => None,
+                }
+            })
+            .map(|message| gents_protocol::transcript::present_message(&message).body_markdown)
             .collect::<Vec<_>>()
             .join("\n");
-        let complete = snapshot.responses.iter().any(|row| {
-            row.request_id.as_deref() == Some(request_id)
-                && row.status.as_deref() == Some("complete")
+        let complete = snapshot.requests.iter().any(|row| {
+            row.request_id == request_id
+                && row
+                    .lifecycle_state
+                    .is_some_and(|state| state.as_str() == "completed")
         });
-        if complete && (response_text.contains(token) || message_text.contains(token)) {
+        if complete && message_text.contains(token) {
             return Ok(());
         }
-        if snapshot.responses.iter().any(|row| {
-            row.request_id.as_deref() == Some(request_id) && row.status.as_deref() == Some("error")
+        if snapshot.requests.iter().any(|row| {
+            row.request_id == request_id
+                && row
+                    .lifecycle_state
+                    .is_some_and(|state| state.as_str() == "failed")
         }) {
             bail!(
-                "client received an error response for {request_id}: {:?}",
-                snapshot.responses
+                "client received a failed request for {request_id}: {:?}",
+                snapshot.requests
             );
         }
         if Instant::now() >= deadline {
-            let node_messages = core
-                .node()
-                .execute(&format!(
-                    r#"{{ AgentMessage(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ role content }} }}"#,
-                    escape_graphql_string(request_id),
-                ))
-                .await;
             bail!(
-                "client never received the complete live response for {request_id} containing {token}; responses={:?}; messages={:?}; node_messages={:?}",
-                snapshot.responses,
-                snapshot.messages,
-                node_messages.data
+                "client never received the complete live response for {request_id} containing {token}; requests={:?}; transcript_messages={:?}",
+                snapshot.requests,
+                snapshot.transcript_messages
             );
         }
         sleep(Duration::from_millis(250)).await;

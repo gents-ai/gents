@@ -15,6 +15,7 @@ use super::support::mock_subscription::MockUpdateSubscriptionSource;
 const EVENT_SOURCE_COLLECTION: &str = "EventDeliveryDoc";
 const EVENT_SOURCE_TRIGGER_ID: &str = "event-delivery-trigger";
 const EVENT_SOURCE_TASK_ID: &str = "event-delivery-task";
+const SUBAGENT_CHILD_BEHAVIOR: &str = "event-delivery-child";
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(2);
 const RESCAN_TEST_INTERVAL: Duration = Duration::from_millis(50);
 
@@ -250,27 +251,15 @@ impl ProductionEventDeliveryDriver {
                 install_subagent_source_fixture(db.node.as_ref(), db.node_identity.did())
                     .await
                     .expect("install SubagentSource event-delivery fixture");
-                let (runner, emitted_rx, snapshot_tx) = spawn_subagent_source_runner(
-                    db.node.clone(),
-                    db.node_identity.clone(),
-                    mock_subs.clone(),
-                    cancel.clone(),
-                );
-                assert!(
-                    mock_subs
-                        .wait_for_subscribers(1, Duration::from_secs(2))
-                        .await,
-                    "SubagentSource runner did not open its mock subscription"
-                );
                 Self {
                     source,
                     db,
                     mock_subs,
                     runtime: ProductionRuntime::SubagentSource,
                     cancel,
-                    _snapshot_tx: Some(snapshot_tx),
-                    runner: Some(runner),
-                    emitted_rx: Some(emitted_rx),
+                    _snapshot_tx: None,
+                    runner: None,
+                    emitted_rx: None,
                     emitted_buffer: Vec::new(),
                     doc_ids: HashMap::new(),
                 }
@@ -284,6 +273,31 @@ impl ProductionEventDeliveryDriver {
             )
         });
         driver
+    }
+
+    async fn start_subagent_source_for_rescan(&mut self) {
+        assert!(matches!(&self.runtime, ProductionRuntime::SubagentSource));
+        assert!(self.runner.is_none(), "SubagentSource already started");
+        // Lean's SubagentSource trace persists its bridge before rescanTick.
+        // Keep this observer absent while the public publisher accepts the
+        // bridge, then start it only after the publisher has crashed. The
+        // mock update sent with no subscriber is intentionally lost: the
+        // source must discover and emit the durable running row by rescan.
+        let (runner, emitted_rx, snapshot_tx) = spawn_subagent_source_runner(
+            self.db.node.clone(),
+            self.db.node_identity.clone(),
+            self.mock_subs.clone(),
+            self.cancel.clone(),
+        );
+        assert!(
+            self.mock_subs
+                .wait_for_subscribers(1, Duration::from_secs(2))
+                .await,
+            "SubagentSource runner did not open its mock subscription"
+        );
+        self._snapshot_tx = Some(snapshot_tx);
+        self.runner = Some(runner);
+        self.emitted_rx = Some(emitted_rx);
     }
 
     async fn seed_world(
@@ -361,92 +375,139 @@ impl ProductionEventDeliveryDriver {
     }
 
     async fn create_subagent_tool_call_doc(&self, doc: &str) -> Result<String, String> {
-        let agent_did = self.db.node_identity.did();
-        let tool_call_id = escape_graphql_string(doc);
-        let tool_call_key = escape_graphql_string(&format!("event-delivery-session:{doc}"));
         let parent_request_id = format!("event-delivery-parent-{doc}");
         let parent_session_id = format!("event-delivery-session-{doc}");
-        let child_request_id = format!("event-delivery-child-{doc}");
-        let parent_request_doc_id = crate::support::create_request_for_agent_with_signed_fields(
-            self.db.node.as_ref(),
-            agent_did,
-            &parent_request_id,
-            &parent_session_id,
-            "processing",
-            "2026-05-20T00:00:00Z",
-            None,
-            None,
-            None,
-            None,
+        let prompt = format!("event delivery parent {doc}");
+        let expected_args = serde_json::json!({
+            "name": SUBAGENT_CHILD_BEHAVIOR,
+            "prompt": "materialize event-delivery child",
+            "await_mode": "background",
+        });
+        let args = expected_args.to_string();
+        let prepared = crate::support::accepted_turn::prepare_accepted_turn(
+            &self.db,
+            crate::support::accepted_turn::AcceptedTurnSpec {
+                backend_id: "event-delivery-subagent-backend",
+                model: "event-delivery-subagent-model",
+                parent_behavior_id: AGENT_NAME,
+                // Keep the target out of the publisher runtime's source
+                // snapshot. The separate SubagentSource under test owns the
+                // rescan and child materialization.
+                configured_behavior_ids: &[AGENT_NAME],
+                request_id: &parent_request_id,
+                session_id: &parent_session_id,
+                prompt: &prompt,
+                accepted_chunks: vec![crate::support::streaming_backend::StreamChunk::tool_call(
+                    doc,
+                    "spawn_subagent",
+                    args,
+                )],
+                child_plans: Vec::new(),
+                valid_until: None,
+                subagent_depth: Some(0),
+                request_setup: None,
+            },
         )
         .await;
-        let parent_request_id = escape_graphql_string(&parent_request_id);
-        let parent_request_doc_id = escape_graphql_string(&parent_request_doc_id);
-        let parent_session_id = escape_graphql_string(&parent_session_id);
-        let child_request_id = escape_graphql_string(&child_request_id);
-        let args = escape_graphql_string(
-            &serde_json::json!({
-                "name": AGENT_NAME,
-                "agent_did": agent_did,
-                "behavior_id": AGENT_NAME,
-                "prompt": "materialize event-delivery child",
-                "parent_subagent_depth": 0,
-            })
-            .to_string(),
+        // A completed parent can terminalize its still-unmaterialized bridge
+        // before the rescan observes it. Hold the next provider response after
+        // canonical acceptance, then crash the publisher once the durable
+        // bridge is running. This leaves a genuine running-source premise.
+        prepared.backend.enable_dynamic_followups(&prompt);
+        let identity: Arc<dyn gents::AgentIdentity> = self.db.node_identity.clone();
+        let agent = gents::Gents::from_default_behavior_documents(
+            self.db.node.clone(),
+            identity,
+            gents::DocumentRuntimeOptions {
+                tool_ceiling: gents::ToolCeiling::meta_only(),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("build event-delivery accepted-turn publisher");
+        let runtime =
+            crate::support::accepted_turn::boot_prepared_accepted_turn(&self.db, prepared, agent)
+                .await;
+        let request_id = escape_graphql_string(&parent_request_id);
+        let observed_bridge = tokio::time::timeout(DELIVERY_TIMEOUT, async {
+            loop {
+                let response = self.db.node.execute(&format!(
+                    r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{ _docID request_id request_doc_id requester_did tool_call_id tool_call_key lifecycle_state child_request_id spawn_behavior_id await_mode }} }}"#,
+                )).await;
+                assert!(!response.has_errors(), "accepted bridge query: {:?}", response.errors);
+                let rows = response.data.as_ref()
+                    .and_then(|data| data["AgentToolCall"].as_array())
+                    .expect("accepted bridge query omitted AgentToolCall rows");
+                assert!(rows.len() <= 1, "one accepted bridge per modeled source document");
+                if let Some(row) = rows.first() {
+                    if row["lifecycle_state"] == "running" {
+                        assert_eq!(row["request_id"], parent_request_id);
+                        assert_eq!(row["tool_call_id"], doc, "native tool ID must match the modeled source key");
+                        assert_eq!(row["spawn_behavior_id"], SUBAGENT_CHILD_BEHAVIOR);
+                        assert_eq!(row["await_mode"], "background");
+                        assert!(row["request_doc_id"].as_str().is_some_and(|id| !id.is_empty()));
+                        assert!(row["child_request_id"].as_str().is_some_and(|id| !id.is_empty()));
+                        break (
+                            row["_docID"].as_str().expect("accepted tool physical identity").to_owned(),
+                            row["requester_did"].as_str().map(str::to_owned),
+                        );
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        let (doc_id, requester_did) = match observed_bridge {
+            Ok(bridge) => bridge,
+            Err(_) => {
+                let observed = self.db.node.execute(&format!(
+                    r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{lifecycle_state failure_reason}}
+                    AgentToolCall(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{_docID requester_did lifecycle_state denial_reason tool_failure_class}} }}"#
+                )).await;
+                let tool = observed
+                    .data
+                    .as_ref()
+                    .and_then(|data| data["AgentToolCall"].as_array())
+                    .and_then(|rows| rows.first());
+                let presentation = match tool.and_then(|row| row["_docID"].as_str()) {
+                    Some(tool_doc_id) => Some(
+                        gents::tool_call_lifecycle::load_tool_call_presentation(
+                            &gents::ConfigAccess::Local(self.db.node.clone()),
+                            tool_doc_id,
+                            self.db.node_identity.did(),
+                            &parent_session_id,
+                            tool.and_then(|row| row["requester_did"].as_str()),
+                        )
+                        .await
+                        .map(|value| value.result)
+                        .map_err(|error| error.to_string()),
+                    ),
+                    None => None,
+                };
+                runtime.crash().await;
+                return Err(format!(
+                    "accepted SubagentSource bridge {doc:?} did not reach running: data={:?}, errors={:?}, presentation={presentation:?}",
+                    observed.data, observed.errors,
+                ));
+            }
+        };
+        let accepted_arguments = gents::tool_call_lifecycle::load_tool_call_arguments(
+            &gents::ConfigAccess::Local(self.db.node.clone()),
+            &doc_id,
+            self.db.node_identity.did(),
+            &parent_session_id,
+            requester_did.as_deref(),
+        )
+        .await
+        .expect("running bridge must reconstruct its unique canonical accepted header");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&accepted_arguments)
+                .expect("accepted arguments are canonical JSON"),
+            expected_args,
+            "accepted header must retain the exact modeled spawn arguments"
         );
-        let agent_did = escape_graphql_string(agent_did);
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{tool_call_key}",
-                    request_id: "{parent_request_id}",
-                request_doc_id: "{parent_request_doc_id}",
-                agent_did: "{agent_did}",
-                    session_id: "{parent_session_id}",
-                    message_sequence: 1,
-                    tool_name: "spawn_subagent",
-                    tool_call_id: "{tool_call_id}",
-                    args: "{args}",
-                    result: "",
-                    status: "called",
-                    lifecycle_state: "running",
-                    started_at: "2026-05-20T00:00:00Z",
-                    await_mode: "foreground",
-                    cancel_policy: "cascade",
-                    child_request_id: "{child_request_id}",
-                    spawn_target_did: "{agent_did}",
-                    selected_service_id: null,
-                    selected_tool_name: null,
-                    tool_failure_class: null,
-                    latency_ms: null
-                }}) {{ _docID }}
-            }}"#
-        );
-        let resp = self.db.node.execute(&mutation).await;
-        if resp.has_errors() {
-            return Err(format!("create_AgentToolCall failed: {:?}", resp.errors));
-        }
-        if let Some(doc_id) = mutation_doc_id(&resp, "create_AgentToolCall") {
-            return Ok(doc_id);
-        }
-        let query = format!(
-            r#"{{
-                AgentToolCall(
-                    filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }},
-                    limit: 1
-                ) {{ _docID }}
-            }}"#
-        );
-        let resp = self.db.node.execute(&query).await;
-        if resp.has_errors() {
-            return Err(format!(
-                "query AgentToolCall after create failed: {:?}",
-                resp.errors
-            ));
-        }
-        first_optional_row::<super::support::DocIdRow>(&resp, "AgentToolCall")
-            .map(|row| row.doc_id)
-            .ok_or_else(|| "created AgentToolCall row was not found".to_string())
+        runtime.crash().await;
+        Ok(doc_id)
     }
 
     fn publish_update(&self, doc: &str) -> Result<(), String> {
@@ -476,6 +537,9 @@ impl ProductionEventDeliveryDriver {
     }
 
     async fn drive_rescan(&mut self, expected_docs: &[String]) -> Result<(), String> {
+        if matches!(&self.runtime, ProductionRuntime::SubagentSource) && self.runner.is_none() {
+            self.start_subagent_source_for_rescan().await;
+        }
         match &mut self.runtime {
             ProductionRuntime::Watcher { watcher } => {
                 for expected in expected_docs {
@@ -712,10 +776,24 @@ async fn install_subagent_source_fixture(
     support::fixtures::configure_subagent_behavior(
         node,
         agent_did,
+        SUBAGENT_CHILD_BEHAVIOR,
+        "event-delivery-subagent-child-tools",
+        Vec::new(),
+        false,
+        false,
+        None,
+    )
+    .await;
+    support::fixtures::configure_subagent_behavior(
+        node,
+        agent_did,
         AGENT_NAME,
         TOOL_SELECTION_ID,
         vec![support::fixtures::subagent_target(
-            agent_did, AGENT_NAME, agent_did, AGENT_NAME,
+            agent_did,
+            SUBAGENT_CHILD_BEHAVIOR,
+            agent_did,
+            SUBAGENT_CHILD_BEHAVIOR,
         )],
         true,
         true,
@@ -777,12 +855,22 @@ fn active_snapshot_without_event_triggers(
         principal: Some(principal.clone()),
         local_did: agent_did,
         default_behavior_id: AGENT_NAME.to_string(),
-        behaviors: HashMap::from([(
-            AGENT_NAME.to_string(),
-            Arc::new(crate::support::fixtures::test_behavior_for_principal(
-                AGENT_NAME, principal,
-            )),
-        )]),
+        behaviors: HashMap::from([
+            (
+                AGENT_NAME.to_string(),
+                Arc::new(crate::support::fixtures::test_behavior_for_principal(
+                    AGENT_NAME,
+                    principal.clone(),
+                )),
+            ),
+            (
+                SUBAGENT_CHILD_BEHAVIOR.to_string(),
+                Arc::new(crate::support::fixtures::test_behavior_for_principal(
+                    SUBAGENT_CHILD_BEHAVIOR,
+                    principal,
+                )),
+            ),
+        ]),
         tool_surfaces: HashMap::new(),
         backend_admission_configs: HashMap::new(),
         unavailable_behaviors: HashMap::new(),

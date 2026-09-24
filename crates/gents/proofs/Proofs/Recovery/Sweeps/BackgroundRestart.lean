@@ -19,14 +19,16 @@ This module is the total, executable model of that classifier:
   with a resolvable parent → every terminal restart disposition carries a
   durable completion notification and coalesced background-completion wake;
   the reason distinguishes restart interruption, deadline expiry, and the
-  two terminal-parent shapes — the in-memory execution and its live output
-  ring buffer died with the process;
+  two terminal-parent shapes — the host execution ended on restart while
+  canonical output already committed to durable records remains available;
 * **background subagent bridge** (`await_mode = background`, child request
   linked) with a live parent → **leave running** — the durable bridge row is
   the work, and the child terminal projects later;
 * detached bridge under an interrupted parent → leave running;
 * child-linked bridge under a cleanly completed parent → leave running;
-* deadline / unclaimed-spawn expiry take precedence over everything;
+* an unresolved exact physical parent defers all terminalization, including
+  deadline / unclaimed-spawn expiry;
+* deadline / unclaimed-spawn expiry take precedence for resolvable parents;
 * interrupted / otherwise-terminal parents terminalize as
   `parentInterrupted` / `parentTerminal`.
 
@@ -48,8 +50,9 @@ namespace Recovery
 open ToolExecution
 
 /-- Parent request as observed by the startup classifier. `missing` covers
-    rows whose `request_id` resolves to no row under the recovering agent's
-    DID (foreign or deleted parents are never grounds for a local write). -/
+    rows whose exact physical request document cannot be resolved in the
+    recovering principal's scope. Replication may supply that owner later;
+    absent owner facts are never grounds for a local write. -/
 inductive ParentObservation where
   | live
   | interrupted
@@ -151,7 +154,9 @@ instance (row : RestartRow) : Decidable row.isDetachedBridge := by
     `recover_stuck_running_tool_calls`; reordering any two branches changes
     the value on some row and fails the exhaustive theorems below. -/
 def restartDisposition (row : RestartRow) : RestartDisposition :=
-  if row.deadlineExpired then
+  if row.parent = .missing then
+    .leaveRunning
+  else if row.deadlineExpired then
     .terminalize .deadlineExceeded
   else if row.unclaimedExpired then
     .terminalize .unclaimedCrossPrincipalSpawn
@@ -202,7 +207,8 @@ theorem orphanedBackgroundToolCause_matches_restartDisposition
     cases h_interrupted : row.parentInterrupted <;>
     cases h_terminal : row.parentTerminal <;>
     simp [orphanedBackgroundToolCause, OrphanedBackgroundToolRow.toRestartRow,
-      OrphanedBackgroundToolRow.parentObservation, restartDisposition,
+      OrphanedBackgroundToolRow.parentObservation,
+      OrphanedBackgroundToolRow.parentResolvable, restartDisposition,
       RestartRow.isNativeBackgroundTool, RestartRow.isDetachedBridge,
       RestartDisposition.causeContract, h_background, h_native, h_deadline,
       h_unclaimed, h_live, h_interrupted, h_terminal,
@@ -243,6 +249,15 @@ def RestartRow.notification (row : RestartRow) :
     | .leaveRunning => none
   else
     none
+
+/-- A missing physical owner is incomplete observation even when a timer has
+    elapsed. No terminal cause or notification can be published from it. -/
+theorem missing_parent_never_terminalizes (row : RestartRow)
+    (h : row.parent = .missing) :
+    restartDisposition row = .leaveRunning ∧ row.notification = none := by
+  constructor
+  · simp [restartDisposition, h]
+  · simp [RestartRow.notification, h]
 
 /-! ## Pointwise theorems (the four #937 arms) -/
 
@@ -335,18 +350,17 @@ theorem restart_interrupt_iff_native_background_live_parent
     cases parent <;> cases deadlineExpired <;> cases unclaimedExpired <;>
     decide
 
-/-- Leave-running fires exactly on the four preserved shapes (with no
-    expiry): a missing parent (never grounds a local write, even for a native
-    background tool), a live parent without the native-background-interrupt
+/-- Leave-running fires exactly on the four preserved shapes: a missing
+    parent regardless of expiry, a live parent without the native-background-interrupt
     shape, a detached bridge under an interrupted parent, and a child-linked
-    bridge under a cleanly completed parent. -/
+    bridge under a cleanly completed parent. The latter three require no expiry. -/
 theorem leave_running_iff_preserved_shapes (row : RestartRow) :
     restartDisposition row = .leaveRunning ↔
-      (row.deadlineExpired = false ∧ row.unclaimedExpired = false ∧
-        (row.parent = .missing ∨
-          (row.parent = .live ∧ ¬ row.isNativeBackgroundTool) ∨
-          (row.isDetachedBridge ∧ row.parent = .interrupted) ∨
-          (row.childLinked = true ∧ row.parent = .cleanlyCompleted))) := by
+      (row.parent = .missing ∨
+        (row.deadlineExpired = false ∧ row.unclaimedExpired = false ∧
+          ((row.parent = .live ∧ ¬ row.isNativeBackgroundTool) ∨
+            (row.isDetachedBridge ∧ row.parent = .interrupted) ∨
+            (row.childLinked = true ∧ row.parent = .cleanlyCompleted)))) := by
   rcases row with ⟨awaitMode, cancelPolicy, childLinked, parent,
     deadlineExpired, unclaimedExpired⟩
   cases awaitMode <;> cases cancelPolicy <;> cases childLinked <;>
@@ -379,17 +393,19 @@ theorem notification_iff_terminalized_native_background (row : RestartRow) :
     operator interrupt. -/
 theorem deadline_precedes_restart_interrupt
     (row : RestartRow)
+    (h_owner : row.parent ≠ .missing)
     (h_expired : row.deadlineExpired = true) :
     restartDisposition row = .terminalize .deadlineExceeded := by
-  simp [restartDisposition, h_expired]
+  simp [restartDisposition, h_owner, h_expired]
 
 /-- Unclaimed-spawn expiry outranks every leave-running exemption: a bridge
     whose spawn was never claimed fails even under a live parent. -/
 theorem unclaimed_precedes_leave_running_exemptions
     (row : RestartRow)
+    (h_owner : row.parent ≠ .missing)
     (h_deadline : row.deadlineExpired = false)
     (h_unclaimed : row.unclaimedExpired = true) :
     restartDisposition row = .terminalize .unclaimedCrossPrincipalSpawn := by
-  simp [restartDisposition, h_deadline, h_unclaimed]
+  simp [restartDisposition, h_owner, h_deadline, h_unclaimed]
 
 end Recovery

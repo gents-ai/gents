@@ -137,35 +137,57 @@ async fn openrouter_oneshot_uses_provider_request_preferences() -> Result<()> {
     let projection = node
         .execute(
             r#"{
-                AgentRequest { lifecycle_state }
-                AgentResponse { status content }
-                AgentMessage(order: { sequence: ASC }) { role content }
+                AgentRequest { _docID agent_did requester_did lifecycle_state terminal_output }
                 AgentSession { observation }
             }"#,
         )
         .await;
     assert!(!projection.has_errors(), "{:?}", projection.errors);
-    assert_eq!(
-        projection.data.as_ref().unwrap()["AgentRequest"][0]["lifecycle_state"],
-        "completed"
-    );
-    assert_eq!(
-        projection.data.as_ref().unwrap()["AgentResponse"][0]["status"],
-        "complete"
-    );
-    assert_eq!(
-        projection.data.as_ref().unwrap()["AgentResponse"][0]["content"],
-        ""
-    );
-    let assistant = projection.data.as_ref().unwrap()["AgentMessage"]
+    let request_rows = projection.data.as_ref().unwrap()["AgentRequest"]
         .as_array()
-        .unwrap()
-        .iter()
-        .find(|message| message["role"] == "assistant")
-        .expect("one-shot assistant transcript row");
-    assert!(assistant["content"]
+        .expect("one-shot request rows");
+    assert_eq!(
+        request_rows.len(),
+        1,
+        "one-shot creates exactly one request"
+    );
+    let request_row = &request_rows[0];
+    assert_eq!(request_row["lifecycle_state"], "completed");
+    let terminal: gents_protocol::output::TerminalOutput =
+        serde_json::from_value(request_row["terminal_output"].clone())
+            .expect("terminal output selection present on completed request");
+    let gents_protocol::output::TerminalOutput::Message { message_doc_id } = terminal else {
+        panic!("one-shot completion must select a published message");
+    };
+    let owner = request_row["agent_did"]
         .as_str()
-        .is_some_and(|content| content.contains("mock response")));
+        .expect("canonical request owner");
+    let requester = request_row["requester_did"].as_str();
+    let request_doc_id = request_row["_docID"]
+        .as_str()
+        .expect("canonical request identity");
+    let (header, message) = gents::session::load_canonical_message_from_node(
+        node.as_ref(),
+        &message_doc_id,
+        owner,
+        requester,
+    )
+    .await
+    .expect("reconstruct terminal assistant message");
+    assert_eq!(
+        header.request_doc_id.as_deref(),
+        Some(request_doc_id),
+        "terminal message must belong to the completed request"
+    );
+    assert!(
+        matches!(message, gents_protocol::message::Message::Assistant { .. }),
+        "terminal output must reconstruct the assistant transcript row"
+    );
+    let body = gents_protocol::transcript::present_message(&message).body_markdown;
+    assert!(
+        body.contains("mock response"),
+        "assistant body must contain the mock response, got: {body:?}"
+    );
     assert_eq!(
         projection.data.as_ref().unwrap()["AgentSession"][0]["observation"]["latest_request"]
             ["lifecycle_state"],

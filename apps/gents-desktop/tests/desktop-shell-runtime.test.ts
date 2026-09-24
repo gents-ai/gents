@@ -21,14 +21,11 @@ function deferred() {
 }
 
 describe("desktopUpdateRefreshScope", () => {
-  it("uses ordinary store wakes for session control-row changes", () => {
+  it("uses ordinary store wakes to probe the canonical live cursor", () => {
     expect(desktopUpdateRefreshScope("health", "session-1", "request-1")).toBe(
       "snapshot",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", "request-1")).toBe(
-      "sessionEvent",
-    );
-    expect(desktopUpdateRefreshScope("store", "session-1", "request-1", true)).toBe(
       "sessionDelta",
     );
     expect(desktopUpdateRefreshScope("store", "session-1", null)).toBe("full");
@@ -73,18 +70,6 @@ describe("live session deltas", () => {
     const current = session(["k1"], null);
     const historical = current.timelineItems[0];
     current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
-    current.latestResponse = {
-      status: "streaming",
-      content: "hello",
-      reasoning: null,
-      errorMessage: null,
-      tokenCount: null,
-      materializedMessageSequence: null,
-      materializedAt: null,
-      interruptedAt: null,
-      completedAt: null,
-    };
-    current.activeResponseOverlay = { ...current.latestResponse };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -103,8 +88,8 @@ describe("live session deltas", () => {
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       progressSeq: 2,
-      turnState: "streaming",
-      status: "streaming",
+      turnState: "running",
+      status: null,
       content: {
         mode: "append",
         value: " world",
@@ -118,7 +103,6 @@ describe("live session deltas", () => {
         hash: "811c9dc5",
       },
     });
-    expect(next?.activeResponseOverlay?.content).toBe("hello world");
     expect(next?.timelineItems[0]).toBe(historical);
     expect(next?.timelineItems.at(-1)).toMatchObject({ content: "hello world" });
   });
@@ -126,18 +110,6 @@ describe("live session deltas", () => {
   it("removes a reset live tail between tool-loop assistant turns", () => {
     const current = session(["k1"], null);
     current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
-    current.latestResponse = {
-      status: "streaming",
-      content: "stale opening prefix",
-      reasoning: null,
-      errorMessage: null,
-      tokenCount: null,
-      materializedMessageSequence: null,
-      materializedAt: null,
-      interruptedAt: null,
-      completedAt: null,
-    };
-    current.activeResponseOverlay = { ...current.latestResponse };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -150,8 +122,8 @@ describe("live session deltas", () => {
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       progressSeq: 3,
-      turnState: "streaming",
-      status: "streaming",
+      turnState: "running",
+      status: null,
       content: {
         mode: "replace",
         value: "",
@@ -166,7 +138,6 @@ describe("live session deltas", () => {
       },
     });
 
-    expect(next?.activeResponseOverlay).toBeNull();
     expect(next?.timelineItems).toHaveLength(1);
     expect(next?.timelineItems[0].itemKey).toBe("k1");
   });
@@ -182,18 +153,6 @@ describe("live session deltas", () => {
       newestItemKey: "k8",
     });
     current.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
-    current.latestResponse = {
-      status: "streaming",
-      content: "hello",
-      reasoning: null,
-      errorMessage: null,
-      tokenCount: null,
-      materializedMessageSequence: null,
-      materializedAt: null,
-      interruptedAt: null,
-      completedAt: null,
-    };
-    current.activeResponseOverlay = { ...current.latestResponse };
     current.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -216,8 +175,8 @@ describe("live session deltas", () => {
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       progressSeq: 2,
-      turnState: "streaming",
-      status: "streaming",
+      turnState: "running",
+      status: null,
       content: {
         mode: "append",
         value: " world",
@@ -243,18 +202,6 @@ describe("live session deltas", () => {
   it("rejects a reconcile gap and a corrupt suffix", () => {
     const current = session([], null);
     current.projectionRevision = { storeVersion: 4, reconcileVersion: 2 };
-    current.latestResponse = {
-      status: "streaming",
-      content: "a",
-      reasoning: null,
-      errorMessage: null,
-      tokenCount: null,
-      materializedMessageSequence: null,
-      materializedAt: null,
-      interruptedAt: null,
-      completedAt: null,
-    };
-    current.activeResponseOverlay = { ...current.latestResponse };
     current.timelineItems = [
       {
         kind: "liveAssistant",
@@ -268,8 +215,8 @@ describe("live session deltas", () => {
       revision: { storeVersion: 5, reconcileVersion: 2 },
       requestId: "request-1",
       progressSeq: 2,
-      turnState: "streaming",
-      status: "streaming",
+      turnState: "running",
+      status: null,
       content: {
         mode: "append",
         value: "b",
@@ -303,13 +250,11 @@ function session(
     behaviorId: "behavior-1",
     title: "Test",
     previewText: null,
-    status: "processing",
+    status: "active",
     goal: null,
-    turnState: "streaming",
+    turnState: "running",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: "notFailed" },
-    latestResponse: null,
-    activeResponseOverlay: null,
     pendingTurn: null,
     context: {
       estimatedDurableTokens: 0,
@@ -331,6 +276,7 @@ function session(
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,
+      reconstruction: { state: "ready" },
     })),
     timelinePage: page,
   };
@@ -394,7 +340,7 @@ describe("session timeline page merging", () => {
       "k4",
       "k5",
     ]);
-    expect(merged.status).toBe("processing");
+    expect(merged.status).toBe("active");
     expect(merged.timelinePage?.hasOlder).toBe(false);
   });
 

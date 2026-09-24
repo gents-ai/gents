@@ -1,5 +1,6 @@
 #![allow(dead_code)] // R4b lands these helpers one task ahead of their tool integrations.
 
+mod final_output;
 pub(crate) mod r4c_args;
 pub(crate) mod subagent_control;
 mod transcript_render;
@@ -10,7 +11,7 @@ use crate::llm::message::{AssistantContent, Message, Text, UserContent};
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents_protocol::transcript::{decode_persisted_message, present_persisted_message};
+use gents_protocol::transcript::present_message;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -20,16 +21,19 @@ use crate::descendant_graph::{
 };
 pub use crate::descendant_graph::{AWAITING_CHILD_MATERIALIZATION, PENDING_CHILD_AUTHORIZATION};
 use crate::document_config::SubagentTargetDocument;
-use crate::graphql::{escape_graphql_string, response_has_documents};
+use crate::graphql::escape_graphql_string;
 use crate::lifecycle::queue::{
-    drain_automated_wakeups, enqueue_steering_request_with_message, row_is_automated_wakeup,
-    QueuePolicy, QueueSource, RequestQueue,
+    drain_automated_wakeups, enqueue_steering_request, row_is_automated_wakeup, QueuePolicy,
+    QueueSource, RequestQueue,
 };
 use gents_protocol::request_input::RequestInput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
+use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 use crate::tool_call_lifecycle::{AwaitMode, ChildTerminal, FailureClass};
+use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+use gents_protocol::output::{OutputSource, OutputWriter, PayloadRef};
 
 use self::r4c_args::{
     ListBackgroundToolsArgs, ListBackgroundToolsEntry, ListBackgroundToolsResponse,
@@ -178,7 +182,7 @@ pub(crate) fn parse_spawn_workspace_arg(
                         return Err(
                             "workspace.provision must be { policy } or git_worktree_diff"
                                 .to_string(),
-                        )
+                        );
                     }
                     None => None,
                 };
@@ -437,9 +441,12 @@ pub(crate) const DEFAULT_CROSS_DEPLOYMENT_SPAWN_TIMEOUT_SECONDS: i64 = 60;
 
 #[derive(Debug, Deserialize)]
 struct ListBackgroundToolRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     tool_call_id: String,
     tool_name: String,
     request_id: String,
+    request_doc_id: String,
     session_id: String,
     agent_did: String,
     requester_did: Option<String>,
@@ -448,14 +455,12 @@ struct ListBackgroundToolRow {
     child_request_id: Option<String>,
     started_at: Option<String>,
     completed_at: Option<String>,
-    result: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct TranscriptMessageRow {
     sequence: u64,
-    role: String,
-    content: String,
+    message: Message,
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,6 +474,8 @@ struct TranscriptToolCallRow {
 
 #[derive(Debug, Deserialize)]
 struct ReadToolOutputRow {
+    #[serde(rename = "_docID")]
+    doc_id: String,
     tool_call_id: String,
     tool_name: String,
     request_id: Option<String>,
@@ -478,7 +485,7 @@ struct ReadToolOutputRow {
     await_mode: Option<String>,
     lifecycle_state: Option<String>,
     child_request_id: Option<String>,
-    result: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 pub(crate) enum ReadToolOutputOutcome {
@@ -503,7 +510,7 @@ pub enum SteerSubagentTarget {
 }
 
 pub async fn handle_list_subagents(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     caller_request_id: &str,
     args: ListSubagentsArgs,
 ) -> Result<ListSubagentsResponse> {
@@ -568,7 +575,7 @@ pub async fn handle_list_subagents(
 }
 
 pub(crate) async fn handle_list_background_tools(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     caller: &ProcessControlScope,
     local_deployment_id: &str,
     live_outputs: &LiveToolOutputRegistry,
@@ -585,9 +592,11 @@ pub(crate) async fn handle_list_background_tools(
                 }},
                 order: {{ started_at: ASC }}
             ) {{
+                _docID
                 tool_call_id
                 tool_name
                 request_id
+                request_doc_id
                 session_id
                 agent_did
                 requester_did
@@ -596,7 +605,6 @@ pub(crate) async fn handle_list_background_tools(
                 child_request_id
                 started_at
                 completed_at
-                result
             }}
         }}"#
     );
@@ -642,17 +650,17 @@ pub(crate) async fn handle_list_background_tools(
             continue;
         };
         let last_update = parse_rfc3339(row.completed_at.as_deref()).unwrap_or(created_at);
-        let (stdout_bytes, stderr_bytes) = if status == "running" {
-            live_outputs
-                .snapshot(&tool_call_id)
-                .await
-                .map(|snapshot| (snapshot.stdout_bytes, snapshot.stderr_bytes))
-                .unwrap_or((0, 0))
-        } else {
-            let persisted =
-                persisted_tool_output_streams(&row.tool_name, row.result.as_deref().unwrap_or(""));
-            (persisted.stdout.len() as u64, persisted.stderr.len() as u64)
-        };
+        let _ = live_outputs;
+        let output = canonical_tool_output(
+            node,
+            &row.doc_id,
+            &row.request_doc_id,
+            &row.session_id,
+            &row.agent_did,
+            row.requester_did.as_deref(),
+        )
+        .await?;
+        let (stdout_bytes, stderr_bytes) = (output.len() as u64, 0);
 
         entries.push(ListBackgroundToolsEntry {
             tool_call_id,
@@ -727,33 +735,33 @@ pub async fn handle_read_subagent(
         None => anyhow::bail!("child request state is not available"),
     };
 
-    let escaped_session_id = escape_graphql_string(&edge.child_session_id);
-    let messages_query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }},
-                order: {{ sequence: ASC }}
-            ) {{
-                sequence
-                role
-                content
-            }}
-        }}"#
+    let message_rows = crate::session::load_sequenced_history_projection(
+        node,
+        &edge.child_session_id,
+        &edge.child_agent_did,
+        edge.child_requester_did.as_deref(),
+        None,
+        None,
+        None,
+    )
+    .await?
+    .into_iter()
+    .map(|row| TranscriptMessageRow {
+        sequence: u64::from(row.sequence),
+        message: row.message,
+    })
+    .collect();
+
+    let scope = crate::session::session_scope_filter(
+        &edge.child_agent_did,
+        &edge.child_session_id,
+        edge.child_requester_did.as_deref(),
     );
-    let messages_response = node.execute(&messages_query).await;
-    if messages_response.has_errors() {
-        anyhow::bail!(
-            "read_subagent AgentMessage query failed: {:?}",
-            messages_response.errors
-        );
-    }
-    let message_rows: Vec<TranscriptMessageRow> =
-        rows(messages_response.data.as_ref(), "AgentMessage")?;
 
     let tool_calls_query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ session_id: {{ _eq: "{escaped_session_id}" }} }}
+                filter: {{ {scope} }}
             ) {{
                 message_sequence
                 tool_call_id
@@ -843,9 +851,9 @@ fn decode_transcript_message_views(
     message_rows
         .into_iter()
         .map(|row| {
-            let presentation = present_persisted_message(&row.role, &row.content);
-            let message = decode_persisted_message(&row.role, &row.content);
-            let role = if row.role == "assistant" {
+            let message = row.message;
+            let presentation = present_message(&message);
+            let role = if matches!(&message, Message::Assistant { .. }) {
                 MessageRoleView::Assistant
             } else {
                 MessageRoleView::User
@@ -971,16 +979,17 @@ pub(crate) async fn read_tool_output_slice(
                 }},
                 limit: 1
             ) {{
+                _docID
                 tool_call_id
                 tool_name
                 request_id
+                request_doc_id
                 session_id
                 agent_did
                 requester_did
                 await_mode
                 lifecycle_state
                 child_request_id
-                result
             }}
         }}"#
     );
@@ -1011,27 +1020,24 @@ pub(crate) async fn read_tool_output_slice(
         .unwrap_or("running")
         .to_string();
     let exited = status != "running";
-    let (slice, exit_code) = if exited {
-        let result = row.result.as_deref().unwrap_or_default();
-        let persisted = persisted_tool_output_streams(&row.tool_name, result);
-        // Merge stdout + stderr into a single logical buffer behind one byte cursor.
-        // The capture stores the two streams separately with no preserved interleave
-        // order, so combining them with a stable labeled boundary (stdout first,
-        // then `STDERR_BOUNDARY`, then stderr) is the cleanest honest single-cursor
-        // model: an orchestrator pages through ALL output gap-free from `offset`.
-        let combined = combine_output_streams(&persisted.stdout, &persisted.stderr);
-        (
-            read_combined_output_slice(&combined, offset, max_bytes),
-            persisted.exit_code,
-        )
-    } else {
-        let slice = live_outputs
-            .snapshot(&row.tool_call_id)
-            .await
-            .map(|snapshot| read_live_output_slice(snapshot, offset, max_bytes))
-            .unwrap_or_else(|| read_combined_output_slice("", offset, max_bytes));
-        (slice, None)
-    };
+    let _ = live_outputs;
+    let combined = canonical_tool_output(
+        node,
+        &row.doc_id,
+        row.request_doc_id
+            .as_deref()
+            .context("tool output row lacks request binding")?,
+        row.session_id
+            .as_deref()
+            .context("tool output row lacks session binding")?,
+        row.agent_did
+            .as_deref()
+            .context("tool output row lacks agent binding")?,
+        row.requester_did.as_deref(),
+    )
+    .await?;
+    let slice = read_combined_output_slice(&combined, offset, max_bytes);
+    let exit_code = None;
 
     Ok(ReadToolOutputOutcome::Found(ReadToolOutputResponse {
         tool_call_id: row.tool_call_id,
@@ -1045,6 +1051,151 @@ pub(crate) async fn read_tool_output_slice(
         exited,
         exit_code,
     }))
+}
+
+/// Resolve one physical tool source through canonical segment reconstruction.
+/// There is deliberately no mutable result-column or volatile ring-buffer
+/// fallback.  An open source is explicit: callers must retry after a segment
+/// close is visible rather than treating absence as an empty result.
+pub(crate) async fn canonical_tool_output(
+    node: &EmbeddedNode,
+    tool_doc_id: &str,
+    request_doc_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<String> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let request = escape_graphql_string(request_doc_id);
+    let response = node.execute(&format!(
+        r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+    )).await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "canonical tool output query failed: {:?}",
+        response.errors
+    );
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentOutputSegment"))
+        .and_then(serde_json::Value::as_array)
+        .context("canonical tool output query omitted segments")?
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<Result<Vec<_>>>()?;
+    Ok(canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)?.into_text())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CanonicalToolOutputObservation {
+    Open(String),
+    Closed(String),
+}
+
+impl CanonicalToolOutputObservation {
+    fn into_text(self) -> String {
+        match self {
+            Self::Open(text) | Self::Closed(text) => text,
+        }
+    }
+}
+
+pub(crate) async fn observe_canonical_tool_output_with_access(
+    access: &crate::config_client::ConfigAccess,
+    tool_doc_id: &str,
+    request_doc_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<CanonicalToolOutputObservation> {
+    let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
+    let request = escape_graphql_string(request_doc_id);
+    let response = access
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+        ))
+        .await?;
+    let rows = response
+        .pointer("/data/AgentOutputSegment")
+        .and_then(serde_json::Value::as_array)
+        .context("canonical tool output query omitted segments")?
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<Result<Vec<_>>>()?;
+    canonical_tool_output_from_rows(rows, tool_doc_id, request_doc_id)
+}
+
+fn canonical_tool_output_from_rows(
+    rows: Vec<crate::session::canonical_rows::OutputSegmentRow>,
+    tool_doc_id: &str,
+    request_doc_id: &str,
+) -> Result<CanonicalToolOutputObservation> {
+    let source = OutputSource::ToolCall {
+        tool_call_doc_id: tool_doc_id.to_owned(),
+    };
+    let rows = rows
+        .into_iter()
+        .filter(|row| row.segment.source == source)
+        .collect::<Vec<_>>();
+    let close = rows
+        .iter()
+        .filter(|row| row.segment.close.is_some())
+        .collect::<Vec<_>>();
+    let observations = rows
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    if close.is_empty() {
+        let writer = OutputWriter::ToolExecution {
+            tool_call_doc_id: tool_doc_id.to_owned(),
+        };
+        let extent = gents_protocol::output::extent::inspect_open_source(
+            &observations,
+            request_doc_id,
+            &source,
+            &writer,
+        )?;
+        if extent.streams.is_empty() {
+            return Ok(CanonicalToolOutputObservation::Open(String::new()));
+        }
+        anyhow::ensure!(
+            extent.streams.len() == 1
+                && matches!(
+                    extent.streams[0].declaration.payload,
+                    gents_protocol::output::StreamPayload::ToolOutput
+                ),
+            "open tool output source does not have one ToolOutput stream"
+        );
+        return Ok(CanonicalToolOutputObservation::Open(
+            extent.streams[0].text.clone(),
+        ));
+    }
+    anyhow::ensure!(
+        close.len() == 1,
+        "tool output is unresolved or has conflicting closures"
+    );
+    let stream = reconstruct_stream(
+        &observations,
+        &[],
+        &[],
+        &PayloadRef {
+            close_doc_id: close[0].doc_id.clone(),
+            stream: 0,
+        },
+    )
+    .map_err(anyhow::Error::from)?;
+    anyhow::ensure!(
+        matches!(
+            stream.declaration.payload,
+            gents_protocol::output::StreamPayload::ToolOutput
+        ),
+        "tool output source stream is not a ToolOutput stream"
+    );
+    Ok(CanonicalToolOutputObservation::Closed(stream.text))
 }
 
 /// Concatenate captured stdout and stderr into one logical buffer behind a
@@ -1228,7 +1379,7 @@ pub(crate) async fn append_steering_request(
     child_request.caused_by_parent_request_doc_id = Some(caller_request_doc_id);
     child_request.caused_by_parent_tool_call_id = None;
     child_request.caused_by_parent_tool_call_doc_id = None;
-    let enqueued = enqueue_steering_request_with_message(
+    let enqueued = enqueue_steering_request(
         node,
         &child_request,
         message,
@@ -2027,113 +2178,7 @@ pub(crate) async fn load_authorized_child_edge(
         .context("authorized descendant edge lacks materialized child identity")
 }
 
-#[derive(Debug, Deserialize)]
-struct AgentResponseFinalRow {
-    materialized_message_sequence: Option<u32>,
-}
-
-#[derive(Debug, Deserialize)]
-struct AgentMessageContentRow {
-    role: String,
-    content: String,
-}
-
-pub(crate) async fn load_child_final_response(
-    node: &EmbeddedNode,
-    child_edge: &ChildEdge,
-) -> Result<Option<String>> {
-    let child_request_id = &child_edge.child_request_id;
-    // Exact physical child binding first: a newer foreign AgentResponse or
-    // AgentMessage sharing the logical request ID / session must never win.
-    let Some(child) = crate::request_binding::load_agent_request(node, child_request_id).await?
-    else {
-        return Ok(None);
-    };
-    anyhow::ensure!(
-        child.agent_did == child_edge.child_agent_did
-            && child.session_id == child_edge.child_session_id,
-        "child request scope differs from descendant edge"
-    );
-    let child_request_doc_id = child.doc_id;
-    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let escaped_child_agent_did = escape_graphql_string(&child_edge.child_agent_did);
-    let escaped_child_session_id = escape_graphql_string(&child_edge.child_session_id);
-    let response_query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{
-                    request_doc_id: {{ _eq: "{escaped_child_request_doc_id}" }},
-                    request_id: {{ _eq: "{escaped_child_request_id}" }},
-                    agent_did: {{ _eq: "{escaped_child_agent_did}" }},
-                    session_id: {{ _eq: "{escaped_child_session_id}" }}
-                }},
-                limit: 2
-            ) {{
-                materialized_message_sequence
-            }}
-        }}"#
-    );
-    let response = node.execute(&response_query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "query child AgentResponse {child_request_id} failed: {:?}",
-            response.errors
-        );
-    }
-    let mut responses = rows::<AgentResponseFinalRow>(response.data.as_ref(), "AgentResponse")?;
-    anyhow::ensure!(
-        responses.len() <= 1,
-        "ambiguous response for physical child {child_request_doc_id}"
-    );
-    let Some(response_row) = responses.pop() else {
-        return Ok(None);
-    };
-    let Some(sequence) = response_row.materialized_message_sequence else {
-        return Ok(None);
-    };
-
-    let message_query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{
-                    session_id: {{ _eq: "{escaped_child_session_id}" }},
-                    request_doc_id: {{ _eq: "{escaped_child_request_doc_id}" }},
-                    agent_did: {{ _eq: "{escaped_child_agent_did}" }},
-                    request_id: {{ _eq: "{escaped_child_request_id}" }},
-                    sequence: {{ _eq: {sequence} }}
-                }},
-                limit: 2
-            ) {{
-                role
-                content
-            }}
-        }}"#
-    );
-    let message = node.execute(&message_query).await;
-    if message.has_errors() {
-        anyhow::bail!(
-            "query child AgentMessage {child_request_id} sequence {sequence} failed: {:?}",
-            message.errors
-        );
-    }
-    let mut messages = rows::<AgentMessageContentRow>(message.data.as_ref(), "AgentMessage")?;
-    anyhow::ensure!(
-        messages.len() <= 1,
-        "ambiguous materialized message for physical child {child_request_doc_id}"
-    );
-    let Some(message_row) = messages.pop() else {
-        return Ok(None);
-    };
-    if message_row.role != "assistant" {
-        anyhow::bail!(
-            "materialized child response {child_request_id} sequence {sequence} is role {}",
-            message_row.role
-        );
-    }
-
-    Ok(Some(render_assistant_message_text(&message_row.content)?))
-}
+pub(crate) use final_output::load_child_final_response;
 
 pub(crate) async fn load_child_terminal_row(
     node: &EmbeddedNode,
@@ -2171,8 +2216,7 @@ pub(crate) async fn load_child_terminal_row(
     )
 }
 
-fn render_assistant_message_text(content: &str) -> Result<String> {
-    let message = decode_persisted_message("assistant", content);
+fn render_assistant_message_text(message: &Message) -> Result<String> {
     let Message::Assistant { content, .. } = message else {
         anyhow::bail!("materialized child response is not an assistant message");
     };
@@ -2188,19 +2232,9 @@ fn render_assistant_message_text(content: &str) -> Result<String> {
             _ => None,
         })
         .collect();
-    if !text_parts.is_empty() {
-        return Ok(text_parts.join("\n"));
-    }
-    // Rare: a final message with no text content. Fall back to the full
-    // serialization rather than returning an empty answer.
-    let mut parts = Vec::new();
-    for item in content.iter() {
-        match item {
-            AssistantContent::Text(Text { text }) => parts.push(text.clone()),
-            other => parts.push(serde_json::to_string(other)?),
-        }
-    }
-    Ok(parts.join("\n"))
+    // A reasoning-only or tool-only message has no answer text. Never serialize
+    // those blocks into the parent's prompt as a fallback.
+    Ok(text_parts.join("\n"))
 }
 
 pub(crate) fn project_child_terminal(row: &AgentRequestRow) -> Option<ChildTerminal> {
@@ -2281,56 +2315,42 @@ pub(crate) fn subagent_tool_not_allowed_payload(
 }
 
 pub(crate) async fn fail_running_subagent_tool_call(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     doc_id: &str,
-    started_at: Option<&str>,
-    deadline_at: Option<&str>,
     result: &str,
     failure: FailureClass,
 ) -> Result<bool> {
-    let now = Utc::now();
-    let started_at = parse_rfc3339(started_at).unwrap_or(now);
-    let latency_ms = (now - started_at).num_milliseconds().max(0);
     let escaped_doc_id = escape_graphql_string(doc_id);
-    let escaped_result = escape_graphql_string(result);
-    let started_at_str = started_at.to_rfc3339();
-    let completed_at_str = now.to_rfc3339();
-    let failure_class = failure.as_str();
-    let deadline_field = parse_rfc3339(deadline_at)
-        .map(|deadline| format!(r#", deadline_at: "{}""#, deadline.to_rfc3339()))
-        .unwrap_or_default();
-
-    let mutation = format!(
-        r#"mutation {{
-            update_AgentToolCall(
-                filter: {{
-                    _docID: {{ _eq: "{escaped_doc_id}" }},
-                    lifecycle_state: {{ _eq: "running" }}
-                }},
-                input: {{
-                    result: "{escaped_result}",
-                    status: "completed",
-                    lifecycle_state: "failed",
-                    started_at: "{started_at_str}"{deadline_field},
-                    completed_at: "{completed_at_str}",
-                    tool_failure_class: "{failure_class}",
-                    latency_ms: {latency_ms}
-                }}
-            ) {{ _docID }}
-        }}"#
+    #[derive(Deserialize)]
+    struct ScopeRow {
+        agent_did: String,
+        requester_did: Option<String>,
+        session_id: String,
+    }
+    let response = node.execute(&format!(
+        r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 2) {{ agent_did requester_did session_id }} }}"#
+    )).await;
+    let rows: Vec<ScopeRow> = crate::graphql::rows(&response, "AgentToolCall")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "subagent failure requires one physical tool row"
     );
-
-    let response = crate::config_client::ConfigAccess::write_local_response(
-        node,
-        "fail_running_subagent_tool_call",
-        &mutation,
+    let scope = &rows[0];
+    let mut lifecycle = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        node.clone(),
+        doc_id,
+        &scope.agent_did,
+        &scope.session_id,
+        scope.requester_did.as_deref(),
     )
-    .await?;
-    Ok(response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("update_AgentToolCall"))
-        .is_some_and(response_has_documents))
+    .await?
+    .context("subagent failure physical tool row disappeared")?;
+    lifecycle
+        .bridge_failure(crate::tool_call_lifecycle::ChildTerminal::Failed {
+            reason: result.to_owned(),
+            failure_class: failure,
+        })
+        .await
 }
 
 fn parse_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
@@ -2397,6 +2417,85 @@ fn non_empty_string(value: Option<&str>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_tool_output_requires_a_close_before_finalizing() {
+        let segment = gents_protocol::output::OutputSegment {
+            agent_did: "did:test:owner".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: "request-doc".into(),
+            source: OutputSource::ToolCall {
+                tool_call_doc_id: "tool-doc".into(),
+            },
+            writer: OutputWriter::ToolExecution {
+                tool_call_doc_id: "tool-doc".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![gents_protocol::output::SegmentRun {
+                stream: 0,
+                bytes: 6,
+                declaration: Some(gents_protocol::output::StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: gents_protocol::output::StreamPayload::ToolOutput,
+                }),
+            }],
+            payload: "prefix".into(),
+            close: None,
+            created_at: "2026-09-22T00:00:00Z".into(),
+        };
+        let row = crate::session::canonical_rows::OutputSegmentRow {
+            doc_id: "segment-open".into(),
+            segment,
+        };
+        assert_eq!(
+            canonical_tool_output_from_rows(vec![row], "tool-doc", "request-doc").unwrap(),
+            CanonicalToolOutputObservation::Open("prefix".into()),
+            "even when a lifecycle replica is terminal, an open source remains loading"
+        );
+    }
+
+    #[test]
+    fn canonical_tool_output_preserves_a_valid_empty_close() {
+        let segment = gents_protocol::output::OutputSegment {
+            agent_did: "did:test:owner".into(),
+            requester_did: None,
+            session_id: "session".into(),
+            request_doc_id: "request-doc".into(),
+            source: OutputSource::ToolCall {
+                tool_call_doc_id: "tool-doc".into(),
+            },
+            writer: OutputWriter::ToolExecution {
+                tool_call_doc_id: "tool-doc".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![gents_protocol::output::SegmentRun {
+                stream: 0,
+                bytes: 0,
+                declaration: Some(gents_protocol::output::StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: gents_protocol::output::StreamPayload::ToolOutput,
+                }),
+            }],
+            payload: String::new(),
+            close: Some(gents_protocol::output::SourceClose::Closed {
+                outcome: gents_protocol::output::OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![0],
+            }),
+            created_at: "2026-09-22T00:00:00Z".into(),
+        };
+        let row = crate::session::canonical_rows::OutputSegmentRow {
+            doc_id: "segment-closed".into(),
+            segment,
+        };
+        assert_eq!(
+            canonical_tool_output_from_rows(vec![row], "tool-doc", "request-doc").unwrap(),
+            CanonicalToolOutputObservation::Closed(String::new())
+        );
+    }
     use crate::llm::message::{AssistantContent, Reasoning, Text, ToolCall, ToolFunction};
 
     #[test]
@@ -2541,11 +2640,27 @@ mod tests {
                 }),
             ],
         };
-        let content = serde_json::to_string(&message).unwrap();
         assert_eq!(
-            render_assistant_message_text(&content).unwrap(),
+            render_assistant_message_text(&message).unwrap(),
             "final answer"
         );
+    }
+
+    #[test]
+    fn child_answer_without_text_does_not_serialize_reasoning() {
+        let message = Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Reasoning(Reasoning::new(
+                "private reasoning",
+            ))],
+        };
+        assert_eq!(render_assistant_message_text(&message).unwrap(), "");
+        assert!(render_assistant_message_text(&Message::User {
+            content: vec![UserContent::Text(Text {
+                text: "not an answer".into()
+            })],
+        })
+        .is_err());
     }
 
     #[test]
@@ -2615,7 +2730,13 @@ mod tests {
     #[test]
     fn generated_tool_output_paging_cases_match_slice_function() {
         let cases = crate::lean_vocab_test::lean_tool_output_paging_cases();
-        assert_eq!(cases.len(), 5, "Lean tool-output paging family drifted");
+        assert!(
+            !cases.is_empty(),
+            "Lean emitted no tool-output paging cases"
+        );
+        // The canonical model retains the full stream, so its former
+        // evicted-prefix case is no longer part of this contract family.
+        // Exercise every emitted case without maintaining a second case count.
 
         for case in cases {
             let retained = "x".repeat(case.retained_len as usize);

@@ -6,6 +6,7 @@ LAKE ?= lake
 NPM ?= npm
 
 DESKTOP_DIR := apps/gents-desktop
+DESKTOP_LOCAL_TAURI_CONFIG := src-tauri/tauri.local-sign.conf.json
 PROOFS_DIR := crates/gents/proofs
 FUZZ_TIME ?= 30s
 MAINTENANCE_ROOT ?= $(CURDIR)
@@ -502,7 +503,7 @@ desktop-native-dev: build-cli
 	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- dev
 
 desktop-native-build: desktop-native-stage-sidecar
-	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json
+	$(NPM) --prefix $(DESKTOP_DIR) run tauri -- build --config src-tauri/tauri.bundle.conf.json --config $(DESKTOP_LOCAL_TAURI_CONFIG)
 
 .PHONY: live-cli live-agent live-desktop-smoke
 live-cli:

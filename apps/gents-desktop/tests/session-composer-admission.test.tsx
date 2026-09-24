@@ -86,11 +86,11 @@ function existingSessionShell(status: Shell["nonEmptyContentSendStatus"]): Shell
       agentDid: "did:key:agent",
       behaviorId: "behavior",
       title: "Session",
-      turnState: status.kind === "ready" ? "interrupted" : "streaming",
+      turnState: status.kind === "ready" ? "interrupted" : "running",
       timelineItems: [],
       timelinePage: { hasOlder: false },
       latestRequestId: "request",
-      latestResponse: null,
+      latestRequestOutcome: null,
       goal: null,
       context: null,
     },
@@ -340,7 +340,7 @@ describe("SessionScreen canonical composer admission", () => {
     const blocked = {
       kind: "disabled",
       reason: "awaitingTurnTerminality",
-      hint: "Turn still streaming",
+      hint: "Turn still running",
     } as const;
     const { rerender } = render(
       <OwnedSessionScreen shell={existingSessionShell(blocked)} />,

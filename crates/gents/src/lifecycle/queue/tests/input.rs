@@ -144,7 +144,7 @@ fn wake_version_is_stamped_by_the_queue_owner() {
 }
 
 #[test]
-fn runtime_control_projection_keeps_only_the_steering_input_visible() {
+fn runtime_control_projection_keeps_authored_steering_visible() {
     let input = |source| {
         queue_input(RequestQueue {
             source,
@@ -156,37 +156,28 @@ fn runtime_control_projection_keeps_only_the_steering_input_visible() {
         })
     };
     let steering = input(QueueSource::Steering);
-    let steering_input = steering_input_message_key("request-1");
 
     assert!(!crate::lifecycle::is_runtime_control_message(
         &steering,
-        &steering_input,
-        true,
-    ));
-    assert!(crate::lifecycle::is_runtime_control_message(
-        &steering, "", true,
+        "authored:request-doc-1:prompt",
     ));
     assert!(crate::lifecycle::is_runtime_control_message(
         &input(QueueSource::Goal),
         "",
-        false,
     ));
     assert!(crate::lifecycle::is_runtime_control_message(
         &RequestInput::default(),
         "background-completion-notification:child-1:subagent",
-        false,
     ));
     assert!(!crate::lifecycle::is_runtime_control_message(
         &input(QueueSource::User),
         "",
-        false,
     ));
     assert!(!crate::lifecycle::is_runtime_control_message(
         &steering,
         "session-1:4",
-        false,
     ));
-    assert!(!crate::lifecycle::request_content_owns_user_projection(
+    assert!(crate::lifecycle::request_content_owns_user_projection(
         &steering
     ));
     assert!(crate::lifecycle::request_content_owns_user_projection(

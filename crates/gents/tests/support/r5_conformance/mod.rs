@@ -5,4 +5,4 @@ pub mod scenario;
 #[allow(unused_imports)]
 pub use runner::Harness;
 #[allow(unused_imports)]
-pub use scenario::{Action, NodeId, Scenario};
+pub use scenario::NodeId;

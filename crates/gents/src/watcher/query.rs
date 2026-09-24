@@ -22,8 +22,8 @@ pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     created_at
                     deadline
                     execution_generation
+                    execution_lease_secs
                     execution_lease_expires_at
-                    execution_progress_seq
                     subagent_depth
                     caused_by_parent_request_id
                     caused_by_parent_request_doc_id

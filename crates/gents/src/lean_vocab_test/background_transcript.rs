@@ -1,6 +1,16 @@
 use super::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanToolOutputProjectionCase {
+    pub(crate) name: String,
+    pub(crate) document: u64,
+    pub(crate) segments: Vec<LeanCanonicalSegment>,
+    pub(crate) expected_state: Option<String>,
+    pub(crate) expected_payload: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "witness", deny_unknown_fields)]
 pub(crate) enum LeanR4cBackgroundWorkCase {
     #[serde(rename = "r4c.list_subagents.lineage_rejects")]
@@ -27,19 +37,11 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         bridge_call_id: String,
         rendered_transcript: String,
     },
-    #[serde(rename = "r4c.read_tool_output.dispatch_by_state")]
-    ReadToolOutputDispatchesByState {
+    #[serde(rename = "r4c.read_tool_output.canonical_source_reconstruction")]
+    ReadToolOutputCanonicalSourceReconstruction {
         tool_call_id: String,
-        running_source: String,
-        running_no_buffer_source: String,
-        terminal_source: String,
-        running_payload: String,
-        running_no_buffer_payload: String,
-        terminal_payload: String,
-        running_next_offset: u64,
-        running_total_bytes: u64,
-        running_has_more: bool,
-        terminal_total_bytes: u64,
+        canonical_source: String,
+        cases: Vec<LeanToolOutputProjectionCase>,
     },
     #[serde(rename = "r4c.steer_subagent.append_preserves_lineage")]
     SteerAppendPreservesLineage {
@@ -54,8 +56,6 @@ pub(crate) enum LeanR4cBackgroundWorkCase {
         lineage_admissible: bool,
         depth_zero_lineage_admissible: bool,
         background_completion_depth_zero_admissible: bool,
-        request_visible_before_message_allowed: bool,
-        message_then_request_allowed: bool,
         queue_source: String,
         queue_policy: String,
     },
@@ -95,8 +95,8 @@ impl LeanR4cBackgroundWorkCase {
             Self::ReadTranscriptHidesBridgeRows { .. } => {
                 "r4c.read_subagent_transcript.hides_bridge_rows"
             }
-            Self::ReadToolOutputDispatchesByState { .. } => {
-                "r4c.read_tool_output.dispatch_by_state"
+            Self::ReadToolOutputCanonicalSourceReconstruction { .. } => {
+                "r4c.read_tool_output.canonical_source_reconstruction"
             }
             Self::SteerAppendPreservesLineage { .. } => {
                 "r4c.steer_subagent.append_preserves_lineage"
@@ -301,6 +301,9 @@ pub(crate) struct LeanTranscriptCase {
     pub(crate) name: String,
     pub(crate) group: String,
     pub(crate) action: String,
+    pub(crate) action_call_ids: Vec<usize>,
+    pub(crate) action_logical_result_ids: Vec<usize>,
+    pub(crate) action_payload_hashes: Vec<usize>,
     pub(crate) legal: bool,
     pub(crate) pre_message_count: usize,
     pub(crate) post_message_count: usize,
@@ -319,61 +322,6 @@ pub(crate) struct LeanTranscriptCase {
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct LeanResponseTransitionCase {
-    // Runtime action arguments must never be reconstructed from expected output.
-    pub(crate) input_error_reason: Option<String>,
-    pub(crate) token_delta: Option<usize>,
-    pub(crate) materialize_sequence: Option<usize>,
-    pub(crate) name: String,
-    pub(crate) group: String,
-    pub(crate) action: String,
-    pub(crate) legal: bool,
-    pub(crate) pre_status: String,
-    pub(crate) post_status: String,
-    pub(crate) pre_live_tail: String,
-    pub(crate) post_live_tail: String,
-    /// #492 reasoning-presence in the live tail before/after the step.
-    #[serde(default)]
-    pub(crate) pre_tail_reasoning: String,
-    #[serde(default)]
-    pub(crate) post_tail_reasoning: String,
-    /// #492 durable reasoning-presence persisted into the materialized
-    /// `AgentMessage.reasoning` field before/after the step.
-    #[serde(default)]
-    pub(crate) pre_durable_reasoning: String,
-    #[serde(default)]
-    pub(crate) post_durable_reasoning: String,
-    pub(crate) pre_token_count: usize,
-    pub(crate) post_token_count: usize,
-    pub(crate) error_reason: Option<String>,
-    pub(crate) pre_materialized_seq: Option<usize>,
-    pub(crate) post_materialized_seq: Option<usize>,
-    pub(crate) expected_request_state: Option<String>,
-    pub(crate) expected_request_persistence: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub(crate) struct LeanResponseInterruptFlowCase {
-    pub(crate) name: String,
-    pub(crate) group: String,
-    pub(crate) action: String,
-    pub(crate) pre_request_state: String,
-    pub(crate) post_request_state: String,
-    pub(crate) pre_response_status: String,
-    pub(crate) post_response_status: String,
-    pub(crate) pre_inference_call_state: String,
-    pub(crate) post_inference_call_state: String,
-    pub(crate) response_error_reason: String,
-    pub(crate) interrupted_at_required: bool,
-    pub(crate) completed_at_required: bool,
-    pub(crate) live_tail_cleared: bool,
-    pub(crate) partial_turn_materialized: bool,
-    pub(crate) request_terminal: bool,
-    pub(crate) response_terminal: bool,
-    pub(crate) inference_call_terminal: bool,
-}
-
-#[derive(Debug, Deserialize)]
 pub(crate) struct LeanCompactionReducerCase {
     pub(crate) name: String,
     pub(crate) group: String,
@@ -384,7 +332,9 @@ pub(crate) struct LeanCompactionReducerCase {
     pub(crate) preserves_pairs: bool,
     pub(crate) preserves_order: bool,
     pub(crate) gate_open: Option<bool>,
-    pub(crate) response_status: String,
+    pub(crate) publication_ready: bool,
+    pub(crate) provider_fixpoint: bool,
+    pub(crate) turn_boundary: bool,
     pub(crate) safe_to_reduce: bool,
     pub(crate) reducer_is_identity: bool,
     pub(crate) reducer_is_idempotent: bool,

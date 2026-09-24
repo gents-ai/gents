@@ -360,7 +360,9 @@ impl DenialReason {
                 }
                 _ => format!("{command} is not allowed when command_network_mode=disabled"),
             },
-            Self::ArtifactWriteSandboxUnavailable => "artifact_write requires macOS Seatbelt sandbox enforcement".into(),
+            Self::ArtifactWriteSandboxUnavailable => {
+                "artifact_write requires macOS Seatbelt sandbox enforcement".into()
+            }
             Self::WorkspaceWriteSandboxUnavailable => {
                 if cfg!(target_os = "macos") {
                     "macOS sandbox-exec is required for workspace_write bash but was not found"

@@ -10,7 +10,7 @@
 //! then defers the JSON-RPC response until the durable request terminalizes.
 //! The response result is a `stopReason` projection of the durable lifecycle —
 //! never a persisted field. A turn that ended in error is a JSON-RPC error
-//! carrying `AgentResponse.error_message`: ACP has no `error` stop reason, and
+//! carrying the request's `failure_reason`: ACP has no `error` stop reason, and
 //! a result the pager cannot decode hides the real failure.
 //!
 //! `session/cancel` parses the audited notification shape (sessionId plus
@@ -173,8 +173,9 @@ impl CancelNotification {
 /// Projection of the durable terminal state into a wire `stopReason`.
 ///
 /// `stopReason` is an adapter projection, not a persisted field: the durable
-/// source is `AgentRequest.lifecycle_state` plus the `AgentResponse` status
-/// vocabulary and its `interrupted_at` marker.
+/// source is `AgentRequest.lifecycle_state` plus its interrupt intent marker
+/// (`interrupt_requested_at`). No modeled refusal signal exists on the
+/// request, so a refusal stop reason is not derivable here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum StopReason {
     EndTurn,
@@ -198,7 +199,7 @@ impl StopReason {
 #[derive(Debug)]
 struct TerminalOutcome {
     stop_reason: StopReason,
-    /// `AgentResponse.error_message` when the turn ended in error.
+    /// `AgentRequest.failure_reason` when the turn ended in error.
     error_message: Option<String>,
 }
 
@@ -1784,9 +1785,12 @@ impl TurnManager {
         let physical_filter = physical
             .map(|id| format!("_docID: {{_eq: \"{}\"}},", escape_graphql_string(id)))
             .unwrap_or_default();
-        let query = format!("{{AgentRequest(filter: {{{physical_filter} {}, request_id: {{_eq: \"{}\"}}}},limit:2) {{{}}}}}",
-            gents::session::session_scope_filter(agent,session,requester), escape_graphql_string(request),
-            gents::SIGNED_REQUEST_FIELDS);
+        let query = format!(
+            "{{AgentRequest(filter: {{{physical_filter} {}, request_id: {{_eq: \"{}\"}}}},limit:2) {{{}}}}}",
+            gents::session::session_scope_filter(agent, session, requester),
+            escape_graphql_string(request),
+            gents::SIGNED_REQUEST_FIELDS
+        );
         let response = self.node.execute(&query).await;
         ensure_no_errors(&response, "load scoped projection request")?;
         let rows = response
@@ -2456,9 +2460,7 @@ impl TurnManager {
         let query = format!(
             r#"{{
             AgentRequest(filter: {{{scope}, _docID: {{_eq:"{physical}"}}}},limit:2)
-                {{request_id lifecycle_state interrupt_requested_at}}
-            AgentResponse(filter: {{{scope}, request_doc_id: {{_eq:"{physical}"}}}},limit:2)
-                {{request_id status error_message interrupted_at}}
+                {{request_id lifecycle_state interrupt_requested_at failure_reason}}
         }}"#
         );
         let response = self.node.execute(&query).await;
@@ -2469,45 +2471,33 @@ impl TurnManager {
             .and_then(|data| data.get("AgentRequest"))
             .and_then(Value::as_array)
             .context("terminal projection request rows missing")?;
-        let response_rows = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentResponse"))
-            .and_then(Value::as_array)
-            .context("terminal projection response rows missing")?;
         anyhow::ensure!(
-            request_rows.len() <= 1 && response_rows.len() <= 1,
+            request_rows.len() <= 1,
             "ambiguous terminal projection physical scope"
         );
         let Some(request_row) = request_rows.first() else {
             return Ok(None);
         };
-        let response_row = response_rows.first().unwrap_or(&Value::Null);
         let lifecycle_state = request_row
             .get("lifecycle_state")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let response_status = response_row
-            .get("status")
+        let interrupted_at = request_row
+            .get("interrupt_requested_at")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let interrupted_at = response_row
-            .get("interrupted_at")
+        let error_message = request_row
+            .get("failure_reason")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let error_message = response_row
-            .get("error_message")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        Ok(stop_reason_from_rows(
-            lifecycle_state,
-            response_status.as_deref(),
-            interrupted_at.as_deref(),
+        Ok(
+            stop_reason_from_rows(lifecycle_state, interrupted_at.as_deref()).map(|stop_reason| {
+                TerminalOutcome {
+                    stop_reason,
+                    error_message,
+                }
+            }),
         )
-        .map(|stop_reason| TerminalOutcome {
-            stop_reason,
-            error_message,
-        }))
     }
 }
 
@@ -2579,23 +2569,22 @@ pub(super) fn is_terminal_lifecycle_state(state: &str) -> bool {
 /// Project the durable terminal state into a wire `stopReason`.
 ///
 /// The durable source is `AgentRequest.lifecycle_state`; an `interrupted`
-/// request projects `cancelled`. Response markers may explain a terminal
-/// outcome, but cannot finish a still-active request ahead of its owner.
+/// request projects `cancelled`, and a `superseded`/`dead` request projects
+/// `cancelled` only when the request itself carries interrupt intent
+/// (`interrupt_requested_at`), otherwise `error`. There is no modeled refusal
+/// signal on the request: the runtime drain path may still deliver a wire
+/// `refusal`, but the durable rows cannot derive one, so none is invented
+/// from arbitrary error text.
 pub(super) fn stop_reason_from_rows(
     lifecycle_state: &str,
-    response_status: Option<&str>,
-    interrupted_at: Option<&str>,
+    interrupt_requested_at: Option<&str>,
 ) -> Option<StopReason> {
-    let interrupted_at_nonempty = interrupted_at
+    let interrupted_at_nonempty = interrupt_requested_at
         .map(|value| !value.trim().is_empty())
         .unwrap_or(false);
     match lifecycle_state {
         "interrupted" => Some(StopReason::Cancelled),
-        "completed" => match response_status {
-            Some("refusal") => Some(StopReason::Refusal),
-            Some("error") => Some(StopReason::Error),
-            _ => Some(StopReason::EndTurn),
-        },
+        "completed" => Some(StopReason::EndTurn),
         "failed" => Some(StopReason::Error),
         "superseded" | "dead" => {
             if interrupted_at_nonempty {
@@ -2903,41 +2892,33 @@ mod tests {
     #[test]
     fn stop_reason_projection_prefers_interrupted_lifecycle() {
         assert_eq!(
-            stop_reason_from_rows("interrupted", Some("complete"), None),
+            stop_reason_from_rows("interrupted", None),
             Some(StopReason::Cancelled)
         );
         assert_eq!(
-            stop_reason_from_rows("completed", Some("complete"), None),
+            stop_reason_from_rows("completed", None),
             Some(StopReason::EndTurn)
         );
         assert_eq!(
-            stop_reason_from_rows("completed", Some("refusal"), None),
-            Some(StopReason::Refusal)
-        );
-        assert_eq!(
-            stop_reason_from_rows("completed", Some("error"), None),
+            stop_reason_from_rows("failed", None),
             Some(StopReason::Error)
         );
-        assert_eq!(
-            stop_reason_from_rows("failed", Some("error"), None),
-            Some(StopReason::Error)
-        );
-        assert_eq!(stop_reason_from_rows("processing", None, None), None);
+        assert_eq!(stop_reason_from_rows("processing", None), None);
     }
 
     #[test]
     fn stop_reason_projection_maps_interrupted_at_marker() {
         assert_eq!(
-            stop_reason_from_rows("processing", None, Some("2026-01-01T00:00:00Z")),
+            stop_reason_from_rows("processing", Some("2026-01-01T00:00:00Z")),
             None
         );
-        assert_eq!(stop_reason_from_rows("processing", None, Some("  ")), None);
+        assert_eq!(stop_reason_from_rows("processing", Some("  ")), None);
         assert_eq!(
-            stop_reason_from_rows("superseded", None, Some("2026-01-01T00:00:00Z")),
+            stop_reason_from_rows("superseded", Some("2026-01-01T00:00:00Z")),
             Some(StopReason::Cancelled)
         );
         assert_eq!(
-            stop_reason_from_rows("superseded", None, None),
+            stop_reason_from_rows("superseded", None),
             Some(StopReason::Error)
         );
     }
@@ -3472,83 +3453,199 @@ mod tests {
         )
     }
 
-    fn fixture_request_fields(request: &gents_protocol::row::AgentRequestRow) -> String {
-        let requester = request
-            .requester_did
-            .as_deref()
-            .map(|did| format!("\"{}\"", escape_graphql_string(did)))
-            .unwrap_or_else(|| "null".into());
-        format!("request_id: \"{}\", request_doc_id: \"{}\", agent_did: \"{}\", session_id: \"{}\", requester_did: {requester}",
-            escape_graphql_string(&request.request_id),
-            escape_graphql_string(request.doc_id.as_deref().expect("fixture physical request")),
-            escape_graphql_string(request.agent_did.as_deref().expect("fixture owner")),
-            escape_graphql_string(request.session_id.as_deref().expect("fixture session")))
-    }
-
+    /// Terminalize a request durably through the canonical request owner:
+    /// set the audited `lifecycle_state` plus the `terminalized_at` timestamp
+    /// the request owner records at completion, mirroring
+    /// `complete_child_request`. The retired `AgentResponse` row is no longer
+    /// written; the projection reads terminal state from the request itself.
     async fn terminalize_request(
         node: &Arc<EmbeddedNode>,
         request: &gents_protocol::row::AgentRequestRow,
         lifecycle_state: &str,
     ) {
         let filter = fixture_request_filter(request);
-        let fields = fixture_request_fields(request);
-        let behavior =
-            escape_graphql_string(request.behavior_id.as_deref().expect("fixture behavior"));
-        let key = escape_graphql_string(request.doc_id.as_deref().unwrap());
         let state = escape_graphql_string(lifecycle_state);
         let now = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
         let response = node.execute(&format!(r#"mutation {{
-            update_AgentRequest(filter: {{{filter}}}, input: {{lifecycle_state: "{state}"}}) {{_docID}}
-            create_AgentResponse(input: {{ {fields}, response_key: "{key}", behavior_id: "{behavior}", content: "", reasoning: "", status: "complete", error_message: "", token_count: 0, progress_seq: 0, created_at: "{now}", completed_at: "{now}" }}) {{_docID}}
+            update_AgentRequest(filter: {{{filter}}}, input: {{lifecycle_state: "{state}", terminalized_at: "{now}"}}) {{_docID}}
         }}"#)).await;
         ensure_no_errors(&response, "test terminalize request").expect("terminalize");
     }
 
-    /// Seed one durable `AgentMessage` assistant row for the request, the
-    /// way the runtime materializes a finished assistant turn: a role-tagged
-    /// persisted envelope decoded by the message leaf.
+    /// Seed one finished assistant turn through the canonical output owner:
+    /// an authored whole-text source closed in the same publication as the
+    /// transcript header presenting it. Authored publication is atomic
+    /// closed output plus header; the retired inline role/content
+    /// `AgentMessage` row no longer decodes through the canonical
+    /// transcript schema. The message key uses the session owner's freshly
+    /// allocated sequence, so a prior tool delivery cannot create a header
+    /// twin with a caller's stale fixture ordinal.
     async fn seed_assistant_message(
         node: &Arc<EmbeddedNode>,
         request: &gents_protocol::row::AgentRequestRow,
-        sequence: i64,
+        _sequence: i64,
         text: &str,
     ) {
-        let message = serde_json::to_string(&gents_protocol::message::Message::assistant(text))
-            .expect("serialize assistant message");
-        seed_message_row(node, request, sequence, "assistant", &message).await;
+        let sequence = i64::from(
+            crate::commands::grok_shim::test_fixtures::next_request_sequence(
+                node,
+                request.doc_id.as_deref().expect("fixture request doc"),
+            )
+            .await,
+        );
+        seed_canonical_text_message(
+            node,
+            request,
+            &gents::session::sequence_message_key(
+                request.agent_did.as_deref().expect("fixture owner"),
+                request.session_id.as_deref().expect("fixture session"),
+                request.requester_did.as_deref(),
+                sequence.try_into().expect("fixture sequence fits u32"),
+            ),
+            &format!("turn:{sequence}"),
+            sequence,
+            gents_protocol::output::MessageRole::Assistant,
+            text,
+        )
+        .await;
     }
 
-    /// Seed one durable `AgentMessage` row with an explicit serialized
-    /// content blob and role.
-    async fn seed_message_row(
+    /// Seed one durable background-completion notification through the same
+    /// canonical authored publication owner, under the notification message
+    /// key vocabulary the queue owner uses.
+    async fn seed_completion_notice(
         node: &Arc<EmbeddedNode>,
         request: &gents_protocol::row::AgentRequestRow,
-        sequence: i64,
-        role: &str,
-        content: &str,
+        _sequence: i64,
+        text: &str,
     ) {
-        let fields = fixture_request_fields(request);
-        let key = escape_graphql_string(&gents::session::sequence_message_key(
-            request.agent_did.as_deref().unwrap(),
-            request.session_id.as_deref().unwrap(),
-            request.requester_did.as_deref(),
-            sequence.try_into().unwrap(),
-        ));
-        let escaped_content = escape_graphql_string(content);
-        let escaped_role = escape_graphql_string(role);
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentMessage(input: {{
-                    message_key: "{key}"
-                    {fields}
-                    sequence: {sequence}
-                    role: "{escaped_role}"
-                    content: "{escaped_content}"
-                }}) {{ _docID }}
-            }}"#
+        let sequence = i64::from(
+            crate::commands::grok_shim::test_fixtures::next_request_sequence(
+                node,
+                request.doc_id.as_deref().expect("fixture request doc"),
+            )
+            .await,
         );
-        let response = node.execute(&mutation).await;
-        ensure_no_errors(&response, "test seed message").expect("seed message");
+        seed_canonical_text_message(
+            node,
+            request,
+            &format!("background-completion-notification:{sequence}:tool"),
+            &format!("background-completion-notification:{sequence}:tool"),
+            sequence,
+            gents_protocol::output::MessageRole::User,
+            text,
+        )
+        .await;
+    }
+
+    /// Publish one canonical transcript message through the public row
+    /// writer the canonical row owner exposes: a closed `Authored` output
+    /// segment carrying the whole text, then the header whose text block
+    /// references that closed record. The writer names one physical request
+    /// execution and the header publication matches it, so the payload
+    /// reference is allowed and each seeded request keeps exactly one
+    /// presentable source coordinate.
+    async fn seed_canonical_text_message(
+        node: &Arc<EmbeddedNode>,
+        request: &gents_protocol::row::AgentRequestRow,
+        message_key: &str,
+        source_key: &str,
+        sequence: i64,
+        role: gents_protocol::output::MessageRole,
+        text: &str,
+    ) {
+        use gents::session::canonical_rows::{
+            output_segment_create_variables, transcript_message_create_variables,
+            CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        };
+        use gents_protocol::output::{
+            MessageBlock, MessagePublication, OutputOutcome, OutputSegment, OutputSource,
+            OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun,
+            SourceClose, StreamDeclaration, StreamPayload, TranscriptMessage,
+        };
+
+        let agent_did = request.agent_did.as_deref().expect("fixture owner");
+        let session_id = request.session_id.as_deref().expect("fixture session");
+        let request_doc_id = request.doc_id.as_deref().expect("fixture physical request");
+        let execution_generation = format!("fixture:{request_doc_id}");
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let segment = OutputSegment {
+            agent_did: agent_did.into(),
+            requester_did: request.requester_did.clone(),
+            session_id: session_id.into(),
+            request_doc_id: request_doc_id.into(),
+            source: OutputSource::Authored {
+                key: source_key.into(),
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: execution_generation.clone(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: text.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            }],
+            payload: text.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![text.len() as u64],
+            }),
+            created_at: created_at.clone(),
+        };
+        let response = node
+            .execute_request_with_retry(
+                gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                    .with_variables(output_segment_create_variables(&segment).unwrap()),
+                gents::defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        ensure_no_errors(&response, "seed canonical output segment").expect("seed segment");
+        let close_doc_id =
+            gents::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+                .expect("segment mutation envelope")
+                .expect("created segment row")["_docID"]
+                .as_str()
+                .expect("physical segment id")
+                .to_string();
+        let message = TranscriptMessage {
+            message_key: message_key.into(),
+            session_id: session_id.into(),
+            agent_did: agent_did.into(),
+            requester_did: request.requester_did.clone(),
+            request_doc_id: Some(request_doc_id.into()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation,
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: sequence.try_into().expect("fixture sequence fits u32"),
+            role,
+            native_id: None,
+            blocks: vec![MessageBlock::Text {
+                text: PresentedPayload {
+                    output: PayloadRef {
+                        close_doc_id,
+                        stream: 0,
+                    },
+                    presentation: PayloadPresentation::Full,
+                },
+            }],
+            created_at,
+        };
+        let response = node
+            .execute_request_with_retry(
+                gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                    .with_variables(transcript_message_create_variables(&message).unwrap()),
+                gents::defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        ensure_no_errors(&response, "seed canonical transcript header")
+            .expect("seed transcript header");
     }
 
     /// Seed one durable `AgentToolCall` row for the request with the given
@@ -3562,41 +3659,24 @@ mod tests {
         result: &str,
         child_request_id: Option<&str>,
     ) -> String {
-        let fields = fixture_request_fields(request);
-        let key = escape_graphql_string(&format!(
-            "{}:{tool_call_id}",
-            request.doc_id.as_deref().unwrap()
-        ));
-        let escaped_id = escape_graphql_string(tool_call_id);
-        let escaped_name = escape_graphql_string(tool_name);
-        let escaped_state = escape_graphql_string(lifecycle_state);
-        let escaped_result = escape_graphql_string(result);
-        let child_field = child_request_id.map_or_else(String::new, |child_request_id| {
-            format!(
-                "child_request_id: \"{}\"",
-                escape_graphql_string(child_request_id)
+        crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
+            node.as_ref(),
+            request,
+            tool_call_id,
+            tool_name,
+            lifecycle_state,
+            "{}",
+            matches!(
+                lifecycle_state,
+                "completed" | "failed" | "cancelled" | "timedOut"
             )
-        });
-        let mutation = format!(
-            r#"mutation {{
-                create_AgentToolCall(input: {{
-                    tool_call_key: "{key}"
-                    {fields}
-                    tool_call_id: "{escaped_id}"
-                    tool_name: "{escaped_name}"
-                    lifecycle_state: "{escaped_state}"
-                    result: "{escaped_result}"
-                    {child_field}
-                }}) {{ _docID }}
-            }}"#
-        );
-        let response = node.execute(&mutation).await;
-        ensure_no_errors(&response, "test seed tool call").expect("seed tool call");
-        gents_protocol::graphql::extract_mutation_doc_id(
-            &json!({"data":response.data}),
-            "AgentToolCall",
+            .then_some(result),
+            child_request_id,
+            None,
+            None,
+            None,
         )
-        .unwrap()
+        .await
     }
 
     /// Seed one runtime child `AgentRequest` row linked to the parent
@@ -3635,21 +3715,29 @@ mod tests {
     /// recorded result, the way the runtime finalizes a tool call.
     async fn complete_tool_call(node: &Arc<EmbeddedNode>, tool_doc_id: &str, result: &str) {
         let escaped_id = escape_graphql_string(tool_doc_id);
-        let escaped_state = escape_graphql_string("completed");
-        let escaped_result = escape_graphql_string(result);
-        let mutation = format!(
-            r#"mutation {{
-                update_AgentToolCall(
-                    filter: {{ _docID: {{ _eq: "{escaped_id}" }} }},
-                    input: {{
-                        lifecycle_state: "{escaped_state}"
-                        result: "{escaped_result}"
-                    }}
-                ) {{ _docID }}
-            }}"#
-        );
-        let response = node.execute(&mutation).await;
-        ensure_no_errors(&response, "test complete tool call").expect("complete tool call");
+        let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{_docID: {{_eq: "{escaped_id}"}}}}, limit: 2) {{tool_call_id request_doc_id}} }}"#)).await;
+        ensure_no_errors(&response, "load tool completion owner").unwrap();
+        let rows = response.data.as_ref().unwrap()["AgentToolCall"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), 1, "tool completion owner must be exact");
+        let call_id = rows[0]["tool_call_id"].as_str().unwrap().to_owned();
+        let request_doc_id = escape_graphql_string(rows[0]["request_doc_id"].as_str().unwrap());
+        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{_docID: {{_eq: "{request_doc_id}"}}}}, limit: 2) {{_docID request_id agent_did requester_did session_id}} }}"#)).await;
+        ensure_no_errors(&response, "load tool request owner").unwrap();
+        let rows = response.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), 1, "tool request owner must be exact");
+        let request = serde_json::from_value(rows[0].clone()).unwrap();
+        crate::commands::grok_shim::test_fixtures::complete_canonical_tool_call(
+            node,
+            &request,
+            tool_doc_id,
+            &call_id,
+            result,
+        )
+        .await;
     }
 
     /// Transition a seeded child request to its terminal completed state,
@@ -3718,8 +3806,11 @@ mod tests {
         complete_tool_call(&node, &tool, "done").await;
         terminalize_request(&node, selected, "completed").await;
         for (index, receipt) in receipts.iter().enumerate() {
-            let query = format!("{{AgentRequest(filter: {{{}}}) {{lifecycle_state}} AgentResponse(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{agent_did requester_did request_doc_id}} AgentMessage(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{agent_did requester_did request_doc_id}}}}",
-                fixture_request_filter(receipt), escape_graphql_string(receipt.doc_id.as_deref().unwrap()), escape_graphql_string(receipt.doc_id.as_deref().unwrap()));
+            let query = format!(
+                "{{AgentRequest(filter: {{{}}}) {{lifecycle_state}} AgentMessage(filter: {{request_doc_id: {{_eq: \"{}\"}}}}) {{message_key agent_did requester_did request_doc_id}}}}",
+                fixture_request_filter(receipt),
+                escape_graphql_string(receipt.doc_id.as_deref().unwrap())
+            );
             let result = node.execute(&query).await;
             ensure_no_errors(&result, "read fixture effects").unwrap();
             let data = result.data.unwrap();
@@ -3727,9 +3818,33 @@ mod tests {
                 data["AgentRequest"][0]["lifecycle_state"],
                 if index == 0 { "completed" } else { "pending" }
             );
-            for collection in ["AgentResponse", "AgentMessage"] {
+            for collection in ["AgentMessage"] {
                 let rows = data[collection].as_array().unwrap();
-                assert_eq!(rows.len(), if index == 0 { 1 } else { 0 });
+                assert_eq!(
+                    rows.len(),
+                    if index == 0 { 3 } else { 0 },
+                    "the selected request owns its assistant output, canonical tool admission, and exact delivery; the colliding request owns none"
+                );
+                if index == 0 {
+                    assert_eq!(
+                        rows.iter()
+                            .filter(|row| row["message_key"]
+                                .as_str()
+                                .is_some_and(|key| key.starts_with("accepted:")))
+                            .count(),
+                        1,
+                        "exactly one coordinator admission header is owned by the selected request"
+                    );
+                    assert_eq!(
+                        rows.iter()
+                            .filter(|row| row["message_key"]
+                                .as_str()
+                                .is_some_and(|key| key.starts_with("delivery:")))
+                            .count(),
+                        1,
+                        "exactly one physical ToolDelivery header is owned by the selected request"
+                    );
+                }
                 for row in rows {
                     assert_eq!(row["agent_did"], principal);
                     assert_eq!(row["requester_did"], principal);
@@ -3793,7 +3908,10 @@ mod tests {
                     "session-1",
                     Some(&principal_for_terminalize),
                 );
-                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let query = format!(
+                    "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
+                    gents::SIGNED_REQUEST_FIELDS
+                );
                 let response = node_for_terminalize.execute(&query).await;
                 ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
@@ -4181,16 +4299,7 @@ mod tests {
             (&root_receipt, 2, "Root task finished."),
             (&first_receipt, 3, "Wake task finished."),
         ] {
-            let result = node
-                .execute(&format!(
-                    r#"mutation {{ create_AgentMessage(input: {{
-                message_key: "background-completion-notification:{sequence}:tool",
-                {}, sequence: {sequence}, role: "user", content: "{}" }}) {{ _docID }} }}"#,
-                    fixture_request_fields(request),
-                    escape_graphql_string(text)
-                ))
-                .await;
-            ensure_no_errors(&result, "seed delayed completion notice").unwrap();
+            seed_completion_notice(&node, request, sequence, text).await;
         }
         let second_receipt =
             seed_runtime_wake(&node, &agent_did, "internal wake instruction").await;
@@ -4353,18 +4462,50 @@ mod tests {
                 followup = Some(row);
             }
         }
-        let fields = fixture_request_fields(&child);
-        let response = node.execute(&format!(r#"mutation {{create_AgentToolCall(input: {{
-            tool_call_key:"session-1-child:child-bash", tool_call_id:"child-bash", {fields},
-            tool_name:"bash", lifecycle_state:"running", await_mode:"background", started_at:"2026-01-01T00:00:00Z",
-            args:"{{\"command\":\"echo CHILD_BG_OUTPUT\"}}", partial_output_tail:"CHILD_BG_OUTPUT"
-        }}) {{_docID}} }}"#)).await;
-        ensure_no_errors(&response, "scope child tool").unwrap();
-        let child_tool_doc = gents_protocol::graphql::extract_mutation_doc_id(
-            &json!({"data":response.data}),
-            "AgentToolCall",
+        // Live process output belongs to the spawned physical process row; its
+        // accepted arguments are owned by the parent spawn_process call.
+        let spawn_doc = crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
+            node.as_ref(),
+            &child,
+            "child-process-meta",
+            "spawn_process",
+            "completed",
+            r#"{"tool_name":"bash","args":{"command":"echo CHILD_BG_OUTPUT"}}"#,
+            Some("spawned child-bash"),
+            None,
+            None,
+            None,
+            None,
         )
-        .unwrap();
+        .await;
+        let child_tool_doc = crate::commands::grok_shim::test_fixtures::seed_canonical_tool_call(
+            node.as_ref(),
+            &child,
+            "child-bash",
+            "bash",
+            "running",
+            r#"{"command":"echo CHILD_BG_OUTPUT"}"#,
+            None,
+            None,
+            Some(&spawn_doc),
+            None,
+            None,
+        )
+        .await;
+        let response = node
+            .execute(&format!(
+                r#"mutation {{ update_AgentToolCall(filter: {{_docID: {{_eq: "{}"}}}}, input: {{await_mode: "background"}}) {{_docID}} }}"#,
+                escape_graphql_string(&child_tool_doc)
+            ))
+            .await;
+        ensure_no_errors(&response, "mark child tool backgrounded").unwrap();
+        crate::commands::grok_shim::test_fixtures::seed_canonical_live_tool_output(
+            node.as_ref(),
+            &child,
+            &child_tool_doc,
+            "CHILD_BG_OUTPUT",
+        )
+        .await;
         seed_assistant_message(&node, &parent, 7, "PARENT MUST WAIT").await;
         let cursor = Mutex::new(RequestCursor::new());
         cursor.lock().await.request = Some(parent);
@@ -4408,10 +4549,11 @@ mod tests {
             .iter()
             .any(|row| row["params"]["sessionId"] == "session-1-child"
                 && row["params"]["update"]["toolCallId"] == "child-bash"));
-        assert!(!activity.iter().any(|row| row
-            .pointer("/params/update/content/text")
-            .and_then(Value::as_str)
-            == Some("PARENT MUST WAIT")));
+        assert!(!activity.iter().any(|row| {
+            row.pointer("/params/update/content/text")
+                .and_then(Value::as_str)
+                == Some("PARENT MUST WAIT")
+        }));
         for row in activity
             .iter()
             .filter(|row| row["params"]["sessionId"] == "session-1")
@@ -4420,7 +4562,13 @@ mod tests {
             assert!(row.pointer("/params/_meta/turnStartMs").is_none());
         }
         complete_child_request(&node, &child).await;
-        complete_tool_call(&node, &child_tool_doc, "child tool done").await;
+        crate::commands::grok_shim::test_fixtures::complete_canonical_spawned_process_output(
+            node.as_ref(),
+            &child,
+            &child_tool_doc,
+            "CHILD_BG_OUTPUT",
+        )
+        .await;
         complete_tool_call(&node, &tool, "done").await;
         manager
             .stream_projection_updates(
@@ -4559,7 +4707,7 @@ mod tests {
             .execute(&format!(
                 r#"mutation {{ update_AgentToolCall(
             filter: {{ _docID: {{ _eq: "{}" }} }},
-            input: {{ lifecycle_state: "failed", result: "exit 7" }}) {{ _docID }} }}"#,
+            input: {{ lifecycle_state: "failed" }}) {{ _docID }} }}"#,
                 escape_graphql_string(&late_tool_doc)
             ))
             .await;
@@ -5069,7 +5217,10 @@ mod tests {
                     "session-1",
                     Some(&principal_for_terminalize),
                 );
-                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let query = format!(
+                    "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
+                    gents::SIGNED_REQUEST_FIELDS
+                );
                 let response = node_for_terminalize.execute(&query).await;
                 ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
@@ -5225,7 +5376,10 @@ mod tests {
                     "session-1",
                     Some(&principal_for_terminalize),
                 );
-                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let query = format!(
+                    "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
+                    gents::SIGNED_REQUEST_FIELDS
+                );
                 let response = node_for_terminalize.execute(&query).await;
                 ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response
@@ -6315,7 +6469,10 @@ mod tests {
                     "session-1",
                     Some(&principal_for_terminalize),
                 );
-                let query = format!("{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}", gents::SIGNED_REQUEST_FIELDS);
+                let query = format!(
+                    "{{AgentRequest(filter: {{{scope}, lifecycle_state: {{_eq: \"pending\"}}}}) {{{}}}}}",
+                    gents::SIGNED_REQUEST_FIELDS
+                );
                 let response = node_for_terminalize.execute(&query).await;
                 ensure_no_errors(&response, "pending fixture rows").unwrap();
                 let rows = response

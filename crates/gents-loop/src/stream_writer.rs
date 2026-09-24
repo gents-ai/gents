@@ -6,6 +6,68 @@
 //! operations, moved here so `StreamProcessor` can be generic over `W:
 //! StreamWriter` with no DefraDB dependency.
 
+use gents_protocol::message::Message;
+use gents_protocol::rendered_request::CaptureScope;
+
+use crate::request_lifecycle::RequestLifecycleControl;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAttemptClose {
+    Retracted,
+    Partial,
+}
+
+pub struct CanonicalPublishedTurn<Accepted> {
+    pub message_doc_id: String,
+    pub accepted_tools: Vec<Accepted>,
+}
+
+/// Native durable publication supplied to the generic stream processor.
+pub trait CanonicalStreamWriter<L: RequestLifecycleControl>: StreamWriter {
+    type AcceptedToolCall: Send;
+    type SpawnAdmissionPlan: Send;
+
+    fn publish_authored_message(
+        &self,
+        lifecycle: &L,
+        key: &str,
+        message: &Message,
+    ) -> impl std::future::Future<Output = anyhow::Result<String>> + Send;
+
+    fn start_provider_attempt(
+        &self,
+        request_doc_id: &str,
+        turn: usize,
+        attempt: u32,
+        capture_scope: CaptureScope,
+    ) -> impl std::future::Future<Output = ()> + Send;
+
+    fn flush_native_partial(
+        &self,
+        lifecycle: &L,
+        message: &Message,
+    ) -> impl std::future::Future<Output = anyhow::Result<bool>> + Send;
+
+    fn close_provider_attempt(
+        &self,
+        lifecycle: &L,
+        turn: usize,
+        attempt: u32,
+        close: ProviderAttemptClose,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send;
+
+    fn publish_native_turn_with_spawn_admissions(
+        &self,
+        lifecycle: &L,
+        turn: usize,
+        attempt: u32,
+        message: &Message,
+        spawn_admissions: &[Self::SpawnAdmissionPlan],
+    ) -> impl std::future::Future<
+        Output = anyhow::Result<CanonicalPublishedTurn<Self::AcceptedToolCall>>,
+    > + Send;
+}
+
 pub trait StreamWriter: Send + Sync {
     fn write_tokens(
         &self,

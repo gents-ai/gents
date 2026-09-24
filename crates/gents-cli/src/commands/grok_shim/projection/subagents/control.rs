@@ -6,7 +6,8 @@ use std::sync::Arc;
 use gents::descendant_graph::{
     resolve_session_descendant_graph, DescendantEdge, DescendantGraphAccess, DescendantQuery,
 };
-use gents_protocol::message::{AssistantContent, Message};
+use gents_protocol::output::TerminalOutput;
+use gents_protocol::transcript::present_message;
 
 use super::*;
 
@@ -108,75 +109,79 @@ pub(crate) async fn authorized_children(
 ) -> Result<BTreeMap<String, (String, DescendantEdge)>> {
     let mut children = BTreeMap::new();
     for session in sessions {
-        let head = gents::config_client::ConfigAccess::transact_local(
-            node,
-            None,
-            "grok.subagent_caller",
-            |txn| {
-                Box::pin(async move {
-                    gents::session::load_latest_request_in_txn(
-                        txn,
-                        principal,
-                        session,
-                        Some(Some(principal)),
-                    )
-                    .await
-                })
-            },
-        )
-        .await?;
-        let Some(head) = head else {
-            continue;
-        };
-        let caller = head.observed.request_id;
-        let mut query = DescendantQuery::all(&caller);
-        loop {
-            let page = resolve_session_descendant_graph(DescendantGraphAccess::Local(node), &query)
-                .await?;
-            for edge in page.edges {
-                if !edge.readable() {
-                    continue;
-                }
-                let Some(id) = edge
-                    .child_session_id
-                    .as_ref()
-                    .filter(|id| !id.is_empty() && *id != session)
-                else {
-                    continue;
-                };
-                // A session ID must resolve uniquely: never choose one of
-                // conflicting child identities by incidental query ordering.
-                if let Some((_, previous)) = children.get(id) {
-                    let previous: &DescendantEdge = previous;
-                    anyhow::ensure!(
-                        previous.child_request_id == edge.child_request_id
-                            && previous.child_request_doc_id == edge.child_request_doc_id
-                            && previous.principal_did == edge.principal_did
-                            && previous.child_requester_did == edge.child_requester_did,
-                        "ambiguous subagent session identity"
-                    );
-                    if edge.controllable() && !previous.controllable() {
+        // A queued steering/control request can be the newest request in a
+        // session without owning the earlier request's child graph. Inspect
+        // every physically scoped request admitted for this principal's
+        // session; choosing only the latest loses still-live descendants.
+        let scope = gents::session::session_scope_filter(principal, session, Some(principal));
+        let response = node
+            .execute(&format!(
+                "{{ AgentRequest(filter: {{ {scope} }}) {{ request_id }} }}"
+            ))
+            .await;
+        ensure_no_errors(&response, "Grok subagent session callers")?;
+        let callers = response
+            .data
+            .as_ref()
+            .and_then(|data| data.get("AgentRequest"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for caller in callers {
+            let caller = caller["request_id"]
+                .as_str()
+                .context("session request omitted logical identity")?
+                .to_owned();
+            let mut query = DescendantQuery::all(&caller);
+            loop {
+                let page =
+                    resolve_session_descendant_graph(DescendantGraphAccess::Local(node), &query)
+                        .await?;
+                for edge in page.edges {
+                    if !edge.readable() {
+                        continue;
+                    }
+                    let Some(id) = edge
+                        .child_session_id
+                        .as_ref()
+                        .filter(|id| !id.is_empty() && *id != session)
+                    else {
+                        continue;
+                    };
+                    // A session ID must resolve uniquely: never choose one of
+                    // conflicting child identities by incidental query ordering.
+                    if let Some((_, previous)) = children.get(id) {
+                        let previous: &DescendantEdge = previous;
+                        anyhow::ensure!(
+                            previous.child_request_id == edge.child_request_id
+                                && previous.child_request_doc_id == edge.child_request_doc_id
+                                && previous.principal_did == edge.principal_did
+                                && previous.child_requester_did == edge.child_requester_did,
+                            "ambiguous subagent session identity"
+                        );
+                        if edge.controllable() && !previous.controllable() {
+                            children.insert(id.clone(), (caller.clone(), edge));
+                        }
+                    } else {
                         children.insert(id.clone(), (caller.clone(), edge));
                     }
-                } else {
-                    children.insert(id.clone(), (caller.clone(), edge));
                 }
+                if !page.has_more {
+                    break;
+                }
+                anyhow::ensure!(
+                    page.next_cursor.is_some() && page.next_cursor != query.after,
+                    "descendant pagination did not advance"
+                );
+                query.after = page.next_cursor;
             }
-            if !page.has_more {
-                break;
-            }
-            anyhow::ensure!(
-                page.next_cursor.is_some() && page.next_cursor != query.after,
-                "descendant pagination did not advance"
-            );
-            query.after = page.next_cursor;
         }
     }
     Ok(children)
 }
 
 async fn snapshot(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     edge: &DescendantEdge,
     context_window: u64,
 ) -> Result<Option<Value>> {
@@ -192,15 +197,24 @@ async fn snapshot(
         .child_request_doc_id
         .as_deref()
         .context("child physical identity missing")?;
-    let scope =
-        gents::session::session_scope_filter(owner, session, edge.child_requester_did.as_deref());
-    let response = node.execute(&format!(r#"{{ child: AgentRequest(filter: {{ {scope}, _docID: {{_eq: "{}"}}, request_id: {{_eq: "{}"}} }}, limit: 2) {{ {CHILD_REQUEST_FIELDS} }} }}"#, escape_graphql_string(physical), escape_graphql_string(&edge.child_request_id))).await;
+    let owner = escape_graphql_string(owner);
+    let requester = edge
+        .child_requester_did
+        .as_deref()
+        .map(|did| format!("\"{}\"", escape_graphql_string(did)))
+        .unwrap_or_else(|| "null".into());
+    // The descendant owner already selected the immutable physical child.
+    // Resolve that document under its principal/requester authority first,
+    // then validate its logical/session labels below. Including mutable
+    // projection labels in the lookup turns a replicated-label mismatch into
+    // a false not-found and hides a broken physical edge.
+    let response = node.execute(&format!(r#"{{ child: AgentRequest(filter: {{ agent_did: {{_eq: "{owner}"}}, requester_did: {{_eq: {requester}}}, _docID: {{_eq: "{}"}} }}, limit: 2) {{ {CHILD_REQUEST_FIELDS} }} }}"#, escape_graphql_string(physical))).await;
     ensure_no_errors(&response, "Grok subagent snapshot")?;
     let children = decode_rows::<ChildRequestRow>(&response, "child", "child snapshot")?;
     anyhow::ensure!(children.len() <= 1, "duplicate physical child snapshot");
-    let Some(child) = children.first() else {
-        return Ok(None);
-    };
+    let child = children
+        .first()
+        .context("materialized descendant physical child is unavailable")?;
     anyhow::ensure!(
         child.doc_id.as_deref() == Some(physical)
             && child.agent_did == owner
@@ -209,24 +223,18 @@ async fn snapshot(
             && child.request_id == edge.child_request_id,
         "child snapshot crossed validated physical scope"
     );
-    let response = node.execute(&child_responses_query(&children)).await;
-    ensure_no_errors(&response, "Grok subagent response")?;
-    let responses = decode_response_rows(&response)?;
-    anyhow::ensure!(
-        responses.len() <= 1,
-        "duplicate response for physical child"
-    );
-    for row in &responses {
+    let usage_response = node.execute(&child_usage_query(&children)).await;
+    ensure_no_errors(&usage_response, "Grok subagent inference usage")?;
+    let usage = decode_inference_call_rows(&usage_response)?;
+    for row in &usage {
         anyhow::ensure!(
             row.request_doc_id == physical
                 && row.agent_did == owner
-                && row.session_id == session
-                && row.requester_did == edge.child_requester_did
                 && row.request_id == child.request_id,
-            "child response crossed validated physical scope"
+            "child inference usage crossed validated physical scope"
         );
     }
-    let response = responses.first();
+    let usage = usage.iter().collect::<Vec<_>>();
     let tool_response = node.execute(&child_tools_query(&children)).await;
     ensure_no_errors(&tool_response, "Grok subagent tools")?;
     let tools = decode_child_tool_rows(&tool_response)?;
@@ -243,7 +251,7 @@ async fn snapshot(
     let tools = tools.iter().collect::<Vec<_>>();
     let progress = progress_update(
         child,
-        response,
+        &usage,
         &tools,
         &child.session_id,
         &edge.immediate_parent_session_id,
@@ -256,13 +264,13 @@ async fn snapshot(
         .map(|v| v.timestamp_millis().max(0) as u64)
         .unwrap_or(0);
     let status = child
-        .finish_status(response)
+        .finish_status()
         .map(|s| s.wire_name())
         .unwrap_or_else(|| match child.lifecycle_state.as_deref() {
             Some("pending" | "claimed") => "initializing",
             _ => "running",
         });
-    let duration = if child.is_terminal(response) {
+    let duration = if child.is_terminal() {
         progress.duration_ms
     } else if started == 0 {
         0
@@ -272,7 +280,7 @@ async fn snapshot(
     let mut value = json!({
         "subagentId": child.session_id, "parentSessionId": edge.immediate_parent_session_id,
         "childSessionId": child.session_id, "subagentType": child.behavior_id.as_deref().unwrap_or("general-purpose"),
-        "description": spawn_description(None, child), "startedAtEpochMs": started, "durationMs": duration, "status": status,
+        "description": spawn_description(None, &std::collections::HashMap::new(), child), "startedAtEpochMs": started, "durationMs": duration, "status": status,
     });
     let object = value.as_object_mut().expect("snapshot object");
     match status {
@@ -294,9 +302,6 @@ async fn snapshot(
                     .failure_reason
                     .as_deref()
                     .and_then(nonempty)
-                    .or(response
-                        .and_then(|v| v.error_message.as_deref())
-                        .and_then(nonempty))
                     .unwrap_or("subagent failed")),
             );
         }
@@ -310,66 +315,31 @@ async fn snapshot(
     Ok(Some(value))
 }
 
-async fn final_output(node: &EmbeddedNode, child: &ChildRequestRow) -> Result<String> {
-    let filter = child_result_filter(std::slice::from_ref(child));
-    let response = node.execute(&format!(r#"{{ AgentResponse(filter: {{ {filter} }}, limit: 2) {{request_id request_doc_id agent_did requester_did session_id materialized_message_sequence content}} }}"#)).await;
-    ensure_no_errors(&response, "Grok child final response")?;
-    let rows = response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(Value::as_array)
-        .context("missing child final response rows")?;
-    anyhow::ensure!(rows.len() <= 1, "duplicate child final response");
-    let row = rows.first();
-    if let Some(row) = row {
-        anyhow::ensure!(
-            row["request_id"].as_str() == Some(child.request_id.as_str())
-                && row["request_doc_id"].as_str() == child.doc_id.as_deref()
-                && row["agent_did"].as_str() == Some(child.agent_did.as_str())
-                && row["session_id"].as_str() == Some(child.session_id.as_str())
-                && row.get("requester_did") == Some(&json!(child.requester_did)),
-            "child final response crossed physical scope"
-        );
-    }
-    if let Some(sequence) = row.and_then(|v| v["materialized_message_sequence"].as_i64()) {
-        let response = node.execute(&format!(r#"{{ AgentMessage(filter: {{ {filter}, sequence: {{_eq: {sequence}}}, role: {{_eq: "assistant"}} }}, limit: 2) {{request_id request_doc_id agent_did requester_did session_id content}} }}"#)).await;
-        ensure_no_errors(&response, "Grok child final message")?;
-        let messages = response
-            .data
-            .as_ref()
-            .and_then(|data| data.get("AgentMessage"))
-            .and_then(Value::as_array)
-            .context("missing child final message rows")?;
-        anyhow::ensure!(messages.len() <= 1, "duplicate child final message");
-        if let Some(message) = messages.first() {
-            anyhow::ensure!(
-                message["request_id"].as_str() == Some(child.request_id.as_str())
-                    && message["request_doc_id"].as_str() == child.doc_id.as_deref()
-                    && message["agent_did"].as_str() == Some(child.agent_did.as_str())
-                    && message["session_id"].as_str() == Some(child.session_id.as_str())
-                    && message.get("requester_did") == Some(&json!(child.requester_did)),
-                "child final message crossed physical scope"
-            );
-            let blob = message["content"]
-                .as_str()
-                .context("child final message content missing")?;
-            if let Message::Assistant { content, .. } =
-                gents_protocol::transcript::decode_persisted_message("assistant", blob)
-            {
-                return Ok(content
-                    .into_iter()
-                    .filter_map(|item| match item {
-                        AssistantContent::Text(text) => Some(text.text),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join(""));
-            }
-        }
-    }
-    Ok(row
-        .and_then(|v| v["content"].as_str())
-        .unwrap_or_default()
-        .to_owned())
+async fn final_output(node: &Arc<EmbeddedNode>, child: &ChildRequestRow) -> Result<String> {
+    let Some(selection) = child.terminal_output.as_ref() else {
+        anyhow::bail!("terminal child request omitted canonical terminal output");
+    };
+    let TerminalOutput::Message { message_doc_id } = selection else {
+        return Ok(String::new());
+    };
+    let request_doc_id = child
+        .doc_id
+        .as_deref()
+        .context("terminal child request omitted physical identity")?;
+    let access = gents::ConfigAccess::Local(node.clone());
+    let (header, message) = gents::session::load_canonical_message(
+        &access,
+        message_doc_id,
+        &child.agent_did,
+        child.requester_did.as_deref(),
+    )
+    .await
+    .context("resolving exact canonical child terminal output")?;
+    anyhow::ensure!(
+        header.session_id == child.session_id
+            && header.request_doc_id.as_deref() == Some(request_doc_id)
+            && header.role == gents_protocol::output::MessageRole::Assistant,
+        "canonical child terminal output crossed exact request scope"
+    );
+    Ok(present_message(&message).body_markdown)
 }

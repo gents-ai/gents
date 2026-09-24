@@ -164,7 +164,6 @@ def slotContext
   , currentTime := 0
   , retryCount := 0
   , maxRetries := 3
-  , progressSeq := 0
   , messageSeq := 0
   , persistence := .uncommitted
   }

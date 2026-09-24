@@ -23,11 +23,14 @@ use super::cli_process::{path_arg, run_cli_json};
 use super::secscan;
 use super::server::{spawn_server_with_args_and_env, wait_http, wait_runtime_ready};
 use crate::cli::args::{PackInitArgs, PackRunArgs, PackSeedArgs};
-use crate::config_writes::ConfigAccess;
 use crate::desired_state::interpolate::interpolate_with;
 use crate::graphql_access::post_graphql;
+use gents::config_client::ConfigAccess;
 use gents::graphql::{escape_graphql_string, validate_collection_identifier};
 use gents_protocol::client_protocol::RequestLifecycleState;
+use gents_protocol::output::TerminalOutput;
+use gents_protocol::row::AgentRequestRow;
+use gents_protocol::transcript::present_message;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1276,6 +1279,31 @@ struct StageResult {
     caused_by_source_doc_id: Option<String>,
 }
 
+/// Pack assertions consume the same reconstructed payloads as trace and desktop;
+/// lifecycle documents no longer contain tool arguments or results.
+async fn canonical_stage_tool_rows(graphql: &str, request_id: &str) -> Result<Vec<Value>> {
+    let access = ConfigAccess::Graphql(graphql.to_owned());
+    let timeline = gents::run_timeline_fetch::load_run_timeline_rows(&access, request_id).await?;
+    let request_doc_id = timeline
+        .request
+        .doc_id
+        .as_deref()
+        .context("pack stage request has no physical document ID")?;
+    timeline
+        .tool_calls
+        .iter()
+        .filter(|tool| tool.request_doc_id.as_deref() == Some(request_doc_id))
+        .map(|tool| {
+            let mut row = serde_json::to_value(tool)?;
+            // These physical coordinates are intentionally omitted by the public
+            // timeline serializer, but provenance assertions need them.
+            row["_docID"] = json!(tool.doc_id);
+            row["request_doc_id"] = json!(tool.request_doc_id);
+            Ok(row)
+        })
+        .collect()
+}
+
 async fn verify_stage_tool_sequences(
     graphql: &str,
     stage: &StageResult,
@@ -1285,16 +1313,7 @@ async fn verify_stage_tool_sequences(
         .iter()
         .filter(|expected| expected.trigger_id == stage.trigger_id)
     {
-        let escaped = escape_graphql_string(&stage.request_id);
-        let query = format!(
-            r#"{{ AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
-                message_sequence
-                tool_name
-                args
-                lifecycle_state
-            }} }}"#
-        );
-        let rows = graphql_rows(graphql, "AgentToolCall", &query).await?;
+        let rows = canonical_stage_tool_rows(graphql, &stage.request_id).await?;
         verify_stage_tool_sequence_rows(stage, expected, &rows)?;
     }
     Ok(())
@@ -1437,6 +1456,7 @@ struct StageProvenance {
     rendered_request_count: usize,
     request_commit_cids: Vec<String>,
     request_fact_counts: BTreeMap<String, usize>,
+    terminal_output: String,
     signer_identity: String,
 }
 
@@ -1474,19 +1494,7 @@ async fn verify_tool_call_expectations(
         let mut all_rows = Vec::new();
         let mut matched = false;
         for stage in matching_stages {
-            let escaped = escape_graphql_string(&stage.request_id);
-            let query = format!(
-                r#"{{
-                AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}) {{
-                    tool_name
-                    status
-                    lifecycle_state
-                    args
-                    result
-                }}
-            }}"#
-            );
-            let rows = graphql_rows(graphql, "AgentToolCall", &query).await?;
+            let rows = canonical_stage_tool_rows(graphql, &stage.request_id).await?;
             matched |= rows.iter().any(|row| tool_call_matches(row, expected));
             all_rows.extend(rows);
         }
@@ -1769,16 +1777,94 @@ async fn verify_stage_provenance(
     request_commit_cids.sort();
     request_commit_cids.dedup();
 
+    // Canonical terminal output (#1571): the terminalization owner selects
+    // `AgentRequest.terminal_output` in the terminal transaction. Read it back
+    // through the canonical `AgentRequestRow` owner, never a retired
+    // `AgentResponse` or a serialized `AgentMessage` copy.
+    let terminal_query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{
+            _docID
+            request_id
+            agent_did
+            requester_did
+            session_id
+            lifecycle_state
+            failure_reason
+            terminal_output
+        }} }}"#,
+        escape_graphql_string(&request_doc_id),
+    );
+    let terminal_rows = graphql_rows(graphql, "AgentRequest", &terminal_query).await?;
+    anyhow::ensure!(
+        terminal_rows.len() == 1,
+        "request {} resolved to {} terminal AgentRequest documents; expected exactly one",
+        stage.request_id,
+        terminal_rows.len()
+    );
+    let request: AgentRequestRow = serde_json::from_value(terminal_rows[0].clone())
+        .context("decoding canonical terminal AgentRequest")?;
+    if !request.is_terminal() {
+        bail!(
+            "request {} did not reach a terminal lifecycle state",
+            stage.request_id
+        );
+    }
+    let selection = request.terminal_output.as_ref().with_context(|| {
+        format!(
+            "terminal request {} is missing AgentRequest.terminal_output; \
+             a terminal row without the selection is incomplete, not NoMessage",
+            stage.request_id
+        )
+    })?;
+    let terminal_output = match selection {
+        TerminalOutput::Message { message_doc_id } => {
+            // Use the same exact terminal observation owner as other consumers;
+            // provenance checking must not introduce its own header eligibility.
+            let access = ConfigAccess::Graphql(graphql.to_owned());
+            let observation = gents::session::observe_request_output(&access, &request)
+                .await
+                .context("resolving the selected canonical terminal output")?;
+            let gents::session::CanonicalRequestOutput::TerminalMessage {
+                message: native, ..
+            } = observation
+            else {
+                bail!(
+                    "selected canonical terminal output for request {} is not reconstructable: {observation:?}",
+                    stage.request_id
+                );
+            };
+            let presentation = present_message(&native);
+            anyhow::ensure!(
+                presentation.has_visible_body() || presentation.has_tool_calls,
+                "selected canonical terminal output for request {} reconstructed an empty assistant body",
+                stage.request_id
+            );
+            format!("message:{message_doc_id}")
+        }
+        TerminalOutput::NoMessage => {
+            // Preserved NoMessage semantics: an explicit absence of an answer,
+            // never a header this layer could second-guess. The AgentMessage
+            // branch below still requires a selected assistant header, so a
+            // completed stage expecting durable output stays red on conflict
+            // instead of silently passing.
+            if stage.lifecycle_state == RequestLifecycleState::Completed {
+                bail!(
+                    "completed request {} selected TerminalOutput::NoMessage but the \
+                     stage assertion requires durable signed output; NoMessage is \
+                     preserved as an explicit absence, not satisfied here",
+                    stage.request_id
+                );
+            }
+            "no_message".to_string()
+        }
+    };
+
     let mut request_fact_counts = BTreeMap::new();
     for (collection, required, extra_fields) in [
-        ("AgentResponse", true, "status content reasoning"),
-        ("AgentMessage", true, "role content reasoning"),
+        ("AgentMessage", true, "role"),
+        ("AgentOutputSegment", true, ""),
         ("InferenceCall", true, "call_state"),
-        (
-            "AgentToolCall",
-            require_tool_call,
-            "status tool_name result",
-        ),
+        ("AgentToolCall", require_tool_call, "tool_name"),
         ("CompactionEntry", false, "summary"),
     ] {
         let rows = verify_request_fact_collection(
@@ -1792,31 +1878,26 @@ async fn verify_stage_provenance(
         )
         .await?;
         match collection {
-            "AgentResponse"
-                if !rows.iter().any(|row| {
-                    matches!(
-                        row.get("status").and_then(Value::as_str),
-                        Some("complete" | "completed") // AgentResponse.status
-                    )
-                }) =>
-            {
-                bail!(
-                    "completed request {} has no terminal AgentResponse",
-                    stage.request_id
-                );
+            "AgentMessage" if terminal_output == "no_message" => {
+                // Preserved NoMessage semantics: no assistant header is
+                // required; request provenance stays signed above.
             }
             "AgentMessage"
                 if !rows.iter().any(|row| {
                     row.get("role").and_then(Value::as_str) == Some("assistant")
-                        && ["content", "reasoning"].iter().any(|field| {
-                            row.get(*field)
-                                .and_then(Value::as_str)
-                                .is_some_and(|value| !value.trim().is_empty())
-                        })
+                        && row
+                            .get("_docID")
+                            .and_then(Value::as_str)
+                            .is_some_and(|doc_id| {
+                                terminal_output
+                                    .strip_prefix("message:")
+                                    .is_some_and(|selected| selected == doc_id)
+                            })
                 }) =>
             {
                 bail!(
-                    "completed request {} has no materialized assistant AgentMessage",
+                    "completed request {} has no canonical assistant AgentMessage header \
+                     matching its selected terminal output",
                     stage.request_id
                 );
             }
@@ -1831,6 +1912,7 @@ async fn verify_stage_provenance(
         rendered_request_count: rendered_rows.len(),
         request_commit_cids,
         request_fact_counts,
+        terminal_output,
         signer_identity: signer_identity.to_string(),
     })
 }
@@ -1901,20 +1983,7 @@ async fn verify_source_edges(
                 )
             })?;
 
-        let tool_query = format!(
-            r#"{{ AgentToolCall(filter: {{
-                request_doc_id: {{ _eq: "{}" }},
-                tool_name: {{ _eq: "{}" }}
-            }}) {{
-                _docID
-                request_doc_id
-                tool_name
-                result
-            }} }}"#,
-            escape_graphql_string(&producer_provenance.request_doc_id),
-            escape_graphql_string(&expected.producer_tool_name),
-        );
-        let tool_rows = graphql_rows(graphql, "AgentToolCall", &tool_query).await?;
+        let tool_rows = canonical_stage_tool_rows(graphql, &producer.request_id).await?;
         let matching_tool_rows = tool_rows
             .iter()
             .filter(|row| {
@@ -3448,6 +3517,7 @@ pub(crate) async fn run(args: PackRunArgs) -> Result<()> {
             "rendered_request_count": evidence.rendered_request_count,
             "request_commit_cids": evidence.request_commit_cids,
             "request_fact_counts": evidence.request_fact_counts,
+            "terminal_output": evidence.terminal_output,
             "signer_identity": evidence.signer_identity,
         })).collect::<Vec<_>>(),
         "source_edges": source_edges.iter().map(|edge| json!({

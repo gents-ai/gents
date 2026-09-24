@@ -409,9 +409,26 @@ jobs:
             exit 1
           fi
 
+      - name: Check proof import closure
+        run: |
+          python3 .github/scripts/test-lean-import-closure.py
+          cd crates/gents/proofs && lake build importClosure
+
       - name: Build proofs
         working-directory: crates/gents/proofs
         run: lake build
+
+      - name: Check canonical output conformance mapping
+        run: |
+          python3 .github/scripts/test-canonical-output-map.py
+          python3 .github/scripts/check-canonical-output-map.py --check-export
+
+      # The #1571 foundation is red, so these strict decoders cannot compile yet.
+      # Limited structural lint only; this does not execute Rust or Serde.
+      - name: Lint Rust fixture shapes against the generated contract
+        run: |
+          python3 .github/scripts/test-lean-rust-decoders.py
+          python3 .github/scripts/check-lean-rust-decoders.py
 
       # Desktop consumers exercise generated ClientShell contracts here, after
       # the proof build has warmed the persistent Lake cache.

@@ -117,7 +117,7 @@ impl BackgroundCompletionObserver {
             }
         }
         for run in crate::periodic_recovery::run_periodic_recovery_sweeps(
-            self.node.as_ref(),
+            &self.node,
             &self.local_did,
             &self.background_executions,
         )
@@ -207,10 +207,10 @@ impl BackgroundCompletionObserver {
                 | BackgroundCompletionOutcome::Unlinked,
             ) => {}
             Err(error) => {
-                tracing::warn!(
+                tracing::error!(
                     child_request_id = %child_request_id,
                     error = %error,
-                    "failed to project background subagent completion"
+                    "background subagent terminal projection failed; will retry"
                 );
             }
         }

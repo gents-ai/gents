@@ -77,6 +77,60 @@ Run from the repo root.
    - Confirm the app process exits.
    - Confirm no unexpected Vite/Tauri helper process remains from the dev run.
 
+## Packaged Acceptance: Canonical Transcript Refactor
+
+Browser and bridge passes do not replace this packaged-app check. Record the
+tested commit, DMG path and checksum, macOS version, and architecture. A local
+unsigned build is not evidence of release signing or notarization.
+
+1. Build with `make desktop-native-build`, then use the DMG path printed by
+   Tauri. Install and open the bundled app, not the development server.
+2. Use a dedicated test profile; do not wipe or overwrite an existing user's
+   database to make this check pass. Start the local backend through the app.
+   For an isolated launch, set both `GENTS_DESKTOP_HOME` (desktop identity and
+   database) and `GENTS_HOME` (managed backend data) to separate directories
+   under a fresh `mktemp -d` directory, and launch the installed bundle's
+   executable from that shell. Setting only one leaves the other on its normal
+   user profile. Reuse those same paths for the relaunch check; a Finder launch
+   does not inherit these shell overrides.
+3. Configure OpenAI-compatible inference at `http://workstation-1:8000/v1`
+   (or workstation-2), model `GLM-5.3-Flash-NVFP4`, API key `local-glm`.
+   This requires access to those hosts. Do not silently fall back to a paid
+   provider when they are unavailable.
+4. Start a session with The Engineer. Send a small filesystem task in a test
+   workspace; verify streaming text, tool activity, final output, and readable
+   failures. Send another message while work is running: it should appear as
+   queued input and become canonical transcript content when execution starts.
+5. Exercise a subagent task and a background command. Verify their completion
+   notifications and parent linkage, then cancel a running task and check that
+   the UI reports cancellation without leaving owned work running.
+6. Reopen the session, then quit and relaunch the installed app. Confirm the
+   transcript reconstructs, configuration persists, and the backend can start
+   again without duplicate ownership or orphaned processes.
+
+Record each result separately. Installation, native lifecycle, and this manual
+Engineer workflow remain unverified until performed on the packaged artifact.
+
+## Live Fixture E2E Acceptance
+
+`tests/tauri-driver.live.e2e-acceptance.test.tsx` renders the real app against
+the live `bridge_runner` fixture and a configured inference endpoint. It uses
+isolated temporary homes, forces a bash file write plus `read_file` read-back,
+requires a nonterminal canonical `liveAssistant` observation, checks the final
+assistant/tool timeline, and reloads the session to verify durability.
+
+```bash
+npm --prefix apps/gents-desktop run test:live:e2e-acceptance -- \
+  --inference-url http://workstation-1:8000/v1 \
+  --model-name GLM-5.3-Flash-NVFP4 --provider OpenAiCompatible
+```
+
+This is fixture-runtime coverage only. It does not exercise a managed backend,
+DMG installation, first-run setup, signing/notarization, or relaunch of a
+packaged app. The fixture provides the generic `Live Repo Audit Default`
+behavior, not The Engineer, so the packaged Engineer workflow above remains a
+separate manual acceptance requirement.
+
 ## Artifacts
 
 Do not commit ad hoc native screenshots. Store manual screenshots/traces outside
@@ -155,3 +209,22 @@ and schedules with matching IDs on different agents from their respective views;
 retry and interrupt actions must carry the intended agent context independently
 of the shared observation filter. Linux/Windows keep their prior close policy;
 this feature does not add portable tab or window creation there.
+
+## Local macOS signing
+
+`desktop-native-build` applies the local Tauri signing overlay at
+`src-tauri/tauri.local-sign.conf.json`. On macOS this gives the complete app
+bundle an ad-hoc signature before Tauri packages the DMG, including a sealed
+`Info.plist` and resources. Verify a local artifact with:
+
+```bash
+codesign --verify --deep --strict --verbose=2 \
+  target/release/bundle/macos/Gents.app
+hdiutil verify target/release/bundle/dmg/Gents_0.18.5_aarch64.dmg
+```
+
+An ad-hoc signature proves only that the local bundle is structurally sealed.
+It has no Apple signing authority and is not Developer ID signed or notarized.
+Release builds must continue to use their certificate and notarization path;
+do not present a local `make desktop-native-build` artifact as release-signing
+evidence.

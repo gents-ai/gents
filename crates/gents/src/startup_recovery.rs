@@ -35,14 +35,17 @@ pub struct StartupRecoveryOutcome {
 /// 1. **Tool calls** — the restart-disposition classifier (#937) must observe
 ///    parent liveness as persisted at the crash, before request repair
 ///    terminalizes those parents.
-/// 2. **Requests/responses/conversations** — terminalizes crash-stuck
+/// 2. **Requests/responses** — terminalizes crash-stuck
 ///    `claimed`/`processing` requests whose execution leases have expired.
 ///    Still-live leases are preserved for a later periodic recovery pass.
 /// 3. **Inference calls** — parent-gated; runs last so crash-orphaned
 ///    queued/running rows observe terminal parents and are terminalized in
 ///    this same pass, or the later periodic pass that repairs a deferred parent
 ///    (`Recovery.request_before_inference_converges`).
-pub async fn run_startup_recovery(node: &EmbeddedNode, agent_did: &str) -> StartupRecoveryOutcome {
+pub async fn run_startup_recovery(
+    node: &std::sync::Arc<EmbeddedNode>,
+    agent_did: &str,
+) -> StartupRecoveryOutcome {
     let tool_calls = ToolCallLifecycle::recover_all(node, agent_did).await;
     let requests = RequestLifecycle::recover_all(node, agent_did).await;
     let inference_calls = InferenceCall::recover_all(node, agent_did).await;

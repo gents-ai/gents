@@ -122,7 +122,7 @@ theorem allToolsCoherent_preserved
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | begin_inference h_state _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
-    | advance _ _ h_post =>
+    | continue_processing _ _ h_post =>
       exact coherent_of_request_clock_eq (h_coherent tool h_in_pre h_live) h_requestId
         (by simp [h_post]) (by simp [h_post])
     | finish _ _ h_post =>
@@ -287,7 +287,7 @@ theorem noToolsBeforeProcessing_preserved
       exact False.elim ((h_no_early_tools tool h_in_pre).1 h_state)
     | begin_inference h_state _ _ =>
       exact False.elim ((h_no_early_tools tool h_in_pre).2.1 h_state)
-    | advance h_state _ h_post =>
+    | continue_processing h_state _ h_post =>
       refine ⟨?_, ?_, ?_⟩
       · intro h_pending
         have h_pre_pending : pre.request.state = .pending := by

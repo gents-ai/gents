@@ -839,7 +839,6 @@ async fn summarize_checkpoint<M: CompletionModel + 'static>(
     }
     let guided_result = crate::loop_stream::run_loop_to_typed(
         model.clone(),
-        Option::<crate::session_hook::NoopSessionHook>::None,
         Message::user(compaction_request_prompt()),
         prepared_history.clone(),
         std::sync::Arc::new(Vec::new()),
@@ -871,7 +870,6 @@ async fn summarize_checkpoint<M: CompletionModel + 'static>(
             ));
             let raw = crate::loop_stream::run_loop_to_text(
                 model.clone(),
-                Option::<crate::session_hook::NoopSessionHook>::None,
                 Message::user(compaction_request_prompt()),
                 prepared_history,
                 std::sync::Arc::new(Vec::new()),
@@ -1093,124 +1091,26 @@ pub fn split_for_summary(
     history::split_messages_for_summary_with_counter(messages, keep_recent_tokens, &counter)
 }
 
-/// Mirror of Lean `StreamingResponse.Status`, with the same terminal partition,
-/// so generated conformance cases can be fed straight in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResponseStatus {
-    Streaming,
-    Complete,
-    Error,
-}
-
-impl ResponseStatus {
-    pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Complete | Self::Error)
-    }
-
-    pub fn from_defra(value: &str) -> Option<Self> {
-        match value {
-            "streaming" => Some(Self::Streaming),
-            "complete" => Some(Self::Complete),
-            "error" => Some(Self::Error),
-            _ => None,
-        }
-    }
-}
-
-/// Resolves the streaming status of the response that produced a message.
-pub trait ResponseStatusIndex {
-    fn status_of(&self, message: &Message) -> Option<ResponseStatus>;
-}
-
-/// Every response in scope is terminal.
-pub struct AllTerminal;
-
-impl ResponseStatusIndex for AllTerminal {
-    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
-        Some(ResponseStatus::Complete)
-    }
-}
-
-/// No status is known — the conservative resolution when anything in scope is
-/// still streaming.
-pub struct NoneKnown;
-
-impl ResponseStatusIndex for NoneKnown {
-    fn status_of(&self, _message: &Message) -> Option<ResponseStatus> {
-        None
-    }
-}
-
-/// Runtime counterpart of Lean `PromptView.safeToReduce`: a transcript may only
-/// be reduced when every tool result it retains belongs to a response whose
-/// status is known and terminal. Reducing under a live response can summarize
-/// away a turn that is still being written.
-///
-/// See `boundary.compaction.safe-to-reduce-session-scope` for how the daemon
-/// resolves statuses at session scope rather than per message.
-pub fn safe_to_reduce(messages: &[Message], statuses: &impl ResponseStatusIndex) -> bool {
-    messages.iter().all(|message| {
-        if !carries_tool_result(message) {
-            return true;
-        }
-        statuses
-            .status_of(message)
-            .is_some_and(ResponseStatus::is_terminal)
-    })
-}
-
-/// Runtime counterpart of Lean `PromptAssembly.UniqueCallIds`: no tool-call id
-/// is announced by more than one assistant message.
-///
-/// This is a *hypothesis* of the prefix-stability theorem, not a structural
-/// guarantee — call ids come from the provider, and nothing in the ingestion
-/// path enforces uniqueness across a session. `sanitize_history_for_provider`
-/// credits an announcement from the globally resolved set, so a later turn that
-/// reuses an id resurrects an earlier announcement the shorter view had dropped
-/// as unpaired. The prefix then changes under append and a stored
-/// `messages_compacted` no longer names the rows it was measured against.
-/// `Compaction.reused_call_id_breaks_prefix_stability` exhibits exactly that.
-///
-/// Checking it here turns the theorem's hypothesis into a precondition the
-/// runtime verifies before recording a count. See
-/// `boundary.compaction.unique-call-ids-checked` for the residual gap and the
-/// follow-up that would remove the need for the check.
-pub fn has_unique_call_ids(messages: &[Message]) -> bool {
-    let mut announced: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for message in messages {
-        let Message::Assistant { content, .. } = message else {
-            continue;
-        };
-        // Per-message first: Lean models a turn's ids as a `Finset`, so a repeat
-        // *within* one announcement collapses rather than conflicting.
-        let this_turn: std::collections::HashSet<String> = content
-            .iter()
-            .filter_map(|item| match item {
-                gents_protocol::message::AssistantContent::ToolCall(tool_call) => Some(
-                    tool_call
-                        .call_id
-                        .clone()
-                        .unwrap_or_else(|| tool_call.id.clone()),
-                ),
-                _ => None,
-            })
-            .collect();
-        for call_id in this_turn {
-            if !announced.insert(call_id) {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-fn carries_tool_result(message: &Message) -> bool {
-    let Message::User { content } = message else {
+/// Runtime counterpart of Lean `PromptView.safeToReduce`. Canonical loading
+/// has already reconstructed the selected immutable headers and payloads, so
+/// reduction requires an ordinary turn boundary and a provider-view fixpoint.
+pub fn safe_to_reduce(messages: &[Message]) -> bool {
+    let Some(last) = messages.last() else {
         return false;
     };
-    content
-        .iter()
-        .any(|item| matches!(item, gents_protocol::message::UserContent::ToolResult(_)))
+    is_ordinary_message(last) && sanitize_history_for_provider(messages.to_vec()) == messages
+}
+
+fn is_ordinary_message(message: &Message) -> bool {
+    match message {
+        Message::Assistant { content, .. } => !content
+            .iter()
+            .any(|item| matches!(item, gents_protocol::message::AssistantContent::ToolCall(_))),
+        Message::User { content } => !content
+            .iter()
+            .any(|item| matches!(item, gents_protocol::message::UserContent::ToolResult(_))),
+        Message::System { .. } => false,
+    }
 }
 
 pub fn bounded_summary(summary: String) -> String {

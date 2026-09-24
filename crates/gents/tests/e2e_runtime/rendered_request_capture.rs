@@ -1146,7 +1146,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         "turn 1 must not carry the compacted-away tool output"
     );
     assert!(
-        turn_one.contains("see DefraDB AgentToolCall for full output]"),
+        turn_one.contains("see canonical transcript for full output]"),
         "turn 1 must carry the stub compaction left in its place; the body was \
          {} chars",
         turn_one.len()
@@ -1157,7 +1157,7 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
     let effective = serde_json::to_string(&trace["effective_messages"]).expect("trace messages");
     assert!(
         !effective.contains(BIG_MARKER)
-            && effective.contains("see DefraDB AgentToolCall for full output]"),
+            && effective.contains("see canonical transcript for full output]"),
         "the assembly trace must be the post-compaction message list"
     );
 
@@ -1174,6 +1174,13 @@ async fn per_turn_compaction_is_captured_and_governs_later_turns() {
         turn_two.contains(SMALL_MARKER),
         "turn 2 must carry its own tool result verbatim; a stripped one would \
          mean turn 2 compacted again, which is what stickiness prevents"
+    );
+
+    assert!(
+        compaction_entries(db.node.as_ref(), "session-capture-compaction")
+            .await
+            .is_empty(),
+        "reducing a closed tool pair must not advance the session-prefix cursor"
     );
 
     agent.shutdown().await;

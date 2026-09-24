@@ -19,7 +19,7 @@ mod job_object;
 mod process_group;
 mod registry;
 
-use capture::{join_capture_with_timeout, spawn_optional_capped};
+use capture::{join_capture_after_child_exit, spawn_optional_capped};
 #[cfg(windows)]
 use job_object::{terminate_job, ManagedChildJob};
 #[cfg(unix)]
@@ -27,8 +27,6 @@ use process_group::{terminate_process_group, ManagedChild};
 use registry::ActiveExecGuard;
 
 pub(crate) use registry::{active_executor_snapshots, ManagedExecKind};
-
-const CAPTURE_DRAIN_AFTER_CHILD_EXIT: Duration = Duration::from_millis(100);
 
 #[derive(Debug)]
 pub(crate) struct ManagedExecRequest {
@@ -141,8 +139,8 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                     drop(wait);
                     child.mark_finished(true);
                     let (stdout, stderr) = tokio::join!(
-                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
-                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
                     );
                     return ManagedExecOutcome::Exited {
                         code: status.code(),
@@ -156,8 +154,8 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                     drop(wait);
                     child.mark_finished(true);
                     let _ = tokio::join!(
-                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
-                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
                     );
                     return ManagedExecOutcome::SpawnFailed {
                         error: format!("waiting for managed exec failed: {error}"),
@@ -171,8 +169,8 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     drop(wait);
     child.mark_finished(kill.reaped);
     let (stdout, stderr) = tokio::join!(
-        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
-        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+        join_capture_after_child_exit(stdout_task),
+        join_capture_after_child_exit(stderr_task),
     );
 
     match outcome_kind {
@@ -280,8 +278,8 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                     drop(wait);
                     child.mark_finished(true);
                     let (stdout, stderr) = tokio::join!(
-                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
-                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
                     );
                     return ManagedExecOutcome::Exited {
                         code: status.code(),
@@ -295,8 +293,8 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
                     drop(wait);
                     child.mark_finished(true);
                     let _ = tokio::join!(
-                        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
-                        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+                        join_capture_after_child_exit(stdout_task),
+                        join_capture_after_child_exit(stderr_task),
                     );
                     return ManagedExecOutcome::SpawnFailed {
                         error: format!("waiting for managed exec failed: {error}"),
@@ -310,8 +308,8 @@ pub(crate) async fn run_managed_exec(request: ManagedExecRequest) -> ManagedExec
     drop(wait);
     child.mark_finished(kill.reaped);
     let (stdout, stderr) = tokio::join!(
-        join_capture_with_timeout(stdout_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
-        join_capture_with_timeout(stderr_task, CAPTURE_DRAIN_AFTER_CHILD_EXIT),
+        join_capture_after_child_exit(stdout_task),
+        join_capture_after_child_exit(stderr_task),
     );
 
     match outcome_kind {

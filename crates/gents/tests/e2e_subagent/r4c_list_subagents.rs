@@ -5,6 +5,7 @@ use gents::tool_call_lifecycle::ToolCallLifecycle;
 use gents::{DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
+use super::r4c_private_support::{accepted_call, bind_accepted_request};
 use crate::support::fixtures::{
     configure_subagent_behavior, spawn_subagent_source, subagent_target,
 };
@@ -63,81 +64,36 @@ async fn create_parent_hook(
     session_id: &str,
 ) -> DefraSessionHook {
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    create_parent_request(
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         db.node.as_ref(),
-        db.node_identity.did(),
-        request_id,
-        session_id,
-        deadline,
-    )
-    .await;
-    crate::support::create_agent_session_in_scope(
-        db.node.as_ref(),
-        db.node_identity.did(),
         session_id,
         PARENT_BEHAVIOR_ID,
-        "2026-05-14T00:00:00Z",
+        db.node_identity.did(),
+        PARENT_BEHAVIOR_ID,
+        Some(db.node_identity.did()),
     )
-    .await;
+    .await
+    .unwrap();
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         session_id,
         PARENT_BEHAVIOR_ID,
         db.node_identity.did(),
-        None,
+        Some(db.node_identity.did()),
         FailurePolicy::default(),
     )
     .await
     .unwrap();
-    hook.set_active_request_lineage(Some(request_id.to_string()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(deadline)).await;
+    bind_accepted_request(
+        db,
+        &hook,
+        PARENT_BEHAVIOR_ID,
+        request_id,
+        session_id,
+        deadline,
+    )
+    .await;
     hook
-}
-
-async fn create_parent_request(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    deadline: chrono::DateTime<chrono::Utc>,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
-    let agent_did = escape_graphql_string(agent_did);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let deadline = deadline.to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "parent prompt",
-                lifecycle_state: "processing",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{created_at}",
-                deadline: "{deadline}",
-                retry_count: 0,
-                max_retries: 3,
-                subagent_depth: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create parent AgentRequest failed: {:?}",
-        response.errors
-    );
 }
 
 async fn spawn_background_child(
@@ -152,14 +108,14 @@ async fn spawn_background_child(
         "await_mode": "background"
     })
     .to_string();
-    let action = hook
-        .on_tool_call(
-            "spawn_subagent",
-            Some(format!("model-{internal_call_id}")),
-            internal_call_id,
-            &args,
-        )
-        .await;
+    let action = accepted_call(
+        hook,
+        "spawn_subagent",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args,
+    )
+    .await;
     let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
     let child_request_id = receipt["child_request_id"]
@@ -202,14 +158,14 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
 }
 
 async fn list_subagents(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
-    let action = hook
-        .on_tool_call(
-            "list_subagents",
-            Some(format!("model-{internal_call_id}")),
-            internal_call_id,
-            &args.to_string(),
-        )
-        .await;
+    let action = accepted_call(
+        hook,
+        "list_subagents",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args.to_string(),
+    )
+    .await;
     skip_reason_json(action)
 }
 
@@ -248,7 +204,8 @@ async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_na
 }
 
 async fn bridge_complete(db: &crate::support::TestDb, session_id: &str, tool_call_id: &str) {
-    let mut lifecycle = ToolCallLifecycle::load(db.node.clone(), session_id, tool_call_id)
+    let native_id = format!("model-{tool_call_id}");
+    let mut lifecycle = ToolCallLifecycle::load(db.node.clone(), session_id, &native_id)
         .await
         .expect("load lifecycle")
         .expect("bridge lifecycle should exist");
@@ -269,14 +226,6 @@ async fn create_superseded_child_edge(
     let child_request_id = format!("{tool_call_id}-child");
     let child_session_id = format!("{tool_call_id}-child-session");
     let parent_request_doc_id = crate::support::exact_request_doc_id(node, parent_request_id).await;
-    let bridge_args = serde_json::json!({
-        "name": CHILD_BEHAVIOR_ID,
-        "agent_did": agent_did,
-        "behavior_id": CHILD_BEHAVIOR_ID,
-        "prompt": "superseded child",
-        "parent_subagent_depth": 0
-    })
-    .to_string();
     let parent_request_id = escape_graphql_string(parent_request_id);
     let parent_request_doc_id = escape_graphql_string(&parent_request_doc_id);
     let session_id = escape_graphql_string(session_id);
@@ -285,7 +234,6 @@ async fn create_superseded_child_edge(
     let child_session_id = escape_graphql_string(&child_session_id);
     let agent_did = escape_graphql_string(agent_did);
     let behavior_id = escape_graphql_string(CHILD_BEHAVIOR_ID);
-    let bridge_args = escape_graphql_string(&bridge_args);
     let bridge_mutation = format!(
         r#"mutation {{
             create_AgentToolCall(input: {{
@@ -293,13 +241,11 @@ async fn create_superseded_child_edge(
                 request_id: "{parent_request_id}",
                 request_doc_id: "{parent_request_doc_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 session_id: "{session_id}",
                 message_sequence: 1,
                 tool_name: "spawn_subagent",
                 tool_call_id: "{tool_call_id}",
-                args: "{bridge_args}",
-                result: "",
-                status: "superseded",
                 lifecycle_state: "superseded",
                 started_at: "2026-05-14T00:01:00Z",
                 completed_at: "2026-05-14T00:02:00Z",
@@ -336,6 +282,7 @@ async fn create_superseded_child_edge(
             create_AgentRequest(input: {{
                 request_id: "{child_request_id}",
                 agent_did: "{agent_did}",
+                requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}",
                 session_id: "{child_session_id}",
                 retry_parent_request: "",
@@ -476,7 +423,7 @@ async fn list_subagents_limit_truncates() {
 }
 
 #[tokio::test]
-async fn list_subagents_no_parent_tool_call_row_written() {
+async fn list_subagents_keeps_one_accepted_parent_control_row() {
     let (db, _source) = setup_db("r4c-list-no-row").await;
     let session_id = "session-no-row";
     let hook = create_parent_hook(&db, "parent-no-row", session_id).await;
@@ -485,7 +432,7 @@ async fn list_subagents_no_parent_tool_call_row_written() {
 
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), session_id, "list_subagents").await,
-        0
+        1
     );
 }
 

@@ -16,8 +16,8 @@ use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use gents_protocol::session::{SessionTitle, SessionTitleSource};
 use gents_protocol::session_hydration::{
-    decode_manifest_json, SessionHydrationDocumentKey, SessionHydrationReceipt,
-    SESSION_HYDRATION_RECEIPT_VERSION,
+    decode_manifest_json, SessionHydrationCollection, SessionHydrationDocumentKey,
+    SessionHydrationReceipt, SESSION_HYDRATION_RECEIPT_VERSION,
 };
 use serde::Deserialize;
 
@@ -99,7 +99,28 @@ fn chat_patch_signature(patch: &ClientStore) -> (usize, usize, u64) {
         Ok(bytes) => {
             let mut hasher = DefaultHasher::new();
             bytes.hash(&mut hasher);
-            (rows, bytes.len(), hasher.finish())
+            let mut byte_len = bytes.len();
+            for row in &patch.transcript_messages {
+                row.doc_id.hash(&mut hasher);
+                match serde_json::to_vec(&row.message) {
+                    Ok(encoded) => {
+                        byte_len = byte_len.saturating_add(encoded.len());
+                        encoded.hash(&mut hasher);
+                    }
+                    Err(_) => return (rows, 0, 0),
+                }
+            }
+            for row in &patch.output_segments {
+                row.doc_id.hash(&mut hasher);
+                match serde_json::to_vec(&row.segment) {
+                    Ok(encoded) => {
+                        byte_len = byte_len.saturating_add(encoded.len());
+                        encoded.hash(&mut hasher);
+                    }
+                    Err(_) => return (rows, 0, 0),
+                }
+            }
+            (rows, byte_len, hasher.finish())
         }
         Err(_) => (rows, 0, 0),
     }
@@ -118,14 +139,7 @@ fn request_patch_is_current(
             .find(|row| row.request_id == request_id && row.agent_did.as_deref() == Some(agent_did))
             .and_then(|row| serde_json::to_value(row).ok())
     };
-    let response_value = |store: &ClientStore| {
-        store
-            .latest_response_for_request_for_agent(request_id, agent_did)
-            .and_then(|row| serde_json::to_value(row).ok())
-    };
-
     request_value(current).is_some_and(|current| request_value(patch) == Some(current))
-        && response_value(current) == response_value(patch)
 }
 
 fn behavior_id_for_write(requested_behavior_id: Option<&str>) -> Option<String> {
@@ -1780,10 +1794,9 @@ fn local_hydration_query(requester_did: &str, session_id: &str, agent_did: &str)
     format!(
         r#"{{
             AgentRequest(filter: {{ {scope} }}) {{ _docID }}
-            AgentResponse(filter: {{ {scope} }}) {{ _docID }}
             AgentMessage(filter: {{ {scope} }}) {{ _docID }}
+            AgentOutputSegment(filter: {{ {scope} }}) {{ _docID }}
             AgentToolCall(filter: {{ {scope} }}) {{ _docID }}
-            AgentToolResult(filter: {{ {scope} }}) {{ _docID }}
             CompactionEntry(filter: {{ {scope} }}) {{ _docID }}
         }}"#
     )
@@ -1793,20 +1806,22 @@ fn local_hydration_documents_from_response(
     response: &defra_node::QueryResponse,
 ) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let mut ids = BTreeSet::new();
-    for collection in [
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "CompactionEntry",
+    for (collection_name, collection) in [
+        ("AgentRequest", SessionHydrationCollection::AgentRequest),
+        ("AgentMessage", SessionHydrationCollection::AgentMessage),
+        (
+            "AgentOutputSegment",
+            SessionHydrationCollection::AgentOutputSegment,
+        ),
+        ("AgentToolCall", SessionHydrationCollection::AgentToolCall),
+        (
+            "CompactionEntry",
+            SessionHydrationCollection::CompactionEntry,
+        ),
     ] {
-        for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection)? {
+        for row in gents::graphql::rows::<HydrationDocIdRow>(response, collection_name)? {
             if let Some(doc_id) = row.doc_id.filter(|value| !value.is_empty()) {
-                ids.insert(SessionHydrationDocumentKey {
-                    collection: collection.to_string(),
-                    doc_id,
-                });
+                ids.insert(SessionHydrationDocumentKey { collection, doc_id });
             }
         }
     }
@@ -2030,21 +2045,30 @@ mod delete_source_tests {
     }
 
     #[test]
-    fn hydration_count_matches_all_client_routable_server_collections() {
+    fn hydration_documents_match_canonical_client_routable_collections() {
         let response = defra_node::QueryResponse::success(json!({
             "AgentRequest": [{ "_docID": "request-1" }],
-            "AgentResponse": [{ "_docID": "response-1" }],
             "AgentMessage": [{ "_docID": "message-1" }],
+            "AgentOutputSegment": [{ "_docID": "segment-1" }],
             "AgentToolCall": [{ "_docID": "tool-call-1" }],
-            "AgentToolResult": [{ "_docID": "tool-result-1" }],
             "CompactionEntry": [{ "_docID": "compaction-1" }]
         }));
 
         assert_eq!(
-            local_hydration_documents_from_response(&response)
-                .unwrap()
-                .len(),
-            6
+            local_hydration_documents_from_response(&response).unwrap(),
+            [
+                (SessionHydrationCollection::AgentRequest, "request-1"),
+                (SessionHydrationCollection::AgentMessage, "message-1"),
+                (SessionHydrationCollection::AgentOutputSegment, "segment-1"),
+                (SessionHydrationCollection::AgentToolCall, "tool-call-1"),
+                (SessionHydrationCollection::CompactionEntry, "compaction-1"),
+            ]
+            .into_iter()
+            .map(|(collection, doc_id)| SessionHydrationDocumentKey {
+                collection,
+                doc_id: doc_id.to_owned(),
+            })
+            .collect()
         );
     }
 

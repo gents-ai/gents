@@ -1,4 +1,4 @@
-import Proofs.Recovery.Sweeps.RequestResponse
+import Proofs.Recovery.Sweeps.Requests
 import Proofs.Recovery.Sweeps.ToolCalls
 import Proofs.Recovery.Sweeps.DetachedBridge
 import Proofs.Recovery.Sweeps.Inference
@@ -8,7 +8,6 @@ namespace Recovery
 
 def registeredRecoverySweeps : List RecoverySweep :=
   [ requestRecoverySweep
-  , responseRecoverySweep
   , toolCallRecoverySweep
   , orphanedBackgroundToolSweep
   , backgroundCompletionSideEffectSweep
@@ -36,8 +35,6 @@ theorem registered_sweeps_cover_persisted_collections :
   cases collection with
   | agentRequest =>
       exact ⟨requestRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
-  | agentResponse =>
-      exact ⟨responseRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
   | agentToolCall =>
       exact ⟨toolCallRecoverySweep, by simp [registeredRecoverySweeps], rfl⟩
   | inferenceCall =>

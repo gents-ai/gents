@@ -8,7 +8,7 @@ theorem terminal_implies_released_local
     (h_term : isTerminal r.state) :
     r.admission = .released := by
   cases r with
-  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries progressSeq messageSeq persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
     cases h_term with
     | inl h =>
       cases h
@@ -86,7 +86,7 @@ theorem transition_produces_coherent
   | begin_inference _ _ h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission]
-  | advance h_state h_admission h_post =>
+  | continue_processing h_state h_admission h_post =>
     rw [coherent, h_post]
     simp [coherentStateAdmission, h_state, h_admission]
   | finish _ _ h_post =>
@@ -117,7 +117,7 @@ theorem claimed_coherent_cases
     (h_coherent : r.coherent) :
     r.admission = .waiting ∨ r.admission = .acquired := by
   cases r with
-  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries progressSeq messageSeq persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
+  | mk state origin backend admission deadline requestDeadline claimTime currentTime retryCount maxRetries messageSeq persistence interruptRequestedAt validUntil subagentDepth causedByParentRequestId causedByParentToolCallId =>
     cases h_state
     cases admission <;> simp [coherent, coherentStateAdmission] at h_coherent ⊢
 
@@ -137,7 +137,7 @@ theorem claim_requires_ttl_open
       simp [h_post] at h_claimed
   | begin_inference _ _ h_post =>
       simp [h_post] at h_claimed
-  | advance h_state _ h_post =>
+  | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
@@ -183,7 +183,7 @@ theorem claim_deadline_explicit
       simp [h_post] at h_claimed
   | begin_inference _ _ h_post =>
       simp [h_post] at h_claimed
-  | advance h_state _ h_post =>
+  | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed
@@ -217,7 +217,7 @@ theorem claim_deadline_default
       simp [h_post] at h_claimed
   | begin_inference _ _ h_post =>
       simp [h_post] at h_claimed
-  | advance h_state _ h_post =>
+  | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed

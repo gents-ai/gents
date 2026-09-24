@@ -195,48 +195,6 @@ impl SessionHook for RecordingHook {
         Some("in-memory-session".to_string())
     }
 
-    fn apply_persistence_policy(
-        &self,
-        result: anyhow::Result<()>,
-        _context: &str,
-    ) -> anyhow::Result<()> {
-        result
-    }
-
-    async fn persist_message(&self, message: &Message) -> anyhow::Result<u32> {
-        let role = match message {
-            Message::System { .. } => "system",
-            Message::User { .. } => "user",
-            Message::Assistant { .. } => "assistant",
-        };
-        self.log(RecordedCall::PersistMessage { role });
-        Ok(self.sequence.fetch_add(1, Ordering::SeqCst) as u32)
-    }
-
-    async fn persist_stream_tool_result_message(
-        &self,
-        _tool_result: &ToolResult,
-        _internal_call_id: &str,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn persist_stream_tool_result_progress(
-        &self,
-        _tool_result: &ToolResult,
-        _internal_call_id: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(true)
-    }
-
-    async fn persist_inflight_assistant_turn(&self, _message: &Message) -> anyhow::Result<u32> {
-        Ok(self.sequence.fetch_add(1, Ordering::SeqCst) as u32)
-    }
-
-    async fn mark_current_response_materialized(&self, _sequence: u32) -> anyhow::Result<()> {
-        Ok(())
-    }
-
     async fn register_stream_tool_call_identity(
         &self,
         _internal_call_id: &str,
@@ -300,11 +258,8 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
         calls: tool_calls.clone(),
     })]);
-    let hook = RecordingHook::default();
-
     let final_text = run_loop_to_text(
         model,
-        Some(hook.clone()),
         Message::user("please echo hi"),
         Vec::new(),
         tools,
@@ -318,42 +273,5 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
         tool_calls.lock().unwrap().as_slice(),
         &["hi".to_string()],
         "the echo tool must have been dispatched exactly once"
-    );
-
-    // The hook sees the persistence calls in order: the user prompt, the
-    // tool call, the tool result, the assistant's tool-call turn, then the
-    // final assistant answer.
-    let calls = hook.calls();
-    assert_eq!(
-        calls[0],
-        RecordedCall::CompletionCall {
-            prompt: "please echo hi".to_string()
-        }
-    );
-    assert_eq!(
-        calls[1],
-        RecordedCall::ToolCall {
-            tool_name: "echo".to_string()
-        }
-    );
-    assert_eq!(
-        calls[2],
-        RecordedCall::ToolResult {
-            tool_name: "echo".to_string(),
-            outcome: "HI".to_string(),
-        }
-    );
-    assert!(
-        calls
-            .iter()
-            .any(|call| matches!(call, RecordedCall::PersistMessage { role: "assistant" })),
-        "the assistant's tool-call turn must be persisted: {calls:?}"
-    );
-    assert!(
-        calls
-            .iter()
-            .any(|call| matches!(call, RecordedCall::CompletionCall { .. }))
-            && calls.len() >= 4,
-        "a second completion call must follow the tool result: {calls:?}"
     );
 }

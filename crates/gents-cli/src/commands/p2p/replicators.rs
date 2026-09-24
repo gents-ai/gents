@@ -172,15 +172,15 @@ mod tests {
     fn parse_replicator_filters_valid_entries() {
         let filters = parse_replicator_filters(&[
             "AgentRequest:agent_did=did:key:alice".to_string(),
-            "AgentResponse:agent_did=did:key:bob".to_string(),
+            "AgentMessage:agent_did=did:key:bob".to_string(),
         ])
         .expect("valid filters should parse");
 
         assert_eq!(filters.len(), 2);
         let req = filters.get("AgentRequest").unwrap();
         assert_eq!(single_string_eq(req), Some(("agent_did", "did:key:alice")));
-        let resp = filters.get("AgentResponse").unwrap();
-        assert_eq!(single_string_eq(resp), Some(("agent_did", "did:key:bob")));
+        let msg = filters.get("AgentMessage").unwrap();
+        assert_eq!(single_string_eq(msg), Some(("agent_did", "did:key:bob")));
     }
 
     #[test]

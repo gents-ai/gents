@@ -86,51 +86,63 @@ example : (advance absentScopeSession [absentScopeRequest, foreignRequester]
     absentScopeRequest "candidate" 4).observation.bind (·.latest) = some absentScopeRequest.observed := by decide
 
 open SessionFork
+open CanonicalOutput
 
-def sourceRow (id sequence : Nat) : Row :=
-  { docId := id, scope, sequence, requestId := some 1, requestDocId := some 101 }
+def sourceMessage (id sequence : Nat) : MessageEnvelope :=
+  { header :=
+      { id
+      , session := scope.session
+      , request := some 101
+      , origin := none
+      , refs := [⟨100 + id, 0⟩]
+      , outcome := .complete
+      , role := .assistant
+      , publication := .requestExecution 7 }
+  , key := "origin-" ++ toString id
+  , sequence
+  , nativeId := some "native-provider-id"
+  , blocks := [.text ⟨⟨100 + id, 0⟩, .full⟩]
+  , createdAt := 5 }
 def history : History :=
-  { messages := [{ sourceRow 1 0 with spillRefs := [3] }]
-    calls := [sourceRow 2 0]
-    spills := [⟨sourceRow 3 100, 2⟩]
-    compactions := [⟨sourceRow 4 1, 0, 10⟩] }
-def splitLinkHistory : History :=
-  { history with
-    messages := history.messages ++ [sourceRow 5 2]
-    calls := [sourceRow 2 2] }
+  { messages := [sourceMessage 1 0]
+    compactions := [⟨4, scope.session, 1, 0⟩] }
 def child : Scope := { scope with session := 20 }
 def remap (id : Nat) := id + 1000
+def childKey (key : String) := "child:" ++ key
+def sourceAuthorization : SessionFork.SourceAuthorization :=
+  ⟨scope, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
+def wrongAgentAuthorization : SessionFork.SourceAuthorization :=
+  ⟨{ scope with agent := 99 }, history.messages.map (·.header.id), history.compactions.map (·.id)⟩
 
-def copied := copyPrefix history child remap 1
-example : publish history scope child remap 1 true true true = some copied := by decide
-/-- Spill/summary creation timestamps cannot exclude a selected exact call/cursor. -/
-example : copied.spills = [⟨copyRow child remap (sourceRow 3 100), 1002⟩] := by decide
-example : copied.compactions = [⟨copyRow child remap (sourceRow 4 1), 0, 20⟩] := by decide
-example : copied.messages.map (·.spillRefs) = [[1003]] := by decide
-example : copied.spills.map (·.row.requestDocId) = [none] := by decide
-example : publish history scope { child with requester := none } remap 1 true true true = none := by decide
-example : publish history scope child remap 1 true false true = none := by decide
-example : publish history scope child remap 1 true true false = none := by decide
-example : publish history scope child remap 1 false true true = none := by decide
-example : (copyPrefix history child remap 0) = ⟨[], [], [], []⟩ := by decide
-example : publish { history with compactions := [⟨sourceRow 4 2, 0, 10⟩] }
-    scope child remap 1 true true true = none := by decide
-/-- A cut that loses the spill's call cannot publish a dangling full-output link. -/
-example : publish splitLinkHistory
-    scope child remap 1 true true true = none := by decide
-
-example : publish { history with compactions := [⟨sourceRow 4 1, 99, 10⟩] }
-    scope child remap 100 true true true = none := by decide
-
-example : structurallyValid splitLinkHistory = true := by decide
-example : linksResolve splitLinkHistory = true := by decide
-example : linksResolve (copyPrefix splitLinkHistory child remap 1) = false := by decide
+def copied := copyPrefix history child remap childKey 1
+example : publish history scope child remap childKey 1 sourceAuthorization true true = some copied := by decide
+example : copied.messages.map (·.header.refs) = [[⟨101, 0⟩]] := by decide
+example : copied.messages.map (·.header.origin) = [some 1] := by decide
+example : copied.messages.map (·.header.request) = [none] := by decide
+example : copied.messages.map (·.blocks) = history.messages.map (·.blocks) := by decide
+example : copied.messages.map (·.nativeId) = history.messages.map (·.nativeId) := by decide
+example : copied.messages.map (·.key) = ["child:origin-1"] := by decide
+example : copied.compactions = [⟨1004, child.session, 1, 0⟩] := by decide
+example : (retentionDependencies copied).originMessages = [1] := by decide
+example : (retentionDependencies copied).closingRecords = [101] := by decide
+example : publish history scope { child with requester := none } remap childKey 1 sourceAuthorization true true = none := by decide
+example : publish history scope child remap childKey 1 sourceAuthorization false true = none := by decide
+example : publish history scope child remap childKey 1 sourceAuthorization true false = none := by decide
+example : publish history scope child remap childKey 1 wrongAgentAuthorization true true = none := by decide
+example : publish history scope { child with agent := 99 } remap childKey 1 sourceAuthorization true true = none := by decide
+example : (copyPrefix history child remap childKey 0) = ⟨[], []⟩ := by decide
+example : publish { history with compactions := [⟨4, scope.session, 2, 0⟩] }
+    scope child remap childKey 1 sourceAuthorization true true = none := by decide
+example : publish { history with compactions := [⟨4, scope.session, 1, 99⟩] }
+    scope child remap childKey 100 sourceAuthorization true true = none := by decide
 
 def duplicateSequenceHistory : History :=
-  { messages := [sourceRow 1 0, sourceRow 2 0], calls := [], spills := [], compactions := [] }
-def orphanCallHistory : History :=
-  { messages := [], calls := [sourceRow 2 0], spills := [], compactions := [] }
-example : publish duplicateSequenceHistory scope child remap 1 true true true = none := by decide
-example : publish orphanCallHistory scope child remap 1 true true true = none := by decide
+  { messages := [sourceMessage 1 0, sourceMessage 2 0], compactions := [] }
+example : publish duplicateSequenceHistory scope child remap childKey 1
+    (SessionFork.SourceAuthorization.mk scope
+      (duplicateSequenceHistory.messages.map (·.header.id))
+      (duplicateSequenceHistory.compactions.map (·.id)))
+    true true = none := by decide
+example : publish history scope child (fun _ => 1000) childKey 1 sourceAuthorization true true = none := by decide
 
 end Conformance.SessionDocuments

@@ -232,18 +232,19 @@ def r6WakeAdmissionCase
 
 def r6WakeAcknowledgementCase
     (name : String)
-    (snapshot : BackgroundCompletion.WakeAttemptSnapshot) :
+    (snapshot : BackgroundCompletion.WakeAttemptSnapshot)
+    (terminalState : RequestState) :
     R6BackgroundingCase :=
   let attempted := snapshot.attemptedBindings
-  let acknowledged := snapshot.acknowledgedBindings
-  let completed := snapshot.terminalState = .completed
+  let acknowledged := snapshot.acknowledgedBindings terminalState
+  let completed := terminalState = .completed
   r6Case
     name
     "completion_acknowledgement"
     "snapshot_notification_bindings"
     (decide (if completed then acknowledged = attempted else acknowledged = []))
     attempted.length
-    snapshot.terminalState.toDefraDB
+    terminalState.toDefraDB
     (some ("attempted=" ++ toString attempted.length ++
       ",acknowledged=" ++ toString acknowledged.length))
     (if completed then some "completed_ack" else some "failed_unacknowledged")
@@ -253,14 +254,12 @@ def r6WakeAcknowledgementCase
 
 def deliveryCrashAction : BackgroundCompletion.DeliveryCrashPoint → String
   | .beforeClaim => "restart_before_claim"
-  | .duringInference => "fail_during_inference"
-  | .afterResponsePersistence => "recover_after_response_persistence"
+  | .duringInference => "preserve_live_inference"
   | .duringAcknowledgement => "project_acknowledgement_after_restart"
 
 def deliveryCrashReason : BackgroundCompletion.DeliveryCrashPoint → String
   | .beforeClaim => "pending_reclaim"
-  | .duringInference => "bounded_retry"
-  | .afterResponsePersistence => "recovered_completed_ack"
+  | .duringInference => "owner_still_live"
   | .duringAcknowledgement => "atomic_ack_projection"
 
 def r6WakeFailureBoundaryCase
@@ -320,6 +319,30 @@ def r6WaitBoundaryCase
     1 (Subagent.ChildTerminal.toDefraDB observation.processState)
     none (some observation.reason)
 
+/-- The standalone wait observation describes why polling stopped, while the
+accepted foreground wait call remains owned by its caller request. Once that
+request's deadline is authoritative, the existing tool timeout transition
+terminalizes the wait call; it never changes the separately backgrounded
+process observed above. -/
+def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
+  let observation := Subagent.ProcessControl.observeBoundary
+    Subagent.ChildTerminal.running .callerDeadline
+  let waitCall := { r6NativeToolFixture .foreground with
+    deadline := 10, currentTime := 11 }
+  let base := r6Case
+    "caller_deadline_times_out_wait_call_preserves_background_process"
+    "wait_dispatch_boundary" "wait_process"
+    false 1 "rejected" none (some observation.reason)
+  match ToolExecution.ToolCallContext.step? waitCall .timeout with
+  | none => base
+  | some callerPost =>
+      { base with
+          legal := !observation.cancellationRequested
+          awaitMode := callerPost.awaitMode.toDefraDB
+          cancelPolicy := callerPost.cancelPolicy.toDefraDB
+          terminalState := callerPost.state.toDefraDB
+          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+
 def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6BudgetCase
       "background_tool_budget_count_7_admits_spawn"
@@ -334,15 +357,15 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       .background
   , r6NativeStepCase
       "tool_kind_bridge_complete_persists_result"
-      "bridge_complete"
+      "complete"
       r6NativeToolFixture
       .complete
       (some "done")
   , r6NativeStepCase
       "tool_kind_explicit_cancel_projects_explicit_cancel"
-      "bridge_failure"
+      "cancel_during_run"
       r6NativeToolFixture
-      (.cancelDuringRun .interrupted)
+      (.cancelDuringRun .userCancelled)
       none
       (some "explicit_cancel")
   , r6RestartCase
@@ -377,19 +400,16 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       BackgroundCompletion.descendantFixture
   , r6WakeAcknowledgementCase
       "completed_wake_acknowledges_exact_claim_snapshot"
-      BackgroundCompletion.completedSnapshotFixture
+      BackgroundCompletion.canonicalSnapshotFixture .completed
   , r6WakeAcknowledgementCase
       "failed_wake_retains_claim_snapshot_unacknowledged"
-      BackgroundCompletion.failedSnapshotFixture
+      BackgroundCompletion.canonicalSnapshotFixture .failed
   , r6WakeFailureBoundaryCase
       "restart_before_claim_preserves_pending_notification"
       .beforeClaim
   , r6WakeFailureBoundaryCase
-      "inference_failure_retains_snapshot_for_bounded_redrive"
+      "live_inference_retains_snapshot_without_ack_or_redrive"
       .duringInference
-  , r6WakeFailureBoundaryCase
-      "response_persisted_before_crash_recovers_completed_ack"
-      .afterResponsePersistence
   , r6WakeFailureBoundaryCase
       "acknowledgement_projection_restart_is_atomic"
       .duringAcknowledgement
@@ -453,6 +473,7 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
   , r6WaitBoundaryCase
       "caller_deadline_preserves_running_process"
       .callerDeadline
+  , r6CallerDeadlineDispatchCase
   ]
 
 /-- Pin the concrete projections while keeping their construction executable:
@@ -516,11 +537,8 @@ theorem r6BackgroundingCases_pinned :
       , ("restart_before_claim_preserves_pending_notification", true,
           "background", none, "pending", some "background_completion",
           some "background_completion:900")
-      , ("inference_failure_retains_snapshot_for_bounded_redrive", true,
-          "background", none, "failed", some "background_completion",
-          some "background_completion:900")
-      , ("response_persisted_before_crash_recovers_completed_ack", true,
-          "background", none, "completed", some "background_completion",
+      , ("live_inference_retains_snapshot_without_ack_or_redrive", true,
+          "background", none, "processing", some "background_completion",
           some "background_completion:900")
       , ("acknowledgement_projection_restart_is_atomic", true,
           "background", none, "completed", some "background_completion",
@@ -554,6 +572,8 @@ theorem r6BackgroundingCases_pinned :
           "background", none, "running", none, none)
       , ("caller_deadline_preserves_running_process", true,
           "background", none, "running", none, none)
+      , ("caller_deadline_times_out_wait_call_preserves_background_process", true,
+          "foreground", none, "timedOut", none, none)
       ] := by
   rfl
 
@@ -581,8 +601,9 @@ drifts from the emitted rows. -/
 
 def toolOutputPagingCase
     (name : String)
-    (firstOffset retainedLen totalBytes offset maxBytes : Nat)
+    (retainedLen totalBytes offset maxBytes : Nat)
     (theoremName : String) : ToolOutputPagingCase :=
+  let firstOffset := 0
   let window : Subagent.ToolOutput.RetainedWindow :=
     { firstOffset := firstOffset
     , retainedLen := retainedLen
@@ -605,15 +626,13 @@ def toolOutputPagingCase
   }
 
 def toolOutputPagingCases : List ToolOutputPagingCase :=
-  [ toolOutputPagingCase "paging_head_page" 0 8 8 0 4
+  [ toolOutputPagingCase "paging_head_page" 8 8 0 4
       "Subagent.ToolOutput.readSlice_contiguous_from_live_cursor"
-  , toolOutputPagingCase "paging_continuation_no_gap" 0 8 8 4 4
+  , toolOutputPagingCase "paging_continuation_no_gap" 8 8 4 4
       "Subagent.ToolOutput.readSlice_contiguous_from_live_cursor"
-  , toolOutputPagingCase "paging_evicted_prefix_detectable" 6 4 10 0 8
-      "Subagent.ToolOutput.readSlice_eviction_detectable"
-  , toolOutputPagingCase "paging_cursor_past_end_parks" 0 4 4 9 4
+  , toolOutputPagingCase "paging_cursor_past_end_parks" 4 4 9 4
       "Subagent.ToolOutput.readSlice_past_end_empty"
-  , toolOutputPagingCase "paging_mid_window_bounded_budget" 2 5 7 3 2
+  , toolOutputPagingCase "paging_mid_window_bounded_budget" 7 7 3 2
       "Subagent.ToolOutput.readSlice_progress"
   ]
 
@@ -627,9 +646,8 @@ theorem toolOutputPagingCases_pinned :
             witness.hasMore)) =
       [ ("paging_head_page", 0, 4, 4, 0, 8, true)
       , ("paging_continuation_no_gap", 4, 4, 8, 0, 8, false)
-      , ("paging_evicted_prefix_detectable", 6, 4, 10, 6, 10, false)
       , ("paging_cursor_past_end_parks", 4, 0, 4, 0, 4, false)
-      , ("paging_mid_window_bounded_budget", 3, 2, 5, 2, 7, true)
+      , ("paging_mid_window_bounded_budget", 3, 2, 5, 0, 7, true)
       ] := by
   rfl
 

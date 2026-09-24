@@ -14,6 +14,8 @@ use gents::{
     ensure_agent_principal, AgentIdentity, BackendProviderKind, Collection, DocumentRuntimeOptions,
     Gents, OpenAiWireApi, ToolCeiling,
 };
+use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
+use gents_protocol::output::{OutputSegment, TranscriptMessage};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 
@@ -239,7 +241,7 @@ async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Optio
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
                 lifecycle_state
             }}
         }}"#
@@ -249,6 +251,18 @@ async fn fetch_request_lifecycle(node: &EmbeddedNode, request_id: &str) -> Optio
         lifecycle_state: Option<String>,
     }
     let resp = node.execute(&query).await;
+    assert!(
+        !resp.has_errors(),
+        "request observation failed: {:?}",
+        resp.errors
+    );
+    let rows = resp.data.as_ref().unwrap()["AgentRequest"]
+        .as_array()
+        .unwrap();
+    assert!(
+        rows.len() <= 1,
+        "live test request label is ambiguous: {request_id}"
+    );
     first_optional_row::<Row>(&resp, "AgentRequest").and_then(|r| r.lifecycle_state)
 }
 
@@ -266,64 +280,143 @@ pub async fn wait_for_request_terminal(
                 return state;
             }
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for request {request_id} to terminalize; last={last}"
-        );
+        if tokio::time::Instant::now() >= deadline {
+            let escaped = escape_graphql_string(request_id);
+            // Bounded lifecycle evidence only: never dump provider payloads,
+            // prompts, tool arguments, or credentials into failure logs.
+            let evidence = node
+                .execute(&format!(
+                    r#"{{
+                AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
+                    _docID lifecycle_state execution_generation execution_lease_expires_at
+                    terminal_output failure_reason
+                }}
+                InferenceCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
+                    call_id call_state failure_reason started_at ended_at
+                }}
+                AgentToolCall(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 10) {{
+                    _docID tool_name lifecycle_state started_at completed_at
+                }}
+            }}"#
+                ))
+                .await;
+            panic!("timed out waiting for request {request_id} to terminalize; last={last}; evidence={:?}; errors={:?}", evidence.data, evidence.errors);
+        }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
-async fn fetch_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
+/// Resolve the one assistant message selected by a terminal request's physical
+/// canonical output reference.  This deliberately has no latest-message or
+/// legacy response-content fallback: callers polling a still-running request
+/// observe an empty value, while a malformed terminal projection fails loudly.
+pub async fn terminal_assistant_answer(node: &EmbeddedNode, request_id: &str) -> String {
     let escaped = escape_graphql_string(request_id);
     let query = format!(
         r#"{{
-            AgentResponse(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{
-                content
-                session_id
+            AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{
+                _docID agent_did requester_did session_id terminal_output
             }}
         }}"#
     );
     #[derive(Deserialize)]
-    struct RespRow {
-        content: Option<String>,
+    struct RequestRow {
+        #[serde(rename = "_docID")]
+        doc_id: String,
+        agent_did: String,
+        requester_did: Option<String>,
         session_id: Option<String>,
+        terminal_output: Option<gents_protocol::output::TerminalOutput>,
     }
     let resp = node.execute(&query).await;
-    let row = first_optional_row::<RespRow>(&resp, "AgentResponse");
-    if let Some(row) = &row {
-        if let Some(content) = row.content.as_deref() {
-            if !content.trim().is_empty() {
-                return gents_protocol::transcript::present_persisted_message("assistant", content)
-                    .body_markdown;
-            }
-        }
-    }
-    let session_id = match row.and_then(|r| r.session_id) {
+    assert!(
+        !resp.has_errors(),
+        "canonical live answer request lookup failed: {:?}",
+        resp.errors
+    );
+    let row = first_optional_row::<RequestRow>(&resp, "AgentRequest");
+    let Some(row) = row else { return String::new() };
+    let session_id = match row.session_id {
         Some(s) if !s.is_empty() => s,
         _ => return String::new(),
     };
     let escaped_session = escape_graphql_string(&session_id);
+    let requester_filter = row
+        .requester_did
+        .as_deref()
+        .map(|did| {
+            format!(
+                r#", requester_did: {{ _eq: "{}" }}"#,
+                escape_graphql_string(did)
+            )
+        })
+        .unwrap_or_else(|| ", requester_did: { _eq: null }".to_owned());
+    let Some(gents_protocol::output::TerminalOutput::Message { message_doc_id }) =
+        row.terminal_output
+    else {
+        return String::new();
+    };
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{escaped_session}" }}, role: {{ _eq: "assistant" }} }},
-                order: {{ sequence: DESC }},
-                limit: 1
-            ) {{ content }}
-        }}"#
+                filter: {{ _docID: {{ _eq: "{}" }}, request_doc_id: {{ _eq: "{}" }}, session_id: {{ _eq: "{escaped_session}" }}, agent_did: {{ _eq: "{}" }}, role: {{ _eq: "assistant" }}{requester_filter} }}, limit: 2
+            ) {{ message_key session_id agent_did requester_did request_doc_id publication outcome sequence role native_id blocks created_at }}
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }}, agent_did: {{ _eq: "{}" }}{requester_filter} }}) {{ _docID agent_did requester_did session_id request_doc_id source ordinal writer runs payload close created_at }}
+        }}"#,
+        escape_graphql_string(&message_doc_id),
+        escape_graphql_string(&row.doc_id),
+        escape_graphql_string(&row.agent_did),
+        escape_graphql_string(&row.doc_id),
+        escape_graphql_string(&row.agent_did)
     );
-    #[derive(Deserialize)]
-    struct MsgRow {
-        content: String,
-    }
     let resp = node.execute(&query).await;
-    first_optional_row::<MsgRow>(&resp, "AgentMessage")
-        .map(|m| {
-            gents_protocol::transcript::present_persisted_message("assistant", &m.content)
-                .body_markdown
+    assert!(
+        !resp.has_errors(),
+        "canonical live answer header lookup failed: {:?}",
+        resp.errors
+    );
+    let headers = resp
+        .data
+        .as_ref()
+        .and_then(|data| data["AgentMessage"].as_array())
+        .expect("canonical live answer query omitted headers");
+    assert_eq!(
+        headers.len(),
+        1,
+        "terminal output did not select one physical assistant header"
+    );
+    let header = serde_json::from_value::<TranscriptMessage>(headers[0].clone())
+        .expect("decode selected canonical terminal header");
+    let observed = resp
+        .data
+        .as_ref()
+        .and_then(|data| data["AgentOutputSegment"].as_array())
+        .expect("canonical live answer query omitted segments")
+        .iter()
+        .map(|value| {
+            let doc_id = value["_docID"]
+                .as_str()
+                .expect("canonical segment omitted physical ID")
+                .to_owned();
+            let mut segment = value.clone();
+            segment
+                .as_object_mut()
+                .expect("canonical segment row object")
+                .remove("_docID");
+            (
+                doc_id,
+                serde_json::from_value::<OutputSegment>(segment)
+                    .expect("decode canonical output segment"),
+            )
         })
-        .unwrap_or_default()
+        .collect::<Vec<_>>();
+    let observations = observed
+        .iter()
+        .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
+        .collect::<Vec<_>>();
+    let message = reconstruct_message(&observations, &[], &[], &header)
+        .expect("reconstruct selected canonical terminal message");
+    gents_protocol::transcript::present_message(&message).body_markdown
 }
 
 pub async fn wait_for_assistant_answer(
@@ -333,7 +426,7 @@ pub async fn wait_for_assistant_answer(
 ) -> String {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        let answer = fetch_assistant_answer(node, request_id).await;
+        let answer = terminal_assistant_answer(node, request_id).await;
         if !answer.trim().is_empty() {
             return answer;
         }

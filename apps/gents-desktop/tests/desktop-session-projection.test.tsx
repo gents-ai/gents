@@ -18,13 +18,12 @@ function session(
     behaviorId: "behavior-1",
     title: "Test",
     previewText: null,
-    status: "processing",
+    status: "active",
     goal: null,
-    turnState: "streaming",
+    turnState: "running",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: "notFailed" },
-    latestResponse: null,
-    activeResponseOverlay: null,
+    latestRequestOutcome: null,
     pendingTurn: null,
     context: {
       estimatedDurableTokens: 0,
@@ -46,6 +45,7 @@ function session(
       sequence: Number(key.slice(1)),
       content: key,
       timestamp: null,
+      reconstruction: { state: "ready" as const },
     })),
     timelinePage: page,
   };
@@ -187,18 +187,6 @@ describe("useDesktopSessionProjection", () => {
       newestItemKey: "k8",
     });
     tip.projectionRevision = { storeVersion: 7, reconcileVersion: 3 };
-    tip.latestResponse = {
-      status: "streaming",
-      content: "hello",
-      reasoning: null,
-      errorMessage: null,
-      tokenCount: null,
-      materializedMessageSequence: null,
-      materializedAt: null,
-      interruptedAt: null,
-      completedAt: null,
-    };
-    tip.activeResponseOverlay = { ...tip.latestResponse };
     tip.timelineItems.push({
       kind: "liveAssistant",
       itemKey: "live-assistant",
@@ -242,8 +230,8 @@ describe("useDesktopSessionProjection", () => {
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
       progressSeq: 2,
-      turnState: "streaming",
-      status: "streaming",
+      turnState: "running",
+      status: null,
       content: {
         mode: "append",
         value: " world",

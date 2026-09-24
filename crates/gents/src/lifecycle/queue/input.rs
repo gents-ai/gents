@@ -6,7 +6,6 @@ use gents_protocol::request_input::{QueuePolicy, QueueSource, RequestInput, Requ
 use gents_protocol::row::AgentRequestRow;
 
 pub(crate) const BACKGROUND_COMPLETION_WAKE_VERSION: u32 = 1;
-const STEERING_INPUT_MESSAGE_PREFIX: &str = "steering-input:";
 
 pub(crate) fn queue_is_automated_wakeup(queue: &RequestQueue) -> bool {
     matches!(queue.source, QueueSource::BackgroundCompletion)
@@ -51,12 +50,4 @@ pub(crate) fn background_wake_queue(
         interrupted_request_id: None,
         background_completion_wake_version: Some(BACKGROUND_COMPLETION_WAKE_VERSION),
     }
-}
-
-pub fn steering_input_message_key(request_id: &str) -> String {
-    format!("{STEERING_INPUT_MESSAGE_PREFIX}{request_id}")
-}
-
-pub fn is_steering_input_message_key(message_key: &str) -> bool {
-    message_key.starts_with(STEERING_INPUT_MESSAGE_PREFIX)
 }

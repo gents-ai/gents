@@ -137,6 +137,9 @@ pub struct AgentRequestRow {
     pub failure_reason: Option<String>,
     #[serde(default)]
     pub terminalized_at: Option<String>,
+    /// Exact terminal answer selection; absence on a terminal row is incomplete.
+    #[serde(default)]
+    pub terminal_output: Option<crate::output::TerminalOutput>,
     #[serde(default)]
     pub terminal_redrive_attempts: Option<i64>,
     #[serde(default)]
@@ -145,10 +148,14 @@ pub struct AgentRequestRow {
     pub claimed_at: Option<String>,
     #[serde(default)]
     pub execution_generation: Option<String>,
+    /// Lease length installed at claim. The request owner explicitly renews at
+    /// bounded cadence; output never extends expiry or rewrites this row.
+    #[serde(default)]
+    pub execution_lease_secs: Option<i64>,
+    /// Sole lease deadline. Renewal compares the current generation and observed
+    /// deadline; expired owners cannot revive themselves with output or renewal.
     #[serde(default)]
     pub execution_lease_expires_at: Option<String>,
-    #[serde(default)]
-    pub execution_progress_seq: Option<i64>,
     #[serde(default)]
     pub background_completion_input_through_sequence: Option<i64>,
     #[serde(default)]
@@ -235,67 +242,8 @@ pub struct MailboxItemRow {
     pub resolved_doc_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentResponseRow {
-    pub response_key: String,
-    #[serde(default)]
-    pub request_doc_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub behavior_id: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub reasoning: Option<String>,
-    #[serde(default)]
-    pub status: Option<String>,
-    #[serde(default)]
-    pub error_message: Option<String>,
-    #[serde(default)]
-    pub token_count: Option<i64>,
-    #[serde(default)]
-    pub progress_seq: Option<i64>,
-    #[serde(default)]
-    pub reasoning_progress_seq: Option<i64>,
-    #[serde(default)]
-    pub materialized_message_sequence: Option<i64>,
-    #[serde(default)]
-    pub materialized_at: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub completed_at: Option<String>,
-    #[serde(default)]
-    pub interrupted_at: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentMessageRow {
-    pub message_key: String,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub request_id: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub sequence: Option<i64>,
-    #[serde(default)]
-    pub role: Option<String>,
-    #[serde(default)]
-    pub content: Option<String>,
-    #[serde(default)]
-    pub reasoning: Option<String>,
-    #[serde(default)]
-    pub timestamp: Option<String>,
-}
+// AgentMessage has no row type: `output::TranscriptMessage` is the single
+// canonical shape, and content is read only through its reconstruction (#1571).
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GoalRow {
@@ -351,7 +299,22 @@ pub struct GoalRow {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentToolCallRow {
+    /// Physical read-envelope identity. Canonical message blocks bind this,
+    /// never the human-readable tool_call_key or provider-local call ID.
+    #[serde(default, rename = "_docID")]
+    pub doc_id: Option<String>,
+    #[serde(default)]
+    pub agent_did: Option<String>,
+    #[serde(default)]
+    pub request_doc_id: Option<String>,
     pub tool_call_key: String,
+    /// Present only for remotely addressed calls; immutable admission input,
+    /// not the transcript payload or a general-purpose args fallback.
+    #[serde(default)]
+    pub delegated_input: Option<crate::output::DelegatedToolInput>,
+    /// Exact parent workspace capability for remote child attenuation.
+    #[serde(default)]
+    pub delegated_workspace: Option<crate::output::DelegatedWorkspace>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -365,15 +328,22 @@ pub struct AgentToolCallRow {
     #[serde(default)]
     pub tool_call_id: Option<String>,
     #[serde(default)]
-    pub args: Option<String>,
-    #[serde(default)]
-    pub result: Option<String>,
-    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub lifecycle_state: Option<String>,
     #[serde(default)]
     pub child_request_id: Option<String>,
+    /// Physical accepted meta-call that created a separate native background
+    /// execution. Not a provider call ID; absent for directly requested tools.
+    #[serde(default)]
+    pub spawned_by_tool_call_doc_id: Option<String>,
+    /// Immutable remote subagent principal selected at accepted publication.
+    #[serde(default)]
+    pub spawn_target_did: Option<String>,
+    /// Immutable behavior selected from the target alias in the same accepted
+    /// publication. Never reconstructed from provider argument bytes.
+    #[serde(default)]
+    pub spawn_behavior_id: Option<String>,
     #[serde(default)]
     pub await_mode: Option<String>,
     #[serde(default)]
@@ -408,41 +378,18 @@ pub struct AgentToolCallRow {
     pub policy_network: Option<String>,
     #[serde(default)]
     pub cancel_cause: Option<String>,
+    /// Existing tool-owner handoff evidence. A cancellation intent is not proof
+    /// that an external process or remote child has stopped.
+    #[serde(default)]
+    pub cancel_cascade_intent_at: Option<String>,
+    #[serde(default)]
+    pub cancel_pending_remote_ack: Option<bool>,
+    #[serde(default)]
+    pub stuck_since: Option<String>,
+    #[serde(default)]
+    pub completion_notification_delivered_at: Option<String>,
     #[serde(default)]
     pub latency_ms: Option<i64>,
-    #[serde(default)]
-    pub partial_output_tail: Option<String>,
-    #[serde(default)]
-    pub partial_output_seq: Option<i64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentToolResultRow {
-    /// Exact spill document identity for observation/merge; not a content heuristic.
-    #[serde(default, rename = "_docID", skip_serializing)]
-    pub doc_id: Option<String>,
-    #[serde(default)]
-    pub agent_did: Option<String>,
-    #[serde(default)]
-    pub requester_did: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub tool_name: Option<String>,
-    #[serde(default)]
-    pub tool_input: Option<String>,
-    #[serde(default)]
-    pub output_text: Option<String>,
-    #[serde(default)]
-    pub truncated: Option<bool>,
-    #[serde(default)]
-    pub truncation_metadata: Option<String>,
-    #[serde(default)]
-    pub tool_call_doc_id: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub discarded_because_interrupted: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

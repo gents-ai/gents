@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::CancelBackgroundToolCallOutcome;
@@ -106,15 +107,57 @@ fn spawn_background_tool_watcher_handle(
                         // Codex command item in progress forever.
                         continue;
                     };
+                    if tool.request_doc_id.as_deref() != Some(request_doc_id.as_str()) {
+                        tracing::warn!(
+                            tool_key,
+                            "Codex background tool crossed physical request scope"
+                        );
+                        continue;
+                    }
                     match observed_tool_status(tool) {
                         ProjectionStatus::InProgress => {}
                         status => {
+                            let (Some(tool_doc_id), Some(agent_did)) =
+                                (tool.doc_id.as_deref(), tool.agent_did.as_deref())
+                            else {
+                                tracing::warn!(
+                                    tool_key,
+                                    "Codex background tool omitted exact canonical identity"
+                                );
+                                continue;
+                            };
+                            let access = ConfigAccess::Local(state.node.clone());
+                            let presentation =
+                                match gents::tool_call_lifecycle::load_tool_call_presentation(
+                                    &access,
+                                    tool_doc_id,
+                                    agent_did,
+                                    &session_id,
+                                    tool.requester_did.as_deref(),
+                                )
+                                .await
+                                {
+                                    Ok(presentation) => presentation,
+                                    Err(error) => {
+                                        tracing::warn!(%error, tool_key, "Codex background canonical tool payload is not ready");
+                                        continue;
+                                    }
+                                };
+                            let Some(result) = presentation.result else {
+                                // A terminal lifecycle row can precede its canonical
+                                // delivery on a replica. Empty delivered output is
+                                // represented by Some(""), not by this absence.
+                                continue;
+                            };
+                            let mut tool = tool.clone();
+                            tool.args = presentation.arguments;
+                            tool.result = result;
                             if let Err(error) = send_background_tool_completion(
                                 &connection.outbound,
                                 &state,
                                 &thread_id,
                                 &turn_id,
-                                tool,
+                                &tool,
                                 codex_command_status(status),
                                 &cwd,
                             )
@@ -275,10 +318,51 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
 
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{OutputSegment, TranscriptMessage};
     use tokio::sync::{mpsc, oneshot, Mutex};
 
     use super::super::{CodexSidecar, ConnectionState, ShimState};
     use super::*;
+
+    async fn insert_segment(node: &EmbeddedNode, segment: &OutputSegment) -> String {
+        let response = node
+            .execute_request_with_retry(
+                gents::defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                    .with_variables(output_segment_create_variables(segment).unwrap()),
+                gents::defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "segment seed: {:?}",
+            response.errors
+        );
+        gents::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+            .unwrap()
+            .unwrap()["_docID"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    async fn insert_header(node: &EmbeddedNode, header: &TranscriptMessage) {
+        let response = node
+            .execute_request_with_retry(
+                gents::defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                    .with_variables(transcript_message_create_variables(header).unwrap()),
+                gents::defra_node::ExecuteRetryPolicy::default(),
+            )
+            .await;
+        assert!(
+            !response.has_errors(),
+            "message seed: {:?}",
+            response.errors
+        );
+    }
 
     fn test_connection() -> (ConnectionState, mpsc::UnboundedReceiver<String>) {
         let (outbound, outbound_rx) = mpsc::unbounded_channel::<String>();
@@ -325,10 +409,21 @@ mod tests {
         request_id: &str,
         session_id: &str,
         tool_call_id: &str,
+        tool_name: &str,
+        await_mode: &str,
+        spawned_by_tool_call_doc_id: Option<&str>,
         lifecycle_state: &str,
         status: &str,
-    ) {
+    ) -> String {
         let tool_call_key = format!("{session_id}:{tool_call_id}");
+        let spawned_by = spawned_by_tool_call_doc_id
+            .map(|doc_id| {
+                format!(
+                    "spawned_by_tool_call_doc_id: \"{}\",",
+                    escape_graphql_string(doc_id)
+                )
+            })
+            .unwrap_or_default();
         let mutation = format!(
             r#"mutation {{
                 create_AgentToolCall(input: {{
@@ -336,16 +431,16 @@ mod tests {
                     request_id: "{request_id}",
                     request_doc_id: "{request_id}",
                     session_id: "{session_id}",
+                    agent_did: "did:test:background-watcher",
                     message_sequence: 1,
-                    tool_name: "bash",
+                    tool_name: "{tool_name}",
                     tool_call_id: "{tool_call_id}",
-                    args: "{{\"command\":\"true\"}}",
-                    result: "done",
+                    {spawned_by}
                     status: "{status}",
                     lifecycle_state: "{lifecycle_state}",
                     started_at: "2026-07-07T12:00:00Z",
                     completed_at: "2026-07-07T12:00:01Z",
-                    await_mode: "background"
+                    await_mode: "{await_mode}"
                 }}) {{ _docID }}
             }}"#
         );
@@ -355,6 +450,177 @@ mod tests {
             "seed AgentToolCall failed: {:?}",
             response.errors
         );
+        gents::graphql::single_mutation_document(&response, "create_AgentToolCall")
+            .expect("tool mutation envelope")
+            .expect("created tool row")["_docID"]
+            .as_str()
+            .expect("physical tool ID")
+            .to_string()
+    }
+
+    async fn seed_canonical_tool_delivery(
+        node: &EmbeddedNode,
+        request_id: &str,
+        session_id: &str,
+        tool_call_id: &str,
+        tool_doc_id: &str,
+        spawned_parent: Option<(&str, &str)>,
+        result: &str,
+    ) {
+        use gents_protocol::output::{
+            MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment,
+            OutputSource, OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload,
+            SegmentRun, SourceClose, StreamDeclaration, StreamPayload, ToolResultPart,
+            TranscriptMessage,
+        };
+
+        let agent_did = "did:test:background-watcher";
+        let created_at = "2026-07-07T12:00:00Z";
+        let args = if spawned_parent.is_some() {
+            r#"{"tool_name":"bash","args":{"command":"true"}}"#
+        } else {
+            r#"{"command":"true"}"#
+        };
+        let (accepted_tool_doc_id, accepted_call_id, accepted_tool_name) = spawned_parent
+            .map(|(doc_id, call_id)| (doc_id, call_id, "spawn_process"))
+            .unwrap_or((tool_doc_id, tool_call_id, "bash"));
+        let accepted_segment = OutputSegment {
+            agent_did: agent_did.into(),
+            requester_did: None,
+            session_id: session_id.into(),
+            request_doc_id: request_id.into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+            writer: OutputWriter::RequestExecution {
+                execution_generation: "watcher-generation".into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: args.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolArguments {
+                        id: accepted_call_id.into(),
+                        call_id: None,
+                        name: accepted_tool_name.into(),
+                    },
+                }),
+            }],
+            payload: args.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![args.len() as u64],
+            }),
+            created_at: created_at.into(),
+        };
+        let accepted_close_doc_id = insert_segment(node, &accepted_segment).await;
+        insert_header(
+            node,
+            &TranscriptMessage {
+                message_key: format!("accepted:{request_id}:{tool_call_id}"),
+                session_id: session_id.into(),
+                agent_did: agent_did.into(),
+                requester_did: None,
+                request_doc_id: Some(request_id.into()),
+                publication: MessagePublication::RequestExecution {
+                    execution_generation: "watcher-generation".into(),
+                },
+                outcome: OutputOutcome::Complete,
+                sequence: 1,
+                role: MessageRole::Assistant,
+                native_id: None,
+                blocks: vec![MessageBlock::ToolCall {
+                    tool_call_doc_id: accepted_tool_doc_id.into(),
+                    id: accepted_call_id.into(),
+                    call_id: None,
+                    name: accepted_tool_name.into(),
+                    arguments: PayloadRef {
+                        close_doc_id: accepted_close_doc_id,
+                        stream: 0,
+                    },
+                    signature: None,
+                    additional_params: None,
+                }],
+                created_at: created_at.into(),
+            },
+        )
+        .await;
+
+        let result_segment = OutputSegment {
+            agent_did: agent_did.into(),
+            requester_did: None,
+            session_id: session_id.into(),
+            request_doc_id: request_id.into(),
+            source: OutputSource::ToolCall {
+                tool_call_doc_id: tool_doc_id.into(),
+            },
+            writer: OutputWriter::ToolExecution {
+                tool_call_doc_id: tool_doc_id.into(),
+            },
+            ordinal: Some(0),
+            runs: vec![SegmentRun {
+                stream: 0,
+                bytes: result.len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ToolOutput,
+                }),
+            }],
+            payload: result.into(),
+            close: Some(SourceClose::Closed {
+                outcome: OutputOutcome::Complete,
+                segments: 1,
+                stream_bytes: vec![result.len() as u64],
+            }),
+            created_at: created_at.into(),
+        };
+        let result_close_doc_id = insert_segment(node, &result_segment).await;
+        if spawned_parent.is_some() {
+            // A spawned process owns a closed ToolExecution source, but no
+            // second provider ToolResult header. Its accepted parent is the
+            // spawn_process meta-call above.
+            return;
+        }
+        insert_header(
+            node,
+            &TranscriptMessage {
+                message_key: format!("delivery:{request_id}:{tool_call_id}"),
+                session_id: session_id.into(),
+                agent_did: agent_did.into(),
+                requester_did: None,
+                request_doc_id: Some(request_id.into()),
+                publication: MessagePublication::ToolDelivery {
+                    tool_call_doc_id: tool_doc_id.into(),
+                },
+                outcome: OutputOutcome::Complete,
+                sequence: 2,
+                role: MessageRole::User,
+                native_id: None,
+                blocks: vec![MessageBlock::ToolResult {
+                    tool_call_doc_id: tool_doc_id.into(),
+                    id: tool_call_id.into(),
+                    call_id: None,
+                    parts: vec![ToolResultPart::Text {
+                        text: PresentedPayload {
+                            output: PayloadRef {
+                                close_doc_id: result_close_doc_id,
+                                stream: 0,
+                            },
+                            presentation: PayloadPresentation::Full,
+                        },
+                    }],
+                }],
+                created_at: created_at.into(),
+            },
+        )
+        .await;
     }
 
     async fn receive_item_completed(outbound_rx: &mut mpsc::UnboundedReceiver<String>) -> Value {
@@ -374,6 +640,7 @@ mod tests {
     async fn assert_watcher_recovers_after_initial_observation(
         test_name: &str,
         schemas_before_start: bool,
+        spawned: bool,
     ) {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let node = Arc::new(
@@ -420,13 +687,47 @@ mod tests {
                 .await
                 .expect("runtime schemas");
         }
-        seed_background_tool(
+        let parent_call_id = format!("spawn-{test_name}");
+        let parent_doc_id = if spawned {
+            Some(
+                seed_background_tool(
+                    &node,
+                    &request_id,
+                    &session_id,
+                    &parent_call_id,
+                    "spawn_process",
+                    "foreground",
+                    None,
+                    "completed",
+                    "completed",
+                )
+                .await,
+            )
+        } else {
+            None
+        };
+        let tool_doc_id = seed_background_tool(
             &node,
             &request_id,
             &session_id,
             &tool_call_id,
+            "bash",
+            "background",
+            parent_doc_id.as_deref(),
             "completed",
             "completed",
+        )
+        .await;
+        seed_canonical_tool_delivery(
+            &node,
+            &request_id,
+            &session_id,
+            &tool_call_id,
+            &tool_doc_id,
+            parent_doc_id
+                .as_deref()
+                .map(|doc_id| (doc_id, parent_call_id.as_str())),
+            "done",
         )
         .await;
 
@@ -466,11 +767,10 @@ mod tests {
                     tool_call_key: "{tool_call_key}",
                     request_id: "{request_id}",
                     session_id: "{session_id}",
+                    agent_did: "did:test:background-watcher",
                     message_sequence: 1,
                     tool_name: "bash",
                     tool_call_id: "{tool_call_id}",
-                    args: "{{\"command\":\"sleep 600\"}}",
-                    result: "",
                     status: "called",
                     lifecycle_state: "running",
                     started_at: "2026-07-07T12:00:00Z",
@@ -518,11 +818,17 @@ mod tests {
 
     #[tokio::test]
     async fn background_tool_watcher_retains_key_while_row_is_temporarily_missing() {
-        assert_watcher_recovers_after_initial_observation("background-missing", true).await;
+        assert_watcher_recovers_after_initial_observation("background-missing", true, false).await;
     }
 
     #[tokio::test]
     async fn background_tool_watcher_retries_after_query_error() {
-        assert_watcher_recovers_after_initial_observation("background-query-retry", false).await;
+        assert_watcher_recovers_after_initial_observation("background-query-retry", false, false)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn background_tool_watcher_completes_spawned_process_without_child_result_header() {
+        assert_watcher_recovers_after_initial_observation("spawned-process", true, true).await;
     }
 }

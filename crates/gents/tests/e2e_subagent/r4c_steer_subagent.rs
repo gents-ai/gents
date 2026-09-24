@@ -2,14 +2,14 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::llm::ToolCallHookAction;
 use gents::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
+    create_subagent_request_with_request_id, AwaitMode, CancelPolicy,
 };
 use gents::{fetch_interrupt_requested_at, DefraSessionHook, FailurePolicy};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
-use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::r4c_private_support::{accepted_call, bind_accepted_request};
 use crate::support::fixtures::{
     configure_subagent_behavior, spawn_subagent_source, subagent_target,
 };
@@ -17,15 +17,6 @@ use crate::support::test_db;
 
 const PARENT_BEHAVIOR_ID: &str = "r4c-parent";
 const CHILD_BEHAVIOR_ID: &str = "r4c-child";
-
-#[derive(Debug, Deserialize)]
-struct MessageRow {
-    role: String,
-    content: String,
-    message_key: String,
-    request_id: Option<String>,
-    request_doc_id: Option<String>,
-}
 
 async fn setup_db(
     name: &str,
@@ -77,81 +68,36 @@ async fn create_parent_hook(
     session_id: &str,
 ) -> DefraSessionHook {
     let deadline = chrono::Utc::now() + chrono::Duration::minutes(5);
-    create_parent_request(
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         db.node.as_ref(),
-        db.node_identity.did(),
-        request_id,
-        session_id,
-        deadline,
-    )
-    .await;
-    crate::support::create_agent_session_in_scope(
-        db.node.as_ref(),
-        db.node_identity.did(),
         session_id,
         PARENT_BEHAVIOR_ID,
-        "2026-05-14T00:00:00Z",
+        db.node_identity.did(),
+        PARENT_BEHAVIOR_ID,
+        Some(db.node_identity.did()),
     )
-    .await;
+    .await
+    .unwrap();
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         session_id,
         PARENT_BEHAVIOR_ID,
         db.node_identity.did(),
-        None,
+        Some(db.node_identity.did()),
         FailurePolicy::default(),
     )
     .await
     .unwrap();
-    hook.set_active_request_lineage(Some(request_id.to_string()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(deadline)).await;
+    bind_accepted_request(
+        db,
+        &hook,
+        PARENT_BEHAVIOR_ID,
+        request_id,
+        session_id,
+        deadline,
+    )
+    .await;
     hook
-}
-
-async fn create_parent_request(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    request_id: &str,
-    session_id: &str,
-    deadline: chrono::DateTime<chrono::Utc>,
-) {
-    let request_id = escape_graphql_string(request_id);
-    let session_id = escape_graphql_string(session_id);
-    let behavior_id = escape_graphql_string(PARENT_BEHAVIOR_ID);
-    let agent_did = escape_graphql_string(agent_did);
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let deadline = deadline.to_rfc3339();
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{request_id}",
-                superseded_by_request: "",
-                content: "parent prompt",
-                lifecycle_state: "processing",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{created_at}",
-                deadline: "{deadline}",
-                retry_count: 0,
-                max_retries: 3,
-                subagent_depth: 0
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create parent AgentRequest failed: {:?}",
-        response.errors
-    );
 }
 
 async fn spawn_background_child(
@@ -166,14 +112,14 @@ async fn spawn_background_child(
         "await_mode": "background"
     })
     .to_string();
-    let action = hook
-        .on_tool_call(
-            "spawn_subagent",
-            Some(format!("model-{internal_call_id}")),
-            internal_call_id,
-            &args,
-        )
-        .await;
+    let action = accepted_call(
+        hook,
+        "spawn_subagent",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args,
+    )
+    .await;
     let mut receipt = skip_reason_json(action);
     assert_eq!(receipt["ok"], true);
     let child_request_id = receipt["child_request_id"]
@@ -214,14 +160,14 @@ async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) 
 }
 
 async fn steer_subagent(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
-    let action = hook
-        .on_tool_call(
-            "steer_subagent",
-            Some(format!("model-{internal_call_id}")),
-            internal_call_id,
-            &args.to_string(),
-        )
-        .await;
+    let action = accepted_call(
+        hook,
+        "steer_subagent",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args.to_string(),
+    )
+    .await;
     skip_reason_json(action)
 }
 
@@ -253,27 +199,6 @@ async fn fetch_request(node: &EmbeddedNode, request_id: &str) -> AgentRequestRow
     );
     let response = node.execute(&query).await;
     crate::support::first_row(&response, "AgentRequest")
-}
-
-async fn latest_user_message(node: &EmbeddedNode, session_id: &str) -> MessageRow {
-    let session_id = escape_graphql_string(session_id);
-    let query = format!(
-        r#"{{
-            AgentMessage(
-                filter: {{ session_id: {{ _eq: "{session_id}" }}, role: {{ _eq: "user" }} }},
-                order: {{ sequence: DESC }},
-                limit: 1
-            ) {{
-                role
-                content
-                message_key
-                request_id
-                request_doc_id
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    crate::support::first_row(&response, "AgentMessage")
 }
 
 async fn update_request_state(node: &EmbeddedNode, request_id: &str, lifecycle_state: &str) {
@@ -454,7 +379,7 @@ async fn steer_subagent_append_enqueues_with_steering_source() {
 }
 
 #[tokio::test]
-async fn steer_subagent_append_writes_user_message() {
+async fn steer_subagent_append_persists_admission_without_transcript_message() {
     let (db, _source) = setup_db("r4c-steer-message").await;
     let hook = create_parent_hook(&db, "parent-message", "session-message").await;
     let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-message", "do work").await;
@@ -471,17 +396,20 @@ async fn steer_subagent_append_writes_user_message() {
     )
     .await;
 
-    let message = latest_user_message(db.node.as_ref(), child_session_id).await;
-    assert_eq!(message.role, "user");
-    assert!(message.content.contains("also check the staging config"));
-    assert!(message.message_key.starts_with("steering-input:"));
     let queued_request_id = result["queued_request_id"].as_str().unwrap();
-    let queued_request_doc_id =
-        crate::support::exact_request_doc_id(db.node.as_ref(), queued_request_id).await;
-    assert_eq!(message.request_id.as_deref(), Some(queued_request_id));
+    let queued = fetch_request(db.node.as_ref(), queued_request_id).await;
     assert_eq!(
-        message.request_doc_id.as_deref(),
-        Some(queued_request_doc_id.as_str())
+        queued.content.as_deref(),
+        Some("also check the staging config")
+    );
+    let session_id = escape_graphql_string(child_session_id);
+    let response = db.node.execute(&format!(
+        r#"{{ AgentMessage(filter: {{ session_id: {{ _eq: "{session_id}" }} }}) {{ _docID }} }}"#
+    )).await;
+    let rows: Vec<Value> = gents::graphql::rows(&response, "AgentMessage").unwrap();
+    assert!(
+        rows.is_empty(),
+        "enqueue must not publish transcript output"
     );
 }
 
@@ -531,7 +459,7 @@ async fn steer_subagent_rejects_unauthorized_child() {
 }
 
 #[tokio::test]
-async fn steer_subagent_no_parent_tool_call_row_written() {
+async fn steer_subagent_keeps_one_accepted_parent_control_row() {
     let (db, _source) = setup_db("r4c-steer-no-row").await;
     let parent_session_id = "session-no-row";
     let hook = create_parent_hook(&db, "parent-no-row", parent_session_id).await;
@@ -550,7 +478,7 @@ async fn steer_subagent_no_parent_tool_call_row_written() {
 
     assert_eq!(
         count_tool_calls_by_name(db.node.as_ref(), parent_session_id, "steer_subagent").await,
-        0
+        1
     );
 }
 
@@ -651,29 +579,48 @@ async fn steer_subagent_interrupt_cascades_to_grandchild_subagents() {
     let child_request_id = child["child_request_id"].as_str().unwrap().to_string();
     let child_session_id = child["child_session_id"].as_str().unwrap().to_string();
     drop(source);
-    update_request_state(db.node.as_ref(), &child_request_id, "claimed").await;
-
     let grandchild_request_id = "r4c-steer-grandchild";
     let child_request_doc_id =
         crate::support::exact_request_doc_id(db.node.as_ref(), &child_request_id).await;
-    let mut descendant_bridge = ToolCallLifecycle::new_subagent(
+    let child_row =
+        crate::support::load_request_row_by_logical_id(db.node.as_ref(), &child_request_id).await;
+    assert_eq!(
+        child_row.session_id.as_deref(),
+        Some(child_session_id.as_str())
+    );
+    let mut child_owner = gents::lifecycle::RequestLifecycle::new_with_agent_did(
         db.node.clone(),
-        child_request_id.clone(),
-        child_session_id.clone(),
-        db.node_identity.did().to_string(),
-        "internal-steer-descendant".to_string(),
-        1,
-        "spawn_subagent".to_string(),
-        "{}".to_string(),
-        parent_deadline,
+        CHILD_BEHAVIOR_ID,
+        db.node_identity.did(),
+        child_row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        child_owner.claim().await.unwrap(),
+        gents::lifecycle::ClaimOutcome::Claimed
+    );
+    let descendant_bridge = gents::tool_call_lifecycle::admission_fixture::publish_accepted_on_claimed_request(
+        db.node.clone(),
+        &mut child_owner,
+        db.node_identity.did(),
+        0,
+        "spawn_subagent",
+        "internal-steer-descendant",
+        json!({"name": CHILD_BEHAVIOR_ID, "prompt": "grandchild prompt", "await_mode": "background"}),
+        Some(gents::streaming::SpawnAdmissionPlan {
+            tool_call_id: "internal-steer-descendant".into(),
+            child_request_id: grandchild_request_id.into(),
+            spawn_target_did: db.node_identity.did().into(),
+            spawn_behavior_id: CHILD_BEHAVIOR_ID.into(),
+            delegated_workspace: None,
+            await_mode: AwaitMode::Background,
+        }),
         AwaitMode::Background,
         CancelPolicy::Cascade,
-        grandchild_request_id.to_string(),
-        db.node_identity.did().to_string(),
+        true,
     )
-    .with_request_doc_id(Some(child_request_doc_id.clone()))
-    .with_requester_did(Some(db.node_identity.did().to_string()));
-    descendant_bridge.start_running().await.unwrap();
+    .await
+    .unwrap();
     let descendant_bridge_doc_id = descendant_bridge
         .doc_id()
         .expect("descendant bridge document id")

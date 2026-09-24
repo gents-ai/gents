@@ -28,6 +28,16 @@ not permission to restore rejected abstractions.
 - Resolve spec conflicts in #1430 before propagating them. Validate each descendant
   and the integrated stack; the non-buildable foundation must not merge alone.
 
+## Canonical output stack (#1571)
+
+`gents_protocol::output` and the SDL are the breaking specification; the
+[ownership table](contracts/canonical-output.md) assigns the remaining deletions.
+Keep this layer intentionally red: no builds/tests or compatibility shims.
+Stack Lean, generated conformance, then implementation/consumers, each on its
+parent. Model the new contracts before implementing transitions or projections.
+The foundation must not merge alone; validate the integrated stack before pushing
+its implementation layers.
+
 ## Foundation
 
 For changes to legal transitions, invariants, or provider input, work in this
@@ -39,6 +49,12 @@ order:
 
 Plumbing and tooling need no proof change when they preserve semantics. The
 [proof map](crates/gents/proofs/README.md) identifies the modeled surfaces.
+
+Conformance has one semantic source: the executable Lean owners. Serialize actual
+modeled inputs/actions and derive expectations through those owners; do not keep
+separate fixture constants or test-only Rust policy machines that mirror their behavior.
+Explicit regression expectations must be checked against model execution. Wire
+decoders and native adapters translate representations, not redefine policy.
 
 ## Ownership
 

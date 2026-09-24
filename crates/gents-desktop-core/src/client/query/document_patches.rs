@@ -1,4 +1,8 @@
 use super::*;
+use gents::session::canonical_rows::{
+    decode_output_segment_row, decode_transcript_message_row, AGENT_MESSAGE_FIELDS,
+    AGENT_OUTPUT_SEGMENT_FIELDS,
+};
 
 /// Fetch the rows for a specific set of `(collection, doc_id)` pairs and
 /// return them as a single-collection `ClientStore` patch suitable for
@@ -70,21 +74,23 @@ pub async fn fetch_doc_patch(
             )
             .await?;
         }
-        AGENT_RESPONSE_NAME => {
-            rows.responses = load_rows(
-                node,
-                AGENT_RESPONSE_NAME,
-                &format!("query {{ {AGENT_RESPONSE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_RESPONSE_FIELDS} }} }}"),
-            )
-            .await?;
-        }
         AGENT_MESSAGE_NAME => {
-            rows.messages = load_rows(
+            let data = execute_local_graphql_query(
                 node,
-                AGENT_MESSAGE_NAME,
                 &format!("query {{ {AGENT_MESSAGE_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"),
-            )
-            .await?;
+                "canonical message patch",
+            ).await?;
+            rows.transcript_messages =
+                parse_canonical_rows(&data, AGENT_MESSAGE_NAME, decode_transcript_message_row)?;
+        }
+        AGENT_OUTPUT_SEGMENT_NAME => {
+            let data = execute_local_graphql_query(
+                node,
+                &format!("query {{ {AGENT_OUTPUT_SEGMENT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"),
+                "canonical output segment patch",
+            ).await?;
+            rows.output_segments =
+                parse_canonical_rows(&data, AGENT_OUTPUT_SEGMENT_NAME, decode_output_segment_row)?;
         }
         AGENT_SESSION_NAME => {
             rows.sessions = load_rows(
@@ -107,14 +113,6 @@ pub async fn fetch_doc_patch(
                 node,
                 AGENT_TOOL_CALL_NAME,
                 &format!("query {{ {AGENT_TOOL_CALL_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TOOL_CALL_FIELDS} }} }}"),
-            )
-            .await?;
-        }
-        AGENT_TOOL_RESULT_NAME => {
-            rows.tool_results = load_rows(
-                node,
-                AGENT_TOOL_RESULT_NAME,
-                &format!("query {{ {AGENT_TOOL_RESULT_NAME}(filter: {{ _docID: {{ _in: [{in_clause}] }} }}) {{ {AGENT_TOOL_RESULT_FIELDS} }} }}"),
             )
             .await?;
         }
@@ -210,12 +208,11 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
             | AGENT_BEHAVIOR_READINESS_NAME
             | AGENT_REQUEST_NAME
             | MAILBOX_ITEM_NAME
-            | AGENT_RESPONSE_NAME
             | AGENT_MESSAGE_NAME
+            | AGENT_OUTPUT_SEGMENT_NAME
             | AGENT_SESSION_NAME
             | GOAL_NAME
             | AGENT_TOOL_CALL_NAME
-            | AGENT_TOOL_RESULT_NAME
             | COMPACTION_ENTRY_NAME
             | TASK_NAME
             | SCHEDULE_NAME
@@ -231,6 +228,9 @@ pub(crate) fn supports_doc_patch_collection(collection_name: &str) -> bool {
 pub(crate) fn is_transcript_content_collection(collection_name: &str) -> bool {
     matches!(
         collection_name,
-        AGENT_MESSAGE_NAME | AGENT_TOOL_CALL_NAME | AGENT_TOOL_RESULT_NAME | COMPACTION_ENTRY_NAME
+        AGENT_MESSAGE_NAME
+            | AGENT_OUTPUT_SEGMENT_NAME
+            | AGENT_TOOL_CALL_NAME
+            | COMPACTION_ENTRY_NAME
     )
 }

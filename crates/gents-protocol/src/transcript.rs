@@ -1,5 +1,5 @@
 use crate::message::{
-    AssistantContent, Message, Reasoning, ReasoningContent, Text, ToolResult, ToolResultContent,
+    AssistantContent, Message, Reasoning, ReasoningContent, ToolResult, ToolResultContent,
     UserContent,
 };
 
@@ -41,41 +41,6 @@ pub fn normalize_markdown_text(text: &str) -> String {
         normalized = normalized.replace("\n\n\n", "\n\n");
     }
     normalized.trim().to_string()
-}
-
-fn message_has_content(message: &Message) -> bool {
-    match message {
-        Message::System { .. } => true,
-        Message::User { content } => !content.is_empty(),
-        Message::Assistant { content, .. } => !content.is_empty(),
-    }
-}
-
-pub fn decode_persisted_message(role: &str, content: &str) -> Message {
-    if let Ok(message) = serde_json::from_str::<Message>(content) {
-        if message_has_content(&message) {
-            return message;
-        }
-    }
-
-    match role {
-        "assistant" => Message::Assistant {
-            id: None,
-            content: vec![AssistantContent::Text(Text {
-                text: content.to_string(),
-            })],
-        },
-        _ => Message::User {
-            content: vec![UserContent::Text(Text {
-                text: content.to_string(),
-            })],
-        },
-    }
-}
-
-pub fn present_persisted_message(role: &str, content: &str) -> PersistedMessagePresentation {
-    let message = decode_persisted_message(role, content);
-    present_message(&message)
 }
 
 pub fn present_message(message: &Message) -> PersistedMessagePresentation {
@@ -215,6 +180,7 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::message::Text;
 
     #[test]
     fn tool_result_messages_present_as_tool_rows() {
@@ -228,10 +194,7 @@ mod tests {
             })],
         };
 
-        let presentation = present_persisted_message(
-            "user",
-            &serde_json::to_string(&tool_result_message).expect("serialize tool result"),
-        );
+        let presentation = present_message(&tool_result_message);
 
         assert_eq!(presentation.role, PresentedMessageRole::Tool);
         assert!(presentation.has_tool_results);
@@ -250,10 +213,7 @@ mod tests {
             ],
         };
 
-        let presentation = present_persisted_message(
-            "assistant",
-            &serde_json::to_string(&message).expect("serialize assistant message"),
-        );
+        let presentation = present_message(&message);
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "I checked the CLI flow.");
@@ -264,28 +224,10 @@ mod tests {
     }
 
     #[test]
-    fn plain_text_fallback_is_preserved() {
-        let presentation = present_persisted_message("assistant", "hello markdown");
-
-        assert_eq!(presentation.role, PresentedMessageRole::Assistant);
-        assert_eq!(presentation.body_markdown, "hello markdown");
-    }
-
-    #[test]
-    fn decoded_message_presentation_matches_persisted_projection() {
-        let decoded = decode_persisted_message("assistant", "hello markdown");
-        assert_eq!(
-            present_message(&decoded),
-            present_persisted_message("assistant", "hello markdown")
-        );
-    }
-
-    #[test]
     fn assistant_tool_call_markup_is_hidden_from_visible_body() {
-        let presentation = present_persisted_message(
-            "assistant",
+        let presentation = present_message(&Message::assistant(
             "<tool_call>list_files<arg_key>path</arg_key><arg_value>/repo</arg_value></tool_call>",
-        );
+        ));
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "");
@@ -293,27 +235,12 @@ mod tests {
 
     #[test]
     fn assistant_partial_tool_call_markup_is_hidden_from_visible_body() {
-        let presentation = present_persisted_message(
-            "assistant",
+        let presentation = present_message(&Message::assistant(
             "recursive</arg_key><arg_value>false</arg_value></tool_call>",
-        );
+        ));
 
         assert_eq!(presentation.role, PresentedMessageRole::Assistant);
         assert_eq!(presentation.body_markdown, "");
-    }
-
-    #[test]
-    fn empty_content_blob_falls_back_to_plain_text() {
-        // rig-era behavior restored: OneOrMany rejected `[]`, so a corrupt
-        // empty-content blob decoded as plain text rather than an invisible
-        // empty message. Vec accepts `[]`; the explicit guard keeps parity.
-        let decoded = decode_persisted_message("user", r#"{"role":"user","content":[]}"#);
-        assert!(
-            matches!(&decoded, Message::User { content }
-                if matches!(content.first(), Some(UserContent::Text(text))
-                    if text.text.contains("\"content\":[]"))),
-            "empty-content blob must fall back to visible plain text; got {decoded:?}"
-        );
     }
 
     #[test]

@@ -174,22 +174,32 @@ pub(super) fn build_session_context_from_stores(
         || context_store.transcript(session_id),
         |agent_did| context_store.transcript_for_agent(session_id, agent_did),
     );
-    let durable_message_count = transcript.messages.len();
+    let observed_segments = transcript
+        .output_segments
+        .iter()
+        .map(
+            |row| gents_protocol::output::reconstruction::ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            },
+        )
+        .collect::<Vec<_>>();
+    let observed_header_count = transcript.messages.len();
     let durable_messages = transcript
         .messages
         .into_iter()
         .filter_map(|row| {
-            row.role
-                .as_deref()
-                .zip(row.content.as_deref())
-                .map(|(role, content)| {
-                    (
-                        row.sequence,
-                        gents_protocol::transcript::decode_persisted_message(role, content),
-                    )
-                })
+            gents_protocol::output::reconstruction::reconstruct_message(
+                &observed_segments,
+                &[],
+                &[],
+                &row.message,
+            )
+            .ok()
+            .map(|message| (Some(i64::from(row.message.sequence)), message))
         })
         .collect::<Vec<_>>();
+    let durable_message_count = durable_messages.len();
     build_session_context_view(
         store,
         context_store,
@@ -198,7 +208,7 @@ pub(super) fn build_session_context_from_stores(
         session_id,
         durable_messages,
         durable_message_count,
-        transcript_totals_exact,
+        transcript_totals_exact && durable_message_count == observed_header_count,
     )
 }
 

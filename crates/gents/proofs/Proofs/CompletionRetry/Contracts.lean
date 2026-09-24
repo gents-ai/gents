@@ -17,313 +17,65 @@ def failureClassName : FailureClass → String
 def phaseName : Phase → String
   | .issuing => "issuing"
   | .streaming => "streaming"
+  | .retractRequired .. => "retract_required"
+  | .retracted .. => "retracted"
   | .backingOff _ => "backing_off"
   | .repairing => "repairing"
-  | .turnClosed => "turn_closed"
-  | .turnDone => "turn_done"
+  | .accepted _ => "accepted"
+  | .acceptedToolFailed _ => "accepted_tool_failed"
   | .exhausted => "exhausted"
   | .failedPermanent => "failed_permanent"
 
-def boolJson (value : Bool) : String :=
-  if value then "true" else "false"
+def actionName : Action → String
+  | .issue => "issue"
+  | .observeFailure .. => "observe_failure"
+  | .confirmRetraction _ => "confirm_retraction"
+  | .schedule => "schedule"
+  | .wake _ => "wake"
+  | .accept _ => "accept_and_publish"
+  | .acceptedToolFailure => "accepted_tool_failure"
+  | .repairIssue => "repair_issue"
+  | .recordUsage _ => "record_usage"
 
-def jsonOptionalNat : Option Nat → String
-  | none => "null"
-  | some value => toString value
-
-def jsonOptionalBool : Option Bool → String
-  | none => "null"
-  | some value => boolJson value
+def boolJson (value : Bool) : String := if value then "true" else "false"
 
 def jsonOptionalPhase : Option Phase → String
   | none => "null"
   | some phase => jsonString (phaseName phase)
 
-def jsonOptionalFailureClass : Option FailureClass → String
+def phaseScheduledWake : Phase → Option Time
+  | .retractRequired _ _ wake | .retracted _ _ wake | .backingOff wake => some wake
+  | _ => none
+
+def jsonOptionalNat : Option Nat → String
   | none => "null"
-  | some klass => jsonString (failureClassName klass)
+  | some value => toString value
 
-def defaultBudget : Budget :=
-  { transportRetries := 3, resampleRetries := 1, allowRepair := true }
-
-def baseState
-    (phase : Phase := .streaming)
-    (budget : Budget := defaultBudget)
-    (transportUsed : Nat := 0)
-    (resampleUsed : Nat := 0)
-    (repairUsed : Bool := false)
-    (lastParseError : Option String := none)
-    (now : Time := 10)
-    (deadline : Option Time := none)
-    (turnIndex : Nat := 0)
-    (effects : Nat := 0)
-    (rendered : Nat := 0) : State :=
-  { phase := phase
-  , budget := budget
-  , transportUsed := transportUsed
-  , resampleUsed := resampleUsed
-  , repairUsed := repairUsed
-  , lastParseError := lastParseError
-  , now := now
-  , deadline := deadline
-  , turn := { turnIndex := turnIndex, effects := effects, rendered := rendered }
-  }
-
-structure CompletionRetryCase where
-  name : String
-  action : String
-  rustSurface : String
-  failureClass : Option FailureClass
-  selectedWake : Option Time
-  pre : State
-  post : Option State
-  intermediate : Option State := none
-  deriving Repr
-
-def caseFromStep
-    (name action rustSurface : String)
-    (failureClass : Option FailureClass)
-    (selectedWake : Option Time)
-    (pre : State)
-    (actionValue : Action) : CompletionRetryCase :=
-  { name := name
-  , action := action
-  , rustSurface := rustSurface
-  , failureClass := failureClass
-  , selectedWake := selectedWake
-  , pre := pre
-  , post := step? pre actionValue
-  }
-
-def caseCloseTurnThenContinue : CompletionRetryCase :=
-  let pre := baseState (effects := 1)
-  let intermediate := step? pre .closeTurn
-  let post := intermediate.bind (fun closed => step? closed (.continueAfterClose 12))
-  { name := "close_turn_with_effects_legal"
-  , action := "close_turn_then_continue"
-  , rustSurface := "mid_stream_effects_close_and_continue"
-  , failureClass := none
-  , selectedWake := some 12
-  , pre := pre
-  , intermediate := intermediate
-  , post := post
-  }
-
-def outputObligationCase
-    (name rustSurface : String)
-    (state : OutputObligation.State)
-    (enabled : Bool := true) : CompletionRetryCase :=
-  let pre := baseState
-  let decision := if enabled then OutputObligation.decideTerminal state else .complete
-  let phase := match decision with
-    | .continue => Phase.turnClosed
-    | .complete => Phase.turnDone
-    | .reject => Phase.failedPermanent
-  { name := name
-  , action := "output_obligation_terminal"
-  , rustSurface := rustSurface
-  , failureClass := none
-  , selectedWake := none
-  , pre := pre
-  , post := some { pre with phase := phase }
-  }
-
-def cases : List CompletionRetryCase :=
-  [ caseFromStep
-      "transport_ladder_progresses"
-      "pre_stream_fail"
-      "pre_stream_transport_retry"
-      (some .transport)
-      (some 12)
-      (baseState (budget := { transportRetries := 3, resampleRetries := 1, allowRepair := true }))
-      (.preStreamFail .transport "transport" 12)
-  , caseFromStep
-      "transport_exhausts_after_budget"
-      "pre_stream_fail"
-      "pre_stream_transport_fail"
-      (some .transport)
-      (some 12)
-      (baseState
-        (budget := { transportRetries := 3, resampleRetries := 1, allowRepair := true })
-        (transportUsed := 3))
-      (.preStreamFail .transport "transport" 12)
-  , caseFromStep
-      "selected_delay_past_deadline_fails_fast"
-      "pre_stream_fail"
-      "pre_stream_transport_fail"
-      (some .transport)
-      (some 20)
-      (baseState
-        (deadline := some 15)
-        (budget := { transportRetries := 3, resampleRetries := 1, allowRepair := true }))
-      (.preStreamFail .transport "transport" 20)
-  , caseFromStep
-      "deadline_behind_clock_fails_fast"
-      "pre_stream_fail"
-      "pre_stream_transport_fail"
-      (some .transport)
-      (some 10)
-      (baseState
-        (now := 10)
-        (deadline := some 5)
-        (budget := { transportRetries := 3, resampleRetries := 1, allowRepair := true }))
-      (.preStreamFail .transport "transport" 10)
-  , caseFromStep
-      "deterministic_400_skips_to_repair"
-      "pre_stream_fail"
-      "pre_stream_parse_repair"
-      (some .parseBadRequest)
-      (some 12)
-      (baseState
-        (budget := { transportRetries := 3, resampleRetries := 2, allowRepair := true })
-        (resampleUsed := 1)
-        (lastParseError := some "json-parse"))
-      (.preStreamFail .parseBadRequest "json-parse" 12)
-  ,
-    caseFromStep
-      "resample_budget_outlives_transport_ladder"
-      "pre_stream_fail"
-      "pre_stream_parse_resample"
-      (some .parseBadRequest)
-      (some 15)
-      (baseState
-        (budget := { transportRetries := 1, resampleRetries := 3, allowRepair := true })
-        (resampleUsed := 1)
-        (lastParseError := some "prior-parse"))
-      (.preStreamFail .parseBadRequest "json-parse" 15)
-  , caseFromStep
-      "resample_exhausts_on_its_own_budget_then_repairs"
-      "pre_stream_fail"
-      "pre_stream_parse_repair"
-      (some .parseBadRequest)
-      (some 15)
-      (baseState
-        (budget := { transportRetries := 1, resampleRetries := 2, allowRepair := true })
-        (resampleUsed := 2)
-        (lastParseError := some "prior-parse"))
-      (.preStreamFail .parseBadRequest "json-parse" 15)
-  , caseFromStep
-      "repair_second_time_illegal"
-      "repair_issue"
-      "repair_already_used_fails"
-      none
-      none
-      (baseState (phase := .repairing) (repairUsed := true))
-      .repairIssue
-  , caseFromStep
-      "retract_with_effects_illegal"
-      "retract"
-      "mid_stream_effects_not_retract"
-      none
-      (some 12)
-      (baseState (effects := 1))
-      (.retract 12)
-  , caseCloseTurnThenContinue
-  , caseFromStep
-      "reissue_with_open_effects_illegal"
-      "pre_stream_fail"
-      "model_only_open_effects_guard"
-      (some .transport)
-      (some 12)
-      (baseState (effects := 1))
-      (.preStreamFail .transport "transport" 12)
-  , caseFromStep
-      "rendered_never_two"
-      "stream_ok"
-      "model_only_stream_ok"
-      none
-      none
-      (baseState (rendered := 0))
-      .streamOk
-  , caseFromStep
-      "permanent_class_cannot_backoff"
-      "pre_stream_fail"
-      "pre_stream_permanent_fail"
-      (some .permanent)
-      (some 12)
-      (baseState)
-      (.preStreamFail .permanent "permanent" 12)
-  , outputObligationCase
-      "unsatisfied_output_obligation_continues"
-      "output_obligation_gate_blocks_terminal"
-      { minimumWrites := 1, completedWrites := 0 }
-  , outputObligationCase
-      "satisfied_output_obligation_completes"
-      "output_obligation_gate_accepts_terminal"
-      { minimumWrites := 1, completedWrites := 1 }
-  , outputObligationCase
-      "dynamic_output_obligation_incomplete_continues"
-      "output_obligation_dynamic_count"
-      { minimumWrites := 1, completedWrites := 2, expectedWrites := some 4 }
-  , outputObligationCase
-      "dynamic_output_obligation_complete_closes"
-      "output_obligation_dynamic_count"
-      { minimumWrites := 1, completedWrites := 4, expectedWrites := some 4 }
-  , outputObligationCase
-      "dynamic_output_obligation_overfull_rejects"
-      "output_obligation_dynamic_count"
-      { minimumWrites := 1, completedWrites := 5, expectedWrites := some 4 }
-  , outputObligationCase
-      "dynamic_output_obligation_inconsistent_rejects"
-      "output_obligation_dynamic_count"
-      { minimumWrites := 1
-      , completedWrites := 2
-      , expectedWrites := some 4
-      , countValid := false
-      }
-  , outputObligationCase
-      "trigger_output_obligation_inactive_interactive"
-      "trigger_scope_activation"
-      { minimumWrites := 1, completedWrites := 0 }
-      (OutputObligation.active .trigger
-        { executionScheduled := false, hasAutomatedTriggerLineage := false })
-  , outputObligationCase
-      "trigger_output_obligation_inactive_scheduled_control"
-      "trigger_scope_activation"
-      { minimumWrites := 1, completedWrites := 0 }
-      (OutputObligation.active .trigger
-        { executionScheduled := true, hasAutomatedTriggerLineage := false })
-  , outputObligationCase
-      "trigger_output_obligation_active_automated_trigger"
-      "trigger_scope_activation"
-      { minimumWrites := 1, completedWrites := 0 }
-      (OutputObligation.active .trigger
-        { executionScheduled := true, hasAutomatedTriggerLineage := true })
-  ]
-
-def CompletionRetryCase.toJson (c : CompletionRetryCase) : String :=
+def RetryCase.toJson (c : RetryCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString c.name ++ ","
     ++ "\"domain\":\"completionRetry\","
-    ++ "\"action\":" ++ jsonString c.action ++ ","
-    ++ "\"rust_surface\":" ++ jsonString c.rustSurface ++ ","
-    ++ "\"failure_class\":" ++ jsonOptionalFailureClass c.failureClass ++ ","
-    ++ "\"selected_wake\":" ++ jsonOptionalNat c.selectedWake ++ ","
+    ++ "\"action\":" ++ jsonString (actionName c.action) ++ ","
     ++ "\"legal\":" ++ boolJson c.post.isSome ++ ","
     ++ "\"pre_phase\":" ++ jsonString (phaseName c.pre.phase) ++ ","
-    ++ "\"expected_phase\":" ++ jsonOptionalPhase (c.post.map (fun s => s.phase)) ++ ","
-    ++ "\"intermediate_phase\":"
-      ++ jsonOptionalPhase (c.intermediate.map (fun s => s.phase)) ++ ","
-    ++ "\"expected_transport_used\":"
-      ++ jsonOptionalNat (c.post.map (fun s => s.transportUsed)) ++ ","
-    ++ "\"expected_resample_used\":"
-      ++ jsonOptionalNat (c.post.map (fun s => s.resampleUsed)) ++ ","
-    ++ "\"expected_repair_used\":"
-      ++ jsonOptionalBool (c.post.map (fun s => s.repairUsed)) ++ ","
-    ++ "\"expected_last_parse_error\":"
-      ++ jsonOptionalString (c.post.bind (fun s => s.lastParseError)) ++ ","
-    ++ "\"expected_turn_index\":"
-      ++ jsonOptionalNat (c.post.map (fun s => s.turn.turnIndex)) ++ ","
-    ++ "\"intermediate_turn_index\":"
-      ++ jsonOptionalNat (c.intermediate.map (fun s => s.turn.turnIndex)) ++ ","
-    ++ "\"expected_effects\":" ++ jsonOptionalNat (c.post.map (fun s => s.turn.effects)) ++ ","
-    ++ "\"expected_rendered\":"
-      ++ jsonOptionalNat (c.post.map (fun s => s.turn.rendered)) ++ ","
-    ++ "\"intermediate_rendered\":"
-      ++ jsonOptionalNat (c.intermediate.map (fun s => s.turn.rendered))
+    ++ "\"pre_now\":" ++ toString c.pre.now ++ ","
+    ++ "\"pre_deadline\":" ++ jsonOptionalNat c.pre.deadline ++ ","
+    ++ "\"pre_scheduled_wake\":" ++ jsonOptionalNat (phaseScheduledWake c.pre.phase) ++ ","
+    ++ "\"expected_phase\":" ++ jsonOptionalPhase (c.post.map (·.phase)) ++ ","
+    ++ "\"expected_transport_used\":" ++
+      (c.post.map (fun state => toString state.transportUsed)).getD "null" ++ ","
+    ++ "\"expected_resample_used\":" ++
+      (c.post.map (fun state => toString state.resampleUsed)).getD "null" ++ ","
+    ++ "\"expected_attempt\":" ++
+      (c.post.map (fun state => toString state.attempt)).getD "null" ++ ","
+    ++ "\"expected_repair_used\":" ++
+      (c.post.map (fun state => boolJson state.repairUsed)).getD "null" ++ ","
+    ++ "\"expected_usage_charged\":" ++
+      (c.post.map (fun state => toString state.usageCharged)).getD "null"
     ++ "}"
 
-def casesJson : String :=
-  jsonArray (cases.map CompletionRetryCase.toJson)
+def cases : List RetryCase := retryCases
+
+def casesJson : String := jsonArray (cases.map RetryCase.toJson)
 
 end CompletionRetry.Contracts

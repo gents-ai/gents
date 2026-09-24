@@ -44,6 +44,13 @@ pub struct ManagedServerRestartRequest {
     pub tool_root: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerResetRequest {
+    /// Omit to preview the exact managed home and required confirmation.
+    pub confirmation: Option<String>,
+}
+
 /// Fetch peer runtime status by **saved peer id** only — read grants never
 /// accept arbitrary addresses (SSRF).
 #[derive(Debug, Clone, Deserialize, TS)]

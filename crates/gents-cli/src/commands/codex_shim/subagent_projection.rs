@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
+use gents::config_client::ConfigAccess;
 use gents::graphql::escape_graphql_string;
 use gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH;
 use gents_codex_protocol as codex;
@@ -18,9 +19,8 @@ use super::projection_state::{ChildStatus, CollabProjection, CollabTool, Project
 use super::store::query_node_json;
 use super::ShimState;
 
-const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 6] = [
+const SUBAGENT_PROJECTION_COLLECTIONS: [&str; 5] = [
     "AgentRequest",
-    "AgentResponse",
     "AgentToolCall",
     "AgentBehavior",
     "InferenceProfile",
@@ -172,6 +172,8 @@ struct ToolLinkRow {
     request_id: String,
     session_id: String,
     agent_did: String,
+    #[serde(default)]
+    requester_did: Option<String>,
     tool_call_id: String,
     tool_name: String,
     #[serde(default)]
@@ -180,12 +182,6 @@ struct ToolLinkRow {
     spawn_target_did: Option<String>,
     #[serde(default)]
     args: String,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct ResponseRow {
-    #[serde(default)]
-    status: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -228,11 +224,11 @@ const TOOL_LINK_ROW_FIELDS: &str = r#"
     request_id
     session_id
     agent_did
+    requester_did
     tool_call_id
     tool_name
     child_request_id
     spawn_target_did
-    args
 "#;
 
 /// Load the subagent request graph reachable from a Codex-shim-owned root.
@@ -337,9 +333,24 @@ async fn load_authorized_subagent_threads_for_roots(
                 &spawn_tools_for_requests_query(&parent_request_ids),
             )
             .await?;
-            for tool in decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
+            let access = ConfigAccess::Local(state.node.clone());
+            for mut tool in decode_rows::<ToolLinkRow>(&response, "AgentToolCall")
                 .context("decoding scoped spawn AgentToolCall rows")?
             {
+                tool.args = gents::tool_call_lifecycle::load_tool_call_arguments(
+                    &access,
+                    &tool.doc_id,
+                    &tool.agent_did,
+                    &tool.session_id,
+                    tool.requester_did.as_deref(),
+                )
+                .await
+                .with_context(|| {
+                    format!(
+                        "reconstructing accepted spawn arguments for {}",
+                        tool.doc_id
+                    )
+                })?;
                 if let Some(child_request_id) = nonempty(tool.child_request_id.as_deref()) {
                     child_request_ids.push(child_request_id.to_string());
                 }
@@ -401,14 +412,13 @@ async fn attach_canonical_request_heads(
                 let Some(head) = gents::session::load_latest_request_in_txn(txn,&owner,&session,Some(requester.as_deref())).await? else { return Ok(None); };
                 let scope = gents::session::session_scope_filter(&owner,&session,requester.as_deref());
                 let physical = escape_graphql_string(&head.observed.request_doc_id);
-                let response = txn.execute(&format!(r#"{{AgentRequest(filter:{{{scope},_docID:{{_eq:"{physical}"}}}}){{{REQUEST_ROW_FIELDS}}} AgentResponse(filter:{{{scope},request_doc_id:{{_eq:"{physical}"}}}}){{status}}}}"#)).await?;
+                let response = txn.execute(&format!(r#"{{AgentRequest(filter:{{{scope},_docID:{{_eq:"{physical}"}}}}){{{REQUEST_ROW_FIELDS}}}}}"#)).await?;
                 let mut requests = decode_request_rows(&response)?;
-                let responses = decode_rows::<ResponseRow>(&response,"AgentResponse")?;
-                anyhow::ensure!(requests.len()==1 && responses.len()<=1,"ambiguous subagent physical head");
-                Ok(Some((requests.remove(0),responses.into_iter().next())))
+                anyhow::ensure!(requests.len()==1,"ambiguous subagent physical head");
+                Ok(Some(requests.remove(0)))
             })
         }).await?;
-        let Some((latest, response)) = updated else {
+        let Some(latest) = updated else {
             anyhow::bail!("authorized subagent head disappeared");
         };
         anyhow::ensure!(
@@ -423,7 +433,6 @@ async fn attach_canonical_request_heads(
                 .map(|state| state.as_str())
                 .unwrap_or(""),
             nonempty(latest.superseded_by_request.as_deref()).is_some(),
-            response.as_ref().and_then(|row| row.status.as_deref()),
         );
     }
     Ok(())
@@ -694,7 +703,6 @@ fn resolve_authorized_subagent_threads(
                 client_projection: project_persisted_attempt(
                     child.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
                     nonempty(child.superseded_by_request.as_deref()).is_some(),
-                    None,
                 ),
                 failure_reason: child
                     .failure_reason
@@ -757,7 +765,6 @@ fn apply_latest_request(link: &mut LinkedSubagentThread, latest: &RequestProject
     link.client_projection = project_persisted_attempt(
         latest.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
         nonempty(latest.superseded_by_request.as_deref()).is_some(),
-        None,
     );
     link.failure_reason = latest
         .failure_reason
@@ -1110,6 +1117,7 @@ mod tests {
             request_id: "root-request".to_string(),
             session_id: root_session.clone(),
             agent_did: "did:root".to_string(),
+            requester_did: None,
             tool_call_id: "spawn-call".to_string(),
             tool_name: "spawn_subagent".to_string(),
             child_request_id: Some("child-request".to_string()),
@@ -1137,6 +1145,7 @@ mod tests {
             request_id: "parent".into(),
             session_id: root_session,
             agent_did: "did:root".into(),
+            requester_did: None,
             tool_call_id: "spawn".into(),
             tool_name: "spawn_subagent".into(),
             child_request_id: Some("child".into()),
@@ -1182,6 +1191,7 @@ mod tests {
             request_id: "parent".into(),
             session_id: root_session.clone(),
             agent_did: "did:root".into(),
+            requester_did: None,
             tool_call_id: tool_id.into(),
             tool_name: "spawn_subagent".into(),
             child_request_id: Some(child_id.into()),
@@ -1231,6 +1241,7 @@ mod tests {
                 request_id: "root-request".to_string(),
                 session_id: root_session.clone(),
                 agent_did: "did:root".to_string(),
+                requester_did: None,
                 tool_call_id: "spawn-call".to_string(),
                 tool_name: "spawn_subagent".to_string(),
                 child_request_id: Some("child-request".to_string()),
@@ -1243,6 +1254,7 @@ mod tests {
                 request_id: "child-followup".to_string(),
                 session_id: child_session.clone(),
                 agent_did: "did:child".to_string(),
+                requester_did: None,
                 tool_call_id: "nested-spawn-call".to_string(),
                 tool_name: "spawn_subagent".to_string(),
                 child_request_id: Some("grandchild-request".to_string()),
@@ -1287,6 +1299,7 @@ mod tests {
             request_id: "root-request".to_string(),
             session_id: root_session,
             agent_did: "did:root".to_string(),
+            requester_did: None,
             tool_call_id: "spawn-call".to_string(),
             tool_name: "spawn_subagent".to_string(),
             child_request_id: Some("child-request".to_string()),
@@ -1307,7 +1320,7 @@ mod tests {
         );
         assert_eq!(
             links[0].client_projection,
-            project_persisted_attempt("processing", false, None)
+            project_persisted_attempt("processing", false)
         );
     }
 
@@ -1334,7 +1347,28 @@ mod tests {
         assert!(tool_query.contains("request_doc_id: { _in:"));
         assert!(tool_query.contains(r#"tool_name: { _eq: "spawn_subagent" }"#));
         assert!(tool_query.contains(r#"child_request_id: { _ne: "" }"#));
+        assert!(tool_query.contains("requester_did"));
+        assert!(!tool_query.lines().any(|line| line.trim() == "args"));
         assert!(tool_query.contains(r#""request-\"b""#));
+    }
+
+    #[tokio::test]
+    async fn spawn_tool_query_is_valid_against_current_canonical_schema() {
+        let node = gents::defra_node::EmbeddedNode::builder()
+            .build()
+            .await
+            .expect("embedded node");
+        gents::ensure_runtime_schemas(&node)
+            .await
+            .expect("runtime schemas");
+        let query = spawn_tools_for_requests_query(&["physical-parent".into()]);
+        let response = node.execute(&query).await;
+        assert!(
+            !response.has_errors(),
+            "spawn link query must use current AgentToolCall fields: {:?}",
+            response.errors
+        );
+        node.shutdown().await;
     }
 
     #[test]
@@ -1346,21 +1380,15 @@ mod tests {
         assert_eq!(collab_tool("list_subagents"), None);
         assert_eq!(collab_tool("read_subagent"), None);
 
-        let status = |lifecycle, response| {
-            collab_agent_status(project_persisted_attempt(lifecycle, false, response))
-        };
-        assert_eq!(status("pending", None), ChildStatus::Pending);
-        assert_eq!(status("claimed", None), ChildStatus::Running);
-        assert_eq!(status("processing", None), ChildStatus::Running);
-        assert_eq!(status("inputRequired", None), ChildStatus::Running);
-        assert_eq!(status("completed", None), ChildStatus::Completed);
-        assert_eq!(status("failed", None), ChildStatus::Errored);
-        assert_eq!(status("interrupted", None), ChildStatus::Interrupted);
-        assert_eq!(
-            status("processing", Some("complete")),
-            ChildStatus::Completed
-        );
-        assert_eq!(status("processing", Some("error")), ChildStatus::Errored);
+        let status =
+            |lifecycle: &str| collab_agent_status(project_persisted_attempt(lifecycle, false));
+        assert_eq!(status("pending"), ChildStatus::Pending);
+        assert_eq!(status("claimed"), ChildStatus::Running);
+        assert_eq!(status("processing"), ChildStatus::Running);
+        assert_eq!(status("inputRequired"), ChildStatus::Running);
+        assert_eq!(status("completed"), ChildStatus::Completed);
+        assert_eq!(status("failed"), ChildStatus::Errored);
+        assert_eq!(status("interrupted"), ChildStatus::Interrupted);
         assert_eq!(collab_agent_status(None), ChildStatus::NotFound);
     }
 
@@ -1399,7 +1427,7 @@ mod tests {
             behavior_id: "code-review".to_string(),
             model: Some("child-model".to_string()),
             nickname: "reviewer".to_string(),
-            client_projection: project_persisted_attempt("processing", false, None),
+            client_projection: project_persisted_attempt("processing", false),
             failure_reason: None,
             created_at: None,
         });
@@ -1440,7 +1468,7 @@ mod tests {
             .subagent_link
             .as_mut()
             .expect("link")
-            .client_projection = project_persisted_attempt("claimed", false, None);
+            .client_projection = project_persisted_attempt("claimed", false);
         let claimed_projection = collab_projection(&claimed).expect("claimed projection");
         assert_eq!(
             projection, claimed_projection,
@@ -1449,7 +1477,7 @@ mod tests {
 
         let mut completed = tool.clone();
         let link = completed.subagent_link.as_mut().expect("link");
-        link.client_projection = project_persisted_attempt("completed", false, None);
+        link.client_projection = project_persisted_attempt("completed", false);
         let completed_projection = collab_projection(&completed).expect("completed projection");
         assert_ne!(
             projection, completed_projection,
@@ -1462,7 +1490,6 @@ mod tests {
         let filter = SubagentProjectionUpdateFilter {
             collection_ids: HashSet::from([
                 "agent-request-id".to_string(),
-                "agent-response-id".to_string(),
                 "agent-tool-call-id".to_string(),
                 "agent-behavior-id".to_string(),
             ]),
@@ -1470,7 +1497,6 @@ mod tests {
         };
 
         assert!(filter.affects_collection_id("agent-request-id"));
-        assert!(filter.affects_collection_id("agent-response-id"));
         assert!(filter.affects_collection_id("agent-tool-call-id"));
         assert!(filter.affects_collection_id("agent-behavior-id"));
         assert!(!filter.affects_collection_id("agent-message-id"));

@@ -122,91 +122,51 @@ structure OverlayBlock where
   deriving DecidableEq, Repr
 
 def projectActiveOverlay
-    (resp : Option ResponseSnapshot)
+    (liveOutputAvailable : Bool)
     (turn : Option ClientTurnState)
-    (materialized : Bool)
     (hasDurableOwner : Bool)
     (hasContent hasReasoning : Bool)
     : Option OverlayBlock :=
-  match resp with
-  | none => none
-  | some r =>
-    if materialized then none
-    else if hasDurableOwner then none
-    else if r.status = .complete ∨ r.status = .error then none
-    else
-      match turn with
-      | none => none
-      | some t =>
-        if t.isTerminal then none
-        else if t = .waitingForClaim ∨ t = .streaming then
-          if hasContent ∨ hasReasoning then
-            some { hasContent := hasContent, hasReasoning := hasReasoning }
-          else none
+  if !liveOutputAvailable then none
+  else if hasDurableOwner then none
+  else
+    match turn with
+    | none => none
+    | some t =>
+      if t.isTerminal then none
+      else if t = .waitingForClaim ∨ t = .running then
+        if hasContent ∨ hasReasoning then
+          some { hasContent := hasContent, hasReasoning := hasReasoning }
         else none
+      else none
 
 theorem projectActiveOverlay_at_most_one
-    (resp : Option ResponseSnapshot)
+    (liveOutputAvailable : Bool)
     (turn : Option ClientTurnState)
-    (materialized hasDurableOwner hasContent hasReasoning : Bool) :
+    (hasDurableOwner hasContent hasReasoning : Bool) :
     ∀ b₁ b₂,
-      projectActiveOverlay resp turn materialized hasDurableOwner hasContent hasReasoning = some b₁ →
-      projectActiveOverlay resp turn materialized hasDurableOwner hasContent hasReasoning = some b₂ →
+      projectActiveOverlay liveOutputAvailable turn hasDurableOwner hasContent hasReasoning = some b₁ →
+      projectActiveOverlay liveOutputAvailable turn hasDurableOwner hasContent hasReasoning = some b₂ →
       b₁ = b₂ := by
   intros b₁ b₂ h₁ h₂
   rw [h₁] at h₂
   injection h₂
 
 theorem projectActiveOverlay_terminal_hides
-    (resp : Option ResponseSnapshot)
+    (liveOutputAvailable : Bool)
     (t : ClientTurnState)
     (h : t.isTerminal = true)
-    (materialized hasDurableOwner hasContent hasReasoning : Bool) :
-    projectActiveOverlay resp (some t) materialized hasDurableOwner hasContent hasReasoning = none := by
-  cases resp with
-  | none => rfl
-  | some r =>
-    cases materialized with
-    | true =>
-      simp [projectActiveOverlay]
-    | false =>
-      cases hasDurableOwner with
-      | true => simp [projectActiveOverlay]
-      | false =>
-        cases r with
-        | mk status tail =>
-          cases status with
-          | streaming =>
-            cases t with
-            | waitingForClaim => simp [ClientTurnState.isTerminal] at h
-            | streaming       => simp [ClientTurnState.isTerminal] at h
-            | completed       => simp [projectActiveOverlay, ClientTurnState.isTerminal]
-            | failed          => simp [projectActiveOverlay, ClientTurnState.isTerminal]
-            | superseded      => simp [projectActiveOverlay, ClientTurnState.isTerminal]
-            | interrupted     => simp [projectActiveOverlay, ClientTurnState.isTerminal]
-          | complete =>
-            simp [projectActiveOverlay]
-          | error =>
-            simp [projectActiveOverlay]
+    (hasDurableOwner hasContent hasReasoning : Bool) :
+    projectActiveOverlay liveOutputAvailable (some t) hasDurableOwner
+      hasContent hasReasoning = none := by
+  cases liveOutputAvailable <;> cases hasDurableOwner <;>
+    simp [projectActiveOverlay, h]
 
-theorem projectActiveOverlay_materialized_hides
-    (resp : Option ResponseSnapshot)
-    (turn : Option ClientTurnState)
-    (hasDurableOwner : Bool)
-    (hasContent hasReasoning : Bool) :
-    projectActiveOverlay resp turn true hasDurableOwner hasContent hasReasoning = none := by
-  cases resp with
-  | none => rfl
-  | some _ => rfl
-
-/-- A replicated live-tail snapshot is hidden once the same request already has
-a durable assistant turn owning that content, even when the response snapshot
-itself predates the materialization marker. -/
+/-- A live preview is hidden once the same request already has a durable
+assistant turn owning that content. -/
 theorem projectActiveOverlay_durable_owner_hides
-    (resp : Option ResponseSnapshot)
+    (liveOutputAvailable : Bool)
     (turn : Option ClientTurnState)
-    (materialized hasContent hasReasoning : Bool) :
-    projectActiveOverlay resp turn materialized true hasContent hasReasoning = none := by
-  cases resp with
-  | none => rfl
-  | some _ => cases materialized <;> rfl
+    (hasContent hasReasoning : Bool) :
+    projectActiveOverlay liveOutputAvailable turn true hasContent hasReasoning = none := by
+  cases liveOutputAvailable <;> rfl

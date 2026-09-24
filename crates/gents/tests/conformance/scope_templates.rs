@@ -90,29 +90,22 @@ fn resolve_template_is_total_over_catalog_and_id_faithful() {
 /// collection theorems.
 #[test]
 fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
-    const TRANSCRIPT: &[&str] = &[
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "CompactionEntry",
-        "MailboxItem",
-    ];
-    const CLIENT_TO_RUNTIME: &[&str] = &[
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "CompactionEntry",
-        "MailboxItem",
-        "PersonaConfigRequest",
-        "PeerEndpoint",
-        "SessionHydrationRequest",
-    ];
+    let transcript_names = lean_string_list("transcriptCollections")
+        .into_iter()
+        .chain(lean_string_list("clientTranscriptCollections"))
+        .collect::<Vec<_>>();
+    let transcript = transcript_names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let transcript = transcript.as_slice();
+    let control_names = lean_string_list("clientToRuntimeCollections");
+    let client_to_runtime = transcript
+        .iter()
+        .copied()
+        .chain(control_names.iter().map(String::as_str))
+        .collect::<Vec<_>>();
+    let client_to_runtime = client_to_runtime.as_slice();
     const RETURN_CONTROL_PLANE: &[&str] = &[
         "AgentBehavior",
         "AgentContext",
@@ -134,44 +127,14 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         "EventSource",
     ];
     const OWNER_PROJECTION: &[&str] = &["AgentBehaviorReadiness"];
-    const RUNTIME_TO_CLIENT: &[&str] = &[
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "CompactionEntry",
-        "MailboxItem",
-        "PersonaConfigRequest",
-        "PeerEndpoint",
-        "SessionHydrationRequest",
-        "AgentBehavior",
-        "AgentContext",
-        "CompactionConfig",
-        "Tools",
-        "SubagentTarget",
-        "InferenceProfile",
-        "InferenceSampling",
-        "InferenceExecution",
-        "InferenceRetryPolicy",
-        "ToolServiceRegistry",
-        "Skill",
-        "DatastoreToolSurface",
-        "ChainKeyBinding",
-        "EthTool",
-        "Task",
-        "Schedule",
-        "Trigger",
-        "EventSource",
-        "AgentBehaviorReadiness",
-    ];
+    let runtime_to_client = client_to_runtime
+        .iter()
+        .copied()
+        .chain(RETURN_CONTROL_PLANE.iter().copied())
+        .chain(OWNER_PROJECTION.iter().copied())
+        .collect::<Vec<_>>();
+    let runtime_to_client = runtime_to_client.as_slice();
 
-    assert_eq!(
-        lean_string_list("transcriptCollections"),
-        &TRANSCRIPT[..TRANSCRIPT.len() - 1],
-        "Rust transcript policy must conform to the checked Lean model source"
-    );
     assert_eq!(
         lean_string_list("clientOwnerProjectionCollections"),
         OWNER_PROJECTION,
@@ -188,16 +151,16 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     let template = resolve_template(CLIENT_TEMPLATE).expect("client in catalog");
     assert_eq!(template.delivery, Delivery::Push);
     assert!(matches!(template.scope, Scope::ClientRoute));
-    assert_eq!(CLIENT_TO_RUNTIME_COLLECTIONS, CLIENT_TO_RUNTIME);
-    assert_eq!(CLIENT_COLLECTIONS, RUNTIME_TO_CLIENT);
-    assert_eq!(template.collections, RUNTIME_TO_CLIENT);
+    assert_eq!(CLIENT_TO_RUNTIME_COLLECTIONS, client_to_runtime);
+    assert_eq!(CLIENT_COLLECTIONS, runtime_to_client);
+    assert_eq!(template.collections, runtime_to_client);
     assert_eq!(
         client_route_collections(PairingDirection::ClientToRuntime),
-        CLIENT_TO_RUNTIME
+        client_to_runtime
     );
     assert_eq!(
         client_route_collections(PairingDirection::RuntimeToClient),
-        RUNTIME_TO_CLIENT
+        runtime_to_client
     );
 
     let requester = "did:key:phone";
@@ -209,8 +172,8 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
         requester,
         owner,
     );
-    assert_eq!(outbound.len(), CLIENT_TO_RUNTIME.len());
-    for collection in TRANSCRIPT {
+    assert_eq!(outbound.len(), client_to_runtime.len());
+    for collection in transcript {
         assert_and_eq_filter(
             outbound.get(*collection).expect("transcript filter"),
             &[("requester_did", requester), ("agent_did", owner)],
@@ -276,7 +239,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     );
     for collection in RETURN_CONTROL_PLANE {
         assert!(!outbound.contains_key(*collection));
-        assert!(!CLIENT_TO_RUNTIME.contains(collection));
+        assert!(!client_to_runtime.contains(collection));
     }
 
     let returning = resolve_template_filters(
@@ -287,7 +250,7 @@ fn client_route_is_directional_destination_scoped_and_control_plane_bounded() {
     );
     assert_eq!(
         returning.len(),
-        CLIENT_TO_RUNTIME.len() + OWNER_PROJECTION.len()
+        client_to_runtime.len() + OWNER_PROJECTION.len()
     );
     assert_eq_filter(
         returning
@@ -344,16 +307,10 @@ fn conversation_scope_filters_transcript_and_grants_unfiltered_config() {
     assert!(matches!(t.scope, Scope::PerCollection(_)));
 
     let filter = scope_filter(&t.scope, t.collections, "did:key:bob", "did:key:alice");
-    for col in [
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "CompactionEntry",
-    ] {
-        let pred = filter.get(col).expect("transcript collection filter");
+    for col in lean_string_list("transcriptCollections") {
+        let pred = filter
+            .get(col.as_str())
+            .expect("transcript collection filter");
         assert_eq_filter(pred, "requester_did", "did:key:bob");
     }
     for col in [
@@ -430,16 +387,10 @@ fn machine_scope_covers_conversation_and_home_owned_directory() {
         "did:key:issuer",
     );
 
-    for collection in [
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-        "AgentToolResult",
-        "AgentSession",
-        "CompactionEntry",
-    ] {
-        let predicate = filters.get(collection).expect("conversation filter");
+    for collection in lean_string_list("transcriptCollections") {
+        let predicate = filters
+            .get(collection.as_str())
+            .expect("conversation filter");
         assert_eq_filter(predicate, "requester_did", "did:key:phone");
     }
     assert_eq!(
@@ -462,12 +413,12 @@ fn unscoped_scope_resolves_to_no_filter() {
 
 #[test]
 fn subagent_templates_resolve_to_exact_directional_filters() {
-    const RETURN_PROJECTION: &[&str] = &[
-        "AgentRequest",
-        "AgentResponse",
-        "AgentMessage",
-        "AgentToolCall",
-    ];
+    let projection_names = lean_string_list("subagentHostCollections");
+    let return_projection = projection_names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let return_projection = return_projection.as_slice();
 
     let coord = resolve_template("subagent-coordinator").expect("coordinator template");
     assert_eq!(coord.delivery, Delivery::Push);
@@ -487,19 +438,19 @@ fn subagent_templates_resolve_to_exact_directional_filters() {
 
     let host = resolve_template("subagent-host").expect("host template");
     assert_eq!(host.delivery, Delivery::Push);
-    assert_eq!(host.collections, RETURN_PROJECTION);
+    assert_eq!(host.collections, return_projection);
     let host_filter = scope_filter(
         &host.scope,
         host.collections,
         "did:key:coord",
         "did:key:host",
     );
-    assert_eq!(host_filter.len(), RETURN_PROJECTION.len());
+    assert_eq!(host_filter.len(), return_projection.len());
     assert_eq!(
         host_filter.get("AgentRequest"),
         Some(&equality_filter("requester_did", "did:key:coord"))
     );
-    for collection in RETURN_PROJECTION {
+    for collection in return_projection {
         assert_eq!(
             host_filter.get(*collection),
             Some(&equality_filter("requester_did", "did:key:coord")),

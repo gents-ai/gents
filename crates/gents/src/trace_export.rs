@@ -1,8 +1,12 @@
 use crate::llm::message::{AssistantContent, Message};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use defra_node::EmbeddedNode;
+use gents_protocol::transcript::{present_message, PersistedMessagePresentation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::session::SequencedMessage;
 use crate::tool_call_lifecycle::ToolCallState;
 
 pub use crate::tool_call_lifecycle::FailureClass as ToolFailureClass;
@@ -179,39 +183,82 @@ pub fn latency_ms(started_at: Option<&str>, completed_at: Option<&str>) -> Optio
     (latency >= 0).then_some(latency)
 }
 
-pub fn raw_message_json(content: &str) -> Value {
-    serde_json::from_str(content).unwrap_or_else(|_| Value::String(content.to_string()))
+pub fn raw_message_json(message: &Message) -> Result<Value> {
+    serde_json::to_value(message).context("serializing canonical trace message")
+}
+
+/// Canonical transcript projection for the export path.
+///
+/// Loads native messages through the public session history owner — exact
+/// authorized references and strict reconstruction are handled there — and
+/// renders each through `present_message`, preserving the exported sequence
+/// order and the canonical session scope (agent DID, requester DID). Callers
+/// passing a physical request identity exclude its in-flight input row, which
+/// is owned by the request itself, not the durable transcript.
+#[allow(clippy::too_many_arguments)]
+pub async fn load_trace_transcript(
+    node: &EmbeddedNode,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    through_sequence: Option<u32>,
+    after_sequence: Option<u32>,
+    exclude_request_doc_id: Option<&str>,
+) -> Result<Vec<PresentedTraceMessage>> {
+    let rows = crate::session::load_sequenced_history_projection(
+        node,
+        session_id,
+        agent_did,
+        requester_did,
+        through_sequence,
+        after_sequence,
+        exclude_request_doc_id,
+    )
+    .await?;
+    Ok(rows.into_iter().map(present_trace_message).collect())
+}
+
+/// One exported transcript row: native message plus its rendered projection.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PresentedTraceMessage {
+    pub sequence: u32,
+    pub message: Message,
+    pub presentation: PersistedMessagePresentation,
+}
+
+fn present_trace_message(row: SequencedMessage) -> PresentedTraceMessage {
+    let presentation = present_message(&row.message);
+    PresentedTraceMessage {
+        sequence: row.sequence,
+        message: row.message,
+        presentation,
+    }
 }
 
 pub fn extract_raw_tool_call_json(
-    role: &str,
-    content: &str,
+    message: &Message,
     persisted_tool_call_id: &str,
     persisted_tool_name: &str,
 ) -> Option<Value> {
-    let message = gents_protocol::transcript::decode_persisted_message(role, content);
     let Message::Assistant { content, .. } = message else {
         return None;
     };
 
-    let mut first_name_match = None;
-    for item in content.iter() {
-        let AssistantContent::ToolCall(tool_call) = item else {
-            continue;
-        };
-
-        if tool_call.id == persisted_tool_call_id
-            || tool_call.call_id.as_deref() == Some(persisted_tool_call_id)
+    // The caller already selected the exact accepted header. A tool name is
+    // not identity: a turn can contain multiple calls to the same tool.
+    let mut matches = content.iter().filter_map(|item| match item {
+        AssistantContent::ToolCall(call)
+            if call.id == persisted_tool_call_id && call.function.name == persisted_tool_name =>
         {
-            return serde_json::to_value(tool_call).ok();
+            Some(call)
         }
-
-        if first_name_match.is_none() && tool_call.function.name == persisted_tool_name {
-            first_name_match = serde_json::to_value(tool_call).ok();
-        }
+        _ => None,
+    });
+    let call = matches.next()?;
+    if matches.next().is_some() {
+        return None;
     }
-
-    first_name_match
+    serde_json::to_value(call).ok()
 }
 
 fn analyze_arguments(tool_name: &str, raw_args: &str) -> ToolCallTraceAnalysis {

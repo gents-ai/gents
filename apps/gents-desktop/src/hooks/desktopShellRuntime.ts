@@ -69,11 +69,10 @@ export function desktopUpdateRefreshScope(
   reason: string | undefined,
   selectedSessionId: string | null,
   selectedTrackedRequestId: string | null,
-  responseOnly = false,
 ): DesktopUpdateRefreshScope {
   if (reason === "health") return "snapshot";
   if (selectedSessionId && selectedTrackedRequestId) {
-    if (reason === "store" && responseOnly) return "sessionDelta";
+    if (reason === "store") return "sessionDelta";
     return "sessionEvent";
   }
   return "full";
@@ -108,9 +107,9 @@ export function sessionLiveDeltaRequest(
 ) {
   const revision = session.projectionRevision;
   if (!revision || session.latestRequestId !== requestId) return null;
-  const response = session.activeResponseOverlay ?? session.latestResponse;
-  const content = response?.content ?? "";
-  const reasoning = response?.reasoning ?? "";
+  const live = session.timelineItems.find((item) => item.kind === "liveAssistant");
+  const content = live?.content ?? "";
+  const reasoning = live?.reasoning ?? "";
   return {
     sessionId: session.sessionId,
     agentDid: session.agentDid,
@@ -167,23 +166,17 @@ export function applySessionLiveDelta(
     return null;
   }
 
-  const active = current.activeResponseOverlay ?? current.latestResponse;
-  if (!active) return null;
-  const content = applyLiveTextPatch(active.content, delta.content);
-  const reasoning = applyLiveTextPatch(active.reasoning, delta.reasoning);
-  if (content === null && delta.content.byteLen > 0) return null;
-  if (reasoning === null && delta.reasoning.byteLen > 0) return null;
   const liveIndex = current.timelineItems.findIndex(
     (item) => item.kind === "liveAssistant",
   );
   if (liveIndex < 0) return null;
+  const live = current.timelineItems[liveIndex];
+  if (live.kind !== "liveAssistant") return null;
+  const content = applyLiveTextPatch(live.content, delta.content);
+  const reasoning = applyLiveTextPatch(live.reasoning, delta.reasoning);
+  if (content === null && delta.content.byteLen > 0) return null;
+  if (reasoning === null && delta.reasoning.byteLen > 0) return null;
 
-  const nextResponse = {
-    ...active,
-    status: delta.status,
-    content,
-    reasoning,
-  };
   const timelineItems = current.timelineItems.slice();
   const liveTailCleared = content === null && reasoning === null;
   if (liveTailCleared) {
@@ -199,10 +192,6 @@ export function applySessionLiveDelta(
   return {
     ...current,
     turnState: delta.turnState,
-    latestResponse: current.latestResponse
-      ? { ...current.latestResponse, ...nextResponse }
-      : nextResponse,
-    activeResponseOverlay: liveTailCleared ? null : nextResponse,
     timelineItems,
     projectionRevision: delta.revision,
   };

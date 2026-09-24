@@ -48,7 +48,7 @@ export function requestProgressPresentation(
 
 export type TurnState =
   | "waitingForClaim"
-  | "streaming"
+  | "running"
   | "completed"
   | "failed"
   | "superseded"
@@ -168,7 +168,7 @@ export function reconcileProjectedWorkflow(
 function isTurnState(value?: string | null): value is TurnState {
   return (
     value === "waitingForClaim" ||
-    value === "streaming" ||
+    value === "running" ||
     value === "completed" ||
     value === "failed" ||
     value === "superseded" ||
@@ -205,8 +205,8 @@ function hintFor(reason: ChatBlockedReason, turnState?: TurnState | null) {
       if (turnState === "waitingForClaim") {
         return "Waiting for the active turn to start";
       }
-      if (turnState === "streaming") {
-        return "Turn still streaming";
+      if (turnState === "running") {
+        return "Turn still running";
       }
       return "Waiting for terminal turn reconciliation";
     case "inconsistentTurnObservation":
@@ -273,7 +273,7 @@ function activityStatusFor(
           animated: true,
         };
       }
-      if (turnState === "streaming") {
+      if (turnState === "running") {
         return {
           kind: "working",
           label: "Agent is working…",

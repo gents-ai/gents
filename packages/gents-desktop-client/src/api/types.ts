@@ -4,6 +4,7 @@ import type { EventSourceSaveRequest } from "../generated/EventSourceSaveRequest
 import type { EventSourceDeleteRequest } from "../generated/EventSourceDeleteRequest.js";
 import type { BackendHealth } from "../types/backendHealth.js";
 import type { ManagedServerStatus } from "../generated/ManagedServerStatus.js";
+import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { ManagedServerToolCeiling } from "../generated/ManagedServerToolCeiling.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
@@ -92,6 +93,9 @@ export type DesktopApiAdapter = {
     agentName: string,
     authority: ManagedServerAuthorityInput,
   ) => Promise<ManagedServerStatus>;
+  resetManagedServer?: (
+    confirmation?: string,
+  ) => Promise<ManagedServerResetResult>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
   commitManagedServerAutoStart?: (
     agentName: string,
@@ -285,4 +289,4 @@ export type DesktopApiAdapter = {
   ) => Promise<InterruptRequestResult>;
 };
 
-export type { ManagedServerStatus };
+export type { ManagedServerResetResult, ManagedServerStatus };

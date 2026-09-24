@@ -19,11 +19,37 @@ use crate::run_timeline::{
     build_run_timeline, RunActivityRows, RunTimeline, RunTimelineRows, TimelineCompactionRow,
     TimelineGoalVersionRow, TimelineInferenceCallRow, TimelineMessageRow,
     TimelineProviderContextReductionRow, TimelineRenderedRequestRef, TimelineRenderedRequestRow,
-    TimelineRequestRow, TimelineResponseRow, TimelineSessionRow, TimelineToolCallRow,
+    TimelineRequestRow, TimelineSessionRow, TimelineToolCallRow,
 };
+use crate::run_timeline_fetch::event_loaders::resolve_timeline_messages_for_session;
 use gents_protocol::graphql::graphql_rows_from_response;
 
 const MAX_RUN_ACTIVITY_ROWS: usize = 10_000;
+
+/// Canonical tool payloads in an exact authorized session scope. Runtime
+/// consumers share the timeline's physical intent binding and delegated-input
+/// rules instead of maintaining another argument reconstruction path.
+pub(crate) async fn load_session_tool_calls(
+    access: &ConfigAccess,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<Vec<TimelineToolCallRow>> {
+    let observations =
+        load_timeline_tool_observations_for_session(access, agent_did, session_id, requester_did)
+            .await?;
+    let messages =
+        resolve_timeline_messages_for_session(access, agent_did, session_id, requester_did).await?;
+    event_loaders::resolve_timeline_tool_observations(
+        access,
+        agent_did,
+        session_id,
+        requester_did,
+        observations,
+        &messages,
+    )
+    .await
+}
 
 pub async fn load_run_timeline(access: &ConfigAccess, request_id: &str) -> Result<RunTimeline> {
     let mut timeline = build_run_timeline(load_run_timeline_rows(access, request_id).await?);
@@ -271,21 +297,34 @@ pub async fn load_run_timeline_rows(
 
     let mut messages = Vec::new();
     let mut tool_calls = Vec::new();
-    let mut responses = Vec::new();
     let mut compactions = Vec::new();
     for (owner, session_id, requester) in &session_scopes {
-        messages.extend(
-            load_timeline_messages_for_session(access, owner, session_id, requester.as_deref())
-                .await?,
-        );
+        // Snapshot mutable tool rows before loading their immutable admission
+        // dependencies. The opposite order can observe a newly accepted tool
+        // against a message list captured before its atomic publication.
+        // Missing/ambiguous dependencies still fail closed (including replicas).
+        let observations = load_timeline_tool_observations_for_session(
+            access,
+            owner,
+            session_id,
+            requester.as_deref(),
+        )
+        .await?;
+        let session_messages =
+            resolve_timeline_messages_for_session(access, owner, session_id, requester.as_deref())
+                .await?;
         tool_calls.extend(
-            load_timeline_tool_calls_for_session(access, owner, session_id, requester.as_deref())
-                .await?,
+            event_loaders::resolve_timeline_tool_observations(
+                access,
+                owner,
+                session_id,
+                requester.as_deref(),
+                observations,
+                &session_messages,
+            )
+            .await?,
         );
-        responses.extend(
-            load_timeline_responses_for_session(access, owner, session_id, requester.as_deref())
-                .await?,
-        );
+        messages.extend(session_messages);
         compactions.extend(
             load_timeline_compactions_for_session(access, owner, session_id, requester.as_deref())
                 .await?,
@@ -307,9 +346,6 @@ pub async fn load_run_timeline_rows(
         }
         None => Vec::new(),
     };
-    if session_ids.is_empty() || root_session_id.is_none() {
-        responses.extend(load_timeline_responses_for_request(access, request_doc_id).await?);
-    }
     let mut inference_calls = Vec::new();
     let mut provider_context_reductions = Vec::new();
     for request_doc_id in timeline_request_doc_ids(&requests)? {
@@ -348,27 +384,13 @@ pub async fn load_run_timeline_rows(
         .values()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    let legacy_logical_only_rows = messages
+    let legacy_logical_only_rows = tool_calls
         .iter()
         .filter(|row| {
             nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
                 && nonempty(row.request_doc_id.as_deref()).is_none()
         })
         .count()
-        + tool_calls
-            .iter()
-            .filter(|row| {
-                nonempty(row.request_id.as_deref()).is_some_and(|id| in_scope_ids.contains(&id))
-                    && nonempty(row.request_doc_id.as_deref()).is_none()
-            })
-            .count()
-        + responses
-            .iter()
-            .filter(|row| {
-                in_scope_ids.contains(row.request_id.as_str())
-                    && nonempty(row.request_doc_id.as_deref()).is_none()
-            })
-            .count()
         + inference_calls
             .iter()
             .filter(|row| {
@@ -405,23 +427,12 @@ pub async fn load_run_timeline_rows(
         );
     }
     messages.retain(|row| {
-        request_scoped_row_is_in_timeline(
-            &request_bindings,
-            row.request_id.as_deref(),
-            row.request_doc_id.as_deref(),
-        )
+        request_scoped_row_is_in_timeline(&request_bindings, None, row.request_doc_id.as_deref())
     });
     tool_calls.retain(|row| {
         request_scoped_row_is_in_timeline(
             &request_bindings,
             row.request_id.as_deref(),
-            row.request_doc_id.as_deref(),
-        )
-    });
-    responses.retain(|row| {
-        request_scoped_row_is_in_timeline(
-            &request_bindings,
-            Some(row.request_id.as_str()),
             row.request_doc_id.as_deref(),
         )
     });
@@ -457,7 +468,6 @@ pub async fn load_run_timeline_rows(
         &request_bindings,
         &messages,
         &tool_calls,
-        &responses,
         &inference_calls,
         &compactions,
         &provider_context_reductions,
@@ -488,7 +498,6 @@ pub async fn load_run_timeline_rows(
         inference_calls,
         compactions,
         provider_context_reductions,
-        responses,
         rendered_requests,
         rendered_request_refs,
     })
@@ -499,15 +508,16 @@ mod event_loaders;
 mod goal_history;
 mod query_helpers;
 mod request_loaders;
+#[cfg(test)]
+mod tool_payload_tests;
 mod validation;
 
 use context_loaders::load_timeline_session;
 use event_loaders::{
     load_timeline_compactions_for_session, load_timeline_inference_calls_for_request,
-    load_timeline_messages_for_session, load_timeline_provider_context_reductions_for_request,
-    load_timeline_rendered_request_refs, load_timeline_rendered_requests_for_request,
-    load_timeline_rendered_requests_for_session, load_timeline_responses_for_request,
-    load_timeline_responses_for_session, load_timeline_tool_calls_for_session,
+    load_timeline_provider_context_reductions_for_request, load_timeline_rendered_request_refs,
+    load_timeline_rendered_requests_for_request, load_timeline_rendered_requests_for_session,
+    load_timeline_tool_observations_for_session,
 };
 use goal_history::load_timeline_goal_versions_for_session;
 use query_helpers::load_rows;
@@ -519,6 +529,10 @@ use validation::{
     request_scoped_row_is_in_timeline, timeline_request_bindings, timeline_request_doc_ids,
     timeline_session_ids, validate_child_tool_bridges, validate_request_scoped_rows,
 };
+
+#[cfg(test)]
+#[path = "run_timeline_fetch/tests.rs"]
+mod regression_tests;
 
 #[cfg(test)]
 mod tests {
@@ -630,7 +644,7 @@ mod tests {
             Some("activity-selected-tool")
         );
         assert!(rows.tool_calls[0].args.is_empty());
-        assert!(rows.tool_calls[0].result.is_empty());
+        assert!(rows.tool_calls[0].result.is_none());
         node.shutdown().await;
     }
 
@@ -670,25 +684,6 @@ mod tests {
         let response = node
             .execute(&format!(
                 r#"mutation {{
-                    create_AgentToolCall(input: {{
-                        tool_call_key: "session-timeline:tool-1"
-                        request_id: "request-timeline"
-                        request_doc_id: "{request_doc_id}"
-                        session_id: "session-timeline"
-                        agent_did: "did:test:agent"
-                        message_sequence: 1
-                        tool_name: "call_tool"
-                        tool_call_id: "tool-1"
-                        args: "{{}}"
-                        result: "ok"
-                        status: "completed"
-                        lifecycle_state: "completed"
-                        started_at: "2026-08-14T12:00:02Z"
-                        deadline_at: "2026-08-14T12:05:00Z"
-                        completed_at: "2026-08-14T12:00:04Z"
-                        selected_service_id: "metrics-prod"
-                        selected_tool_name: "query_metrics"
-                    }}) {{ _docID }}
                     create_InferenceCall(input: {{
                         call_id: "inference-1"
                         runtime_instance_id: "runtime-a"

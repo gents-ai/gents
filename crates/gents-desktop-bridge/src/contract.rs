@@ -7,13 +7,13 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-pub const CONTRACT_VERSION: &str = "8.1";
+pub const CONTRACT_VERSION: &str = "9.0";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
 /// cannot silently ship under an unchanged contract version.
 pub const WIRE_SCHEMA_HASH: &str =
-    "5f2e5db9118bf97e0434818d645b8d43eb1539b685ff85f2ecb26d66344d4f3c";
+    "f655fa32d4f8535bebbbe69e1467c11364d42b9f8297fab7a97093902b9e2f51";
 
 /// Package version string shared with workspace release train.
 pub const PACKAGE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -85,6 +85,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_stop", "runtime-admin"),
         ("desktop_managed_server_set_auto_start", "runtime-admin"),
         ("desktop_managed_server_restart", "runtime-admin"),
+        ("desktop_managed_server_reset", "runtime-admin"),
         ("desktop_managed_server_validate_root", "runtime-admin"),
         ("desktop_open_db_explorer", "runtime-admin"),
         // external-links
@@ -310,6 +311,10 @@ mod tests {
             .expect("read generated wire bindings")
             .map(|entry| entry.expect("generated binding entry").path())
             .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("ts"))
+            .filter(|path| {
+                path.file_name().and_then(|value| value.to_str())
+                    != Some("BridgeContractFingerprint.ts")
+            })
             .collect::<Vec<_>>();
         paths.sort();
         let mut hasher = blake3::Hasher::new();
@@ -565,6 +570,7 @@ mod tests {
             ("desktop_managed_server_stop", "mutate"),
             ("desktop_managed_server_set_auto_start", "mutate"),
             ("desktop_managed_server_restart", "mutate"),
+            ("desktop_managed_server_reset", "mutate"),
             ("desktop_managed_server_validate_root", "mutate"),
             ("desktop_open_db_explorer", "mutate"),
             ("desktop_open_external_url", "mutate"),

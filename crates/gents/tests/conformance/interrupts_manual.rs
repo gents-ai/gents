@@ -1,6 +1,7 @@
 use super::*;
 use gents::lifecycle::RequestTerminalOutcome;
 use gents::StreamWriter;
+use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
 #[tokio::test]
@@ -29,16 +30,6 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         "2026-04-21T10:00:02Z",
     )
     .await;
-    let response_key = format!("resp-{request_id}");
-    let response_doc_id = create_response_with_status(
-        &db.node,
-        &response_key,
-        &request_id,
-        &parent_session,
-        "complete",
-    )
-    .await;
-
     create_agent_message(
         &db.node,
         &parent_session,
@@ -59,7 +50,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     .await;
 
     let before_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
-    let before_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
+    let before_output = canonical_session_output(&db.node, &parent_session).await;
     let before_session = fetch_session_snapshot(&db.node, &parent_session).await;
 
     let _ = fork(
@@ -76,7 +67,7 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
     .expect("fork succeeds on idle parent");
 
     let after_request = fetch_request_snapshot(&db.node, &request_doc_id).await;
-    let after_response = fetch_response_snapshot(&db.node, &response_doc_id).await;
+    let after_output = canonical_session_output(&db.node, &parent_session).await;
     let after_session = fetch_session_snapshot(&db.node, &parent_session).await;
 
     assert_eq!(
@@ -84,77 +75,33 @@ async fn fork_does_not_transition_parent_lifecycle_state() {
         "parent AgentRequest unchanged"
     );
     assert_eq!(
-        before_response, after_response,
-        "parent AgentResponse unchanged"
+        before_output, after_output,
+        "fork leaves the parent's immutable headers and output segments unchanged"
     );
     assert_eq!(
         before_session, after_session,
         "parent AgentSession unchanged"
     );
 }
-#[tokio::test]
-async fn processing_interrupted_preserves_partial_response() {
-    let db = test_db("processing-interrupted").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
 
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
+async fn canonical_session_output(node: &EmbeddedNode, session_id: &str) -> serde_json::Value {
+    use gents::session::canonical_rows::{AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS};
+    let session_id = escape_graphql_string(session_id);
+    let response = node
+        .execute(&format!(
+            r#"{{
+                AgentMessage(filter: {{session_id: {{_eq: "{session_id}"}}}}, order: {{_docID: ASC}}) {{ {AGENT_MESSAGE_FIELDS} }}
+                AgentOutputSegment(filter: {{session_id: {{_eq: "{session_id}"}}}}, order: {{_docID: ASC}}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }}
+            }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "canonical output snapshot: {:?}",
+        response.errors
     );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let partial_content = "partial streamed text";
-    let stream_writer = DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::ZERO);
-    let response_doc_id = lifecycle
-        .begin_owned_execution(&stream_writer)
-        .await
-        .unwrap();
-    stream_writer
-        .write_tokens(&response_doc_id, partial_content)
-        .await
-        .unwrap();
-    stream_writer.flush_pending(&response_doc_id).await.unwrap();
-
-    let interrupt_at = chrono::Utc::now().to_rfc3339();
-    let stamped = stream_writer
-        .write_interrupted_at(&response_doc_id, &interrupt_at)
-        .await
-        .unwrap();
-    assert!(stamped, "expected interrupted_at to be stamped");
-
-    lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
-        .await
-        .unwrap();
-    assert_lean_transition_is_legal("Request", "processing", "interrupted");
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Interrupted);
-
-    let content = fetch_response_content(&db.node, &response_doc_id).await;
-    assert_eq!(
-        content, partial_content,
-        "partial content must be preserved"
-    );
-
-    let interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
-    assert_eq!(interrupted_at.as_deref(), Some(interrupt_at.as_str()));
+    response.data.expect("canonical output snapshot data")
 }
-
 #[tokio::test]
 async fn input_required_interrupt_is_rejected_without_transition() {
     // `inputRequired` is reserved persisted/client vocabulary. Rust may parse
@@ -191,7 +138,11 @@ async fn input_required_interrupt_is_rejected_without_transition() {
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
     let result = lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
+        .terminalize_owned(
+            RequestTerminalOutcome::Interrupted,
+            TerminalOutput::NoMessage,
+            Some("interrupted"),
+        )
         .await
         .unwrap();
     assert_eq!(result, gents::lifecycle::TerminalizeResult::Lost);
@@ -206,7 +157,7 @@ async fn input_required_interrupt_is_rejected_without_transition() {
     ] {
         assert_eq!(
             lifecycle
-                .terminalize_owned_without_stream(outcome, None)
+                .terminalize_owned(outcome, TerminalOutput::NoMessage, None)
                 .await
                 .unwrap(),
             gents::lifecycle::TerminalizeResult::Lost
@@ -293,7 +244,11 @@ async fn fail_after_interrupt_latch_prefers_interrupted() {
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
 
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Failed,
+            TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -379,7 +334,11 @@ async fn interrupt_on_already_terminal_is_noop() {
         .await
         .unwrap();
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -389,7 +348,11 @@ async fn interrupt_on_already_terminal_is_noop() {
     let interrupt_at = chrono::Utc::now().to_rfc3339();
     set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
+        .terminalize_owned(
+            RequestTerminalOutcome::Interrupted,
+            TerminalOutput::NoMessage,
+            Some("interrupted"),
+        )
         .await
         .unwrap();
 
@@ -483,7 +446,11 @@ async fn s7_interrupt_requested_at_is_latch_never_rewritten() {
         Some(t0.as_str())
     );
     lifecycle_b
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
+        .terminalize_owned(
+            RequestTerminalOutcome::Interrupted,
+            TerminalOutput::NoMessage,
+            Some("interrupted"),
+        )
         .await
         .unwrap();
 
@@ -547,7 +514,11 @@ async fn s8_valid_until_never_rewritten_by_transitions() {
     );
 
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
+        .terminalize_owned(
+            RequestTerminalOutcome::Interrupted,
+            TerminalOutput::NoMessage,
+            Some("interrupted"),
+        )
         .await
         .unwrap();
     let snap3 = fetch_request_snapshot_raw(&db.node, &doc_id).await;
@@ -583,7 +554,11 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     );
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
+        .terminalize_owned(
+            RequestTerminalOutcome::Interrupted,
+            TerminalOutput::NoMessage,
+            Some("interrupted"),
+        )
         .await
         .unwrap();
 
@@ -594,7 +569,11 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     assert_lean_transition_is_illegal("Request", "interrupted", "processing");
 
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
+        .terminalize_owned(
+            RequestTerminalOutcome::Interrupted,
+            TerminalOutput::NoMessage,
+            Some("interrupted"),
+        )
         .await
         .unwrap();
     let snap1 = fetch_request_snapshot(&db.node, &doc_id).await;
@@ -605,7 +584,11 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     );
 
     let _complete_result = lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            TerminalOutput::NoMessage,
+            None,
+        )
         .await;
     let snap2 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -615,7 +598,11 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     );
 
     let _fail_result = lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Failed,
+            TerminalOutput::NoMessage,
+            None,
+        )
         .await;
     let snap3 = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
@@ -625,78 +612,6 @@ async fn s1_interrupted_is_terminal_subsequent_transitions_are_no_ops() {
     );
 }
 
-#[tokio::test]
-async fn ordering_response_interrupted_at_before_request_lifecycle_flip() {
-    // The 6-step interrupt flow writes `AgentResponse.interrupted_at` BEFORE
-    // `AgentRequest.lifecycle_state=interrupted`, per the spec's persistence-
-    // ordering invariant: any subscriber observing the terminal lifecycle
-    // also observes the marked partial response.
-    //
-    // DefraDB doesn't expose commit timestamps at query time, so we assert
-    // the weaker observable: after the handler returns, BOTH writes exist.
-    // This protects against the regression where the lifecycle flips but
-    // `interrupted_at` is null. A stronger ordering assertion requires a
-    // subscription-based observer (covered end-to-end in Task 11).
-
-    let db = test_db("ordering-response-before-request").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let request = build_request(
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at,
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        db.node.clone(),
-        AGENT_NAME,
-        AGENT_DID,
-        request,
-        DEADLINE_SECS,
-        ExecutionOrigin::Interactive,
-        BACKEND_ID,
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let partial_content = "Hello wor";
-    let stream_writer = DefraStreamWriter::new(db.node.clone(), AGENT_DID, Duration::ZERO);
-    let response_doc_id = lifecycle
-        .begin_owned_execution(&stream_writer)
-        .await
-        .unwrap();
-    stream_writer
-        .write_tokens(&response_doc_id, partial_content)
-        .await
-        .unwrap();
-    stream_writer.flush_pending(&response_doc_id).await.unwrap();
-
-    let intent_at = chrono::Utc::now().to_rfc3339();
-    let stamped = stream_writer
-        .write_interrupted_at(&response_doc_id, &intent_at)
-        .await
-        .unwrap();
-    assert!(stamped, "ordering: interrupted_at must be stamped");
-    lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Interrupted, Some("interrupted"))
-        .await
-        .unwrap();
-
-    let response_interrupted_at = fetch_response_interrupted_at(&db.node, &response_doc_id).await;
-    let request_snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(
-        request_snap.lifecycle_state,
-        RequestLifecycleState::Interrupted
-    );
-    assert_eq!(
-        response_interrupted_at.as_deref(),
-        Some(intent_at.as_str()),
-        "ordering: if request.lifecycle_state=interrupted, response.interrupted_at must also be set"
-    );
-    let response_content = fetch_response_content(&db.node, &response_doc_id).await;
-    assert_eq!(response_content, partial_content);
-}
 #[test]
 fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
     use gents_protocol::client_protocol::{
@@ -710,7 +625,6 @@ fn conformance_interrupted_lifecycle_maps_to_interrupted_client_turn() {
             lifecycle_state: RequestLifecycleState::Interrupted,
             is_superseded: false,
         },
-        response: None,
     };
     assert_eq!(derive_attempt(&view), ClientTurnState::Interrupted);
     assert!(ClientTurnState::Interrupted.is_terminal());

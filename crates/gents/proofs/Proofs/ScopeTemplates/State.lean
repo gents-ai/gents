@@ -73,8 +73,8 @@ abbrev Catalog := List Template
 
 /-- Canonical transcript artifacts rooted in AgentSession. -/
 def transcriptCollections : List String :=
-  ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall",
-   "AgentToolResult", "AgentSession", "CompactionEntry"]
+  ["AgentRequest", "AgentMessage", "AgentToolCall", "AgentOutputSegment",
+   "AgentSession", "CompactionEntry"]
 
 /-- Configuration reachable from AgentBehavior -> AgentContext / InferenceProfile
 and its referenced settings and documents: Tools, CompactionConfig, sampling,
@@ -134,7 +134,7 @@ def machineCollections : List String :=
 /-- Subagent legs stay minimal requester-scoped transcript carriers; host-local
 artifacts and configuration never ride them. -/
 def subagentHostCollections : List String :=
-  ["AgentRequest", "AgentResponse", "AgentMessage", "AgentToolCall"]
+  ["AgentRequest", "AgentOutputSegment", "AgentMessage", "AgentToolCall"]
 
 /-- The eager client index retains its existing requester scope. -/
 def clientIndexCollections : List String :=
@@ -142,10 +142,9 @@ def clientIndexCollections : List String :=
 
 def conversationRules : List CollectionRule :=
   [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
-  , { collection := "AgentResponse",   field := "requester_did", source := .peerDid }
   , { collection := "AgentMessage",    field := "requester_did", source := .peerDid }
   , { collection := "AgentToolCall",   field := "requester_did", source := .peerDid }
-  , { collection := "AgentToolResult", field := "requester_did", source := .peerDid }
+  , { collection := "AgentOutputSegment", field := "requester_did", source := .peerDid }
   , { collection := "AgentSession",    field := "requester_did", source := .peerDid }
   , { collection := "CompactionEntry", field := "requester_did", source := .peerDid } ]
 
@@ -160,7 +159,7 @@ def subagentCoordinatorRules : List CollectionRule :=
 
 def subagentHostRules : List CollectionRule :=
   [ { collection := "AgentRequest",    field := "requester_did", source := .peerDid }
-  , { collection := "AgentResponse",   field := "requester_did", source := .peerDid }
+  , { collection := "AgentOutputSegment", field := "requester_did", source := .peerDid }
   , { collection := "AgentMessage",    field := "requester_did", source := .peerDid }
   , { collection := "AgentToolCall",   field := "requester_did", source := .peerDid } ]
 

@@ -279,7 +279,7 @@ mod tests {
         // The preset is config-only: no conversation content, no secrets.
         for excluded in [
             "AgentRequest",
-            "AgentResponse",
+            "AgentOutputSegment",
             "AgentMessage",
             "OAuthCredential",
         ] {

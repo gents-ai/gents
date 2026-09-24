@@ -149,7 +149,10 @@ pub fn eth_tool_by_id_query(agent_did: &str, tool_id: &str) -> Result<String> {
     );
     let owner = escape_graphql_string(agent_did);
     let id = escape_graphql_string(tool_id);
-    Ok(format!("{{ EthTool(filter: {{agent_did: {{_eq: \"{owner}\"}}, tool_id: {{_eq: \"{id}\"}}}}, limit: 2) {{_docID {}}} }}", tool_fields()?))
+    Ok(format!(
+        "{{ EthTool(filter: {{agent_did: {{_eq: \"{owner}\"}}, tool_id: {{_eq: \"{id}\"}}}}, limit: 2) {{_docID {}}} }}",
+        tool_fields()?
+    ))
 }
 
 #[cfg(test)]

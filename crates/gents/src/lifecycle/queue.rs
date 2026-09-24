@@ -9,7 +9,6 @@ use serde_json::Value;
 
 use crate::config_client::ConfigApplyTxn;
 use crate::graphql::{escape_graphql_string, response_has_documents};
-use crate::session;
 use crate::watcher::AgentRequest;
 
 use super::materialize::EnqueuedAgentRequest;
@@ -23,10 +22,14 @@ mod goal_continuation;
 mod input;
 mod mutation;
 
+pub(crate) use atomic_inputs::next_append_sequence_in_transaction;
+#[cfg(test)]
 pub(crate) use atomic_inputs::persist_background_completion_with_message;
+pub(crate) use atomic_inputs::persist_background_completion_with_message_canonical;
 use atomic_inputs::steering_transaction_attempt;
 #[cfg(test)]
 use atomic_inputs::transaction_created_doc_id;
+pub(crate) use atomic_inputs::ToolNotificationPublication;
 pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{
     parent_behavior_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
@@ -34,7 +37,7 @@ use coalescing::{
 pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_subagent_owned_queue;
 pub use enqueue::enqueue_local_steering_request;
-pub(crate) use enqueue::enqueue_steering_request_with_message;
+pub(crate) use enqueue::enqueue_steering_request;
 pub use gents_protocol::request_input::{
     GoalContinuationInput, QueuePolicy, QueueSource, RequestInput, RequestQueue,
 };
@@ -45,7 +48,6 @@ pub(crate) use input::{
     background_wake_queue, is_automated_wakeup, row_is_automated_wakeup,
     row_is_subagent_owned_queue, row_queue,
 };
-pub use input::{is_steering_input_message_key, steering_input_message_key};
 #[cfg(test)]
 use input::{queue_is_automated_wakeup, BACKGROUND_COMPLETION_WAKE_VERSION};
 use mutation::session_request_create_mutation;

@@ -73,7 +73,7 @@ fn status_test_request(request_id: &str) -> crate::watcher::AgentRequest {
         deadline: None,
         execution_generation: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
+        execution_lease_secs: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -296,9 +296,15 @@ async fn drive_generated_process_legal_case(case: &LeanLifecycleTransitionCase) 
     )
     .expect("decode process readiness");
     assert_eq!(
-        readiness.process_state.as_str(), case.to,
+        readiness.process_state.as_str(),
+        case.to,
         "generated Process transition {} expected {} -> {} classified as {} via {:?}, got authoritative process_state={}",
-        case.name, case.from, case.to, case.classification, case.action, readiness.process_state.as_str()
+        case.name,
+        case.from,
+        case.to,
+        case.classification,
+        case.action,
+        readiness.process_state.as_str()
     );
     owner.close().await.unwrap();
 }

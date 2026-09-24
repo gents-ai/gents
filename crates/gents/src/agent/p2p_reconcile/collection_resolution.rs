@@ -27,7 +27,7 @@ pub fn resolve_embedded_collection_name(
         Err(error) => {
             return Err(RemoteP2pAdminError::LocalError(format!(
                 "resolve_collection_name({token}) as name: {error}"
-            )))
+            )));
         }
     }
 

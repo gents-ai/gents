@@ -78,7 +78,6 @@ export function useDesktopProjectionEffects({
           event.reason,
           selectedSessionIdRef.current,
           selectedTrackedRequestIdRef.current,
-          event.responseOnly === true,
         );
         await controller.request(scope);
       },

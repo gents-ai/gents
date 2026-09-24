@@ -11,7 +11,7 @@ pub(crate) async fn append_background_tool_completion(
     node: &EmbeddedNode,
     parent_session_id: &str,
     parent_request_id: &str,
-    tool_call_id: &str,
+    tool_call_doc_id: &str,
     tool_name: &str,
     status: &str,
     result: &str,
@@ -28,27 +28,63 @@ pub(crate) async fn append_background_tool_completion(
         "background completion parent session mismatch"
     );
     let existing =
-        existing_tool_completion_notification(node, parent_session_id, tool_call_id).await?;
-    let notification = render_tool_completion(tool_call_id, tool_name, status, result, reason);
-    let key = background_completion_notification_message_key(tool_call_id, "tool");
-    let effects =
-        ensure_notification_delivery(node, &parent_request, existing, &notification, &key).await?;
+        existing_tool_completion_notification(node, &parent_request, tool_call_doc_id).await?;
+    let tool_call_id = load_tool_call_id(node, tool_call_doc_id).await?;
+    let (notification, presentation) =
+        tool_completion_presentation(&tool_call_id, tool_name, status, result, reason);
+    let key = background_completion_notification_message_key(tool_call_doc_id, "tool");
+    let effects = ensure_notification_delivery(
+        node,
+        &parent_request,
+        existing,
+        &notification,
+        &key,
+        Some(crate::lifecycle::queue::ToolNotificationPublication {
+            tool_call_doc_id: tool_call_doc_id.to_owned(),
+            presentation,
+        }),
+    )
+    .await?;
     mark_background_tool_notification_delivered(
         node,
         &parent_request.agent_did,
         parent_request_id,
-        tool_call_id,
+        tool_call_doc_id,
     )
     .await?;
-    mark_background_tool_completion_side_effects_done(node, parent_session_id, tool_call_id)
-        .await?;
+    mark_background_tool_completion_side_effects_done(node, tool_call_doc_id).await?;
     tracing::debug!(
-        parent_session_id, parent_request_id, tool_call_id,
+        parent_session_id, parent_request_id, tool_call_doc_id,
         wake_request_id = ?effects.wake_request_id,
         created_wake = effects.created_wake,
         "persisted background completion side effects"
     );
     Ok(())
+}
+
+async fn load_tool_call_id(node: &EmbeddedNode, tool_call_doc_id: &str) -> Result<String> {
+    let doc_id = escape_graphql_string(tool_call_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 2) {{ _docID tool_call_id }} }}"#
+        ))
+        .await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "query background tool notification identity failed: {:?}",
+        response.errors
+    );
+    let rows = crate::graphql::rows::<serde_json::Value>(&response, "AgentToolCall")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "background tool notification requires one exact physical lifecycle row"
+    );
+    rows[0]
+        .get("tool_call_id")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_owned)
+        .context("background tool notification lifecycle omitted tool_call_id")
 }
 
 /// Marker discovery supplies only an ID; the atomic owner reloads receipt and
@@ -59,8 +95,12 @@ pub(super) async fn ensure_notification_delivery(
     existing: Option<side_effects::ExistingNotification>,
     content: &str,
     message_key: &str,
+    native: Option<crate::lifecycle::queue::ToolNotificationPublication>,
 ) -> Result<SideEffects> {
-    let enqueued = crate::lifecycle::queue::persist_background_completion_with_message(
+    let native = native.context(
+        "subagent background notification requires its dedicated canonical provenance builder",
+    )?;
+    let enqueued = crate::lifecycle::queue::persist_background_completion_with_message_canonical(
         node,
         parent,
         content,
@@ -75,6 +115,7 @@ pub(super) async fn ensure_notification_delivery(
             background_completion_wake_version: None,
         },
         existing.as_ref().map(|receipt| receipt.doc_id.as_str()),
+        &native,
     )
     .await?;
     Ok(SideEffects {
@@ -89,11 +130,11 @@ async fn mark_background_tool_notification_delivered(
     node: &EmbeddedNode,
     agent_did: &str,
     parent_request_id: &str,
-    tool_call_id: &str,
+    tool_call_doc_id: &str,
 ) -> Result<()> {
     let agent_did = escape_graphql_string(agent_did);
     let parent_request_id = escape_graphql_string(parent_request_id);
-    let tool_call_id = escape_graphql_string(tool_call_id);
+    let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let delivered_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
@@ -101,7 +142,7 @@ async fn mark_background_tool_notification_delivered(
                 filter: {{
                     agent_did: {{ _eq: "{agent_did}" }},
                     request_id: {{ _eq: "{parent_request_id}" }},
-                    tool_call_id: {{ _eq: "{tool_call_id}" }},
+                    _docID: {{ _eq: "{tool_call_doc_id}" }},
                     completion_notification_delivered_at: {{ _eq: null }}
                 }},
                 input: {{
@@ -121,14 +162,13 @@ async fn mark_background_tool_notification_delivered(
 
 async fn mark_background_tool_completion_side_effects_done(
     node: &EmbeddedNode,
-    session_id: &str,
-    tool_call_id: &str,
+    tool_call_doc_id: &str,
 ) -> Result<()> {
-    let tool_call_key = escape_graphql_string(&format!("{session_id}:{tool_call_id}"));
+    let tool_call_doc_id = escape_graphql_string(tool_call_doc_id);
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ tool_call_key: {{ _eq: "{tool_call_key}" }} }},
+                filter: {{ _docID: {{ _eq: "{tool_call_doc_id}" }} }},
                 limit: 1
             ) {{ _docID status lifecycle_state }}
         }}"#
@@ -146,11 +186,11 @@ async fn mark_background_tool_completion_side_effects_done(
         .and_then(|data| data.get("AgentToolCall"))
         .and_then(serde_json::Value::as_array)
         .and_then(|rows| rows.first())
-        .ok_or_else(|| anyhow!("background completion tool row {tool_call_key} not found"))?;
+        .ok_or_else(|| anyhow!("background completion tool row {tool_call_doc_id} not found"))?;
     let doc_id = row
         .get("_docID")
         .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| anyhow!("background completion tool row {tool_call_key} not found"))?;
+        .ok_or_else(|| anyhow!("background completion tool row {tool_call_doc_id} not found"))?;
     let status = row
         .get("status")
         .and_then(serde_json::Value::as_str)
@@ -169,7 +209,7 @@ async fn mark_background_tool_completion_side_effects_done(
         )
     {
         anyhow::bail!(
-            "background completion tool row {tool_call_key} is not awaiting terminal side effects"
+            "background completion tool row {tool_call_doc_id} is not awaiting terminal side effects"
         );
     }
     let escaped_doc_id = escape_graphql_string(doc_id);

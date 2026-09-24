@@ -99,7 +99,7 @@ theorem terminal_irreversibility
   | begin_inference h_pre _ _ =>
     rw [h_pre] at h_terminal
     exact (claimed_not_terminal h_terminal).elim
-  | advance h_pre _ _ =>
+  | continue_processing h_pre _ _ =>
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
   | finish h_pre _ _ =>
@@ -124,37 +124,11 @@ theorem terminal_irreversibility
     rw [h_pre] at h_terminal
     exact (processing_not_terminal h_terminal).elim
 
-theorem progress_monotonic
+theorem continue_processing_is_lifecycle_stutter
     {pre post : RequestContext}
-    (h_trans : RequestContext.Transition pre post) :
-    post.progressSeq ≥ pre.progressSeq := by
-  cases h_trans with
-  | bind_workspace _ _ h_post =>
-    simp [h_post]
-  | claim _ _ _ h_post =>
-    simp [h_post]
-  | dedup_lose _ _ h_post =>
-    simp [h_post]
-  | admission_reject _ _ h_post =>
-    simp [h_post]
-  | begin_inference _ _ h_post =>
-    simp [h_post]
-  | advance _ _ h_post =>
-    simp [h_post]
-  | finish _ _ h_post =>
-    simp [h_post]
-  | fail _ _ h_post =>
-    simp [h_post]
-  | fail_before_stream _ _ h_post =>
-    simp [h_post]
-  | expire _ _ _ _ h_post =>
-    simp [h_post]
-  | interrupt_before_claim _ _ _ h_post =>
-    simp [h_post]
-  | interrupt_claimed _ _ _ h_post =>
-    simp [h_post]
-  | interrupt_processing _ _ _ h_post =>
-    simp [h_post]
+    (h : RequestContext.step? pre .continueProcessing = some post) : post = pre := by
+  simp [RequestContext.step?] at h
+  exact h.2.symm
 
 theorem completed_not_deadline_expired
     {pre post : RequestContext}
@@ -174,7 +148,7 @@ theorem completed_not_deadline_expired
     simp [h_post] at h_completed
   | begin_inference _ _ h_post =>
     simp [h_post] at h_completed
-  | advance h_pre _ h_post =>
+  | continue_processing h_pre _ h_post =>
     exact h_pre
   | fail _ _ h_post =>
     simp [h_post] at h_completed
@@ -261,7 +235,7 @@ theorem persistence_before_completion
     simp [h_post] at h_completed
   | begin_inference _ _ h_post =>
     simp [h_post] at h_completed
-  | advance h_pre _ h_post =>
+  | continue_processing h_pre _ h_post =>
     simp [h_post, h_pre] at h_completed
   | fail _ _ h_post =>
     simp [h_post] at h_completed
@@ -299,7 +273,7 @@ theorem claim_deadline_structural_bound
       simp [h_post] at h_claimed
   | begin_inference _ _ h_post =>
       simp [h_post] at h_claimed
-  | advance h_state _ h_post =>
+  | continue_processing h_state _ h_post =>
       simp [h_post, h_state] at h_claimed
   | finish _ _ h_post =>
       simp [h_post] at h_claimed

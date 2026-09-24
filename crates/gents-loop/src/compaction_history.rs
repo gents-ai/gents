@@ -576,7 +576,7 @@ pub fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 
 /// Head and tail of every stub this module writes.
 const STUB_HEAD: &str = "[tool: ";
-const STUB_TAIL: &str = "see DefraDB AgentToolCall for full output]";
+const STUB_TAIL: &str = "see canonical transcript for full output]";
 const STUB_JOIN: &str = " — ";
 const STUB_TRUNCATED: &str = ", truncated";
 

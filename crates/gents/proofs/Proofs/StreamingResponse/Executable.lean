@@ -1,192 +1,397 @@
-import Proofs.StreamingResponse.Transition
-import Proofs.InferenceCall.Executable
+import Proofs.StreamingResponse.Properties
+import Proofs.StreamingResponse.TargetSelection
 
 namespace StreamingResponse
 
-structure ResponseTransitionCase where
-  name                       : String
-  group                      : String
-  action                     : String
-  legal                      : Bool
-  /-- Action arguments are independent of the expected post-state. -/
-  tokenDelta                 : Option Nat
-  inputErrorReason           : Option String
-  materializeSequence        : Option Transcript.Sequence
-  preStatus                  : String
-  postStatus                 : String
-  preLiveTail                : String
-  postLiveTail               : String
-  preTailReasoning           : String := "empty"
-  postTailReasoning          : String := "empty"
-  preDurableReasoning        : String := "empty"
-  postDurableReasoning       : String := "empty"
-  preTokenCount              : Nat
-  postTokenCount             : Nat
-  errorReason                : Option String
-  preMaterializedSeq         : Option Transcript.Sequence
-  postMaterializedSeq        : Option Transcript.Sequence
-  expectedRequestState       : Option String
-  expectedRequestPersistence : Option String
-  deriving Repr
+open CanonicalOutput
 
-structure ResponseInterruptFlowCase where
-  name                         : String
-  group                        : String
-  action                       : String
-  preRequestState              : String
-  postRequestState             : String
-  preResponseStatus            : String
-  postResponseStatus           : String
-  preInferenceCallState        : String
-  postInferenceCallState       : String
-  responseErrorReason          : String
-  interruptedAtRequired        : Bool
-  completedAtRequired          : Bool
-  liveTailCleared              : Bool
-  partialTurnMaterialized      : Bool
-  requestTerminal              : Bool
-  responseTerminal             : Bool
-  inferenceCallTerminal        : Bool
-  deriving Repr
-
-/-- Conformance rows project typed owner transitions; expected state is never
-maintained as an independent table of strings. -/
-private structure Sample where
+structure TargetSelectionCase where
   name : String
-  group : String
-  action : String
-  pre : ResponseContext
-  post : ResponseContext
-  legal : Transition pre post
-  paired : Bool
-  requestOutcome : RequestState
-  pairedLegal : paired = true → BridgeTransition
-    ⟨pre, .processing, .uncommitted⟩ ⟨post, requestOutcome, .committed⟩
-  tokenDelta : Option Nat
-  inputErrorReason : Option ErrorReason
-  materializeSequence : Option Transcript.Sequence
+  request : Nat
+  generation : Nat
+  inferenceScopes : List Nat
+  records : List Segment
+  messages : List MessageEnvelope
+  expected : TargetSelection
+  deriving Repr
 
-private def unpaired (name group action : String) (pre post : ResponseContext)
-    (legal : Transition pre post) : Sample :=
-  ⟨name, group, action, pre, post, legal, false, .processing, (by intro h; cases h), none, none, none⟩
+def sampleCoordinate : Coordinate := ⟨10, .provider 0 0 0⟩
+def sampleText : Declaration := { block := 0, part := 0, kind := .text }
+def sampleOpaque : Declaration := { block := 1, part := 0, kind := .opaque }
 
-private def paired (name group action : String) (pre post : ResponseContext)
-    (outcome : RequestState) (legal : Transition pre post)
-    (bridge : BridgeTransition ⟨pre, .processing, .uncommitted⟩ ⟨post, outcome, .committed⟩) : Sample :=
-  ⟨name, group, action, pre, post, legal, true, outcome, (fun _ => bridge), none, none, none⟩
+def sampleComplete : Segment :=
+  { id := 100, coordinate := sampleCoordinate, writer := .request 7
+    flush := some ⟨0,
+      [⟨0, 1, some sampleText⟩, ⟨1, 1, some sampleOpaque⟩], [65, 66]⟩
+    close := some (.closed .complete 1 [1, 1]), createdAt := 5 }
 
-private def base (tokens : Nat := 0) (tail : LiveTail := .empty) : ResponseContext :=
-  { docId := 1, requestId := 1, status := .streaming, liveTail := tail
-  , tailReasoning := .empty, durableReasoning := .empty, tokenCount := tokens
-  , lastProgressAt := 0, streamIdleDeadline := 10, now := 11
-  , errorReason := none, materializedMessageSequence := none, interruptedAt := none }
+def samplePartial : Segment :=
+  { sampleComplete with id := 101, close := some (.closed .partial 1 [1, 1]) }
 
-private def samples : List Sample :=
-  [ unpaired "begin_emits_streaming_empty" "normal" "begin" (base) (base)
-      (Transition.begin rfl rfl rfl rfl rfl)
-  , let delta := 5
-    { (unpaired "write_tokens_advances_progress" "normal" "write_tokens" (base)
-        { base with liveTail := .nonEmpty, tokenCount := delta, lastProgressAt := 11 }
-        (Transition.writeTokens (delta := delta) rfl (by decide) rfl)) with
-      tokenDelta := some delta }
-  , unpaired "write_reasoning_no_token_bump" "normal" "write_reasoning" (base)
-      { base with liveTail := .nonEmpty, tailReasoning := .nonEmpty, lastProgressAt := 11 }
-      (Transition.writeReasoning rfl rfl)
-  , unpaired "flush_pending_is_abstract_noop" "normal" "flush" (base 3 .nonEmpty) (base 3 .nonEmpty)
-      (Transition.flushPending rfl rfl)
-  , unpaired "reset_tail_clears_but_preserves_tokens" "normal" "reset_tail" (base 7 .nonEmpty)
-      { base 7 .nonEmpty with liveTail := .empty, tailReasoning := .empty }
-      (Transition.resetTail rfl rfl)
-  , let seq := 42
-    { (paired "finalize_complete_clears_and_materializes" "normal" "finalize_complete"
-        { base 10 .nonEmpty with tailReasoning := .nonEmpty }
-        { base 10 with status := .completed, tailReasoning := .nonEmpty, durableReasoning := .nonEmpty, materializedMessageSequence := some seq } .completed
-        (Transition.finalizeComplete rfl rfl)
-        (BridgeTransition.finalizeComplete rfl rfl rfl rfl rfl)) with
-      materializeSequence := some seq }
-  , let reason := ErrorReason.inferenceFailed
-    { (paired "finalize_error_inference_failed_clears" "normal" "finalize_error" (base 8 .nonEmpty)
-        { base 8 with status := .error, errorReason := some reason } .failed
-        (Transition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl)
-        (BridgeTransition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl rfl rfl rfl)) with
-      inputErrorReason := some reason }
-  , let reason := ErrorReason.streamIdleTimeout
-    { (paired "finalize_error_idle_timeout_requires_deadline" "normal" "finalize_error" (base 4 .nonEmpty)
-        { base 4 with status := .error, errorReason := some reason } .failed
-        (Transition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl)
-        (BridgeTransition.finalizeError (reason := reason) rfl (by decide) (by decide) rfl rfl rfl rfl)) with
-      inputErrorReason := some reason }
-  , paired "recover_interrupted_keeps_content" "recovery" "recover_interrupted" (base 6 .nonEmpty)
-      { base 6 .nonEmpty with status := .error, errorReason := some .daemonRestartRecovery } .failed
-      (Transition.recoverInterrupted rfl rfl)
-      (BridgeTransition.recoverPaired rfl rfl rfl rfl rfl)
-  , unpaired "observe_idempotent_finalize_is_noop" "idempotent" "observe_idempotent_finalize"
-      { base 12 with status := .completed, materializedMessageSequence := some 99 }
-      { base 12 with status := .completed, materializedMessageSequence := some 99 }
-      (Transition.observeIdempotentFinalize (Or.inl rfl) rfl)
-  , unpaired "set_interrupted_at_does_not_change_status" "boundary" "set_interrupted_at" (base 2 .nonEmpty)
-      { base 2 .nonEmpty with interruptedAt := some 11 }
-      (Transition.setInterruptedAt rfl rfl rfl)
-  , let seq := 88
-    { (paired "bridge_completed_pairs_request_committed" "bridge" "finalize_complete"
-        { base 15 .nonEmpty with tailReasoning := .nonEmpty }
-        { base 15 with status := .completed, tailReasoning := .nonEmpty, durableReasoning := .nonEmpty, materializedMessageSequence := some seq } .completed
-        (Transition.finalizeComplete rfl rfl)
-        (BridgeTransition.finalizeComplete rfl rfl rfl rfl rfl)) with
-      materializeSequence := some seq } ]
+def sampleOpen : Segment := { sampleComplete with id := 102, close := none }
+def sampleRetracted : Segment :=
+  { sampleComplete with id := 103, flush := none, close := some .retracted }
 
-private def sampleCase (s : Sample) : ResponseTransitionCase :=
-  { name := s.name, group := s.group, action := s.action, legal := true
-  , tokenDelta := s.tokenDelta, materializeSequence := s.materializeSequence
-  , inputErrorReason := s.inputErrorReason.map ErrorReason.toContract
-  , preStatus := s.pre.status.toDefraDB, postStatus := s.post.status.toDefraDB
-  , preLiveTail := s.pre.liveTail.toContract, postLiveTail := s.post.liveTail.toContract
-  , preTailReasoning := s.pre.tailReasoning.toContract, postTailReasoning := s.post.tailReasoning.toContract
-  , preDurableReasoning := s.pre.durableReasoning.toContract, postDurableReasoning := s.post.durableReasoning.toContract
-  , preTokenCount := s.pre.tokenCount, postTokenCount := s.post.tokenCount
-  , errorReason := s.post.errorReason.map ErrorReason.toContract
-  , preMaterializedSeq := s.pre.materializedMessageSequence
-  , postMaterializedSeq := s.post.materializedMessageSequence
-  , expectedRequestState := if s.paired then some s.requestOutcome.toDefraDB else none
-  , expectedRequestPersistence := if s.paired then some PersistenceState.committed.toDefraDB else none }
+/-- A benign late raw flush is outside the already committed one-segment
+extent, carries no competing closure, and has a distinct immutable identity. -/
+def sampleLateBeyondExtent : Segment :=
+  { sampleComplete with
+    id := 104
+    flush := some ⟨1, [⟨0, 1, none⟩], [90]⟩
+    close := none
+    createdAt := 6 }
 
-def responseTransitionCases : List ResponseTransitionCase := samples.map sampleCase
+def sampleLateInExtentTwin : Segment :=
+  { sampleComplete with
+    id := 105
+    flush := some ⟨0, [⟨0, 1, some sampleText⟩], [90]⟩
+    close := none
+    createdAt := 6 }
 
-/-- The excerpt starts after the existing transcript owner materializes the partial
-turn; response interruption preserves that observed handle. This model does not
-manufacture transcript writes. Completion timestamp persistence remains an explicit
-adapter obligation, outside ResponseContext's projection. -/
-private def interruptPre : ResponseContext :=
-  { base 2 .nonEmpty with materializedMessageSequence := some 1 }
-private def interruptStamped : ResponseContext :=
-  { interruptPre with interruptedAt := some 11 }
-private def interruptPost : ResponseContext :=
-  { interruptStamped with status := .error, liveTail := .empty, errorReason := some .interrupted }
-private def interruptCall : InferenceCall :=
-  { callId := 1, requestId := 1, backend := ⟨"backend"⟩, state := .running }
+def sampleOpenContinuation : Segment :=
+  { sampleOpen with
+    id := 106
+    flush := some ⟨1, [⟨0, 1, none⟩, ⟨1, 1, none⟩], [67, 68]⟩
+    createdAt := 6 }
 
-example : Transition interruptPre interruptStamped ∧
-    BridgeTransition ⟨interruptStamped, .processing, .uncommitted⟩ ⟨interruptPost, .interrupted, .committed⟩ ∧
-    InferenceCall.Transition interruptCall interruptCall.cancel :=
-  ⟨Transition.setInterruptedAt rfl rfl rfl,
-   BridgeTransition.finalizeError (reason := .interrupted) rfl (by decide) (by decide) rfl rfl rfl rfl,
-   InferenceCall.cancel_during_stream_transition rfl rfl⟩
+/-- The committed extent exists, but its declared run lengths consume more
+bytes than the immutable payload contains. -/
+def sampleMalformedSealed : Segment :=
+  { sampleComplete with
+    flush := some ⟨0,
+      [⟨0, 2, some sampleText⟩, ⟨1, 1, some sampleOpaque⟩], [65, 66]⟩ }
 
-def daemonInterruptTerminalizesResponseAndRequest : ResponseInterruptFlowCase :=
-  { name := "daemon_interrupt_terminalizes_response_and_request", group := "interrupt", action := "daemon_interrupt_flow"
-  , preRequestState := RequestState.processing.toDefraDB, postRequestState := RequestState.interrupted.toDefraDB
-  , preResponseStatus := interruptPre.status.toDefraDB, postResponseStatus := interruptPost.status.toDefraDB
-  , preInferenceCallState := interruptCall.state.toDefraDB, postInferenceCallState := interruptCall.cancel.state.toDefraDB
-  , responseErrorReason := ErrorReason.interrupted.toContract
-  , interruptedAtRequired := interruptPost.interruptedAt.isSome
-  , completedAtRequired := true
-  , liveTailCleared := interruptPost.liveTail == .empty
-  , partialTurnMaterialized := interruptPost.materializedMessageSequence.isSome
-  , requestTerminal := decide (isTerminal RequestState.interrupted)
-  , responseTerminal := decide (isTerminal interruptPost.status)
-  , inferenceCallTerminal := decide (isTerminal interruptCall.cancel.state) }
+def textSpec : PayloadSpec := ⟨⟨100, 0⟩, .full⟩
+def opaqueSpec : PayloadSpec := ⟨⟨100, 1⟩, .full⟩
 
-def responseInterruptFlowCases : List ResponseInterruptFlowCase :=
-  [daemonInterruptTerminalizesResponseAndRequest]
+def sampleMessage : MessageEnvelope :=
+  { header :=
+      { id := 200, session := 1, request := some 10, origin := none
+        refs := [textSpec.reference, opaqueSpec.reference]
+        outcome := .complete, role := .assistant, publication := .requestExecution 7 }
+    key := "turn", sequence := 0, nativeId := some "native"
+    blocks := [.text textSpec, .reasoning none [.encrypted opaqueSpec]]
+    createdAt := 6 }
+
+def sampleForkMessage : MessageEnvelope :=
+  { sampleMessage with
+    header := forkHeader sampleMessage.header 201 2
+    key := "child-turn", sequence := 0 }
+
+def sampleReasoning : Declaration := { block := 0, part := 0, kind := .reasoning }
+def sampleArguments : Declaration :=
+  { block := 1, part := 0, kind := .arguments
+    tool := some ⟨"provider-call", some "call-alias", "lookup"⟩ }
+
+/-- A native assistant payload which exercises both nested reasoning parts and
+tool-call argument JSON. Expectations for this witness still come exclusively
+from `project`/`reconstructMessage`; this is not a second projection policy. -/
+def sampleNativePayload : Segment :=
+  { id := 110, coordinate := sampleCoordinate, writer := .request 7
+    flush := some ⟨0,
+      [⟨0, 3, some sampleReasoning⟩, ⟨1, 2, some sampleArguments⟩],
+      [119, 104, 121, 123, 125]⟩
+    close := some (.closed .complete 1 [3, 2]), createdAt := 5 }
+
+def sampleNativeMessage : MessageEnvelope :=
+  { header :=
+      { id := 210, session := 1, request := some 10, origin := none
+        refs := [⟨110, 0⟩, ⟨110, 1⟩]
+        outcome := .complete, role := .assistant, publication := .requestExecution 7 }
+    key := "native-turn", sequence := 1, nativeId := some "assistant-native"
+    blocks :=
+      [.reasoning (some "reasoning-id") [.text ⟨⟨110, 0⟩, .full⟩ (some "sig")],
+       .toolCall 42 "provider-call" (some "call-alias") "lookup"
+          ⟨⟨110, 1⟩, .full⟩ (some "tool-sig") (some "{\"mode\":\"fast\"}")]
+    createdAt := 7 }
+
+def baseObservation
+    (records : List Segment := [sampleComplete])
+    (messages : List MessageEnvelope := [sampleMessage])
+    (messageId : Option DocId := some 200)
+    (owner : OwnerLiveness := ⟨some (10, 7), []⟩)
+    (coordinate : Coordinate := sampleCoordinate)
+    (writer : Writer := .request 7)
+    (requestTerminal : Bool := false)
+    (terminalSelection : Option TerminalSelection := none) : Observation :=
+  { request := 10, session := 1, records, messages
+  , deniedHeaders := [], deniedSegments := [], dependencyDenials := []
+  , owner, target := ⟨coordinate, writer, messageId⟩
+  , requestTerminal, terminalSelection }
+
+def viewName : View → String
+  | .absent => "absent"
+  | .live _ => "live"
+  | .loading => "loading"
+  | .settling _ => "settling"
+  | .denied => "denied"
+  | .conflicted => "conflicted"
+  | .invalid => "invalid"
+  | .retracted => "retracted"
+  | .retainedPartial _ => "retained_partial"
+  | .published _ _ => "published"
+
+/-- The presentation projection intentionally excludes encrypted/redacted opaque
+reasoning even though canonical reconstruction retains it losslessly. -/
+def renderedKinds : View → List String
+  | .live streams | .retainedPartial streams =>
+      streams.filterMap fun stream => match stream.1.kind with
+        | .opaque => none
+        | .text => some "text"
+        | .reasoning => some "reasoning"
+        | .summary => some "summary"
+        | .arguments => some "arguments"
+        | .toolOutput => some "tool_output"
+        | .media => some "media"
+  | .published _ native =>
+      native.blocks.flatMap fun block => match block with
+        | .text _ => ["text"]
+        | .reasoning _ parts => parts.filterMap fun part => match part with
+            | .text _ _ => some "reasoning"
+            | .summary _ => some "summary"
+            | .encrypted _ | .redacted _ => none
+        | .toolCall .. => ["arguments"]
+        | .toolResult .. => ["tool_output"]
+        | .media _ => ["media"]
+  | _ => []
+
+structure OutputProjectionCase where
+  name : String
+  input : Observation
+  expected : View
+  deriving Repr
+
+private def case (name : String) (input : Observation) : OutputProjectionCase :=
+  { name, input, expected := project input }
+
+def outputProjectionCases : List OutputProjectionCase :=
+  [ case "published_typed_message_filters_opaque_presentation" baseObservation
+  , case "published_native_reasoning_and_tool_arguments"
+      (baseObservation (records := [sampleNativePayload])
+        (messages := [sampleNativeMessage]) (messageId := some 210))
+  , case "malformed_sealed_payload_is_invalid"
+      (baseObservation (records := [sampleMalformedSealed]))
+  , case "conflicting_physical_segment_identity_is_invalid"
+      (baseObservation
+        (records := [sampleOpen, { sampleOpen with
+          flush := some ⟨1, [⟨0, 1, none⟩], [67]⟩, createdAt := 6 }])
+        (messages := []) (messageId := none))
+  , case "raw_exact_record_replay_is_idempotent"
+      (baseObservation (records := [sampleComplete, sampleComplete]))
+  , case "fork_projection_uses_exact_child_session_and_origin_without_request_membership"
+      { baseObservation (messages := [sampleMessage, sampleForkMessage])
+          (messageId := some 201) with session := 2 }
+  , case "missing_message_is_loading" (baseObservation (messages := []))
+  , case "conflicting_message_identity_is_not_selected"
+      (baseObservation (messages := [sampleMessage, { sampleMessage with nativeId := none }]))
+  , case "missing_payload_dependency_is_loading" (baseObservation (records := []))
+  , case "known_denial_is_not_loading" { baseObservation with deniedSegments := [100] }
+  , case "current_generation_contiguous_open_source_is_live"
+      (baseObservation (records := [sampleOpen]) (messages := []) (messageId := none))
+  , case "stale_generation_open_source_is_not_live"
+      (baseObservation (records := [sampleOpen]) (messages := []) (messageId := none)
+        (owner := ⟨some (10, 8), []⟩))
+  , case "missing_open_prefix_is_loading"
+      (baseObservation (records := []) (messages := []) (messageId := none))
+  , case "unreferenced_terminal_partial_is_retained_diagnostic"
+      (baseObservation (records := [samplePartial]) (messages := []) (messageId := none)
+        (owner := ⟨none, []⟩) (requestTerminal := true)
+        (terminalSelection := some .noMessage))
+  , case "partial_without_terminal_selection_is_loading"
+      (baseObservation (records := [samplePartial]) (messages := []) (messageId := none)
+        (owner := ⟨none, []⟩) (requestTerminal := true))
+  , case "retracted_attempt_is_not_rendered"
+      (baseObservation (records := [sampleRetracted]) (messages := []) (messageId := none)
+        (owner := ⟨none, []⟩))
+  , case "authored_without_header_is_not_live"
+      (baseObservation (records := [{ sampleOpen with
+          coordinate := ⟨10, .authored 4⟩ }]) (messages := []) (messageId := none)
+        (coordinate := ⟨10, .authored 4⟩))
+  , case "tool_partial_awaits_delivery"
+      (baseObservation (records := [{ samplePartial with
+          coordinate := ⟨10, .tool 42⟩, writer := .tool 42 }])
+        (messages := []) (messageId := none) (coordinate := ⟨10, .tool 42⟩)
+        (writer := .tool 42) (requestTerminal := true)
+        (terminalSelection := some .noMessage))
+  , case "header_before_payload_dependencies_is_loading"
+      (baseObservation (records := []))
+  , case "closed_source_is_never_a_live_preview"
+      (baseObservation (messages := []) (messageId := none))
+  , case "benign_late_record_beyond_extent_preserves_publication"
+      (baseObservation
+        (records := CanonicalOutput.deliver [sampleComplete] sampleLateBeyondExtent))
+  , case "late_in_extent_twin_is_a_conflict"
+      (baseObservation
+        (records := CanonicalOutput.deliver [sampleComplete] sampleLateInExtentTwin))
+  , case "valid_open_append_extends_live_preview"
+      (baseObservation
+        (records := CanonicalOutput.deliver [sampleOpen] sampleOpenContinuation)
+        (messages := []) (messageId := none))
+  ]
+
+theorem outputProjectionCases_count : outputProjectionCases.length = 23 := by decide
+
+theorem projection_cases_pin_boundaries :
+    outputProjectionCases.map (fun witness => viewName witness.expected) =
+       ["published", "published", "invalid", "invalid", "published", "published", "loading",
+       "conflicted", "loading", "denied",
+       "live", "absent", "loading", "retained_partial", "loading",
+       "retracted", "absent", "settling", "loading", "settling", "published", "conflicted",
+       "live"] := by
+  native_decide
+
+theorem published_presentation_excludes_opaque :
+    (outputProjectionCases.map (fun witness => renderedKinds witness.expected)).head? =
+      some ["text"] := by native_decide
+
+theorem header_before_payload_dependencies_is_loading :
+    project (baseObservation (records := [])) = .loading := by
+  native_decide
+
+def sampleWaitingClose : Segment :=
+  { sampleComplete with flush := none, close := some (.closed .complete 2 [1, 1]) }
+
+def sampleWrongWaitingClose : Segment :=
+  { sampleWaitingClose with coordinate := ⟨11, .provider 0 0 0⟩ }
+
+private def targetCase (name : String) (records : List Segment)
+    (messages : List MessageEnvelope := []) (request : Nat := 10)
+    (generation : Nat := 7) (inferenceScopes : List Nat := [0]) : TargetSelectionCase :=
+  { name, request, generation, inferenceScopes, records, messages
+    expected := selectTarget request generation inferenceScopes records messages }
+
+def laterAttempt : Segment :=
+  { sampleOpen with id := 120, coordinate := ⟨10, .provider 0 0 1⟩ }
+
+def laterAttemptClose : Segment :=
+  { laterAttempt with id := 121, flush := none, close := some (.closed .complete 1 [1, 1]) }
+
+def laterAttemptMessage : MessageEnvelope :=
+  { sampleMessage with
+    header := { sampleMessage.header with id := 220, refs := [⟨121, 0⟩] }
+    key := "later", sequence := 1 }
+
+def conflictingLaterAttemptMessage : MessageEnvelope :=
+  { laterAttemptMessage with
+    header := { laterAttemptMessage.header with id := 221 }
+    key := "later-conflict", sequence := 2 }
+
+def laterInferenceScope : Segment :=
+  { sampleOpen with id := 122, coordinate := ⟨10, .provider 2 0 0⟩ }
+
+def staleWriterClose : Segment :=
+  { laterAttemptClose with id := 123, writer := .request 8 }
+
+def staleWriterMessage : MessageEnvelope :=
+  { laterAttemptMessage with
+    header := { laterAttemptMessage.header with id := 222, refs := [⟨123, 0⟩] }
+    key := "stale-writer", sequence := 3 }
+
+def targetSelectionCases : List TargetSelectionCase :=
+  [ targetCase "target_absent_without_current_inference_source" []
+  , targetCase "target_ignores_stale_generation"
+      [{ sampleOpen with writer := .request 8 }]
+  , targetCase "target_ignores_foreign_request"
+      [{ sampleOpen with coordinate := ⟨11, .provider 0 0 0⟩ }]
+  , targetCase "target_ignores_non_inference_scope"
+      [{ sampleOpen with coordinate := ⟨10, .provider 1 0 0⟩ }]
+  , targetCase "target_selects_latest_attempt_order_independently"
+      [laterAttempt, sampleOpen]
+  , targetCase "target_selects_latest_inference_scope"
+      [sampleOpen, laterInferenceScope] (inferenceScopes := [0, 2])
+  , targetCase "target_exact_replay_is_inert" [laterAttempt, laterAttempt]
+  , targetCase "target_selects_unique_referencing_header"
+      [laterAttempt, laterAttemptClose] [laterAttemptMessage]
+  , targetCase "target_rejects_ambiguous_referencing_headers"
+      [laterAttempt, laterAttemptClose]
+      [laterAttemptMessage, conflictingLaterAttemptMessage]
+  , targetCase "target_does_not_attach_stale_writer_close"
+      [laterAttempt, staleWriterClose] [staleWriterMessage]
+  ]
+
+theorem targetSelectionCases_count : targetSelectionCases.length = 10 := by decide
+
+
+theorem target_selection_boundaries :
+    targetSelectionCases.map (fun witness => witness.expected) =
+      [.absent, .absent, .absent, .absent,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, none⟩,
+       .selected ⟨laterInferenceScope.coordinate, laterInferenceScope.writer, none⟩,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, none⟩,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, some 220⟩,
+       .conflicted,
+       .selected ⟨laterAttempt.coordinate, laterAttempt.writer, none⟩] := by
+  native_decide
+
+theorem header_arrival_preserves_valid_open_prefix_as_settling :
+    project (baseObservation (records := [sampleOpen, sampleWaitingClose])) =
+      .settling [(sampleText, [65])] := by
+  native_decide
+
+theorem header_without_exact_target_close_does_not_attach_preview :
+    project (baseObservation (records := [sampleOpen])) = .loading := by
+  native_decide
+
+theorem header_wrong_source_target_does_not_attach_preview :
+    project (baseObservation (records := [sampleOpen, sampleWrongWaitingClose])) !=
+      .settling [(sampleText, [65])] := by
+  native_decide
+
+theorem header_denied_target_prefix_is_denied :
+    project { baseObservation (records := [sampleOpen, sampleWaitingClose]) with
+      deniedSegments := [100] } = .denied := by
+  native_decide
+
+theorem same_session_different_id_same_key_is_conflicted :
+    project { baseObservation with messages :=
+      [sampleMessage, { sampleMessage with
+        header := { sampleMessage.header with id := 299 }, sequence := 1 }] } = .conflicted := by
+  native_decide
+
+theorem same_session_different_id_same_sequence_is_conflicted :
+    project { baseObservation with messages :=
+      [sampleMessage, { sampleMessage with
+        header := { sampleMessage.header with id := 298 }, key := "other" }] } = .conflicted := by
+  native_decide
+
+theorem closed_complete_source_is_not_live :
+    project (baseObservation (messages := []) (messageId := none)) =
+      .settling [(sampleText, [65])] := by
+  native_decide
+
+theorem closed_preview_ignores_malformed_data_beyond_committed_extent :
+    project (baseObservation
+      (records := [sampleComplete, { sampleLateBeyondExtent with writer := .request 99 }])
+      (messages := []) (messageId := none)) = .settling [(sampleText, [65])] := by
+  native_decide
+
+/-- This deliberately does not claim arbitrary late records are harmless:
+same-ID or in-extent twins remain conflicts. The witness is distinct, closureless
+and outside the selected closure's committed extent. -/
+theorem benign_late_record_beyond_extent_preserves_publication :
+    project (baseObservation
+      (records := CanonicalOutput.deliver [sampleComplete] sampleLateBeyondExtent)) =
+      project baseObservation := by
+  native_decide
+
+theorem late_in_extent_twin_is_not_benign :
+    project (baseObservation
+      (records := CanonicalOutput.deliver [sampleComplete] sampleLateInExtentTwin)) =
+      .conflicted := by
+  native_decide
+
+/-- Executable non-rewind regression for a valid contiguous append. This pins
+the actual projected bytes, rather than inferring prefix safety merely from
+record retention. -/
+theorem valid_open_append_extends_live_preview :
+    project (baseObservation (records := [sampleOpen])
+      (messages := []) (messageId := none)) =
+        .live [(sampleText, [65])] ∧
+    project (baseObservation
+      (records := CanonicalOutput.deliver [sampleOpen] sampleOpenContinuation)
+      (messages := []) (messageId := none)) =
+        .live [(sampleText, [65, 67])] ∧
+    ([65] : List UInt8).IsPrefix [65, 67] := by
+  native_decide
 
 end StreamingResponse

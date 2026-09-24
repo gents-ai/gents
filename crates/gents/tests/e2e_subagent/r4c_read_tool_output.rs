@@ -1,14 +1,14 @@
-use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
 use gents::llm::tool::BoxFuture;
 use gents::llm::tool::ToolDefinition;
 use gents::llm::tool::{ToolDyn, ToolError};
 use gents::llm::ToolCallHookAction;
-use gents::tool_call_lifecycle::ToolCallLifecycle;
 use gents::{BackgroundToolRegistry, DefraSessionHook, FailurePolicy};
 use serde_json::{json, Value};
 
-use crate::support::{test_db, AGENT_DID};
+use super::r4c_private_support::{
+    accepted_call, assert_accepted_control_rows, bind_accepted_request,
+};
+use crate::support::test_db;
 
 struct StaticTool {
     name: &'static str,
@@ -64,38 +64,38 @@ async fn setup_hook(
     let db = test_db(test_name).await;
     let session_id = format!("{test_name}-session");
     let request_id = format!("{test_name}-request");
-    crate::support::create_request(
-        db.node.as_ref(),
-        &request_id,
-        &session_id,
-        "processing",
-        "2026-05-14T00:00:00Z",
-    )
-    .await;
-    crate::support::create_agent_session(
+    let did = db.node_identity.did();
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         db.node.as_ref(),
         &session_id,
         "r4c-read-tool-output",
-        "2026-05-14T00:00:00Z",
+        did,
+        "r4c-read-tool-output",
+        Some(did),
     )
-    .await;
+    .await
+    .expect("ensure canonical read-process parent session");
 
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         &session_id,
         "r4c-read-tool-output",
-        AGENT_DID,
-        None,
+        did,
+        Some(did),
         FailurePolicy::default(),
     )
     .await
     .unwrap()
     .with_background_tool_registry(registry);
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
-        .await;
+    bind_accepted_request(
+        &db,
+        &hook,
+        "r4c-read-tool-output",
+        &request_id,
+        &session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
     (db, hook, session_id, request_id)
 }
 
@@ -105,37 +105,37 @@ async fn setup_hook_on_db(
     session_id: &str,
     registry: BackgroundToolRegistry,
 ) -> (DefraSessionHook, String, String) {
-    crate::support::create_request(
-        db.node.as_ref(),
-        request_id,
-        session_id,
-        "processing",
-        "2026-05-14T00:00:00Z",
-    )
-    .await;
-    crate::support::create_agent_session(
+    let did = db.node_identity.did();
+    gents::session::ensure_session_with_behavior_id_and_requester_did(
         db.node.as_ref(),
         session_id,
         "r4c-read-tool-output",
-        "2026-05-14T00:00:00Z",
+        did,
+        "r4c-read-tool-output",
+        Some(did),
     )
-    .await;
+    .await
+    .expect("ensure canonical read-process parent session");
     let hook = DefraSessionHook::resume_with_identity_policy(
         db.node.clone(),
         session_id,
         "r4c-read-tool-output",
-        AGENT_DID,
-        None,
+        did,
+        Some(did),
         FailurePolicy::default(),
     )
     .await
     .unwrap()
     .with_background_tool_registry(registry);
-    hook.set_active_request_lineage(Some(request_id.to_string()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(5)))
-        .await;
+    bind_accepted_request(
+        db,
+        &hook,
+        "r4c-read-tool-output",
+        request_id,
+        session_id,
+        chrono::Utc::now() + chrono::Duration::minutes(5),
+    )
+    .await;
     (hook, session_id.to_string(), request_id.to_string())
 }
 
@@ -164,7 +164,8 @@ async fn background_tool_with_args(
     args: Value,
 ) -> Value {
     skip_reason_json(
-        hook.on_tool_call(
+        accepted_call(
+            hook,
             "spawn_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -176,7 +177,8 @@ async fn background_tool_with_args(
 
 async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id: &str) -> Value {
     skip_reason_json(
-        hook.on_tool_call(
+        accepted_call(
+            hook,
             "wait_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -188,7 +190,8 @@ async fn wait_tool(hook: &DefraSessionHook, internal_call_id: &str, tool_call_id
 
 async fn read_tool_output(hook: &DefraSessionHook, internal_call_id: &str, args: Value) -> Value {
     skip_reason_json(
-        hook.on_tool_call(
+        accepted_call(
+            hook,
             "read_process",
             Some(format!("model-{internal_call_id}")),
             internal_call_id,
@@ -205,53 +208,21 @@ fn skip_reason_json(action: ToolCallHookAction) -> Value {
     serde_json::from_str(&reason).expect("skip reason should be JSON")
 }
 
-async fn create_foreground_tool_call(
-    db: &crate::support::TestDb,
-    request_id: &str,
-    session_id: &str,
-) -> String {
+async fn create_foreground_tool_call(hook: &DefraSessionHook) -> String {
     let tool_call_id = "foreground-call".to_string();
-    let mut lifecycle = ToolCallLifecycle::new(
-        db.node.clone(),
-        request_id.to_string(),
-        session_id.to_string(),
-        "did:test:test".to_string(),
-        tool_call_id.clone(),
-        99,
-        "foreground_tool".to_string(),
-        "{}".to_string(),
+    let mut lifecycle = super::accepted_hook_tool_lifecycle(
+        hook,
+        &tool_call_id,
+        "foreground_tool",
+        "{}",
         chrono::Utc::now() + chrono::Duration::minutes(5),
-    );
+        gents::tool_call_lifecycle::AwaitMode::Foreground,
+        gents::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .await;
     lifecycle.start_running().await.unwrap();
     lifecycle.complete("foreground result").await.unwrap();
     tool_call_id
-}
-
-async fn count_tool_calls_by_name(node: &EmbeddedNode, session_id: &str, tool_name: &str) -> usize {
-    let session_id = escape_graphql_string(session_id);
-    let tool_name = escape_graphql_string(tool_name);
-    let query = format!(
-        r#"{{
-            AgentToolCall(
-                filter: {{
-                    session_id: {{ _eq: "{session_id}" }},
-                    tool_name: {{ _eq: "{tool_name}" }}
-                }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "count AgentToolCall by name failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentToolCall"))
-        .and_then(|rows| rows.as_array())
-        .map_or(0, Vec::len)
 }
 
 #[tokio::test]
@@ -354,7 +325,7 @@ async fn read_tool_output_terminal_reads_persisted_result() {
 }
 
 #[tokio::test]
-async fn read_tool_output_terminal_parses_native_command_streams() {
+async fn read_tool_output_terminal_preserves_native_command_envelope() {
     let persisted = concat!(
         "gents_exec: {\"ok\":false,\"status\":\"exit_nonzero\",",
         "\"command\":\"grep -P foo README.md\",\"argv\":[\"grep\",\"-P\",\"foo\",\"README.md\"],",
@@ -393,12 +364,18 @@ async fn read_tool_output_terminal_parses_native_command_streams() {
     )
     .await;
     let output = result["output"].as_str().unwrap();
-    assert_eq!(output, "matches\n--- stderr ---\ngrep: invalid option -- P");
+    assert_eq!(
+        output, persisted,
+        "canonical output retains the exact native result"
+    );
     assert_eq!(result["total_bytes"].as_u64(), Some(output.len() as u64));
     assert_eq!(result["next_offset"].as_u64(), Some(output.len() as u64));
     assert_eq!(result["has_more"].as_bool(), Some(false));
     assert_eq!(result["exited"].as_bool(), Some(true));
-    assert_eq!(result["exit_code"].as_i64(), Some(2));
+    assert!(
+        result["exit_code"].is_null(),
+        "read_process does not re-interpret the native result envelope"
+    );
 }
 
 #[tokio::test]
@@ -587,7 +564,7 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
         registry(
             vec![Box::new(StaticTool {
                 name: "bash",
-                result: native_result,
+                result: native_result.clone(),
             })],
             &["bash"],
         ),
@@ -609,11 +586,10 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
     )
     .await;
     let total_bytes = first["total_bytes"].as_u64().expect("total_bytes");
-    let stderr_boundary_len = "\n--- stderr ---\n".len();
-    let expected_combined_len = stdout_body.len() + stderr_boundary_len + stderr_body.len();
     assert_eq!(
-        total_bytes, expected_combined_len as u64,
-        "total_bytes must cover stdout + boundary + stderr"
+        total_bytes,
+        native_result.len() as u64,
+        "total_bytes must cover the entire canonical native result"
     );
 
     let mut reassembled = first["output"].as_str().unwrap().to_string();
@@ -651,13 +627,17 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
         assert!(pages < 30, "paging did not terminate");
     }
     assert_eq!(cursor, total_bytes, "final cursor must equal total_bytes");
+    assert_eq!(
+        reassembled, native_result,
+        "pages must reconstruct the exact canonical native result"
+    );
     assert!(
         reassembled.contains(&stdout_body),
         "reassembled output must contain stdout"
     );
     assert!(
-        reassembled.contains("--- stderr ---"),
-        "reassembled output must contain the stderr boundary"
+        reassembled.contains("\nstderr:\n"),
+        "reassembled output must contain the native stderr boundary"
     );
     assert!(
         reassembled.contains(&stderr_body),
@@ -672,12 +652,12 @@ async fn read_process_stdout_and_stderr_paging_across_boundary_is_gap_free() {
 
 #[tokio::test]
 async fn read_tool_output_rejects_non_backgrounded() {
-    let (db, hook, session_id, request_id) = setup_hook(
+    let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-foreground",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
     )
     .await;
-    let foreground_call_id = create_foreground_tool_call(&db, &request_id, &session_id).await;
+    let foreground_call_id = create_foreground_tool_call(&hook).await;
 
     let result = read_tool_output(
         &hook,
@@ -720,8 +700,8 @@ async fn read_tool_output_rejects_unauthorized() {
 }
 
 #[tokio::test]
-async fn read_tool_output_no_parent_tool_call_row_written() {
-    let (db, hook, session_id, _request_id) = setup_hook(
+async fn read_tool_output_has_exact_accepted_parent_tool_call_row() {
+    let (_db, hook, _session_id, _request_id) = setup_hook(
         "r4c-read-output-no-row",
         registry(vec![Box::new(PendingTool)], &["slow_tool"]),
     )
@@ -735,8 +715,5 @@ async fn read_tool_output_no_parent_tool_call_row_written() {
     )
     .await;
 
-    assert_eq!(
-        count_tool_calls_by_name(db.node.as_ref(), &session_id, "read_process").await,
-        0
-    );
+    assert_accepted_control_rows(&hook, "read_process", 1).await;
 }

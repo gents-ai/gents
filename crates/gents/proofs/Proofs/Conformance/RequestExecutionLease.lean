@@ -9,17 +9,14 @@ open RequestExecutionLease
 abbrev Generation := Nat
 
 private def world
-    (request : RequestState) (response : Option StreamingResponse.Status)
-    (lease : Lease Generation) (usedGenerations : List Generation)
-    (now progressSeq : Nat)
+    (request : RequestState) (lease : Lease Generation)
+    (usedGenerations : List Generation) (now : Nat)
     (continuationRequired tokenChargeRequired : Bool := true)
     (continuationCount tokenChargeCount : Nat := 0) : World Generation :=
   { request
-  , response
   , lease
   , usedGenerations
   , now
-  , progressSeq
   , continuationRequired
   , tokenChargeRequired
   , continuationCount
@@ -27,20 +24,21 @@ private def world
   }
 
 private def vacant : World Generation :=
-  world .pending none .vacant [] 0 0
+  world .pending .vacant [] 0
 
-private def claimed (generation deadline now : Nat := 1) : World Generation :=
-  world .claimed none (.active generation deadline) [generation] now 0
+private def claimed
+    (generation duration deadline now : Nat := 1) : World Generation :=
+  world .claimed (.active generation duration deadline) [generation] now
 
-private def processing
-    (generation deadline now : Nat := 1) (progressSeq : Nat := 0) : World Generation :=
-  world .processing (some .streaming) (.active generation deadline)
-    [generation] now progressSeq
+private def processing (generation duration deadline now : Nat := 1) : World Generation :=
+  world .processing (.active generation duration deadline) [generation] now
 
-private def recoverable
-    (generation now : Nat := 1) (progressSeq : Nat := 0) : World Generation :=
-  world .processing (some .streaming) (.recoverable generation)
-    [generation] now progressSeq
+private def recoverable (generation duration deadline now : Nat := 1) : World Generation :=
+  world .processing (.recoverable generation duration deadline) [generation] now
+
+private def recovered (oldGeneration generation duration deadline now : Nat) : World Generation :=
+  world .processing (.active generation duration deadline)
+    [generation, oldGeneration] now
 
 structure LeaseCase where
   name : String
@@ -50,192 +48,258 @@ structure LeaseCase where
   deriving DecidableEq, Repr
 
 def leaseCases : List LeaseCase :=
-  [ { name := "fresh_claim_installs_generation_and_deadline"
+  [ { name := "fresh_claim_installs_generation_duration_and_deadline"
     , pre := vacant
-    , action := .claim 101 10
-    , expected := some
-        (world .claimed none (.active 101 10) [101] 0 0)
+    , action := .claim .mutationWriteGate 101 5 10
+    , expected := some (claimed 101 5 10 0)
     }
   , { name := "claim_rejects_reused_generation"
     , pre := { vacant with usedGenerations := [101] }
-    , action := .claim 101 10
+    , action := .claim .mutationWriteGate 101 5 10
     , expected := none
     }
-  , { name := "matching_owner_begins_streaming"
-    , pre := claimed 101 10 1
-    , action := .begin 101
-    , expected := some (processing 101 10 1)
+  , { name := "claim_rejects_zero_duration"
+    , pre := vacant
+    , action := .claim .mutationWriteGate 101 0 10
+    , expected := none
     }
-  , { name := "response_progress_advances_and_renews"
-    , pre := processing 101 10 5 7
-    , action := .persistProgress 101 .response 20
-    , expected := some (processing 101 20 5 8)
+  , { name := "observing_replica_cannot_claim"
+    , pre := vacant
+    , action := .claim .observingReplica 101 5 10
+    , expected := none
     }
-  , { name := "tool_progress_advances_and_renews"
-    , pre := processing 101 10 5 7
-    , action := .persistProgress 101 .tool 20
-    , expected := some (processing 101 20 5 8)
+  , { name := "matching_owner_begins_processing"
+    , pre := claimed 101 5 10 1
+    , action := .begin .mutationWriteGate 101
+    , expected := some (processing 101 5 10 1)
     }
-  , { name := "transcript_progress_advances_and_renews"
-    , pre := processing 101 10 5 7
-    , action := .persistProgress 101 .transcript 20
-    , expected := some (processing 101 20 5 8)
+  , { name := "output_append_authorization_does_not_renew"
+    , pre := processing 101 5 10 4
+    , action := .appendOutput .mutationWriteGate 101
+    , expected := some (processing 101 5 10 4)
     }
   , { name := "socket_traffic_is_not_progress"
-    , pre := processing 101 10 12 7
+    , pre := processing 101 5 10 12
     , action := .socketTraffic 101
-    , expected := some (processing 101 10 12 7)
+    , expected := some (processing 101 5 10 12)
     }
   , { name := "no_op_is_not_progress"
-    , pre := processing 101 10 12 7
+    , pre := processing 101 5 10 12
     , action := .noOp 101
-    , expected := some (processing 101 10 12 7)
+    , expected := some (processing 101 5 10 12)
+    }
+  , { name := "stale_generation_cannot_append"
+    , pre := { processing 202 5 20 5 with usedGenerations := [202, 101] }
+    , action := .appendOutput .mutationWriteGate 101
+    , expected := none
     }
   , { name := "stale_generation_cannot_renew"
-    , pre := { processing 202 20 5 8 with usedGenerations := [202, 101] }
-    , action := .persistProgress 101 .response 30
+    , pre := { processing 202 5 20 5 with usedGenerations := [202, 101] }
+    , action := .renew .mutationWriteGate 101 20
     , expected := none
     }
   , { name := "stale_generation_cannot_finalize"
-    , pre := { processing 202 20 5 8 with usedGenerations := [202, 101] }
-    , action := .finalize 101 .completed
+    , pre := { processing 202 5 20 5 with usedGenerations := [202, 101] }
+    , action := .finalize .mutationWriteGate 101 .completed
     , expected := none
     }
-  , { name := "expired_generation_cannot_finalize"
-    , pre := processing 101 10 11 7
-    , action := .finalize 101 .completed
+  , { name := "deadline_boundary_rejects_raw_append"
+    , pre := processing 101 5 10 10
+    , action := .appendOutput .mutationWriteGate 101
     , expected := none
     }
-  , { name := "expiry_relinquishes_for_recovery"
-    , pre := processing 101 10 11 7
-    , action := .expire 101
-    , expected := some (recoverable 101 11 7)
+  , { name := "deadline_boundary_rejects_explicit_renewal"
+    , pre := processing 101 5 10 10
+    , action := .renew .mutationWriteGate 101 10
+    , expected := none
     }
-  , { name := "drop_relinquishes_for_recovery"
-    , pre := processing 101 10 5 7
-    , action := .drop 101
-    , expected := some (recoverable 101 5 7)
+  , { name := "deadline_boundary_rejects_acceptance_publication_authorization"
+    , pre := processing 101 5 10 10
+    , action := .authorizeProducerDecision .mutationWriteGate 101 .acceptAndPublish
+    , expected := none
     }
-  , { name := "recovery_takes_fresh_generation"
-    , pre := recoverable 101 11 7
-    , action := .recover 101 202 30
+  , { name := "deadline_boundary_rejects_dispatch_authorization"
+    , pre := processing 101 5 10 10
+    , action := .authorizeProducerDecision .mutationWriteGate 101 .dispatch
+    , expected := none
+    }
+  , { name := "deadline_boundary_rejects_terminalization"
+    , pre := processing 101 5 10 10
+    , action := .finalize .mutationWriteGate 101 .completed
+    , expected := none
+    }
+  , { name := "deadline_boundary_atomically_recovers_fresh_generation"
+    , pre := processing 101 5 10 10
+    , action := .recoverExpired .mutationWriteGate 101 202 5 30
+    , expected := some (recovered 101 202 5 30 10)
+    }
+  , { name := "observing_replica_cannot_recover_expired_work"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpired .observingReplica 101 202 5 30
+    , expected := none
+    }
+  , { name := "observing_replica_cannot_append"
+    , pre := processing 101 5 10 5
+    , action := .appendOutput .observingReplica 101
+    , expected := none
+    }
+  /- This is an explicit owner heartbeat only. It does not assert provider
+  progress and does not replace stream-idle or request/tool deadline owners. -/
+  , { name := "explicit_owner_heartbeat_extends_at_due_time"
+    , pre := processing 101 5 10 8
+    , action := .renew .mutationWriteGate 101 10
+    , expected := some (processing 101 5 13 8)
+    }
+  , { name := "early_renewal_is_rejected"
+    , pre := processing 101 5 10 5
+    , action := .renew .mutationWriteGate 101 10
+    , expected := none
+    }
+  , { name := "stale_expected_deadline_cannot_renew"
+    , pre := processing 101 5 10 8
+    , action := .renew .mutationWriteGate 101 9
+    , expected := none
+    }
+  , { name := "same_deadline_replay_after_renewal_is_rejected"
+    , pre := processing 101 5 13 8
+    , action := .renew .mutationWriteGate 101 10
+    , expected := none
+    }
+  , { name := "one_tick_duration_cannot_advance_before_expiry"
+    , pre := processing 101 1 10 9
+    , action := .renew .mutationWriteGate 101 10
+    , expected := none
+    }
+  , { name := "terminal_lifecycle_rejects_renewal_even_with_active_lease"
+    , pre := { processing 101 5 10 8 with request := .completed }
+    , action := .renew .mutationWriteGate 101 10
+    , expected := none
+    }
+  , { name := "input_required_wait_keeps_explicit_owner_heartbeat"
+    , pre := { processing 101 5 10 8 with request := .inputRequired }
+    , action := .renew .mutationWriteGate 101 10
+    , expected := some { processing 101 5 13 8 with request := .inputRequired }
+    }
+  , { name := "close_or_retract_authorization_does_not_renew"
+    , pre := processing 101 5 10 5
+    , action := .authorizeProducerDecision .mutationWriteGate 101 .closeOrRetract
+    , expected := some (processing 101 5 10 5)
+    }
+  , { name := "accept_and_publish_authorization_does_not_renew"
+    , pre := processing 101 5 10 5
+    , action := .authorizeProducerDecision .mutationWriteGate 101 .acceptAndPublish
+    , expected := some (processing 101 5 10 5)
+    }
+  , { name := "dispatch_authorization_does_not_renew"
+    , pre := processing 101 5 10 5
+    , action := .authorizeProducerDecision .mutationWriteGate 101 .dispatch
+    , expected := some (processing 101 5 10 5)
+    }
+  , { name := "drop_relinquishes_for_distinct_recovery_path"
+    , pre := processing 101 5 10 5
+    , action := .drop .mutationWriteGate 101
+    , expected := some (recoverable 101 5 10 5)
+    }
+  , { name := "dropped_recovery_takes_fresh_generation"
+    , pre := recoverable 101 5 10 11
+    , action := .recoverDropped .mutationWriteGate 101 202 5 30
+    , expected := some (recovered 101 202 5 30 11)
+    }
+  , { name := "dropped_recovery_rejects_zero_duration"
+    , pre := recoverable 101 5 10 11
+    , action := .recoverDropped .mutationWriteGate 101 202 0 30
+    , expected := none
+    }
+  , { name := "dropped_recovery_rejects_wrong_expected_generation"
+    , pre := recoverable 101 5 10 11
+    , action := .recoverDropped .mutationWriteGate 999 202 5 30
+    , expected := none
+    }
+  , { name := "dropped_recovery_rejects_aba_generation_reuse"
+    , pre := { recoverable 202 5 20 21 with usedGenerations := [202, 101] }
+    , action := .recoverDropped .mutationWriteGate 202 101 5 30
+    , expected := none
+    }
+  , { name := "expired_recovery_rejects_wrong_expected_generation"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpired .mutationWriteGate 999 202 5 30
+    , expected := none
+    }
+  , { name := "expired_recovery_rejects_aba_generation_reuse"
+    , pre := { processing 202 5 20 21 with usedGenerations := [202, 101] }
+    , action := .recoverExpired .mutationWriteGate 202 101 5 30
+    , expected := none
+    }
+  , { name := "expired_recovery_failure_atomically_elects_terminal_winner"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredAndFail .mutationWriteGate 101 202
     , expected := some
-        { processing 202 30 11 7 with usedGenerations := [202, 101] }
+        (world .failed (.terminal 202 .failed) [202, 101] 11 true true 1 1)
     }
-  , { name := "recovery_rejects_wrong_expected_generation"
-    , pre := recoverable 101 11 7
-    , action := .recover 999 202 30
-    , expected := none
-    }
-  , { name := "recovery_rejects_aba_generation_reuse"
-    , pre :=
-        { recoverable 202 21 9 with usedGenerations := [202, 101] }
-    , action := .recover 202 101 30
-    , expected := none
-    }
-  , { name := "recovery_failure_is_atomic_and_single_effect"
-    , pre := recoverable 101 11 7
-    , action := .recoverAndFail 101 202
+  , { name := "expired_terminal_recovery_preserves_failure_contract"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredTerminal .mutationWriteGate 101 202 .failed
     , expected := some
-        (world .failed (some .error) (.terminal 202 .failed) [202, 101]
-          11 7 true true 1 1)
+        (world .failed (.terminal 202 .failed) [202, 101] 11 true true 1 1)
     }
-  , { name := "completion_atomically_agrees_request_response"
-    , pre := processing 101 10 5 7
-    , action := .finalize 101 .completed
+  , { name := "expired_terminal_recovery_preserves_interrupt_contract"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredTerminal .mutationWriteGate 101 202 .interrupted
     , expected := some
-        (world .completed (some .completed) (.terminal 101 .completed) [101]
-          5 7 true true 1 1)
+        (world .interrupted (.terminal 202 .interrupted) [202, 101] 11 true true 1 1)
     }
-  , { name := "provider_eof_fails_claimed_pair_atomically"
-    , pre := claimed 101 10 5
-    , action := .finalize 101 .failed
+  , { name := "expired_terminal_recovery_rejects_completed_outcome"
+    , pre := processing 101 5 10 11
+    , action := .recoverExpiredTerminal .mutationWriteGate 101 202 .completed
+    , expected := none
+    }
+  , { name := "dropped_recovery_failure_atomically_elects_terminal_winner"
+    , pre := recoverable 101 5 10 11
+    , action := .recoverDroppedAndFail .mutationWriteGate 101 202
     , expected := some
-        (world .failed (some .error) (.terminal 101 .failed) [101]
-          5 0 true true 1 1)
+        (world .failed (.terminal 202 .failed) [202, 101] 11 true true 1 1)
     }
-  , { name := "interrupt_atomically_agrees_request_response"
-    , pre := processing 101 10 5 7
-    , action := .finalize 101 .interrupted
+  , { name := "completion_atomically_terminalizes_request"
+    , pre := processing 101 5 10 5
+    , action := .finalize .mutationWriteGate 101 .completed
     , expected := some
-        (world .interrupted (some .error) (.terminal 101 .interrupted) [101]
-          5 7 true true 1 1)
+        (world .completed (.terminal 101 .completed) [101] 5 true true 1 1)
     }
-  , { name := "terminal_winner_rejects_second_finalize"
-    , pre := world .completed (some .completed) (.terminal 101 .completed) [101]
-        5 7 true true 1 1
-    , action := .finalize 101 .failed
+  , { name := "provider_eof_fails_claimed_request_atomically"
+    , pre := claimed 101 5 10 5
+    , action := .finalize .mutationWriteGate 101 .failed
+    , expected := some
+        (world .failed (.terminal 101 .failed) [101] 5 true true 1 1)
+    }
+  , { name := "completion_rejects_claimed_request"
+    , pre := claimed 101 5 10 5
+    , action := .finalize .mutationWriteGate 101 .completed
     , expected := none
     }
-  , { name := "terminal_winner_rejects_recovery_racer"
-    , pre := world .failed (some .error) (.terminal 202 .failed) [202, 101]
-        11 7 true true 1 1
-    , action := .recoverAndFail 101 303
+  , { name := "policy_authority_can_supersede_live_generation"
+    , pre := processing 101 5 10 5
+    , action := .policyRevoke .mutationWriteGate 101 202 .superseded
+    , expected := some
+        (world .superseded (.terminal 202 .superseded) [202, 101] 5 true true 1 1)
+    }
+  , { name := "policy_revocation_rejects_wrong_expected_generation"
+    , pre := processing 101 5 10 5
+    , action := .policyRevoke .mutationWriteGate 999 202 .dead
     , expected := none
     }
-  , { name := "expired_generation_cannot_begin"
-    , pre := claimed 101 10 11
-    , action := .begin 101
+  , { name := "policy_revocation_rejects_non_policy_outcome"
+    , pre := processing 101 5 10 5
+    , action := .policyRevoke .mutationWriteGate 101 202 .failed
     , expected := none
     }
-  , { name := "expired_generation_cannot_renew"
-    , pre := processing 101 10 11 7
-    , action := .persistProgress 101 .response 20
-    , expected := none
-    }
-  , { name := "completion_rejects_claimed_without_response"
-    , pre := claimed 101 10 5
-    , action := .finalize 101 .completed
-    , expected := none
-    }
-  , { name := "renewal_must_extend_deadline"
-    , pre := processing 101 10 5 7
-    , action := .persistProgress 101 .response 10
-    , expected := none
-    }
-  , { name := "deadline_boundary_allows_completion"
-    , pre := processing 101 10 10 7
-    , action := .finalize 101 .completed
-    , expected := some (world .completed (some .completed) (.terminal 101 .completed) [101] 10 7 true true 1 1)
-    }
-  , { name := "live_generation_can_be_superseded"
-    , pre := processing 101 10 5 7
-    , action := .revoke 101 10 7 202 .superseded
-    , expected := some (world .superseded (some .error) (.terminal 202 .superseded) [202, 101] 5 7 true true 1 1)
-    }
-  , { name := "claimed_generation_can_be_declared_dead"
-    , pre := claimed 101 10 5
-    , action := .revoke 101 10 0 202 .dead
-    , expected := some (world .dead (some .error) (.terminal 202 .dead) [202, 101] 5 0 true true 1 1)
-    }
-  , { name := "revocation_rejects_stale_generation"
-    , pre := processing 101 10 5 7
-    , action := .revoke 999 10 7 202 .dead
-    , expected := none
-    }
-  , { name := "revocation_rejects_stale_expiry"
-    , pre := processing 101 10 5 7
-    , action := .revoke 101 9 7 202 .dead
-    , expected := none
-    }
-  , { name := "revocation_rejects_stale_progress"
-    , pre := processing 101 10 5 7
-    , action := .revoke 101 10 6 202 .dead
-    , expected := none
-    }
-  , { name := "revocation_rejects_reused_generation"
-    , pre := processing 101 10 5 7
-    , action := .revoke 101 10 7 101 .dead
-    , expected := none
-    }
-  , { name := "revocation_cannot_claim_success"
-    , pre := processing 101 10 5 7
-    , action := .revoke 101 10 7 202 .completed
+  , { name := "clock_cannot_move_backwards"
+    , pre := processing 101 5 10 5
+    , action := .advanceTime 4
     , expected := none
     }
   ]
 
-theorem leaseCases_count : leaseCases.length = 34 := by native_decide
+theorem leaseCases_count : leaseCases.length = 48 := by native_decide
 
 theorem leaseCases_hold :
     leaseCases.all (fun testCase =>
@@ -250,51 +314,83 @@ structure LeaseTraceCase where
   deriving DecidableEq, Repr
 
 def leaseTraceCases : List LeaseTraceCase :=
-  [ { name := "socket_and_noop_traffic_cannot_prevent_expiry_recovery"
-    , pre := processing 101 10 9 7
+  [ { name := "traffic_cannot_prevent_atomic_boundary_recovery"
+    , pre := processing 101 5 10 9
     , actions :=
         [ .socketTraffic 101
         , .noOp 101
-        , .advanceTime 11
-        , .socketTraffic 101
-        , .expire 101
-        , .recoverAndFail 101 202
+        , .advanceTime 10
+        , .recoverExpiredAndFail .mutationWriteGate 101 202
         ]
     , expected := some
-        (world .failed (some .error) (.terminal 202 .failed) [202, 101]
-          11 7 true true 1 1)
+        (world .failed (.terminal 202 .failed) [202, 101] 10 true true 1 1)
     }
-  , { name := "semantic_progress_renews_before_success"
-    , pre := processing 101 10 9 7
+  , { name := "output_requires_separate_explicit_renewal"
+    , pre := processing 101 5 10 9
     , actions :=
-        [ .persistProgress 101 .response 20
+        [ .appendOutput .mutationWriteGate 101
         , .advanceTime 11
-        , .finalize 101 .completed
+        , .finalize .mutationWriteGate 101 .completed
+        ]
+    , expected := none
+    }
+  , { name := "expired_expected_deadline_does_not_revive_generation"
+    , pre := processing 101 5 10 9
+    , actions :=
+        [ .advanceTime 10
+        , .renew .mutationWriteGate 101 10
+        ]
+    , expected := none
+    }
+  , { name := "explicit_slow_heartbeat_renews_then_completes"
+    , pre := processing 101 5 10 8
+    , actions :=
+        [ .renew .mutationWriteGate 101 10
+        , .advanceTime 12
+        , .finalize .mutationWriteGate 101 .completed
         ]
     , expected := some
-        (world .completed (some .completed) (.terminal 101 .completed) [101]
-          11 8 true true 1 1)
+        (world .completed (.terminal 101 .completed) [101] 12 true true 1 1)
     }
-  , { name := "dropped_owner_recovers_and_fails_atomically"
-    , pre := processing 101 10 5 7
-    , actions := [.drop 101, .recoverAndFail 101 202]
+  , { name := "duplicate_renewal_with_consumed_deadline_loses_cas"
+    , pre := processing 101 5 10 8
+    , actions :=
+        [ .renew .mutationWriteGate 101 10
+        , .renew .mutationWriteGate 101 10
+        ]
+    , expected := none
+    }
+  , { name := "output_write_and_explicit_heartbeat_are_separate"
+    , pre := processing 101 5 10 9
+    , actions :=
+        [ .appendOutput .mutationWriteGate 101
+        , .renew .mutationWriteGate 101 10
+        , .advanceTime 11
+        , .finalize .mutationWriteGate 101 .completed
+        ]
     , expected := some
-        (world .failed (some .error) (.terminal 202 .failed) [202, 101]
-          5 7 true true 1 1)
+        (world .completed (.terminal 101 .completed) [101] 11 true true 1 1)
     }
-  , { name := "recovered_owner_wins_and_stale_owner_cannot_finalize"
-    , pre := recoverable 101 11 7
-    , actions := [.recover 101 202 30, .finalize 101 .completed]
+  , { name := "atomically_recovered_owner_wins_and_stale_owner_cannot_finalize"
+    , pre := processing 101 5 10 11
+    , actions :=
+        [ .recoverExpired .mutationWriteGate 101 202 5 30
+        , .finalize .mutationWriteGate 101 .completed
+        ]
     , expected := none
     }
-  , { name := "one_terminal_winner_prevents_duplicate_effects"
-    , pre := processing 101 10 5 7
-    , actions := [.finalize 101 .completed, .finalize 101 .failed]
-    , expected := none
+  , { name := "producer_authorization_does_not_claim_canonical_source_effects"
+    , pre := processing 101 5 10 5
+    , actions :=
+        [ .authorizeProducerDecision .mutationWriteGate 101 .closeOrRetract
+        , .appendOutput .mutationWriteGate 101
+        , .authorizeProducerDecision .mutationWriteGate 101 .acceptAndPublish
+        ]
+    , expected := some (processing 101 5 10 5)
     }
   ]
 
-theorem leaseTraceCases_count : leaseTraceCases.length = 5 := by native_decide
+theorem leaseTraceCases_count : leaseTraceCases.length = 8 := by native_decide
 
 theorem leaseTraceCases_hold :
     leaseTraceCases.all (fun testCase =>
@@ -304,10 +400,6 @@ theorem leaseTraceCases_hold :
 private def boolJson (value : Bool) : String :=
   if value then "true" else "false"
 
-def responseStatusName : Option StreamingResponse.Status → String
-  | none => "absent"
-  | some status => status.toDefraDB
-
 def outcomeName : Outcome → String
   | .completed => "completed"
   | .failed => "failed"
@@ -315,33 +407,40 @@ def outcomeName : Outcome → String
   | .dead => "dead"
   | .superseded => "superseded"
 
-def progressKindName : ProgressKind → String
-  | .response => "response"
-  | .tool => "tool"
-  | .transcript => "transcript"
+def boundaryName : Boundary → String
+  | .mutationWriteGate => "mutation_write_gate"
+  | .observingReplica => "observing_replica"
+
+def decisionName : ProducerDecision → String
+  | .closeOrRetract => "close_or_retract"
+  | .acceptAndPublish => "accept_and_publish"
+  | .dispatch => "dispatch"
 
 def leaseJson : Lease Generation → String
   | .vacant =>
-      "{\"status\":\"vacant\",\"generation\":null,\"deadline\":null,\"outcome\":null}"
-  | .active generation deadline =>
+      "{\"status\":\"vacant\",\"generation\":null,\"duration\":null," ++
+        "\"explicit_deadline\":null,\"outcome\":null}"
+  | .active generation duration deadline =>
       "{\"status\":\"active\",\"generation\":" ++ toString generation ++
-        ",\"deadline\":" ++ toString deadline ++ ",\"outcome\":null}"
-  | .recoverable generation =>
+        ",\"duration\":" ++ toString duration ++
+        ",\"explicit_deadline\":" ++ toString deadline ++ ",\"outcome\":null}"
+  | .recoverable generation duration deadline =>
       "{\"status\":\"recoverable\",\"generation\":" ++ toString generation ++
-        ",\"deadline\":null,\"outcome\":null}"
+        ",\"duration\":" ++ toString duration ++
+        ",\"explicit_deadline\":" ++ toString deadline ++ ",\"outcome\":null}"
   | .terminal generation outcome =>
       "{\"status\":\"terminal\",\"generation\":" ++ toString generation ++
-        ",\"deadline\":null,\"outcome\":" ++ jsonString (outcomeName outcome) ++ "}"
+        ",\"duration\":null,\"explicit_deadline\":null,\"outcome\":" ++
+        jsonString (outcomeName outcome) ++ "}"
 
 def worldJson (value : World Generation) : String :=
   "{"
     ++ "\"request\":" ++ jsonString (value.request.toDefraDB) ++ ","
-    ++ "\"response\":" ++ jsonString (responseStatusName value.response) ++ ","
     ++ "\"lease\":" ++ leaseJson value.lease ++ ","
     ++ "\"used_generations\":" ++
       jsonArray (value.usedGenerations.map (fun generation => toString generation)) ++ ","
     ++ "\"now\":" ++ toString value.now ++ ","
-    ++ "\"progress_seq\":" ++ toString value.progressSeq ++ ","
+    ++ "\"effective_expiry\":" ++ toString (effectiveExpiry value) ++ ","
     ++ "\"continuation_required\":" ++ boolJson value.continuationRequired ++ ","
     ++ "\"token_charge_required\":" ++ boolJson value.tokenChargeRequired ++ ","
     ++ "\"continuation_count\":" ++ toString value.continuationCount ++ ","
@@ -353,71 +452,90 @@ def optionalWorldJson : Option (World Generation) → String
   | some value => worldJson value
 
 def actionJson : Action Generation → String
-  | .claim generation deadline =>
-      "{\"kind\":\"claim\",\"generation\":" ++ toString generation ++
-        ",\"deadline\":" ++ toString deadline ++ "}"
-  | .begin generation =>
-      "{\"kind\":\"begin\",\"generation\":" ++ toString generation ++ "}"
-  | .persistProgress generation kind deadline =>
-      "{\"kind\":\"persist_progress\",\"generation\":" ++ toString generation ++
-        ",\"progress_kind\":" ++ jsonString (progressKindName kind) ++
-        ",\"deadline\":" ++ toString deadline ++ "}"
+  | .claim boundary generation duration deadline =>
+      "{\"kind\":\"claim\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++
+        ",\"duration\":" ++ toString duration ++
+        ",\"explicit_deadline\":" ++ toString deadline ++ "}"
+  | .begin boundary generation =>
+      "{\"kind\":\"begin\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ "}"
+  | .appendOutput boundary generation =>
+      "{\"kind\":\"append_output\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ "}"
+  | .renew boundary generation expectedDeadline =>
+      "{\"kind\":\"renew\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++
+        ",\"expected_deadline\":" ++ toString expectedDeadline ++ "}"
+  | .authorizeProducerDecision boundary generation decision =>
+      "{\"kind\":\"authorize_producer_decision\",\"boundary\":" ++
+        jsonString (boundaryName boundary) ++ ",\"generation\":" ++
+        toString generation ++ ",\"decision\":" ++ jsonString (decisionName decision) ++ "}"
   | .socketTraffic generation =>
       "{\"kind\":\"socket_traffic\",\"generation\":" ++ toString generation ++ "}"
   | .noOp generation =>
       "{\"kind\":\"no_op\",\"generation\":" ++ toString generation ++ "}"
-  | .advanceTime now =>
-      "{\"kind\":\"advance_time\",\"now\":" ++ toString now ++ "}"
-  | .drop generation =>
-      "{\"kind\":\"drop\",\"generation\":" ++ toString generation ++ "}"
-  | .expire generation =>
-      "{\"kind\":\"expire\",\"generation\":" ++ toString generation ++ "}"
-  | .recover expected fresh deadline =>
-      "{\"kind\":\"recover\",\"expected_generation\":" ++ toString expected ++
+  | .advanceTime now => "{\"kind\":\"advance_time\",\"now\":" ++ toString now ++ "}"
+  | .drop boundary generation =>
+      "{\"kind\":\"drop\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++ "}"
+  | .recoverExpired boundary expected fresh duration deadline =>
+      "{\"kind\":\"recover_expired\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"expected_generation\":" ++ toString expected ++
         ",\"fresh_generation\":" ++ toString fresh ++
-        ",\"deadline\":" ++ toString deadline ++ "}"
-  | .finalize generation outcome =>
-      "{\"kind\":\"finalize\",\"generation\":" ++ toString generation ++
+        ",\"duration\":" ++ toString duration ++
+        ",\"explicit_deadline\":" ++ toString deadline ++ "}"
+  | .recoverDropped boundary expected fresh duration deadline =>
+      "{\"kind\":\"recover_dropped\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"expected_generation\":" ++ toString expected ++
+        ",\"fresh_generation\":" ++ toString fresh ++
+        ",\"duration\":" ++ toString duration ++
+        ",\"explicit_deadline\":" ++ toString deadline ++ "}"
+  | .finalize boundary generation outcome =>
+      "{\"kind\":\"finalize\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"generation\":" ++ toString generation ++
         ",\"outcome\":" ++ jsonString (outcomeName outcome) ++ "}"
-  | .revoke expected deadline progress fresh outcome =>
-      "{\"kind\":\"revoke\",\"expected_generation\":" ++ toString expected ++
-        ",\"expected_deadline\":" ++ toString deadline ++
-        ",\"expected_progress\":" ++ toString progress ++
+  | .policyRevoke boundary expected fresh outcome =>
+      "{\"kind\":\"policy_revoke\",\"boundary\":" ++ jsonString (boundaryName boundary) ++
+        ",\"expected_generation\":" ++ toString expected ++
         ",\"fresh_generation\":" ++ toString fresh ++
         ",\"outcome\":" ++ jsonString (outcomeName outcome) ++ "}"
-  | .recoverAndFail expected fresh =>
-      "{\"kind\":\"recover_and_fail\",\"expected_generation\":" ++
+  | .recoverExpiredAndFail boundary expected fresh =>
+      "{\"kind\":\"recover_expired_and_fail\",\"boundary\":" ++
+        jsonString (boundaryName boundary) ++ ",\"expected_generation\":" ++
+        toString expected ++ ",\"fresh_generation\":" ++ toString fresh ++ "}"
+  | .recoverExpiredTerminal boundary expected fresh outcome =>
+      "{\"kind\":\"recover_expired_terminal\",\"boundary\":" ++
+        jsonString (boundaryName boundary) ++ ",\"expected_generation\":" ++
+        toString expected ++ ",\"fresh_generation\":" ++ toString fresh ++
+        ",\"outcome\":" ++ jsonString (outcomeName outcome) ++ "}"
+  | .recoverDroppedAndFail boundary expected fresh =>
+      "{\"kind\":\"recover_dropped_and_fail\",\"boundary\":" ++
+        jsonString (boundaryName boundary) ++ ",\"expected_generation\":" ++
         toString expected ++ ",\"fresh_generation\":" ++ toString fresh ++ "}"
 
 def leaseCaseJson (testCase : LeaseCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString testCase.name ++ ","
-    ++ "\"pre\":" ++ worldJson testCase.pre ++ ","
-    ++ "\"action\":" ++ actionJson testCase.action ++ ","
-    ++ "\"expected\":" ++ optionalWorldJson testCase.expected
-    ++ "}"
+  "{" ++ "\"name\":" ++ jsonString testCase.name ++
+    ",\"pre\":" ++ worldJson testCase.pre ++
+    ",\"action\":" ++ actionJson testCase.action ++
+    ",\"expected\":" ++ optionalWorldJson testCase.expected ++ "}"
 
-def leaseCasesJson : String :=
-  jsonArray (leaseCases.map leaseCaseJson)
+def leaseCasesJson : String := jsonArray (leaseCases.map leaseCaseJson)
 
 def leaseTraceCaseJson (testCase : LeaseTraceCase) : String :=
-  "{"
-    ++ "\"name\":" ++ jsonString testCase.name ++ ","
-    ++ "\"pre\":" ++ worldJson testCase.pre ++ ","
-    ++ "\"actions\":" ++ jsonArray (testCase.actions.map actionJson) ++ ","
-    ++ "\"expected\":" ++ optionalWorldJson testCase.expected
-    ++ "}"
+  "{" ++ "\"name\":" ++ jsonString testCase.name ++
+    ",\"pre\":" ++ worldJson testCase.pre ++
+    ",\"actions\":" ++ jsonArray (testCase.actions.map actionJson) ++
+    ",\"expected\":" ++ optionalWorldJson testCase.expected ++ "}"
 
-def leaseTraceCasesJson : String :=
-  jsonArray (leaseTraceCases.map leaseTraceCaseJson)
+def leaseTraceCasesJson : String := jsonArray (leaseTraceCases.map leaseTraceCaseJson)
 
 structure ProviderEofCase where
   sawExplicitFinal : Bool
   expectedFailure : Bool
   deriving DecidableEq, Repr
 
-def providerEofCases : List ProviderEofCase :=
-  [⟨false, true⟩, ⟨true, false⟩]
+def providerEofCases : List ProviderEofCase := [⟨false, true⟩, ⟨true, false⟩]
 
 theorem providerEofCases_hold :
     providerEofCases.all (fun c =>

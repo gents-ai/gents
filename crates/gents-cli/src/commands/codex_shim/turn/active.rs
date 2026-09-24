@@ -31,20 +31,6 @@ impl NextSteeringRequest {
     }
 }
 
-#[derive(Clone, Debug)]
-struct RequestWithResponseStatus {
-    request: AgentRequestRow,
-    response_status: Option<String>,
-}
-
-impl std::ops::Deref for RequestWithResponseStatus {
-    type Target = AgentRequestRow;
-
-    fn deref(&self) -> &Self::Target {
-        &self.request
-    }
-}
-
 pub(in crate::commands::codex_shim) async fn install_stream_control(
     connection: &ConnectionState,
     thread_id: String,
@@ -210,7 +196,7 @@ pub(in crate::commands::codex_shim) async fn codex_turn_id_for_request(
 }
 
 fn next_steering_request_after_from_rows(
-    rows: &[RequestWithResponseStatus],
+    rows: &[AgentRequestRow],
     queued_after_request_id: &str,
 ) -> Option<NextSteeringRequest> {
     rows.iter()
@@ -251,7 +237,7 @@ pub(super) async fn steering_request_ids_for_turn_interrupt_cleanup(
     let mut request_ids = Vec::new();
     for row in rows.iter().filter(|row| {
         row.request_id != interrupt_request_id
-            && row.is_effectively_active()
+            && row_is_effectively_active(row)
             && steering_parent_id(row).is_some()
     }) {
         let (root, _) = codex_turn_root_and_depth(row, &by_id)?;
@@ -433,7 +419,7 @@ async fn load_thread_request_rows(
     agent_did: &str,
     requester_did: Option<&str>,
     thread_id: &str,
-) -> Result<Vec<RequestWithResponseStatus>> {
+) -> Result<Vec<AgentRequestRow>> {
     let scope = gents::session::session_scope_filter(agent_did, thread_id, requester_did);
     gents::config_client::ConfigAccess::transact_local(&state.node,None,"codex.active.rows",|txn| {
         let scope=&scope;
@@ -442,24 +428,17 @@ async fn load_thread_request_rows(
                 AgentRequest(filter:{{{scope}}},order:[{{created_at:ASC}},{{request_id:ASC}}]){{
                     _docID request_id agent_did requester_did session_id behavior_id lifecycle_state superseded_by_request input created_at
                 }}
-                AgentResponse(filter:{{{scope}}}){{request_doc_id request_id status}}
             }}"#)).await?;
             let values=response.pointer("/data/AgentRequest").and_then(Value::as_array).context("active request query omitted rows")?;
-            let mut rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>>>()?;
+            let rows=values.iter().cloned().map(decode_request_row).collect::<Result<Vec<_>>>()?;
             let mut labels=BTreeSet::new();
             for row in &rows {anyhow::ensure!(labels.insert(row.request_id.clone()),"ambiguous scoped active request label");}
-            let mut statuses=BTreeMap::new();
-            for value in response.pointer("/data/AgentResponse").and_then(Value::as_array).context("active response query omitted rows")? {
-                let physical=value.get("request_doc_id").and_then(Value::as_str).context("active response missing physical request")?;
-                anyhow::ensure!(statuses.insert(physical,value.get("status").and_then(Value::as_str)).is_none(),"duplicate response for active physical request");
-            }
-            for row in &mut rows {row.response_status=statuses.get(row.doc_id.as_deref().expect("validated physical request")).copied().flatten().map(ToOwned::to_owned);}
             Ok(rows)
         })
     }).await
 }
 
-fn decode_request_row(row: Value) -> Result<RequestWithResponseStatus> {
+fn decode_request_row(row: Value) -> Result<AgentRequestRow> {
     let request: AgentRequestRow =
         serde_json::from_value(row).context("decoding canonical AgentRequest row")?;
     request
@@ -472,14 +451,11 @@ fn decode_request_row(row: Value) -> Result<RequestWithResponseStatus> {
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .context("AgentRequest row missing created_at")?;
-    Ok(RequestWithResponseStatus {
-        request,
-        response_status: None,
-    })
+    Ok(request)
 }
 
 fn active_codex_turn_from_rows(
-    rows: &[RequestWithResponseStatus],
+    rows: &[AgentRequestRow],
     expected_turn_id: Option<&str>,
 ) -> Result<Option<ActiveCodexTurn>> {
     let by_id = rows
@@ -488,11 +464,18 @@ fn active_codex_turn_from_rows(
         .collect::<BTreeMap<_, _>>();
     let active_rows = rows
         .iter()
-        .filter(|row| row.is_effectively_active())
+        .filter(|row| row_is_effectively_active(row))
         .collect::<Vec<_>>();
 
-    let mut candidates = Vec::<(&RequestWithResponseStatus, String, usize)>::new();
+    let mut candidates = Vec::<(&AgentRequestRow, String, usize)>::new();
     for row in active_rows {
+        // A pending steering admission remains visible through the queue
+        // projection, but it cannot revive a turn whose execution ancestor
+        // has been superseded. The pending child has not claimed publication
+        // authority yet, so there is no active Codex turn to interrupt.
+        if steering_lineage_has_superseded_request(row, &by_id)? {
+            continue;
+        }
         let (root, depth) = codex_turn_root_and_depth(row, &by_id)?;
         if expected_turn_id.is_none_or(|expected| root == expected) {
             candidates.push((row, root, depth));
@@ -535,9 +518,39 @@ fn active_codex_turn_from_rows(
     }))
 }
 
+fn steering_lineage_has_superseded_request<'a>(
+    row: &'a AgentRequestRow,
+    by_id: &BTreeMap<&'a str, &'a AgentRequestRow>,
+) -> Result<bool> {
+    let mut current = row;
+    let mut seen = BTreeSet::<String>::new();
+    loop {
+        if !seen.insert(current.request_id.clone()) {
+            anyhow::bail!(
+                "cycle in Codex steering queue ancestry at request {}",
+                current.request_id
+            );
+        }
+        if current
+            .superseded_by_request
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            return Ok(true);
+        }
+        let Some(parent_id) = steering_parent_id(current) else {
+            return Ok(false);
+        };
+        let Some(parent) = by_id.get(parent_id.as_str()).copied() else {
+            return Ok(false);
+        };
+        current = parent;
+    }
+}
+
 fn codex_turn_root_and_depth<'a>(
-    row: &'a RequestWithResponseStatus,
-    by_id: &BTreeMap<&'a str, &'a RequestWithResponseStatus>,
+    row: &'a AgentRequestRow,
+    by_id: &BTreeMap<&'a str, &'a AgentRequestRow>,
 ) -> Result<(String, usize)> {
     let mut current = row;
     let mut seen = BTreeSet::<String>::new();
@@ -561,33 +574,33 @@ fn codex_turn_root_and_depth<'a>(
     }
 }
 
-fn steering_parent_id(row: &RequestWithResponseStatus) -> Option<String> {
+fn steering_parent_id(row: &AgentRequestRow) -> Option<String> {
     let queue = row.input.as_ref()?.queue.as_ref()?;
     (queue.source == gents_protocol::request_input::QueueSource::Steering)
         .then(|| queue.queued_after_request_id.clone())
         .flatten()
 }
 
-impl RequestWithResponseStatus {
-    fn is_effectively_active(&self) -> bool {
-        project_persisted_attempt(
-            self.lifecycle_state.map(|s| s.as_str()).unwrap_or(""),
-            self.superseded_by_request.is_some(),
-            self.response_status.as_deref(),
-        )
-        .is_some_and(|head| head.is_active())
-    }
+/// Request-only projection per `Proofs/Client/Types.lean`: supersession
+/// overrides, then the lifecycle decides terminality. No response facts.
+fn row_is_effectively_active(row: &AgentRequestRow) -> bool {
+    project_persisted_attempt(
+        row.lifecycle_state
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or(""),
+        row.superseded_by_request
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty()),
+    )
+    .is_some_and(|head| head.is_active())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn row(
-        request_id: &str,
-        lifecycle_state: &str,
-        queued_after: Option<&str>,
-    ) -> RequestWithResponseStatus {
+    fn row(request_id: &str, lifecycle_state: &str, queued_after: Option<&str>) -> AgentRequestRow {
         let input = queued_after.map(|parent| {
             serde_json::json!({
                 "queue": {
@@ -598,17 +611,14 @@ mod tests {
                 }
             })
         });
-        RequestWithResponseStatus {
-            request: serde_json::from_value(json!({
-                "request_id": request_id,
-                "lifecycle_state": lifecycle_state,
-                "input": input,
-                "_docID": format!("physical:{request_id}"),
-                "created_at": request_id,
-            }))
-            .expect("canonical AgentRequest test row"),
-            response_status: None,
-        }
+        serde_json::from_value(json!({
+            "request_id": request_id,
+            "lifecycle_state": lifecycle_state,
+            "input": input,
+            "_docID": format!("physical:{request_id}"),
+            "created_at": request_id,
+        }))
+        .expect("canonical AgentRequest test row")
     }
 
     #[test]
@@ -650,17 +660,23 @@ mod tests {
     }
 
     #[test]
-    fn terminal_response_excludes_stale_processing_request_from_active_turn() {
-        let mut completed = row("turn-1", "processing", None);
-        completed.response_status = Some("complete".to_string());
-        assert_eq!(
-            active_codex_turn_from_rows(&[completed], None).unwrap(),
-            None
-        );
+    fn superseded_request_is_excluded_from_active_turn() {
+        let rows = vec![
+            {
+                let mut row = row("turn-1", "processing", None);
+                row.superseded_by_request = Some("turn-2".to_string());
+                row
+            },
+            row("steer-1", "pending", Some("turn-1")),
+        ];
 
-        let mut failed = row("turn-2", "processing", None);
-        failed.response_status = Some("error".to_string());
-        assert_eq!(active_codex_turn_from_rows(&[failed], None).unwrap(), None);
+        assert_eq!(active_codex_turn_from_rows(&rows, None).unwrap(), None);
+
+        // Excluding the superseded execution lineage from the interruptable
+        // turn must not hide its separately durable queued user admission.
+        let queued = next_steering_request_after_from_rows(&rows, "turn-1").unwrap();
+        assert_eq!(queued.request_id, "steer-1");
+        assert!(queued.is_pending());
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import Proofs.Recovery.Sweeps.RequestResponse
+import Proofs.Recovery.Sweeps.Requests
 import Proofs.Recovery.Sweeps.ToolCalls
 import Proofs.Recovery.Sweeps.DetachedBridge
 import Proofs.Recovery.Sweeps.Inference

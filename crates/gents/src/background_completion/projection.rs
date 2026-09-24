@@ -66,20 +66,28 @@ async fn project_background_subagent_completion_inner(
         return Ok(BackgroundCompletionOutcome::NotBackground);
     }
 
-    let (status, summary, bridge_result, terminal) = if completed {
-        let Some(final_response) =
-            load_projected_final_response(node, &parent_context.session_id, &edge).await?
-        else {
+    let (status, summary, bridge_result, terminal, bridge_source) = if completed {
+        let Some(final_response) = load_projected_final_response(node, &edge).await? else {
             return Ok(BackgroundCompletionOutcome::MissingFinalResponse);
         };
         let summary = compact_summary(&final_response);
-        ("completed".to_string(), summary, Some(final_response), None)
+        (
+            "completed".to_string(),
+            summary,
+            Some(final_response.clone()),
+            None,
+            final_response,
+        )
     } else {
         let terminal = terminal.expect("non-completed child terminal checked above");
         let status = child_terminal_status(&terminal).to_string();
         let (reason, _failure_class) = child_terminal_reason(&terminal);
         let summary = compact_summary(&reason);
-        (status, summary, None, Some(terminal))
+        let bridge_source = match &terminal {
+            crate::tool_call_lifecycle::ChildTerminal::Failed { reason, .. } => reason.clone(),
+            _ => "linked child did not produce a completed result".to_string(),
+        };
+        (status, summary, None, Some(terminal), bridge_source)
     };
 
     let mut transitioned = false;
@@ -114,6 +122,7 @@ async fn project_background_subagent_completion_inner(
         &edge,
         &status,
         &summary,
+        &bridge_source,
     )
     .await?;
 
@@ -135,24 +144,7 @@ async fn project_background_subagent_completion_inner(
 
 async fn load_projected_final_response(
     node: &EmbeddedNode,
-    parent_session_id: &str,
     edge: &ChildEdge,
 ) -> Result<Option<String>> {
-    if let Some(final_response) = load_child_final_response(node, edge).await? {
-        return Ok(Some(final_response));
-    }
-    if edge.lifecycle_state == "completed" {
-        return match session::load_tool_call_result(
-            node,
-            parent_session_id,
-            &edge.parent_tool_call_id,
-        )
-        .await
-        {
-            Ok(result) if !result.trim().is_empty() => Ok(Some(result)),
-            Ok(_) => Ok(None),
-            Err(error) => Err(error),
-        };
-    }
-    Ok(None)
+    load_child_final_response(node, edge).await
 }

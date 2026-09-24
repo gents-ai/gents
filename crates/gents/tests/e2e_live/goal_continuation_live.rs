@@ -60,6 +60,13 @@ async fn wait_for_goal_child(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
 async fn durable_goal_continues_with_real_inference_until_model_completes() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,gents=info")),
+        )
+        .with_test_writer()
+        .try_init();
     assert!(
         std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1"),
         "set GENTS_D4F_LIVE=1 and pass --ignored to run the durable-goal live qualification"

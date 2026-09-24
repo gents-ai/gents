@@ -960,6 +960,32 @@ Denies the desktop_mailbox_start_request command without any pre-configured scop
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-reset`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_reset command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-reset`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_reset command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-restart`
 
 </td>

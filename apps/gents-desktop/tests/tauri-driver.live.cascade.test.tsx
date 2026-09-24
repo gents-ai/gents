@@ -126,7 +126,7 @@ describeLive("Tauri app live cascade interrupt (B3 + C2 witnesses)", () => {
 
       const parentSession = await runner.waitForRequestCompletion(submitted);
       logTurn(
-        `parent session terminal: turnState=${parentSession.turnState} cancelCause=${JSON.stringify(parentSession.latestResponse?.cancelCause)}`,
+        `parent session terminal: turnState=${parentSession.turnState} cancelCause=${JSON.stringify(parentSession.latestRequestOutcome?.cancelCause)}`,
       );
       expect(
         parentSession.turnState,

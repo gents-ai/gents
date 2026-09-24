@@ -387,13 +387,19 @@
           "const": "gents"
         },
         "source_projection_id": {
-          "const": "run_timeline"
+          "enum": [
+            "run_timeline",
+            "external_adapter_capture"
+          ]
         },
         "source_projection_version": {
           "const": "v1"
         },
         "source_version_status": {
-          "const": "current_state_captured_only"
+          "enum": [
+            "current_state_captured_only",
+            "external_adapter_capture"
+          ]
         }
       },
       "required": [

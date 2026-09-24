@@ -24,8 +24,6 @@ pub const AGENT_MEMORY_NAME: &str = "AgentMemory";
 pub const AGENT_MEMORY: &str = include_str!("../schemas/agent/agent_memory.graphql");
 pub const AGENT_REQUEST_NAME: &str = "AgentRequest";
 pub const AGENT_REQUEST: &str = include_str!("../schemas/agent/agent_request.graphql");
-pub const AGENT_RESPONSE_NAME: &str = "AgentResponse";
-pub const AGENT_RESPONSE: &str = include_str!("../schemas/agent/agent_response.graphql");
 pub const AGENT_MESSAGE_NAME: &str = "AgentMessage";
 pub const AGENT_MESSAGE: &str = include_str!("../schemas/agent/agent_message.graphql");
 pub const AGENT_SESSION_NAME: &str = "AgentSession";
@@ -40,8 +38,9 @@ pub const MAILBOX_ITEM_NAME: &str = "MailboxItem";
 pub const MAILBOX_ITEM: &str = include_str!("../schemas/agent/mailbox_item.graphql");
 pub const AGENT_TOOL_CALL_NAME: &str = "AgentToolCall";
 pub const AGENT_TOOL_CALL: &str = include_str!("../schemas/agent/agent_tool_call.graphql");
-pub const AGENT_TOOL_RESULT_NAME: &str = "AgentToolResult";
-pub const AGENT_TOOL_RESULT: &str = include_str!("../schemas/agent/agent_tool_result.graphql");
+pub const AGENT_OUTPUT_SEGMENT_NAME: &str = "AgentOutputSegment";
+pub const AGENT_OUTPUT_SEGMENT: &str =
+    include_str!("../schemas/agent/agent_output_segment.graphql");
 pub const COMPACTION_ENTRY_NAME: &str = "CompactionEntry";
 pub const COMPACTION_ENTRY: &str = include_str!("../schemas/agent/compaction_entry.graphql");
 pub const RENDERED_REQUEST_NAME: &str = "RenderedRequest";
@@ -176,8 +175,7 @@ pub const ALL: &[&str] = &[
     CALLBACK_INVOCATION,
     CALLBACK_RESULT,
     AGENT_REQUEST,
-    AGENT_RESPONSE,
-    AGENT_TOOL_RESULT,
+    AGENT_OUTPUT_SEGMENT,
     AGENT_SESSION,
     GOAL,
     GOAL_CREATION_CLAIM,
@@ -242,8 +240,7 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
     CALLBACK_INVOCATION_NAME,
     CALLBACK_RESULT_NAME,
     AGENT_REQUEST_NAME,
-    AGENT_RESPONSE_NAME,
-    AGENT_TOOL_RESULT_NAME,
+    AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
     GOAL_CREATION_CLAIM_NAME,
@@ -288,8 +285,7 @@ pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = &[
     AGENT_DIRECTORY_ENTRY_NAME,
     AGENT_MEMORY_NAME,
     AGENT_REQUEST_NAME,
-    AGENT_RESPONSE_NAME,
-    AGENT_TOOL_RESULT_NAME,
+    AGENT_OUTPUT_SEGMENT_NAME,
     AGENT_SESSION_NAME,
     GOAL_NAME,
     GOAL_CREATION_CLAIM_NAME,

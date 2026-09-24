@@ -488,6 +488,11 @@ mod tests {
             partial_output_tail: None,
             partial_output_seq: None,
             result: Some(result.into()),
+            reconstruction: crate::types::MessageReconstructionView {
+                state: crate::types::ReconstructionState::Ready,
+                error: None,
+                denied_dependency_doc_id: None,
+            },
             status: Some(state.into()),
             lifecycle_state: Some(state.into()),
             child_request_id: None,

@@ -201,27 +201,32 @@ theorem deadline_exceeded_request_cancels_pending_tools_from_initial
   deadline_exceeded_request_cancels_pending_tools
     h_in (wellFormed_from_initial h_reach) h_live_kind h_pending h_deadline
 
-theorem all_tools_terminal_unblocks_request_progress
+/-- With every tool terminal, the composed foreground guard admits the owned
+loop's explicit processing continuation. The witness is intentionally a
+lifecycle stutter: it claims permission to continue, not scheduler liveness or
+evidence that work occurred. -/
+theorem all_tools_terminal_admits_processing_continuation
     {pre : ComposedState}
     (h_all_terminal : ∀ t ∈ pre.tools, isTerminal t.state)
     (h_proc         : pre.request.state = .processing)
     (h_admission    : pre.request.admission = .executing) :
     ∃ post,
       Transition pre post ∧
-      RequestContext.Transition pre.request post.request := by
-  let postReq : RequestContext :=
-    { pre.request with progressSeq := pre.request.progressSeq + 1 }
+      RequestContext.step? pre.request .continueProcessing = some post.request := by
+  let postReq : RequestContext := pre.request
   let post : ComposedState := { pre with request := postReq }
   have h_inner : RequestContext.Transition pre.request postReq :=
-    RequestContext.Transition.advance h_proc h_admission rfl
-  refine ⟨post, ?_, h_inner⟩
+    RequestContext.Transition.continue_processing h_proc h_admission rfl
+  have h_action : RequestContext.step? pre.request .continueProcessing = some postReq := by
+    simp [RequestContext.step?, h_proc, h_admission, postReq]
+  refine ⟨post, ?_, h_action⟩
   refine Transition.request_step h_inner rfl rfl rfl rfl ?_ ?_
   ·
     intro h_pending
     rw [h_proc] at h_pending
     cases h_pending
   ·
-    intro _h_advance
+    intro _h_continuation
     intro ⟨t, h_in, _h_fg, h_nt⟩
     exact h_nt (h_all_terminal t h_in)
 

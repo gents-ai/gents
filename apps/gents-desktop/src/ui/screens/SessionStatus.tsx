@@ -19,7 +19,7 @@ export function SessionStatus({
   const label = held ? "Needs you" : (turnLabel(turnState) ?? "Finished");
   const glyph = held ? (
     <span className="size-2 rounded-full bg-brand" />
-  ) : turnState === "streaming" ? (
+  ) : turnState === "running" ? (
     <Spinner className="text-foreground" />
   ) : turnState === "waitingForClaim" ? (
     <Clock className="size-3.5 text-muted-foreground" />

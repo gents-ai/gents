@@ -487,10 +487,10 @@ impl MaterializerHandle for ProductionMaterializer {
                 caused_by_trigger_id: {{ _eq: "{escaped_trigger_id}" }}{request_exclusion_filter},
                 lifecycle_state: {{ _in: {active} }}
             }}) {{ _docID request_id agent_did requester_did behavior_id session_id lifecycle_state
-                execution_generation execution_lease_expires_at execution_progress_seq
+                execution_generation execution_lease_expires_at
             }} }}"#
             );
-            // A progressing executor may invalidate the observed tuple. Read
+            // A lease renewal may invalidate the observed tuple. Read
             // again before allowing LatestOnly to dispatch its replacement.
             let mut converged = false;
             const EXECUTION_REVOCATION_ATTEMPTS: usize = 4;
@@ -507,7 +507,7 @@ impl MaterializerHandle for ProductionMaterializer {
                     break;
                 }
                 for row in active_rows {
-                    if crate::lifecycle::revoke_execution_generation(
+                    if crate::lifecycle::revoke_execution_preserving_output(
                         node.as_ref(),
                         &row,
                         crate::lifecycle::RequestTerminalOutcome::Superseded,
@@ -522,7 +522,7 @@ impl MaterializerHandle for ProductionMaterializer {
             }
             anyhow::ensure!(
                 converged,
-                "execution progress raced LatestOnly revocation; retry trigger dispatch"
+                "execution renewal raced LatestOnly revocation; retry trigger dispatch"
             );
             if count > 0 {
                 tracing::info!(

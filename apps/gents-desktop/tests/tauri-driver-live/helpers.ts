@@ -35,8 +35,7 @@ function sessionDiagnosticMessage(label: string, session: DesktopSessionSnapshot
   return `${label} did not complete: ${JSON.stringify({
     turnState: session.turnState ?? null,
     latestRequestId: session.latestRequestId ?? null,
-    latestResponse: session.latestResponse ?? null,
-    activeResponseOverlay: session.activeResponseOverlay ?? null,
+    latestRequestOutcome: session.latestRequestOutcome ?? null,
     pendingTurn: session.pendingTurn ?? null,
     timelineTail: session.timelineItems.slice(-6),
   })}`;

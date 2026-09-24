@@ -10,6 +10,7 @@ describe("fenced code highlighting", () => {
         timelineItems={[
           {
             kind: "assistantMessage",
+            reconstruction: { state: "ready" },
             itemKey: "a1",
             content: '```rust\nfn main() { let x = "hi"; }\n```',
           },
@@ -28,6 +29,7 @@ describe("fenced code highlighting", () => {
         timelineItems={[
           {
             kind: "assistantMessage",
+            reconstruction: { state: "ready" },
             itemKey: "a2",
             content: "```\nplain text block\n```",
           },

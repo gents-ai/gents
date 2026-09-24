@@ -59,7 +59,7 @@ pub struct BackgroundCompletionEpochDiagnostic {
 #[derive(Debug, Clone, Deserialize)]
 struct NotificationRow {
     message_key: String,
-    request_id: Option<String>,
+    request_doc_id: Option<String>,
 }
 
 /// Load the durable completion-delivery state shown by operator status
@@ -85,8 +85,8 @@ pub async fn load_background_completion_diagnostics(
             notifications: AgentMessage(filter: {{
                 agent_did: {{ _eq: "{escaped_agent_did}" }},
                 message_key: {{ _like: "background-completion-notification:%" }}
-            }}, order: {{ timestamp: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
-                message_key request_id
+            }}, order: {{ created_at: DESC }}, limit: {NOTIFICATION_SCAN_LIMIT}) {{
+                message_key request_doc_id
             }}
         }}"#
     );
@@ -163,12 +163,16 @@ fn summarize(
                 .is_some_and(crate::lifecycle::is_background_completion_request)
         })
         .collect::<Vec<_>>();
-    let roots_by_request = wakes
+    let roots_by_request_doc = wakes
         .iter()
-        .map(|wake| (wake.request_id.clone(), retry_root(wake).to_string()))
+        .filter_map(|wake| {
+            wake.doc_id
+                .as_ref()
+                .map(|doc_id| (doc_id.clone(), retry_root(wake).to_string()))
+        })
         .collect::<BTreeMap<_, _>>();
     let mut notifications_by_root = BTreeMap::<String, BTreeSet<String>>::new();
-    let mut notifications_by_request = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut notifications_by_request_doc = BTreeMap::<String, BTreeSet<String>>::new();
     for notification in notifications {
         if !crate::background_completion::is_background_completion_notification_message_key(
             &notification.message_key,
@@ -176,9 +180,9 @@ fn summarize(
             continue;
         }
         let Some(root) = notification
-            .request_id
+            .request_doc_id
             .as_deref()
-            .and_then(|request_id| roots_by_request.get(request_id))
+            .and_then(|request_doc_id| roots_by_request_doc.get(request_doc_id))
         else {
             continue;
         };
@@ -186,8 +190,8 @@ fn summarize(
             .entry(root.clone())
             .or_default()
             .insert(notification.message_key.clone());
-        notifications_by_request
-            .entry(notification.request_id.unwrap_or_default())
+        notifications_by_request_doc
+            .entry(notification.request_doc_id.unwrap_or_default())
             .or_default()
             .insert(notification.message_key);
     }
@@ -200,8 +204,8 @@ fn summarize(
         let mut attempted = snapshot_keys(wake);
         if attempted.is_empty() {
             attempted.extend(
-                notifications_by_request
-                    .get(&wake.request_id)
+                notifications_by_request_doc
+                    .get(wake.doc_id.as_deref().unwrap_or_default())
                     .into_iter()
                     .flatten()
                     .cloned(),
@@ -472,12 +476,30 @@ mod tests {
     fn notification(request_id: &str, suffix: &str) -> NotificationRow {
         NotificationRow {
             message_key: format!("background-completion-notification:{suffix}:subagent"),
-            request_id: Some(request_id.to_string()),
+            request_doc_id: Some(format!("physical-{request_id}")),
         }
     }
 
     fn head(request_id: &str) -> BTreeMap<String, String> {
         BTreeMap::from([("session-1".to_owned(), format!("physical-{request_id}"))])
+    }
+
+    #[test]
+    fn notification_membership_requires_the_physical_wake_not_its_logical_label() {
+        let now = DateTime::parse_from_rfc3339("2026-08-12T00:00:06Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut wrong = notification("wake-1", "foreign");
+        wrong.request_doc_id = Some("wake-1".into());
+        let diagnostics = summarize(
+            vec![wake("wake-1", None, "failed", 0, 3)],
+            vec![notification("wake-1", "child-1"), wrong],
+            head("wake-1"),
+            now,
+        );
+        assert_eq!(diagnostics.scanned_notifications, 2);
+        assert_eq!(diagnostics.pending_notifications, 1);
+        assert_eq!(diagnostics.epochs[0].notification_count, 1);
     }
 
     #[test]
@@ -653,6 +675,7 @@ mod tests {
             "lifecycle_state":"failed", "created_at":"2026-08-12T00:00:00Z",
             "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0, "max_retries":3
         });
+        let mut wake_doc_id = None;
         for value in [
             failed.clone(),
             serde_json::json!({
@@ -661,7 +684,7 @@ mod tests {
                 "lifecycle_state":"completed", "created_at":"2026-08-14T00:00:00Z"
             }),
         ] {
-            access
+            let created = access
                 .write(
                     "test.diagnostic.request",
                     &format!(
@@ -670,10 +693,13 @@ mod tests {
                     ),
                 )
                 .await?;
+            if value["request_id"] == "wake" {
+                wake_doc_id = Some(crate::graphql::created_doc_id(&created, "AgentRequest")?);
+            }
         }
         access.write("test.diagnostic.notification", &format!("mutation {{ create_AgentMessage(input:{}){{_docID}} }}", gents_protocol::graphql::graphql_input_literal(&serde_json::json!({
             "agent_did":owner,"session_id":"shared-session","message_key":"background-completion-notification:child:subagent",
-            "request_id":"wake","role":"user","content":"completed tool","sequence":1,"timestamp":"2026-08-12T00:00:01Z"
+            "request_doc_id":wake_doc_id.context("wake not created")?,"role":"user","sequence":1,"created_at":"2026-08-12T00:00:01Z"
         }))?)).await?;
         let diagnostics = load_background_completion_diagnostics(&access, owner).await?;
         assert_eq!(diagnostics.epochs.len(), 1);

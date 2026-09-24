@@ -3,118 +3,165 @@ import Proofs.RequestExecutionLease.State
 namespace RequestExecutionLease
 
 /-!
-`persistProgress` is the sole lease-renewal transition.  Its constructors name
-the three durable semantic sources accepted by the runtime contract.  Socket
-traffic and no-ops deliberately remain legal observations even after the
-deadline, but return the exact same world, so they cannot defer `expire`.
+Every authoritative read and its commit is one `step?` while holding
+`Boundary.mutationWriteGate`. This models local serialization only. It does not
+claim that another process, native handle, or remote merge shares the mutex.
 
-Both live completion and recovery failure call the one `terminalize` helper;
-there is no response-only or request-only terminal transition.
+Raw output append is the only producer write that does not rewrite the request's
+explicit deadline. Exact replay is identity and never stamps fresh progress.
+Canonical source closure, header publication, pending tool rows, and exact
+recovery extent are composition obligations: this machine only authorizes their
+generation-fenced request CAS and does not model their effects.
 -/
 
+inductive ProducerDecision where
+  | closeOrRetract
+  | acceptAndPublish
+  | dispatch
+  deriving DecidableEq, Repr
+
 inductive Action (Generation : Type) where
-  | claim (generation : Generation) (deadline : Time)
-  | begin (generation : Generation)
-  | persistProgress (generation : Generation) (kind : ProgressKind) (newDeadline : Time)
+  | claim (boundary : Boundary) (generation : Generation)
+      (duration explicitDeadline : Time)
+  | begin (boundary : Boundary) (generation : Generation)
+  | appendOutput (boundary : Boundary) (generation : Generation)
+  | renew (boundary : Boundary) (generation : Generation) (expectedDeadline : Time)
+  /-- Authorizes the request-side CAS for a producer transaction. The canonical
+  output/publication effects are deliberately absent from this world. -/
+  | authorizeProducerDecision (boundary : Boundary) (generation : Generation)
+      (decision : ProducerDecision)
   | socketTraffic (generation : Generation)
   | noOp (generation : Generation)
   | advanceTime (now : Time)
-  | drop (generation : Generation)
-  | expire (generation : Generation)
-  | recover (expected : Generation) (fresh : Generation) (deadline : Time)
-  | finalize (generation : Generation) (outcome : Outcome)
-  | revoke (expected : Generation) (expectedDeadline : Time) (expectedProgress : Nat)
-      (fresh : Generation) (outcome : Outcome)
-  | recoverAndFail (expected : Generation) (fresh : Generation)
+  /-- Voluntary relinquishment, not expiry recovery. -/
+  | drop (boundary : Boundary) (generation : Generation)
+  /-- Atomic authoritative reread and generation swap for expired work. -/
+  | recoverExpired (boundary : Boundary) (expected fresh : Generation)
+      (duration explicitDeadline : Time)
+  /-- Reclaims explicitly dropped work. -/
+  | recoverDropped (boundary : Boundary) (expected fresh : Generation)
+      (duration explicitDeadline : Time)
+  | finalize (boundary : Boundary) (generation : Generation) (outcome : Outcome)
+  /-- External policy authority. It is not inactivity recovery and intentionally
+  does not treat recent output as a veto. -/
+  | policyRevoke (boundary : Boundary) (expected fresh : Generation) (outcome : Outcome)
+  /-- Atomic expiry recovery that elects the fresh terminal winner. Canonical
+  source recovery and accepted tool-row handling are composed elsewhere. -/
+  | recoverExpiredAndFail (boundary : Boundary) (expected fresh : Generation)
+  | recoverExpiredTerminal (boundary : Boundary) (expected fresh : Generation)
+      (outcome : Outcome)
+  /-- Terminal recovery after an explicit drop. -/
+  | recoverDroppedAndFail (boundary : Boundary) (expected fresh : Generation)
   deriving DecidableEq, Repr
+
+/-- The production renewal policy is intentionally not deadline equality:
+every explicit renewal advances the prior deadline by at least one tick. -/
+def renewalInterval (duration : Time) : Time := max 1 (duration / 2)
+
+def renewalDue (duration deadline : Time) : Time :=
+  deadline - renewalInterval duration
+
+def renewDeadline {Generation : Type}
+    (pre : World Generation) (duration : Time) : Time := pre.now + duration
+
+def installFresh {Generation : Type}
+    (pre : World Generation) (generation : Generation)
+    (duration explicitDeadline : Time) : World Generation :=
+  { pre with
+    lease := .active generation duration explicitDeadline
+    usedGenerations := generation :: pre.usedGenerations }
+
+def recoveryTerminal {Generation : Type}
+    (pre : World Generation) (generation : Generation)
+    (outcome : Outcome := .failed) : World Generation :=
+  terminalize
+    { pre with usedGenerations := generation :: pre.usedGenerations }
+    generation outcome
 
 def step? {Generation : Type} [DecidableEq Generation]
     (pre : World Generation) : Action Generation → Option (World Generation)
-  | .claim generation deadline =>
+  | .claim boundary generation duration explicitDeadline =>
       match pre.lease with
       | .vacant =>
-          if pre.request = .pending ∧ pre.response = none ∧
-              fresh pre generation ∧ pre.now < deadline then
+          if boundary = .mutationWriteGate ∧ pre.request = .pending ∧ duration > 0 ∧
+              fresh pre generation ∧ pre.now < explicitDeadline then
             some
               { pre with
                 request := .claimed
-                lease := .active generation deadline
+                lease := .active generation duration explicitDeadline
                 usedGenerations := generation :: pre.usedGenerations }
-          else
-            none
+          else none
       | _ => none
-  | .begin generation =>
+  | .begin boundary generation =>
+      if admitted pre boundary generation ∧ pre.request = .claimed then
+        some { pre with request := .processing }
+      else none
+  | .appendOutput boundary generation =>
+      if admitted pre boundary generation ∧ pre.request = .processing then some pre else none
+  | .renew boundary generation expectedDeadline =>
       match pre.lease with
-      | .active owner deadline =>
-          if owner = generation ∧ pre.now ≤ deadline ∧
-              pre.request = .claimed ∧ pre.response = none then
-            some { pre with request := .processing, response := some .streaming }
-          else
-            none
+      | .active owner duration explicitDeadline =>
+          if admitted pre boundary generation ∧ explicitDeadline = expectedDeadline ∧
+              renewalDue duration explicitDeadline ≤ pre.now ∧
+              explicitDeadline < renewDeadline pre duration ∧
+              renewableLifecycle pre.request then
+            some { pre with lease :=
+              (.active owner duration (renewDeadline pre duration)) }
+          else none
       | _ => none
-  | .persistProgress generation _ newDeadline =>
+  | .authorizeProducerDecision boundary generation _ =>
       match pre.lease with
-      | .active owner deadline =>
-          if owner = generation ∧ pre.now ≤ deadline ∧ deadline < newDeadline ∧
-              pre.request = .processing ∧ pre.response = some .streaming then
-            some
-              { pre with
-                lease := .active owner newDeadline
-                progressSeq := pre.progressSeq + 1 }
-          else
-            none
+      | .active _ _ _ =>
+          if admitted pre boundary generation ∧ pre.request = .processing then
+            some pre
+          else none
       | _ => none
   | .socketTraffic generation =>
       match pre.lease with
-      | .active owner _ => if owner = generation then some pre else none
+      | .active owner _ _ => if owner = generation then some pre else none
       | _ => none
   | .noOp generation =>
       match pre.lease with
-      | .active owner _ => if owner = generation then some pre else none
+      | .active owner _ _ => if owner = generation then some pre else none
       | _ => none
   | .advanceTime now =>
       if pre.now ≤ now then some { pre with now := now } else none
-  | .drop generation =>
+  | .drop boundary generation =>
       match pre.lease with
-      | .active owner _ =>
-          if owner = generation then
-            some { pre with lease := .recoverable owner }
-          else
-            none
+      | .active owner duration explicitDeadline =>
+          if boundary = .mutationWriteGate ∧ owner = generation then
+            some { pre with lease := .recoverable owner duration explicitDeadline }
+          else none
       | _ => none
-  | .expire generation =>
+  | .recoverExpired boundary expected generation duration explicitDeadline =>
       match pre.lease with
-      | .active owner deadline =>
-          if owner = generation ∧ deadline < pre.now then
-            some { pre with lease := .recoverable owner }
-          else
-            none
+      | .active owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧
+              effectiveExpiry pre ≤ pre.now ∧ duration > 0 ∧
+              fresh pre generation ∧ pre.now < explicitDeadline then
+            some (installFresh pre generation duration explicitDeadline)
+          else none
       | _ => none
-  | .recover expected generation deadline =>
+  | .recoverDropped boundary expected generation duration explicitDeadline =>
       match pre.lease with
-      | .recoverable owner =>
-          if owner = expected ∧ fresh pre generation ∧ pre.now < deadline then
-            some
-              { pre with
-                lease := .active generation deadline
-                usedGenerations := generation :: pre.usedGenerations }
-          else
-            none
+      | .recoverable owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧ duration > 0 ∧
+              fresh pre generation ∧ pre.now < explicitDeadline then
+            some (installFresh pre generation duration explicitDeadline)
+          else none
       | _ => none
-  | .finalize generation outcome =>
+  | .finalize boundary generation outcome =>
       match pre.lease with
-      | .active owner deadline =>
-          if owner = generation ∧ pre.now ≤ deadline ∧ canFinalize pre outcome ∧
+      | .active owner _ _ =>
+          if admitted pre boundary generation ∧ canFinalize pre outcome ∧
               pre.continuationCount = 0 ∧ pre.tokenChargeCount = 0 then
             some (terminalize pre owner outcome)
-          else
-            none
+          else none
       | _ => none
-  | .revoke expected expectedDeadline expectedProgress generation outcome =>
+  | .policyRevoke boundary expected generation outcome =>
       match pre.lease with
-      | .active owner deadline =>
-          if owner = expected ∧ deadline = expectedDeadline ∧
-              pre.progressSeq = expectedProgress ∧ fresh pre generation ∧
+      | .active owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧ fresh pre generation ∧
               (outcome = .dead ∨ outcome = .superseded) ∧ canFinalize pre outcome ∧
               pre.continuationCount = 0 ∧ pre.tokenChargeCount = 0 then
             some (terminalize
@@ -122,18 +169,35 @@ def step? {Generation : Type} [DecidableEq Generation]
               generation outcome)
           else none
       | _ => none
-  | .recoverAndFail expected generation =>
+  | .recoverExpiredAndFail boundary expected generation =>
       match pre.lease with
-      | .recoverable owner =>
-          if owner = expected ∧ fresh pre generation ∧
+      | .active owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧
+              effectiveExpiry pre ≤ pre.now ∧ fresh pre generation ∧
               canFinalize pre .failed ∧ pre.continuationCount = 0 ∧
               pre.tokenChargeCount = 0 then
-            some
-              (terminalize
-                { pre with usedGenerations := generation :: pre.usedGenerations }
-                generation .failed)
-          else
-            none
+            some (recoveryTerminal pre generation)
+          else none
+      | _ => none
+  | .recoverExpiredTerminal boundary expected generation outcome =>
+      match pre.lease with
+      | .active owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧
+              effectiveExpiry pre ≤ pre.now ∧ fresh pre generation ∧
+              (outcome = .failed ∨ outcome = .interrupted) ∧
+              canFinalize pre outcome ∧ pre.continuationCount = 0 ∧
+              pre.tokenChargeCount = 0 then
+            some (recoveryTerminal pre generation outcome)
+          else none
+      | _ => none
+  | .recoverDroppedAndFail boundary expected generation =>
+      match pre.lease with
+      | .recoverable owner _ _ =>
+          if boundary = .mutationWriteGate ∧ owner = expected ∧ fresh pre generation ∧
+              canFinalize pre .failed ∧ pre.continuationCount = 0 ∧
+              pre.tokenChargeCount = 0 then
+            some (recoveryTerminal pre generation)
+          else none
       | _ => none
 
 def replay? {Generation : Type} [DecidableEq Generation] :

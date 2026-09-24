@@ -9,12 +9,17 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
+use gents_protocol::message::{AssistantContent, Message};
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource, SourceClose,
+};
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config_client::ConfigAccess;
 use crate::graphql::escape_graphql_string;
+use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
 
 pub const DEFAULT_DESCENDANT_PAGE_LIMIT: usize = 20;
 pub const MAX_DESCENDANT_PAGE_LIMIT: usize = 100;
@@ -210,8 +215,17 @@ struct BridgeRow {
     agent_did: Option<String>,
     requester_did: Option<String>,
     tool_call_id: String,
+    tool_name: String,
+    message_sequence: Option<u32>,
+    // Derived only through the accepted canonical header; it is never an
+    // AgentToolCall persistence field.
+    #[serde(skip_deserializing)]
     args: Option<String>,
-    result: Option<String>,
+    // Derived only through the exact ToolCall source closure. A background
+    // bridge's sole native reply is its earlier receipt, not another terminal
+    // ToolDelivery header.
+    #[serde(skip_deserializing)]
+    terminal_output_closed: bool,
     status: Option<String>,
     lifecycle_state: Option<String>,
     started_at: Option<String>,
@@ -220,6 +234,10 @@ struct BridgeRow {
     cancel_policy: Option<String>,
     child_request_id: Option<String>,
     spawn_target_did: Option<String>,
+    // The accepted remote subagent route binds this immutable behavior before
+    // materialization.  Until the child exists, projection must expose that
+    // physical route fact rather than re-resolving an alias from tool args.
+    spawn_behavior_id: Option<String>,
     unclaimed_deadline_at: Option<String>,
 }
 
@@ -231,8 +249,8 @@ const BRIDGE_FIELDS: &str = r#"
     agent_did
     requester_did
     tool_call_id
-    args
-    result
+    tool_name
+    message_sequence
     status
     lifecycle_state
     started_at
@@ -241,6 +259,7 @@ const BRIDGE_FIELDS: &str = r#"
     cancel_policy
     child_request_id
     spawn_target_did
+    spawn_behavior_id
     unclaimed_deadline_at
 "#;
 
@@ -254,10 +273,6 @@ struct MessageCursorRow {
 struct BridgeArgs {
     #[serde(default)]
     name: Option<String>,
-    #[serde(default)]
-    agent_did: Option<String>,
-    #[serde(default)]
-    behavior_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -672,10 +687,9 @@ fn project_descendant_edge(
             DescendantControlAuthority::RejectedPhysicalLineage
         }
     };
-    let terminal_result_ref = bridge_state_is_terminal(&lifecycle_state)
-        .then(|| clean(bridge.result.as_deref()))
-        .flatten()
-        .map(|_| format!("AgentToolCall:{}", bridge.doc_id));
+    let terminal_result_ref = (bridge_state_is_terminal(&lifecycle_state)
+        && bridge.terminal_output_closed)
+        .then(|| format!("AgentToolCall:{}", bridge.doc_id));
     let diagnostic = match authorization_state {
         DescendantAuthorizationState::Authorized => None,
         DescendantAuthorizationState::PendingMaterialization => Some(format!(
@@ -705,12 +719,11 @@ fn project_descendant_edge(
     let principal_did = child
         .as_ref()
         .and_then(|row| clean(row.agent_did.as_deref()))
-        .or_else(|| clean(bridge.spawn_target_did.as_deref()))
-        .or_else(|| clean(args.agent_did.as_deref()));
+        .or_else(|| clean(bridge.spawn_target_did.as_deref()));
     let behavior_id = child
         .as_ref()
         .and_then(|row| clean(row.behavior_id.as_deref()))
-        .or_else(|| clean(args.behavior_id.as_deref()));
+        .or_else(|| clean(bridge.spawn_behavior_id.as_deref()));
 
     Ok(Some(ProjectedEdge {
         edge: DescendantEdge {
@@ -1084,13 +1097,16 @@ async fn load_bridges(
             AgentToolCall(
                 filter: {{
                     request_id: {{ _in: [{list}] }},
+                    tool_name: {{ _eq: "spawn_subagent" }},
                     child_request_id: {{ _ne: "" }}
                 }},
                 order: [{{ started_at: ASC }}, {{ tool_call_id: ASC }}]
             ) {{ {BRIDGE_FIELDS} }}
         }}"#
     );
-    load_rows(access, "AgentToolCall", &query).await
+    let mut bridges: Vec<BridgeRow> = load_rows(access, "AgentToolCall", &query).await?;
+    hydrate_bridge_payloads(access, &mut bridges).await?;
+    Ok(bridges)
 }
 
 async fn load_bridges_by_child(
@@ -1101,12 +1117,14 @@ async fn load_bridges_by_child(
     let query = format!(
         r#"{{
             AgentToolCall(
-                filter: {{ child_request_id: {{ _eq: "{child_request_id}" }} }},
+                filter: {{ tool_name: {{ _eq: "spawn_subagent" }}, child_request_id: {{ _eq: "{child_request_id}" }} }},
                 order: [{{ started_at: ASC }}, {{ tool_call_id: ASC }}]
             ) {{ {BRIDGE_FIELDS} }}
         }}"#
     );
-    load_rows(access, "AgentToolCall", &query).await
+    let mut bridges: Vec<BridgeRow> = load_rows(access, "AgentToolCall", &query).await?;
+    hydrate_bridge_payloads(access, &mut bridges).await?;
+    Ok(bridges)
 }
 
 async fn load_unique_bridge_by_doc_id(
@@ -1122,11 +1140,188 @@ async fn load_unique_bridge_by_doc_id(
             ) {{ {BRIDGE_FIELDS} }}
         }}"#
     );
-    let rows: Vec<BridgeRow> = load_rows(access, "AgentToolCall", &query).await?;
+    let mut rows: Vec<BridgeRow> = load_rows(access, "AgentToolCall", &query).await?;
+    hydrate_bridge_payloads(access, &mut rows).await?;
     match rows.len() {
         0 => Ok(None),
         1 => Ok(rows.into_iter().next()),
         count => anyhow::bail!("AgentToolCall document {doc_id} resolved to {count} rows"),
+    }
+}
+
+/// Tool lifecycle rows carry only bridge state and immutable physical joins.
+/// Their input/result columns were retired with the canonical transcript, so
+/// resolve those display-only fields through exact accepted/delivery headers.
+/// A missing header is intentionally represented as absent payload, never as
+/// an empty or proximity-selected value.
+async fn hydrate_bridge_payloads(
+    access: &DescendantGraphAccess<'_>,
+    bridges: &mut [BridgeRow],
+) -> Result<()> {
+    for bridge in bridges {
+        bridge.args = load_bridge_accepted_arguments(access, bridge).await?;
+        bridge.terminal_output_closed = load_bridge_terminal_output_closed(access, bridge).await?;
+    }
+    Ok(())
+}
+
+fn bridge_scope(bridge: &BridgeRow) -> Result<(String, String, Option<String>)> {
+    let agent_did = clean(bridge.agent_did.as_deref()).context("bridge is missing agent_did")?;
+    let session_id = clean(bridge.session_id.as_deref()).context("bridge is missing session_id")?;
+    Ok((agent_did, session_id, bridge.requester_did.clone()))
+}
+
+async fn load_bridge_accepted_arguments(
+    access: &DescendantGraphAccess<'_>,
+    bridge: &BridgeRow,
+) -> Result<Option<String>> {
+    let Some(request_doc_id) = clean(bridge.request_doc_id.as_deref()) else {
+        return Ok(None);
+    };
+    let Some(sequence) = bridge.message_sequence else {
+        return Ok(None);
+    };
+    let (agent_did, session_id, requester_did) = bridge_scope(bridge)?;
+    let scope =
+        crate::session::session_scope_filter(&agent_did, &session_id, requester_did.as_deref());
+    let request = escape_graphql_string(&request_doc_id);
+    let query = format!(
+        r#"{{ AgentMessage(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }}, sequence: {{ _eq: {sequence} }} }}, limit: 2) {{ _docID }} }}"#
+    );
+    let rows: Vec<Value> = load_rows(access, "AgentMessage", &query).await?;
+    match rows.as_slice() {
+        [] => return Ok(None),
+        [row] => {
+            let header_doc_id = row
+                .get("_docID")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .context("accepted bridge header omitted _docID")?;
+            let (header, message) = load_scoped_canonical_message(
+                access,
+                header_doc_id,
+                &agent_did,
+                requester_did.as_deref(),
+            )
+            .await?;
+            anyhow::ensure!(
+                header.session_id == session_id
+                    && header.request_doc_id.as_deref() == Some(request_doc_id.as_str())
+                    && header.sequence == sequence
+                    && header.role == MessageRole::Assistant
+                    && header.outcome == OutputOutcome::Complete
+                    && matches!(
+                        header.publication,
+                        MessagePublication::RequestExecution { .. }
+                    ),
+                "bridge accepted header crosses its physical session/request boundary"
+            );
+            let matches = header
+                .blocks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, block)| match block {
+                    MessageBlock::ToolCall {
+                        tool_call_doc_id,
+                        id,
+                        name,
+                        ..
+                    } if tool_call_doc_id == &bridge.doc_id
+                        && id == &bridge.tool_call_id
+                        && name == &bridge.tool_name =>
+                    {
+                        Some(index)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            anyhow::ensure!(
+                matches.len() == 1,
+                "accepted header does not uniquely bind descendant bridge"
+            );
+            let Message::Assistant { content, .. } = message else {
+                anyhow::bail!("accepted bridge header reconstructed as a non-assistant message");
+            };
+            let Some(AssistantContent::ToolCall(native)) = content.get(matches[0]) else {
+                anyhow::bail!("accepted bridge native block does not match its canonical position");
+            };
+            anyhow::ensure!(
+                native.id == bridge.tool_call_id && native.function.name == bridge.tool_name,
+                "accepted bridge native identity disagrees with its header"
+            );
+            Ok(Some(serde_json::to_string(&native.function.arguments)?))
+        }
+        _ => anyhow::bail!("accepted bridge header is ambiguous"),
+    }
+}
+
+async fn load_bridge_terminal_output_closed(
+    access: &DescendantGraphAccess<'_>,
+    bridge: &BridgeRow,
+) -> Result<bool> {
+    if !bridge_state_is_terminal(&lifecycle(
+        &bridge.lifecycle_state,
+        &bridge.status,
+        "running",
+    )) {
+        return Ok(false);
+    }
+    let Some(request_doc_id) = clean(bridge.request_doc_id.as_deref()) else {
+        return Ok(false);
+    };
+    let (agent_did, session_id, requester_did) = bridge_scope(bridge)?;
+    let scope =
+        crate::session::session_scope_filter(&agent_did, &session_id, requester_did.as_deref());
+    let request = escape_graphql_string(&request_doc_id);
+    let query = format!(
+        r#"{{ AgentOutputSegment(filter: {{ {scope}, request_doc_id: {{ _eq: "{request}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+    );
+    let rows: Vec<Value> = load_rows(access, "AgentOutputSegment", &query).await?;
+    let mut closes = Vec::new();
+    for row in rows {
+        let row = decode_output_segment_row(&row)?;
+        if row.segment.source
+            == (OutputSource::ToolCall {
+                tool_call_doc_id: bridge.doc_id.clone(),
+            })
+            && matches!(
+                row.segment.close,
+                Some(SourceClose::Closed {
+                    outcome: OutputOutcome::Complete,
+                    ..
+                })
+            )
+        {
+            closes.push(row.doc_id);
+        }
+    }
+    anyhow::ensure!(
+        closes.len() <= 1,
+        "bridge ToolCall source has conflicting terminal closures"
+    );
+    Ok(closes.len() == 1)
+}
+
+async fn load_scoped_canonical_message(
+    access: &DescendantGraphAccess<'_>,
+    header_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+) -> Result<(gents_protocol::output::TranscriptMessage, Message)> {
+    match access {
+        DescendantGraphAccess::Local(node) => {
+            crate::session::load_canonical_message_from_node(
+                node,
+                header_doc_id,
+                agent_did,
+                requester_did,
+            )
+            .await
+        }
+        DescendantGraphAccess::Config(access) => {
+            crate::session::load_canonical_message(access, header_doc_id, agent_did, requester_did)
+                .await
+        }
     }
 }
 
@@ -1263,6 +1458,24 @@ mod tests {
             direct,
             edge_cursor(1, Some("2026-01-01T00:00:00Z"), "p", "t", "c")
         );
+    }
+
+    #[test]
+    fn bridge_row_decodes_persisted_fields_without_derived_payload_columns() {
+        let rows: Vec<BridgeRow> = serde_json::from_value(serde_json::json!([{
+            "_docID": "physical-tool",
+            "request_id": "parent-request",
+            "tool_call_id": "native-call",
+            "tool_name": "spawn_subagent",
+            "spawn_behavior_id": "remote-behavior"
+        }]))
+        .unwrap();
+        let [bridge] = rows.as_slice() else {
+            panic!("one bridge row");
+        };
+        assert_eq!(bridge.args, None);
+        assert!(!bridge.terminal_output_closed);
+        assert_eq!(bridge.spawn_behavior_id.as_deref(), Some("remote-behavior"));
     }
 
     #[test]

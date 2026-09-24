@@ -1,10 +1,8 @@
 use std::collections::HashSet;
 
 use gents_protocol::client_protocol::{
-    derive_turn as derive_client_turn, AttemptView, RequestSnapshot, ResponseSnapshot,
-    ResponseStatus,
+    derive_turn as derive_client_turn, AttemptView, RequestSnapshot,
 };
-use gents_protocol::row::AgentResponseRow;
 
 use super::indexing::clean_string;
 use super::ClientStore;
@@ -57,11 +55,10 @@ fn attempt_chain_for_request(store: &ClientStore, request_id: &str) -> Vec<Attem
         let Some(index) = store.request_index_by_id.get(&current_request_id).copied() else {
             break;
         };
-        let row = &store.requests[index];
         if let Some(attempt) = attempt_for_request(store, index) {
             attempts.push(attempt);
         }
-        cursor = clean_string(row.retry_parent_request.as_deref());
+        cursor = clean_string(store.requests[index].retry_parent_request.as_deref());
     }
 
     attempts
@@ -86,7 +83,7 @@ fn attempt_chain_for_request_for_agent(
         }) else {
             break;
         };
-        if let Some(attempt) = attempt_for_request_for_agent(store, index, agent_did) {
+        if let Some(attempt) = attempt_for_request(store, index) {
             attempts.push(attempt);
         }
         cursor = clean_string(row.retry_parent_request.as_deref());
@@ -99,12 +96,6 @@ fn attempt_for_request(store: &ClientStore, index: usize) -> Option<AttemptView>
     let row = &store.requests[index];
     let lifecycle = row.lifecycle_state?;
 
-    let response = store
-        .latest_response_by_request_id
-        .get(&row.request_id)
-        .and_then(|response_index| response_status(&store.responses[*response_index]))
-        .map(|status| ResponseSnapshot { status });
-
     Some(AttemptView {
         request: RequestSnapshot {
             request_id: row.request_id.clone(),
@@ -112,33 +103,5 @@ fn attempt_for_request(store: &ClientStore, index: usize) -> Option<AttemptView>
             lifecycle_state: lifecycle,
             is_superseded: clean_string(row.superseded_by_request.as_deref()).is_some(),
         },
-        response,
     })
-}
-
-fn attempt_for_request_for_agent(
-    store: &ClientStore,
-    index: usize,
-    agent_did: &str,
-) -> Option<AttemptView> {
-    let row = &store.requests[index];
-    let lifecycle = row.lifecycle_state?;
-    let response = store
-        .latest_response_for_request_for_agent(&row.request_id, agent_did)
-        .and_then(response_status)
-        .map(|status| ResponseSnapshot { status });
-
-    Some(AttemptView {
-        request: RequestSnapshot {
-            request_id: row.request_id.clone(),
-            retry_parent_request: clean_string(row.retry_parent_request.as_deref()),
-            lifecycle_state: lifecycle,
-            is_superseded: clean_string(row.superseded_by_request.as_deref()).is_some(),
-        },
-        response,
-    })
-}
-
-fn response_status(row: &AgentResponseRow) -> Option<ResponseStatus> {
-    ResponseStatus::try_from(row.status.as_deref().unwrap_or_default()).ok()
 }

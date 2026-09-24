@@ -14,6 +14,7 @@ import type {
   McpServiceProbeResult,
   SubagentTreeView,
   TaskRunResult,
+  SessionLiveDeltaView,
 } from "@source-inc/gents-desktop-client";
 import type { TauriDriverChatRequest } from "../tauri-driver";
 import type { LiveBridgeRunner } from "../live-bridge-runner";
@@ -73,6 +74,8 @@ export function createBridgeHttpAdapter(
         agentDid,
       });
     },
+    fetchSessionLiveDelta: async (request) =>
+      client.postJson<SessionLiveDeltaView>("/desktop/session/live-delta", request),
     sendChatMessage: async (request) => {
       const normalized: TauriDriverChatRequest = {
         agentDid: request.agentDid,

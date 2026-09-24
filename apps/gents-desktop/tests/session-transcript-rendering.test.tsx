@@ -26,8 +26,7 @@ function session(content: string): DesktopSessionSnapshot {
     turnState: "completed",
     latestRequestId: "request-1",
     retryEligibility: { eligible: false, denialReason: null },
-    latestResponse: null,
-    activeResponseOverlay: null,
+    latestRequestOutcome: null,
     pendingTurn: null,
     context: {
       estimatedDurableTokens: 0,
@@ -49,6 +48,7 @@ function session(content: string): DesktopSessionSnapshot {
         content,
         reasoning: null,
         timestamp: null,
+        reconstruction: { state: "ready" },
       },
     ],
   };

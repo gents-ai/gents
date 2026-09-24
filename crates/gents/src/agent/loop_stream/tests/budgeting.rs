@@ -199,7 +199,10 @@ fn machine_width_budget_arithmetic_is_exact_and_fail_closed() {
 #[test]
 fn generated_aggregate_token_budget_cases_drive_the_owned_loop_ledger() {
     let cases = crate::lean_vocab_test::lean_aggregate_token_budget_cases();
-    assert!(!cases.is_empty(), "Lean emitted no aggregate token-budget cases");
+    assert!(
+        !cases.is_empty(),
+        "Lean emitted no aggregate token-budget cases"
+    );
 
     for name in [
         "restart-zero-usage-adds-no-spend",
@@ -364,7 +367,6 @@ async fn nested_compaction_charges_the_same_request_budget() {
         Box::pin(async move {
             run_loop_to_text(
                 model,
-                None::<crate::hook::DefraSessionHook>,
                 Message::user("summarize"),
                 Vec::new(),
                 Arc::new(Vec::new()),
@@ -549,7 +551,8 @@ async fn exact_aggregate_exhaustion_allows_a_valid_terminal_response() {
 }
 
 #[tokio::test]
-async fn exact_aggregate_exhaustion_after_tool_effect_is_terminal_and_preserved() {
+async fn exact_aggregate_exhaustion_rejects_tool_intent_before_dispatch() {
+    let calls = Arc::new(AtomicUsize::new(0));
     let model = UsageScriptedModel::new(vec![usage_echo_tool_turn(usage_response(
         1_000, 1_000, 2_000,
     ))]);
@@ -562,12 +565,19 @@ async fn exact_aggregate_exhaustion_after_tool_effect_is_terminal_and_preserved(
         None::<crate::hook::DefraSessionHook>,
         Message::user("use the tool"),
         Vec::new(),
-        Arc::new(vec![echo_tool()]),
+        Arc::new(vec![Box::new(CountingTool {
+            name: "echo".to_string(),
+            output: "ECHOED".to_string(),
+            calls: calls.clone(),
+        }) as Box<dyn ToolDyn>]),
         loop_config,
     ))
     .await;
 
-    assert_eq!(collected.tool_results, vec!["ECHOED"]);
+    // The modeled exhausted/nonterminal post-charge action fails before
+    // accepting the provider turn; streamed intent is not dispatch authority.
+    assert!(collected.tool_results.is_empty());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert!(
         collected.error.as_deref().is_some_and(|error| error
             .starts_with("CompletionError: ProviderError: aggregate_token_budget_exhausted: ")),
@@ -1030,9 +1040,10 @@ async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
         .await;
 
         if with_tool {
-            // The already-executed tool effect survives the mid-stream failure.
-            assert_eq!(calls.load(Ordering::SeqCst), 1);
-            assert_eq!(collected.tool_results, vec!["ECHOED"]);
+            // A streamed call is only intent. The failed provider turn never
+            // reached Complete acceptance, so no tool effect may escape.
+            assert_eq!(calls.load(Ordering::SeqCst), 0);
+            assert!(collected.tool_results.is_empty());
         }
         assert!(
             collected.error.as_deref().is_some_and(|error| error
@@ -1083,7 +1094,10 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
 
     assert_eq!(collected.final_text, None);
     assert_eq!(collected.tool_results, Vec::<String>::new());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    // No-effect-before-Complete: the provider turn never closed (mid-stream
+    // error), so the streamed tool intent must never dispatch, even as the
+    // exhausted retry budget terminalizes the loop.
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     let error = collected
         .error
         .expect("effectful retry exhaustion should fail");
@@ -1113,10 +1127,8 @@ fn generated_budget_cases_drive_dynamic_output_compaction_trigger() {
         // Drive the production helper, not a formula duplicated here.
         let configured =
             crate::provider_input::budget::threshold_budget(case.context_window, threshold);
-        let effective = crate::provider_input::budget::effective_input_budget(
-            case.context_window,
-            threshold,
-        );
+        let effective =
+            crate::provider_input::budget::effective_input_budget(case.context_window, threshold);
         let input_tokens = case.prompt_tokens.saturating_add(case.request_tokens);
         let effective_output = crate::provider_input::budget::effective_output_budget(
             input_tokens,

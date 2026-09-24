@@ -341,6 +341,7 @@ async fn create_request(
     let lifecycle_state = escape_graphql_string(lifecycle_state);
     let trigger_id = escape_graphql_string(trigger_id);
     let correlation = escape_graphql_string(correlation);
+    let created_at = escape_graphql_string(&Utc::now().to_rfc3339());
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -350,6 +351,15 @@ async fn create_request(
                 session_id: "{request_id}",
                 content: "production marker test",
                 lifecycle_state: "{lifecycle_state}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                backend_id: "",
+                execution_origin: "automated-trigger",
+                failure_reason: "",
+                created_at: "{created_at}",
+                retry_count: 0,
+                max_retries: 3,
                 caused_by_trigger_id: "{trigger_id}",
                 caused_by_trigger_kind: "{trigger_kind}",
                 caused_by_correlation: "{correlation}"
@@ -874,39 +884,141 @@ async fn unique_read_write_denial_does_not_leave_claimable_request() {
     );
 }
 
+async fn claimed_trigger_request(
+    node: &Arc<defra_node::EmbeddedNode>,
+    request_id: &str,
+    agent_did: &str,
+) -> crate::lifecycle::RequestLifecycle {
+    create_request(
+        node,
+        request_id,
+        agent_did,
+        "pending",
+        "latest",
+        TriggerKind::Event,
+        request_id,
+    )
+    .await;
+    let result = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            escape_graphql_string(request_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&result, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        agent_did,
+        row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    lifecycle
+}
+
+async fn canonical_partial_streams(
+    node: &defra_node::EmbeddedNode,
+    row: &gents_protocol::row::AgentRequestRow,
+) -> (String, String) {
+    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::live::reconstruct_dense_prefix;
+    use gents_protocol::output::reconstruction::ObservedSegment;
+    use gents_protocol::output::StreamPayload;
+
+    let doc_id = row.doc_id.as_deref().unwrap();
+    let result = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+            escape_graphql_string(doc_id),
+            AGENT_OUTPUT_SEGMENT_FIELDS,
+        ))
+        .await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let segments = result.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<anyhow::Result<Vec<_>>>()
+        .unwrap();
+    let observed = segments
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let mut coordinates = Vec::new();
+    for segment in &segments {
+        let coordinate = (&segment.segment.source, &segment.segment.writer);
+        if !coordinates.contains(&coordinate) {
+            coordinates.push(coordinate);
+        }
+    }
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    for (source, writer) in coordinates {
+        let prefix = reconstruct_dense_prefix(&observed, doc_id, source, writer, None)
+            .expect("superseded partial remains a valid canonical prefix");
+        for stream in prefix.streams {
+            match stream.declaration.payload {
+                StreamPayload::Text => text.push_str(&stream.text),
+                StreamPayload::Reasoning | StreamPayload::ReasoningSummary => {
+                    reasoning.push_str(&stream.text)
+                }
+                _ => {}
+            }
+        }
+    }
+    (text, reasoning)
+}
+
 #[tokio::test]
 async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically() {
     let (node, materializer) = materializer_with_node().await;
     let agent_did = "did:key:z-execution-owner";
     for state in ["claimed", "processing"] {
         let request_id = format!("live-{state}");
-        let expiry = (Utc::now() + ChronoDuration::minutes(5)).to_rfc3339();
-        create_request(
-            &node,
-            &request_id,
+        let mut lifecycle = claimed_trigger_request(&node, &request_id, agent_did).await;
+        let writer = crate::streaming::DefraStreamWriter::new(
+            node.clone(),
             agent_did,
-            state,
-            "latest",
-            TriggerKind::Event,
-            state,
-        )
-        .await;
-        let result = node.execute(&format!(r#"mutation {{ update_AgentRequest(
-            filter: {{ request_id: {{ _eq: "{request_id}" }} }},
-            input: {{ execution_generation: "original", execution_lease_expires_at: "{expiry}", execution_progress_seq: 7 }}
-        ) {{ _docID }} }}"#)).await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-        let request_doc_id = result.data.as_ref().unwrap()["update_AgentRequest"][0]["_docID"]
-            .as_str()
-            .unwrap();
+            std::time::Duration::ZERO,
+        );
         if state == "processing" {
-            let result = node.execute(&format!(r#"mutation {{ create_AgentResponse(input: {{
-                response_key: "{request_id}", request_id: "{request_id}", request_doc_id: "{request_doc_id}",
-                agent_did: "{agent_did}", session_id: "{request_id}", behavior_id: "general",
-                status: "streaming", content: "durable partial text", reasoning: "durable reasoning"
-            }}) {{ _docID }} }}"#)).await;
-            assert!(!result.has_errors(), "{:?}", result.errors);
+            lifecycle.begin_owned_execution(&writer).await.unwrap();
+            let doc_id = lifecycle.request().doc_id.clone();
+            writer
+                .start_provider_attempt(&doc_id, 0, 0, "inference.1".parse().unwrap())
+                .await;
+            writer
+                .flush_native_partial(
+                    &lifecycle,
+                    &gents_protocol::message::Message::Assistant {
+                        id: None,
+                        content: vec![
+                            gents_protocol::message::AssistantContent::Reasoning(
+                                gents_protocol::message::Reasoning::new("durable reasoning"),
+                            ),
+                            gents_protocol::message::AssistantContent::Text(
+                                gents_protocol::message::Text::from("durable partial text"),
+                            ),
+                        ],
+                    },
+                )
+                .await
+                .unwrap();
         }
+        let before = lifecycle.request().execution_generation.clone();
         assert_eq!(
             materializer
                 .supersede_active_runtime_requests_for_trigger(agent_did, "latest", None)
@@ -914,19 +1026,30 @@ async fn latest_only_revokes_live_execution_and_terminalizes_response_atomically
                 .unwrap(),
             1
         );
-        let result = node.execute(&format!(r#"{{
-            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ lifecycle_state execution_generation }}
-            AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ status content reasoning }}
-        }}"#)).await;
+        let result = node
+            .execute(&format!(
+                r#"{{
+            AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
+                _docID request_id agent_did requester_did session_id lifecycle_state
+                execution_generation terminal_output terminalized_at
+            }}
+        }}"#
+            ))
+            .await;
         assert!(!result.has_errors(), "{:?}", result.errors);
         let data = result.data.as_ref().unwrap();
         assert_eq!(data["AgentRequest"][0]["lifecycle_state"], "superseded");
-        assert_ne!(data["AgentRequest"][0]["execution_generation"], "original");
-        assert_eq!(data["AgentResponse"].as_array().unwrap().len(), 1);
-        assert_eq!(data["AgentResponse"][0]["status"], "error");
+        let terminal: gents_protocol::row::AgentRequestRow =
+            serde_json::from_value(data["AgentRequest"][0].clone()).unwrap();
+        assert_ne!(terminal.execution_generation, before);
+        assert_eq!(
+            terminal.terminal_output,
+            Some(gents_protocol::output::TerminalOutput::NoMessage)
+        );
         if state == "processing" {
-            assert_eq!(data["AgentResponse"][0]["content"], "durable partial text");
-            assert_eq!(data["AgentResponse"][0]["reasoning"], "durable reasoning");
+            let (text, reasoning) = canonical_partial_streams(&node, &terminal).await;
+            assert_eq!(text, "durable partial text");
+            assert_eq!(reasoning, "durable reasoning");
         }
         assert_eq!(
             materializer

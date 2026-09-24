@@ -74,6 +74,8 @@ export function useDesktopShell({
     ensureDesktopClientStarted,
     onStartClient,
     onRetryStartup,
+    onResetManagedServer,
+    managedServerReset,
     restartDesktopClient,
   } = useDesktopClientLifecycle({
     api,
@@ -356,6 +358,8 @@ export function useDesktopShell({
     error,
     onDismissError,
     onRetryStartup,
+    onResetManagedServer,
+    managedServerReset,
     selectedAgentDid,
     selectedSessionId,
     selectedBehaviorId,

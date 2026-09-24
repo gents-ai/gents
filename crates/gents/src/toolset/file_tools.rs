@@ -680,7 +680,7 @@ impl Tool for EditFileTool {
             None | Some("ladder") => MatchMode::Ladder,
             Some("regex") => MatchMode::Regex,
             Some(other) => {
-                return Err(anyhow!("unknown match_mode {other:?}; valid: ladder, regex").into())
+                return Err(anyhow!("unknown match_mode {other:?}; valid: ladder, regex").into());
             }
         };
 

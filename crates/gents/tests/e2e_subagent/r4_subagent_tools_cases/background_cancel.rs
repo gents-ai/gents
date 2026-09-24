@@ -10,7 +10,6 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     )
     .await;
     let db = &fixture.db;
-    let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let request_id = fixture.request_id.clone();
     let parent_deadline = fixture.parent_deadline;
@@ -23,16 +22,13 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     })
     .to_string();
 
-    let action = hook
-        .on_tool_call(
-            "spawn_subagent",
-            Some("model-call-1".to_string()),
-            "internal-spawn-1",
-            &args,
-        )
-        .await;
-    let receipt = skip_reason_json(action);
-    assert_eq!(receipt["ok"], true);
+    let _runtime = run_canonical_spawn_turn(&fixture, "internal-spawn-1", &args).await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-spawn-1").await;
+    let receipt = persisted_tool_result_json(&tool);
+    assert_eq!(
+        receipt["ok"], true,
+        "unexpected local spawn result: {receipt}"
+    );
     assert_eq!(receipt["behavior_id"], CHILD_BEHAVIOR_ID);
     assert_eq!(receipt["await_mode"], "background");
     assert_eq!(receipt["status"], "running");
@@ -46,15 +42,17 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
     );
     let child_session_id = wait_for_child_session_id(db.node.as_ref(), &child_request_id).await;
 
-    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-spawn-1").await;
     assert_eq!(tool.request_id.as_deref(), Some(request_id.as_str()));
     assert_eq!(tool.tool_name.as_deref(), Some("spawn_subagent"));
     let persisted_args: serde_json::Value =
         serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
     assert_eq!(persisted_args["name"], CHILD_BEHAVIOR_ID);
-    assert_eq!(persisted_args["behavior_id"], CHILD_BEHAVIOR_ID);
-    assert_eq!(persisted_args["agent_did"], fixture.agent_did);
     assert_eq!(persisted_args["prompt"], "child prompt from spawn tool");
+    assert_eq!(tool.spawn_behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
+    assert_eq!(
+        tool.spawn_target_did.as_deref(),
+        Some(fixture.agent_did.as_str())
+    );
     assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(tool.await_mode.as_deref(), Some("background"));
     assert_eq!(tool.cancel_policy.as_deref(), Some("cascade"));
@@ -74,7 +72,22 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
         "unclaimed_deadline_at should be about 60s out, got {delta}s"
     );
 
-    let child = fetch_child_request(db.node.as_ref(), &child_request_id).await;
+    let claim_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let child = loop {
+        let child = fetch_child_request(db.node.as_ref(), &child_request_id).await;
+        if child.lifecycle_state == Some(RequestLifecycleState::Processing)
+            && child.deadline.is_some()
+        {
+            break child;
+        }
+        assert!(
+            tokio::time::Instant::now() < claim_deadline,
+            "timed out waiting for the public runtime to claim child; state={:?}, deadline={:?}",
+            child.lifecycle_state,
+            child.deadline
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    };
     assert_eq!(child.request_id, child_request_id);
     assert_eq!(child.session_id.as_deref(), Some(child_session_id.as_str()));
     assert_eq!(child.behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
@@ -82,11 +95,15 @@ async fn spawn_subagent_background_materializes_child_and_bridge() {
         child.content.as_deref(),
         Some("child prompt from spawn tool")
     );
-    assert_eq!(child.lifecycle_state, Some(RequestLifecycleState::Pending));
-    assert_eq!(child.subagent_depth, Some(1));
     assert_eq!(
-        child.deadline, None,
-        "claim owns the first execution deadline"
+        child.lifecycle_state,
+        Some(RequestLifecycleState::Processing),
+        "the public runtime must claim the materialized local child"
+    );
+    assert_eq!(child.subagent_depth, Some(1));
+    assert!(
+        child.deadline.is_some(),
+        "the claimed child must carry its execution deadline"
     );
     assert_eq!(
         child.valid_until.as_deref(),
@@ -121,7 +138,6 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     )
     .await;
     let db = &fixture.db;
-    let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let request_id = fixture.request_id.clone();
     bind_behavior_backend(
@@ -149,6 +165,22 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     )
     .await
     .unwrap();
+    configure_subagent_behavior(
+        db.node.as_ref(),
+        &fixture.agent_did,
+        PARENT_BEHAVIOR_ID,
+        "r4-parent-tools",
+        vec![subagent_target(
+            &fixture.agent_did,
+            CHILD_BEHAVIOR_ID,
+            "did:test:r5-remote-child",
+            CHILD_BEHAVIOR_ID,
+        )],
+        true,
+        true,
+        Some(true),
+    )
+    .await;
 
     let args = json!({
         "name": CHILD_BEHAVIOR_ID,
@@ -157,15 +189,9 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
     })
     .to_string();
 
-    let action = hook
-        .on_tool_call(
-            "spawn_subagent",
-            Some("model-call-r5-remote-spawn".to_string()),
-            "internal-r5-remote-spawn",
-            &args,
-        )
-        .await;
-    let receipt = skip_reason_json(action);
+    let _runtime = run_canonical_spawn_turn(&fixture, "internal-r5-remote-spawn", &args).await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-r5-remote-spawn").await;
+    let receipt = persisted_tool_result_json(&tool);
     assert_eq!(receipt["ok"], true);
     assert_eq!(receipt["behavior_id"], CHILD_BEHAVIOR_ID);
     assert_eq!(receipt["await_mode"], "background");
@@ -179,7 +205,6 @@ async fn background_cross_deployment_spawn_writes_bridge_without_local_child() {
         .expect("child_request_id")
         .to_string();
 
-    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-r5-remote-spawn").await;
     assert_eq!(tool.request_id.as_deref(), Some(request_id.as_str()));
     assert_eq!(tool.lifecycle_state.as_deref(), Some("running"));
     assert_eq!(tool.await_mode.as_deref(), Some("background"));
@@ -211,26 +236,8 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     )
     .await;
     let db = &fixture.db;
-    let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
-    let agent_did = fixture.agent_did.clone();
-
-    configure_subagent_behavior(
-        db.node.as_ref(),
-        &agent_did,
-        PARENT_BEHAVIOR_ID,
-        "r4-parent-tools",
-        vec![subagent_target(
-            &agent_did,
-            CHILD_BEHAVIOR_ID,
-            REMOTE_DID,
-            CHILD_BEHAVIOR_ID,
-        )],
-        true,
-        true,
-        Some(true),
-    )
-    .await;
+    configure_remote_spawn_target(&fixture, REMOTE_DID).await;
 
     let args = json!({
         "name": CHILD_BEHAVIOR_ID,
@@ -239,27 +246,24 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
     })
     .to_string();
 
-    let action = hook
-        .on_tool_call(
-            "spawn_subagent",
-            Some("model-call-xdep-cancel".to_string()),
-            "internal-xdep-cancel",
-            &args,
-        )
-        .await;
-    let receipt = skip_reason_json(action);
+    let _runtime = run_canonical_spawn_turn(&fixture, "internal-xdep-cancel", &args).await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-xdep-cancel").await;
+    let receipt = persisted_tool_result_json(&tool);
+    assert_eq!(
+        receipt["ok"], true,
+        "unexpected remote spawn result: {receipt}"
+    );
     let child_request_id = receipt["child_request_id"]
         .as_str()
         .expect("child_request_id")
         .to_string();
 
-    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-xdep-cancel").await;
-    let persisted_args: serde_json::Value =
-        serde_json::from_str(tool.args.as_deref().expect("bridge args")).unwrap();
     assert_eq!(
-        persisted_args["agent_did"], REMOTE_DID,
+        tool.spawn_target_did.as_deref(),
+        Some(REMOTE_DID),
         "bridge must resolve the remote target owner DID"
     );
+    assert_eq!(tool.spawn_behavior_id.as_deref(), Some(CHILD_BEHAVIOR_ID));
     assert!(
         fetch_child_request_optional(db.node.as_ref(), &child_request_id)
             .await
@@ -273,7 +277,7 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
             .unwrap()
             .expect("bridge should be persisted");
     let dispatch = lifecycle
-        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &agent_did)
+        .cancel_during_run_with_cascade_dispatch(CancelCause::Interrupted, &fixture.agent_did)
         .await
         .unwrap()
         .expect("cascade dispatch");
@@ -282,19 +286,18 @@ async fn cross_deployment_cancel_writes_cascade_intent_on_bridge() {
         "remote child should write bridge intent"
     );
 
-    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-xdep-cancel").await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-xdep-cancel").await;
     assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
     assert!(
         tool.cancel_cascade_intent_at.is_some(),
         "remote branch must set cancel_cascade_intent_at"
     );
     assert_eq!(tool.cancel_pending_remote_ack, Some(true));
-    let child_interrupt = fetch_interrupt_requested_at(db.node.as_ref(), &child_request_id)
-        .await
-        .unwrap();
     assert!(
-        child_interrupt.is_none(),
-        "remote branch must not write child interrupt_requested_at"
+        fetch_child_request_optional(db.node.as_ref(), &child_request_id)
+            .await
+            .is_none(),
+        "remote branch must not materialize or interrupt a child request locally"
     );
 }
 
@@ -308,7 +311,6 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
     )
     .await;
     let db = &fixture.db;
-    let hook = fixture.hook.clone();
     let session_id = fixture.session_id.clone();
     let agent_did = fixture.agent_did.clone();
     let args = json!({
@@ -318,15 +320,13 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
     })
     .to_string();
 
-    let action = hook
-        .on_tool_call(
-            "spawn_subagent",
-            Some("model-call-local-cancel".to_string()),
-            "internal-local-cancel",
-            &args,
-        )
-        .await;
-    let receipt = skip_reason_json(action);
+    let _runtime = run_canonical_spawn_turn(&fixture, "internal-local-cancel", &args).await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-local-cancel").await;
+    let receipt = persisted_tool_result_json(&tool);
+    assert_eq!(
+        receipt["ok"], true,
+        "unexpected local spawn result: {receipt}"
+    );
     let child_request_id = receipt["child_request_id"]
         .as_str()
         .expect("child_request_id")
@@ -347,7 +347,7 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
         panic!("local child should use local cascade dispatch");
     };
     assert_eq!(intent.child_request_id, child_request_id);
-    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-local-cancel").await;
     assert_eq!(tool.cancel_cause.as_deref(), Some("interrupted"));
     gents::interrupt_request_by_doc_id(
         db.node.as_ref(),
@@ -364,7 +364,7 @@ async fn single_deployment_cancel_dispatch_still_interrupts_child() {
     .await
     .unwrap();
 
-    let tool = fetch_tool_call(db.node.as_ref(), &session_id, "internal-local-cancel").await;
+    let tool = fetch_tool_call(&db.node, &session_id, "internal-local-cancel").await;
     assert!(
         tool.cancel_cascade_intent_at.is_none(),
         "local branch must not set bridge cancel intent"

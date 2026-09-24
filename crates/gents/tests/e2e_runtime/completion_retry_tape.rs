@@ -7,16 +7,16 @@ use gents::{
     build_run_timeline, AgentIdentity, Gents, RunTimeline, RunTimelineRows,
     TimelineInferenceCallRow, TimelineRequestRow, ToolCeiling,
 };
+use gents_protocol::output::TerminalOutput;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde_json::Value;
 
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::{
     create_runtime_request, create_runtime_request_with_execution_origin,
-    wait_for_request_lifecycle_state, wait_for_response_doc_id, wait_for_runtime_ready,
-    BootedAgent,
+    wait_for_request_lifecycle_state, wait_for_runtime_ready, BootedAgent,
 };
-use crate::support::snapshots::{fetch_request_snapshot, fetch_response_snapshot};
+use crate::support::snapshots::fetch_request_snapshot;
 use crate::support::streaming_backend::{MockStreamingBackend, StreamPlan, StreamResponse};
 use crate::support::{first_row, test_db};
 
@@ -68,7 +68,6 @@ async fn backend_restart_cluster_recovers() {
             let snapshot = fetch_request_snapshot(db.node.as_ref(), doc_id).await;
             let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
             let all_calls = fetch_call_diagnostics(db.node.as_ref(), request_id).await;
-            let response = fetch_response_diagnostic(db.node.as_ref(), request_id).await;
             let request_counts = request_doc_ids
                 .iter()
                 .map(|(_, request_id, marker)| {
@@ -78,7 +77,7 @@ async fn backend_restart_cluster_recovers() {
             panic!(
                 "request {request_id} unexpectedly reached {terminal_state}; \
                  failure_reason={:?}; inference_calls={calls:?}; \
-                 all_calls={all_calls:?}; response={response:?}; \
+                 all_calls={all_calls:?}; \
                  backend_request_counts={request_counts:?}",
                 snapshot.failure_reason
             );
@@ -173,7 +172,7 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
         .node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }} ) {{
-        lifecycle_state execution_generation execution_lease_expires_at execution_progress_seq
+        lifecycle_state execution_generation execution_lease_expires_at
     }} }}"#
         ))
         .await;
@@ -182,22 +181,19 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     assert_eq!(observed["lifecycle_state"], "processing");
     let generation = escape_graphql_string(observed["execution_generation"].as_str().unwrap());
     let expiry = escape_graphql_string(observed["execution_lease_expires_at"].as_str().unwrap());
-    let progress = observed["execution_progress_seq"].as_i64().unwrap();
-    assert_eq!(
-        progress, 0,
-        "failed provider dispatch and backoff are not durable output progress"
-    );
     let expired = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
     let mutation = format!(
         r#"mutation {{ update_AgentRequest(
         filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }}, lifecycle_state: {{ _eq: "processing" }},
-            execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }},
-            execution_progress_seq: {{ _eq: {progress} }} }},
+            execution_generation: {{ _eq: "{generation}" }}, execution_lease_expires_at: {{ _eq: "{expiry}" }} }},
         input: {{ execution_lease_expires_at: "{}" }}
     ) {{ _docID }} }}"#,
         escape_graphql_string(&expired)
     );
-    let expired = db.node.execute(&mutation).await;
+    let expired = db
+        .node
+        .execute_with_retry(&mutation, gents::defra_node::ExecuteRetryPolicy::default())
+        .await;
     assert!(!expired.has_errors(), "{:?}", expired.errors);
     assert!(
         expired
@@ -209,24 +205,48 @@ async fn retry_backoff_cannot_renew_an_expired_execution_lease() {
     );
 
     wait_for_request_lifecycle_state(db.node.as_ref(), &doc_id, "failed").await;
-    let escaped_request_id = escape_graphql_string(request_id);
-    let rows = db.node.execute(&format!(r#"{{
-        AgentRequest(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ lifecycle_state execution_progress_seq }}
-        AgentResponse(filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }}) {{ status content }}
-    }}"#)).await;
+    let rows = db
+        .node
+        .execute(&format!(
+            r#"{{
+        AgentRequest(filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }}, limit: 1) {{
+            lifecycle_state failure_reason terminal_output
+        }}
+        AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{escaped_doc_id}" }} }}) {{ _docID source payload }}
+    }}"#
+        ))
+        .await;
     assert!(!rows.has_errors(), "{:?}", rows.errors);
     let rows = rows.data.as_ref().unwrap();
     assert_eq!(rows["AgentRequest"].as_array().unwrap().len(), 1);
-    assert_eq!(rows["AgentResponse"].as_array().unwrap().len(), 1);
+    assert_eq!(rows["AgentRequest"][0]["lifecycle_state"], "failed");
     assert_eq!(
-        rows["AgentRequest"][0]["execution_progress_seq"].as_i64(),
-        Some(progress)
+        serde_json::from_value::<TerminalOutput>(
+            rows["AgentRequest"][0]["terminal_output"].clone()
+        )
+        .unwrap(),
+        TerminalOutput::NoMessage,
+        "a provider failure before accepted publication has no terminal message"
     );
-    assert_eq!(rows["AgentResponse"][0]["status"], "error");
-    assert!(!rows["AgentResponse"][0]["content"]
+    assert!(rows["AgentRequest"][0]["failure_reason"]
         .as_str()
-        .unwrap_or_default()
-        .contains("retry must not execute after lease expiry"));
+        .is_some_and(|reason| reason.contains("execution lease expired")));
+    // Claim publishes authored admission input even when the provider returns
+    // no bytes. Retraction/closure records may also survive a failed attempt;
+    // neither is successful provider output from the forbidden retry.
+    for segment in rows["AgentOutputSegment"].as_array().unwrap() {
+        let source: gents_protocol::output::OutputSource =
+            serde_json::from_value(segment["source"].clone()).unwrap();
+        if matches!(
+            source,
+            gents_protocol::output::OutputSource::ProviderTurn { .. }
+        ) {
+            assert!(
+                segment["payload"].is_null() || segment["payload"].as_str() == Some(""),
+                "terminal-only provider records must contain no payload: {segment:?}"
+            );
+        }
+    }
     let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
     assert_eq!(call_states(&calls), vec!["failed"]);
     let timeline = build_timeline(db.node.as_ref(), request_id).await;
@@ -293,16 +313,13 @@ async fn deadline_tight_fails_cleanly() {
     );
     let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
     assert_eq!(call_states(&calls), vec!["failed"]);
-    let response_doc_id = wait_for_response_doc_id(db.node.as_ref(), request_id).await;
-    let response = fetch_response_snapshot(db.node.as_ref(), &response_doc_id).await;
-    assert_eq!(response.status, "error");
-    let error_message = fetch_response_error_message(db.node.as_ref(), &response_doc_id).await;
+    let request = fetch_terminal_request(db.node.as_ref(), &request_doc_id).await;
+    assert_eq!(request.lifecycle_state, RequestLifecycleState::Failed);
+    assert_eq!(request.terminal_output, TerminalOutput::NoMessage);
     assert!(
-        error_message
-            .as_deref()
-            .unwrap_or_default()
-            .contains("request deadline"),
-        "deadline failure should surface request deadline context, got {error_message:?}"
+        request.failure_reason.contains("request deadline"),
+        "deadline failure should surface request deadline context, got {:?}",
+        request.failure_reason
     );
 
     agent.shutdown().await;
@@ -407,13 +424,16 @@ async fn deterministic_400_tape() {
     let terminal_state = wait_for_request_terminal_state(db.node.as_ref(), &request_doc_id).await;
 
     let calls = fetch_inference_calls(db.node.as_ref(), request_id).await;
-    let response_doc_id = wait_for_response_doc_id(db.node.as_ref(), request_id).await;
-    let error_message = fetch_response_error_message(db.node.as_ref(), &response_doc_id).await;
     assert_eq!(
         terminal_state,
         RequestLifecycleState::Completed,
-        "deterministic parse-400 should recover; calls={calls:?}; error={error_message:?}"
+        "deterministic parse-400 should recover; calls={calls:?}"
     );
+    let request = fetch_terminal_request(db.node.as_ref(), &request_doc_id).await;
+    assert!(matches!(
+        request.terminal_output,
+        TerminalOutput::Message { .. }
+    ));
     assert_retry_recovered(&calls, 2);
     let timeline = build_timeline(db.node.as_ref(), request_id).await;
     assert_eq!(timeline.request.retry_summary.retry_count, 2);
@@ -605,58 +625,31 @@ async fn wait_for_request_terminal_state(
     }
 }
 
-async fn fetch_response_error_message(
-    node: &EmbeddedNode,
-    response_doc_id: &str,
-) -> Option<String> {
-    let response_doc_id = escape_graphql_string(response_doc_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(filter: {{ _docID: {{ _eq: "{response_doc_id}" }} }}, limit: 1) {{
-                error_message
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "fetch response error_message failed: {:?}",
-        response.errors
-    );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.get("error_message"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+#[derive(Debug, serde::Deserialize)]
+struct TerminalRequest {
+    lifecycle_state: RequestLifecycleState,
+    failure_reason: String,
+    terminal_output: TerminalOutput,
 }
 
-async fn fetch_response_diagnostic(node: &EmbeddedNode, request_id: &str) -> Option<Value> {
-    let request_id = escape_graphql_string(request_id);
+async fn fetch_terminal_request(node: &EmbeddedNode, request_doc_id: &str) -> TerminalRequest {
+    let request_doc_id = escape_graphql_string(request_doc_id);
     let query = format!(
         r#"{{
-            AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                status
-                error_message
+            AgentRequest(filter: {{ _docID: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{
+                lifecycle_state
+                failure_reason
+                terminal_output
             }}
         }}"#
     );
     let response = node.execute(&query).await;
     assert!(
         !response.has_errors(),
-        "fetch response diagnostic failed: {:?}",
+        "fetch terminal request failed: {:?}",
         response.errors
     );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentResponse"))
-        .and_then(Value::as_array)
-        .and_then(|rows| rows.first())
-        .cloned()
+    first_row::<TerminalRequest>(&response, "AgentRequest")
 }
 
 async fn fetch_inference_calls(

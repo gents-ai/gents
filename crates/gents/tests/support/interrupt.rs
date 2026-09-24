@@ -1,16 +1,18 @@
 use std::time::Duration;
 
-use gents::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS;
 use gents::defra_node::{EmbeddedNode, QueryResponse};
 use gents::graphql::escape_graphql_string;
+use gents::session::canonical_rows::{
+    decode_output_segment_row, OutputSegmentRow, AGENT_OUTPUT_SEGMENT_FIELDS,
+};
+use gents_protocol::output::live::reconstruct_dense_prefix;
+use gents_protocol::output::reconstruction::ObservedSegment;
+use gents_protocol::output::OutputSource;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{
-    first_row,
-    snapshots::{fetch_request_snapshot, fetch_response_content, fetch_runtime_snapshot},
-};
+use super::snapshots::{fetch_request_snapshot, fetch_runtime_snapshot};
 
 const TEST_MUTATION_MAX_RETRIES: u32 = 3;
 const TEST_MUTATION_INITIAL_BACKOFF_MS: u64 = 100;
@@ -26,6 +28,7 @@ const TEST_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct BootedAgent {
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     handle: Option<tokio::task::JoinHandle<anyhow::Result<()>>>,
+    signal_shutdown_on_drop: bool,
     pub agent_did: String,
 }
 
@@ -38,6 +41,7 @@ impl BootedAgent {
         Self {
             shutdown_tx,
             handle: Some(handle),
+            signal_shutdown_on_drop: true,
             agent_did,
         }
     }
@@ -55,11 +59,29 @@ impl BootedAgent {
             .expect("agent task should join")
             .expect("agent run should return ok");
     }
+
+    /// Abort and join the runtime task without sending the graceful shutdown
+    /// signal. Recovery fixtures use this to establish a deterministic crash
+    /// boundary: no live observer may race the subsequent startup sweep, and
+    /// graceful shutdown must not author terminal lifecycle state first.
+    pub async fn crash(mut self) {
+        self.signal_shutdown_on_drop = false;
+        let Some(handle) = self.handle.take() else {
+            return;
+        };
+        handle.abort();
+        let error = handle
+            .await
+            .expect_err("aborted agent task must be cancelled");
+        assert!(error.is_cancelled(), "aborted agent task: {error}");
+    }
 }
 
 impl Drop for BootedAgent {
     fn drop(&mut self) {
-        let _ = self.shutdown_tx.send(true);
+        if self.signal_shutdown_on_drop {
+            let _ = self.shutdown_tx.send(true);
+        }
         if let Some(handle) = &self.handle {
             handle.abort();
         }
@@ -239,113 +261,80 @@ async fn lookup_request_doc_id(node: &EmbeddedNode, request_id: &str) -> String 
     first_doc_id(&response, "AgentRequest")
 }
 
-pub async fn wait_for_response_doc_id(node: &EmbeddedNode, request_id: &str) -> String {
-    let escaped_request_id = escape_graphql_string(request_id);
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        let query = format!(
-            r#"{{
-                AgentResponse(
-                    filter: {{ request_id: {{ _eq: "{escaped_request_id}" }} }},
-                    limit: 1
-                ) {{
-                    _docID
-                }}
-            }}"#
-        );
-        let response = node.execute(&query).await;
-        assert!(
-            !response.has_errors(),
-            "AgentResponse lookup failed: {:?}",
-            response.errors
-        );
-        if let Some(doc_id) = optional_doc_id(&response, "AgentResponse") {
-            return doc_id;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentResponse for request_id={request_id}"
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+pub async fn fetch_output_segments_for_request(
+    node: &EmbeddedNode,
+    request_doc_id: &str,
+) -> Vec<OutputSegmentRow> {
+    let request_doc_id = escape_graphql_string(request_doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "canonical output query failed: {:?}",
+        response.errors
+    );
+    response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentOutputSegment"))
+        .and_then(Value::as_array)
+        .expect("canonical output rows")
+        .iter()
+        .map(|row| decode_output_segment_row(row).expect("decode canonical output segment"))
+        .collect()
 }
 
-pub async fn wait_for_response_content_contains(
+pub async fn wait_for_provider_output_contains(
     node: &EmbeddedNode,
-    response_doc_id: &str,
+    request_doc_id: &str,
     expected: &str,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
-        let content = fetch_response_content(node, response_doc_id).await;
-        if content.contains(expected) {
+        let rows = fetch_output_segments_for_request(node, request_doc_id).await;
+        let records = rows
+            .iter()
+            .map(|row| ObservedSegment {
+                doc_id: &row.doc_id,
+                segment: &row.segment,
+            })
+            .collect::<Vec<_>>();
+        let visible = rows.iter().find_map(|row| {
+            matches!(&row.segment.source, OutputSource::ProviderTurn { .. })
+                .then(|| {
+                    reconstruct_dense_prefix(
+                        &records,
+                        request_doc_id,
+                        &row.segment.source,
+                        &row.segment.writer,
+                        None,
+                    )
+                    .ok()
+                })
+                .flatten()
+                .map(|prefix| {
+                    prefix
+                        .streams
+                        .into_iter()
+                        .map(|stream| stream.text)
+                        .collect::<String>()
+                })
+        });
+        if visible
+            .as_deref()
+            .is_some_and(|text| text.contains(expected))
+        {
             return;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for response content to contain {expected:?}; last={content:?}"
+            "timed out waiting for canonical provider output to contain {expected:?}; last={visible:?}"
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-}
-
-pub async fn wait_for_response_content_min_len(
-    node: &EmbeddedNode,
-    response_doc_id: &str,
-    min_len: usize,
-) -> String {
-    let deadline = tokio::time::Instant::now()
-        + Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS + 15);
-    loop {
-        let snapshot = fetch_response_state(node, response_doc_id).await;
-        if snapshot.content.len() >= min_len {
-            return snapshot.content;
-        }
-        if snapshot.status == "error" {
-            panic!(
-                "live response failed before content length reached {min_len}; error_message={:?}",
-                snapshot.error_message.unwrap_or_default()
-            );
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "timed out waiting for live response content length >= {min_len}; last_status={}; last_content={:?}; last_error={:?}",
-            snapshot.status,
-            snapshot.content,
-            snapshot.error_message,
-        );
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ResponseStateSnapshot {
-    status: String,
-    content: String,
-    error_message: Option<String>,
-}
-
-async fn fetch_response_state(node: &EmbeddedNode, response_doc_id: &str) -> ResponseStateSnapshot {
-    let doc_id = escape_graphql_string(response_doc_id);
-    let query = format!(
-        r#"{{
-            AgentResponse(
-                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                limit: 1
-            ) {{
-                status
-                content
-                error_message
-            }}
-        }}"#
-    );
-    let response = node.execute(&query).await;
-    assert!(
-        !response.has_errors(),
-        "AgentResponse state query failed: {:?}",
-        response.errors
-    );
-    first_row::<ResponseStateSnapshot>(&response, "AgentResponse")
 }
 
 pub async fn wait_for_request_lifecycle_state(
@@ -363,8 +352,9 @@ pub async fn wait_for_request_lifecycle_state(
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for AgentRequest {request_doc_id} lifecycle_state={expected}; last={}",
-            snapshot.lifecycle_state
+            "timed out waiting for AgentRequest {request_doc_id} lifecycle_state={expected}; last={}; failure_reason={:?}",
+            snapshot.lifecycle_state,
+            snapshot.failure_reason
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }

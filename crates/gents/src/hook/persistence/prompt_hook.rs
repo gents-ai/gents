@@ -8,31 +8,15 @@ impl DefraSessionHook {
 
     pub async fn on_completion_call_with_context(
         &self,
-        prompt: &Message,
+        _prompt: &Message,
         _history: &[Message],
-        context: Option<&Message>,
+        _context: Option<&Message>,
     ) -> HookAction {
-        let result: anyhow::Result<()> = async {
-            let mut state = self.state.lock().await;
-
-            state.reset_after_user_message();
-            drop(state);
-
-            if let Some(context) = context {
-                self.persist_message(context).await?;
-            }
-            self.persist_message(prompt).await?;
-            Ok(())
-        }
-        .await;
-
-        match result {
-            Ok(()) => {
-                self.record_success();
-                HookAction::Continue
-            }
-            Err(e) => self.on_persistence_error("persist user prompt", &e),
-        }
+        // StreamProcessor owns publication through the active request lease.
+        // The hook has no authority to create transcript rows at admission.
+        self.state.lock().await.reset_after_user_message();
+        self.record_success();
+        HookAction::Continue
     }
 
     pub async fn on_tool_call(
@@ -297,31 +281,21 @@ impl DefraSessionHook {
         }
 
         let result: anyhow::Result<()> = async {
-            let (session_id, request_id, deadline_at, seq) =
+            let (session_id, request_id, deadline_at, _seq) =
                 self.ensure_assistant_turn_sequence().await?;
-            let request_doc_id = self.active_request_doc_id_for(&request_id).await?;
-            self.state.lock().await.register_tool_result_identity(
-                internal_call_id,
-                None,
-                tool_call_id.as_deref(),
-            );
-
-            let mut lc = crate::tool_call_lifecycle::ToolCallLifecycle::new(
-                self.node.clone(),
-                request_id,
-                session_id,
-                self.agent_did.clone(),
-                internal_call_id.to_string(),
-                seq,
-                tool_name.to_string(),
-                args.to_string(),
-                deadline_at,
-            )
-            .with_requester_did(self.active_requester_did().await)
-            .with_request_doc_id(request_doc_id)
-            .with_selected_tool_identity(self.remote_tools.as_ref().and_then(|remote| {
-                crate::meta_tools::selected_remote_identity(tool_name, args, remote)
-            }));
+            let mut lc = self
+                .adopt_accepted_tool_dispatch(
+                    internal_call_id,
+                    tool_call_id.as_deref(),
+                    &request_id,
+                    &session_id,
+                    tool_name,
+                    args,
+                    deadline_at,
+                    crate::tool_call_lifecycle::AwaitMode::Foreground,
+                    crate::tool_call_lifecycle::CancelPolicy::Cascade,
+                )
+                .await?;
             lc.start_running().await?;
 
             self.in_flight_lifecycles
@@ -357,7 +331,6 @@ impl DefraSessionHook {
     ) -> HookAction {
         use crate::tool_call_lifecycle::ToolOutcome;
 
-        self.release_live_output(internal_call_id).await;
         let persist_result: anyhow::Result<HookAction> = async {
             // Managed terminals terminate the turn; they carry no model-facing
             // text and never thread back to the provider.
@@ -372,6 +345,7 @@ impl DefraSessionHook {
                     .remove(internal_call_id);
 
                 if let Some(mut lc) = lifecycle {
+                    let output_doc_id = lc.doc_id().map(str::to_owned);
                     match outcome {
                         ToolOutcome::TimedOut { .. } => {
                             let _ = lc.timeout().await?;
@@ -379,6 +353,9 @@ impl DefraSessionHook {
                         _ => {
                             let _ = lc.cancel_during_run(CancelCause::Interrupted).await?;
                         }
+                    }
+                    if let Some(output_doc_id) = output_doc_id {
+                        self.release_live_output(&output_doc_id).await;
                     }
                 } else {
                     tracing::debug!(
@@ -400,6 +377,23 @@ impl DefraSessionHook {
             // The outcome arrives as data, so there is nothing to classify or
             // strip: the model-facing text is the only text there is.
             let result = outcome.model_facing_text();
+
+            // Background subagent dispatch published its immediate receipt
+            // under a separate authored source. Rig still reports the Skip as
+            // a completed tool outcome; acknowledging it must not close the
+            // running bridge or manufacture a second ToolResult.
+            if self
+                .in_flight_lifecycles
+                .lock()
+                .await
+                .get(internal_call_id)
+                .is_some_and(|lifecycle| {
+                    lifecycle.is_subagent_bridge()
+                        && lifecycle.await_mode() == crate::tool_call_lifecycle::AwaitMode::Background
+                })
+            {
+                return Ok(HookAction::Continue);
+            }
 
             let tool_call_doc_id = {
                 let lifecycles = self.in_flight_lifecycles.lock().await;
@@ -435,20 +429,10 @@ impl DefraSessionHook {
                 )
             };
 
-            let truncator =
-                DefraSpillTruncator::new(self.node.clone(), &self.agent_did, &session_id)
-                    .with_requester_did(self.active_requester_did().await);
-            let result_for_persistence = result;
-            let truncated = truncator
-                .truncate(
-                    tool_name,
-                    args,
-                    result_for_persistence,
-                    truncation_mode_for(tool_name),
-                    &self.truncation_limits,
-                    Some(&tool_call_doc_id),
-                )
-                .await?;
+            // Canonical segments retain the full result exactly once.  Provider
+            // narrowing is represented by the delivery header's presentation,
+            // never by a spill row or a second truncated payload copy.
+            let _ = (&session_id, &tool_call_doc_id, args);
 
             let mut lc = self
                 .in_flight_lifecycles
@@ -461,13 +445,17 @@ impl DefraSessionHook {
                     )
                 })?;
 
+            let presentation = self.background_live_outputs.registry
+                .take_prepared_presentation(&tool_call_doc_id, result)
+                .await?;
+
             match outcome {
-                ToolOutcome::Completed(_) => lc.complete(&truncated.text).await?,
+                ToolOutcome::Completed(_) => lc.complete_with_presentation(result, presentation).await?,
                 ToolOutcome::Failed { class, denial, .. } => {
                     if let Some(denial) = denial.as_ref() {
-                        lc.fail_with_command_denial(&truncated.text, denial).await?;
+                        lc.fail_with_command_denial(result, denial).await?;
                     } else {
-                        lc.fail(&truncated.text, *class).await?;
+                        lc.fail_with_presentation(result, *class, presentation).await?;
                     }
                 }
                 ToolOutcome::TimedOut { .. } | ToolOutcome::Cancelled => {
@@ -475,20 +463,17 @@ impl DefraSessionHook {
                 }
             }
 
-            if should_persist_message {
-                let model_observation =
-                    model_observation_for_tool_result(tool_name, &truncated.text);
-                let tool_result_message = Message::User {
-                    content: vec![UserContent::ToolResult(ToolResult {
-                        id: persisted_result_id,
-                        call_id: persisted_call_id,
-                        content: vec![ToolResultContent::Text(Text {
-                            text: model_observation,
-                        })],
-                    })],
-                };
-                self.persist_message(&tool_result_message).await?;
-            }
+            // The lifecycle terminal transition already published the sole
+            // canonical ToolResult header with exact physical identity.  Do
+            // not append the retired serialized-message projection again.
+            let _ = (
+                should_persist_message,
+                persisted_result_id,
+                persisted_call_id,
+                model_observation_for_tool_result(tool_name, result),
+            );
+
+            self.release_live_output(&tool_call_doc_id).await;
 
             Ok(HookAction::Continue)
         }

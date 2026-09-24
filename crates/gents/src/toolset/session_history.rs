@@ -383,7 +383,7 @@ struct MessageRow {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
-    timestamp: Option<String>,
+    created_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1125,7 +1125,7 @@ fn session_detail_query(agent_did: &str, session_ids: &[String]) -> String {
                 {{ session_id: {{ _in: [{list}] }} }}
             ] }}) {{
                 session_id
-                timestamp
+                created_at
             }}
             CompactionEntry(filter: {{ _and: [
                 {{ agent_did: {{ _eq: "{agent_did}" }} }},
@@ -1277,7 +1277,10 @@ fn aggregate_by_session(
         }
         let aggregate = aggregates.entry(session_id).or_default();
         aggregate.message_count += 1;
-        update_latest(&mut aggregate.latest_message_at, message.timestamp.as_ref());
+        update_latest(
+            &mut aggregate.latest_message_at,
+            message.created_at.as_ref(),
+        );
     }
 
     for compaction in compactions {
@@ -1334,6 +1337,11 @@ mod tests {
     use std::sync::Arc;
 
     use crate::llm::tool::Tool;
+    use crate::session::canonical_rows::{
+        decode_transcript_message_row, output_segment_create_variables,
+        transcript_message_create_variables, CREATE_AGENT_MESSAGE_MUTATION,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
 
     use super::*;
 
@@ -1514,28 +1522,6 @@ mod tests {
                 }) { _docID }
             }"#,
             r#"mutation {
-                create_AgentMessage(input: {
-                    message_key: "session-a:1",
-                    session_id: "session-a",
-                    agent_did: "did:key:z-sessions",
-                    sequence: 1,
-                    role: "user",
-                    content: "hello",
-                    timestamp: "2026-06-03T10:01:00Z"
-                }) { _docID }
-            }"#,
-            r#"mutation {
-                create_AgentMessage(input: {
-                    message_key: "session-a:2",
-                    session_id: "session-a",
-                    agent_did: "did:key:z-sessions",
-                    sequence: 2,
-                    role: "assistant",
-                    content: "hi",
-                    timestamp: "2026-06-03T10:06:00Z"
-                }) { _docID }
-            }"#,
-            r#"mutation {
                 create_CompactionEntry(input: {
                     compaction_key: "session-a:1",
                     session_id: "session-a",
@@ -1594,7 +1580,169 @@ mod tests {
             .and_then(|rows| rows.first())
             .and_then(|row| row.get("_docID"))
             .and_then(Value::as_str)
-            .expect("request-a-new document ID");
+            .expect("request-a-new document ID")
+            .to_string();
+
+        // Canonical transcript fixtures (#1571): one authored user header and
+        // one provider-turn assistant header, each over a closed source. The
+        // document travels as a typed GraphQL variable through the native
+        // retry API; the pinned create response key is add_<Collection>.
+        let agent_did: &str = "did:key:z-sessions";
+        let canonical_messages = [
+            (
+                "session-a:1",
+                1u32,
+                gents_protocol::output::MessageRole::User,
+                "2026-06-03T10:01:00Z",
+                gents_protocol::output::OutputSource::Authored {
+                    key: "prompt".to_string(),
+                },
+            ),
+            (
+                "session-a:2",
+                2u32,
+                gents_protocol::output::MessageRole::Assistant,
+                "2026-06-03T10:06:00Z",
+                gents_protocol::output::OutputSource::ProviderTurn {
+                    scope: gents_protocol::rendered_request::CaptureScope {
+                        kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                        seq: 1,
+                    },
+                    turn_index: 1,
+                    attempt: 0,
+                },
+            ),
+        ];
+        for (index, (message_key, sequence, role, created_at, source)) in
+            canonical_messages.iter().enumerate()
+        {
+            let payload = if index == 0 { "hello" } else { "hi" };
+            let segment = gents_protocol::output::OutputSegment {
+                agent_did: agent_did.to_string(),
+                requester_did: None,
+                session_id: "session-a".to_string(),
+                request_doc_id: request_doc_id.clone(),
+                source: source.clone(),
+                writer: gents_protocol::output::OutputWriter::RequestExecution {
+                    execution_generation: "generation-a".to_string(),
+                },
+                ordinal: Some(0),
+                runs: vec![gents_protocol::output::SegmentRun {
+                    stream: 0,
+                    bytes: payload.len() as u32,
+                    declaration: Some(gents_protocol::output::StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: gents_protocol::output::StreamPayload::Text,
+                    }),
+                }],
+                payload: payload.to_string(),
+                close: Some(gents_protocol::output::SourceClose::Closed {
+                    outcome: gents_protocol::output::OutputOutcome::Complete,
+                    segments: 1,
+                    stream_bytes: vec![payload.len() as u64],
+                }),
+                created_at: (*created_at).to_string(),
+            };
+            let segment_response = node
+                .execute_request_with_retry(
+                    defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                        .with_variables(output_segment_create_variables(&segment).unwrap()),
+                    defra_node::ExecuteRetryPolicy::default(),
+                )
+                .await;
+            assert!(
+                !segment_response.has_errors(),
+                "canonical segment fixture create failed: {:?}",
+                segment_response.errors
+            );
+            let segment_doc_id = segment_response
+                .data
+                .as_ref()
+                .and_then(|data| data.get("add_AgentOutputSegment"))
+                .and_then(|rows| rows.as_array())
+                .and_then(|rows| rows.first())
+                .and_then(|row| row.get("_docID"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .expect("pinned add_AgentOutputSegment response shape");
+            // The docID travels inside the typed JSON variable, not GraphQL
+            // text, so it must be the raw value.
+            let close_doc_id = segment_doc_id;
+            let message = gents_protocol::output::TranscriptMessage {
+                message_key: (*message_key).to_string(),
+                session_id: "session-a".to_string(),
+                agent_did: agent_did.to_string(),
+                requester_did: None,
+                request_doc_id: Some(request_doc_id.clone()),
+                publication: gents_protocol::output::MessagePublication::RequestExecution {
+                    execution_generation: "generation-a".to_string(),
+                },
+                outcome: gents_protocol::output::OutputOutcome::Complete,
+                sequence: *sequence,
+                role: *role,
+                native_id: None,
+                blocks: vec![gents_protocol::output::MessageBlock::Text {
+                    text: gents_protocol::output::PresentedPayload {
+                        output: gents_protocol::output::PayloadRef {
+                            close_doc_id: close_doc_id.clone(),
+                            stream: 0,
+                        },
+                        presentation: gents_protocol::output::PayloadPresentation::Full,
+                    },
+                }],
+                created_at: (*created_at).to_string(),
+            };
+            let message_response = node
+                .execute_request_with_retry(
+                    defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                        .with_variables(transcript_message_create_variables(&message).unwrap()),
+                    defra_node::ExecuteRetryPolicy::default(),
+                )
+                .await;
+            assert!(
+                !message_response.has_errors(),
+                "canonical message fixture create failed: {:?}",
+                message_response.errors
+            );
+            assert!(
+                message_response
+                    .data
+                    .as_ref()
+                    .and_then(|data| data.get("add_AgentMessage"))
+                    .and_then(|rows| rows.as_array())
+                    .and_then(|rows| rows.first())
+                    .and_then(|row| row.get("_docID"))
+                    .and_then(Value::as_str)
+                    .is_some(),
+                "pinned add_AgentMessage response shape: {:?}",
+                message_response.data
+            );
+        }
+
+        // A retired field must be rejected by the strict canonical decoder,
+        // never silently decoded from a malformed row: AgentMessage no longer
+        // carries content, timestamp, or a logical request_id (DefraDB itself
+        // permits unknown keys in create input, so the assertion belongs at
+        // the typed owner, not at the GraphQL boundary).
+        let retired = json!({
+            "_docID": "retired-doc-1",
+            "message_key": "retired:1",
+            "session_id": "session-a",
+            "agent_did": agent_did,
+            "request_doc_id": request_doc_id,
+            "publication": {"kind": "request_execution", "execution_generation": "generation-a"},
+            "outcome": "complete",
+            "sequence": 9,
+            "role": "user",
+            "blocks": [],
+            "created_at": "2026-06-03T10:09:00Z",
+            "timestamp": "2026-06-03T10:09:00Z"
+        });
+        assert!(
+            decode_transcript_message_row(&retired).is_err(),
+            "retired AgentMessage fields must fail the canonical decoder, not silently decode"
+        );
         let accounting = gents_protocol::rendered_request::ContextAccounting {
             accounting_version: gents_protocol::rendered_request::CONTEXT_ACCOUNTING_VERSION,
             turn_index: 2,
@@ -1634,7 +1782,7 @@ mod tests {
                 context_accounting_json: "{accounting}"
             }}) {{ _docID }}
         }}"#,
-            request_doc_id = escape_graphql_string(request_doc_id)
+            request_doc_id = escape_graphql_string(&request_doc_id)
         );
         let response = node.execute(&mutation).await;
         assert!(

@@ -84,6 +84,35 @@ fn single_mutation_document_normalizes_create_to_add_response_key() {
 }
 
 #[test]
+fn created_doc_id_uses_the_shared_single_document_contract() {
+    for field in ["create_AgentOutputSegment", "add_AgentOutputSegment"] {
+        for value in [
+            serde_json::json!({"_docID": "physical"}),
+            serde_json::json!([{"_docID": "physical"}]),
+        ] {
+            let response = serde_json::json!({"data": {field: value}});
+            assert_eq!(
+                created_doc_id(&response, "AgentOutputSegment").unwrap(),
+                "physical"
+            );
+        }
+    }
+    for response in [
+        serde_json::json!({"data": {}}),
+        serde_json::json!({"data": {"add_AgentOutputSegment": []}}),
+        serde_json::json!({"data": {"add_AgentOutputSegment": [{"_docID": "one"}, {"_docID": "two"}]}}),
+        serde_json::json!({"data": {"add_AgentOutputSegment": {"_docID": " "}}}),
+        serde_json::json!({"data": {"add_AgentOutputSegment": {"_docID": "one"}, "create_AgentOutputSegment": {"_docID": "one"}}}),
+        serde_json::json!({"errors": ["failed"], "data": {"add_AgentOutputSegment": {"_docID": "one"}}}),
+    ] {
+        assert!(
+            created_doc_id(&response, "AgentOutputSegment").is_err(),
+            "{response}"
+        );
+    }
+}
+
+#[test]
 fn mutation_write_ledger_counts_returned_documents_not_just_calls() {
     let response = QueryResponse::success(serde_json::json!({
         "upsert_One": { "_docID": "doc-1" },

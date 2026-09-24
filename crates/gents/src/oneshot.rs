@@ -156,7 +156,11 @@ async fn terminalize_oneshot_setup_failure(
 
 async fn persist_oneshot_failure(lifecycle: &mut RequestLifecycle, reason: &str) -> Result<()> {
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, Some(reason))
+        .terminalize_owned(
+            RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            Some(reason),
+        )
         .await?;
     Ok(())
 }
@@ -202,12 +206,13 @@ where
         behavior.agent_did(),
         std::time::Duration::ZERO,
     );
-    let response_doc_id = match lifecycle.begin_owned_execution(&stream_writer).await {
-        Ok(doc_id) => doc_id,
+    match lifecycle.begin_owned_execution(&stream_writer).await {
+        Ok(()) => {}
         Err(error) => {
             return Err(terminalize_oneshot_setup_failure(&mut lifecycle, &lsp_pool, error).await);
         }
     };
+    let response_doc_id = lifecycle.request().doc_id.clone();
     let request_commit_cid = match lifecycle.request_commit_cid() {
         Some(cid) => cid.to_string(),
         None => {
@@ -287,8 +292,8 @@ where
     )
     .await;
     hook.set_request_deadline_at(config.deadline).await;
-    // Both entry points consume the owned stream through the same durable
-    // processor, so text, reasoning and tool progress renew the same lease.
+    // Both entry points publish through the same durable processor. The
+    // lifecycle's independent renewal task owns liveness; output never renews.
     let inference = async {
         let mut stream = Box::pin(crate::agent::loop_stream::run_loop_stream(
             model,
@@ -317,7 +322,7 @@ where
                     return processor
                         .final_text
                         .take()
-                        .context("one-shot final response missing text")
+                        .context("one-shot final response missing text");
                 }
                 StreamAction::Error(error) => {
                     drop(stream);
@@ -343,8 +348,9 @@ where
     let session_id = hook.session_id().await;
     match response {
         Ok(response_text) => {
+            let selection = stream_writer.terminal_output(&request.doc_id).await;
             let lifecycle_result = lifecycle
-                .terminalize_owned(&stream_writer, RequestTerminalOutcome::Completed, None)
+                .terminalize_owned(RequestTerminalOutcome::Completed, selection, None)
                 .await;
             let close_result = if matches!(lifecycle_result, Ok(TerminalizeResult::Won)) {
                 hook.close().await
@@ -370,10 +376,11 @@ where
             })
         }
         Err(error) => {
+            let selection = stream_writer.terminal_output(&request.doc_id).await;
             let lifecycle_result = lifecycle
                 .terminalize_owned(
-                    &stream_writer,
                     RequestTerminalOutcome::Failed,
+                    selection,
                     Some(&error.to_string()),
                 )
                 .await;

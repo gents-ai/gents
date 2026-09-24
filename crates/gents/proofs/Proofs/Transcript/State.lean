@@ -1,4 +1,5 @@
 import Proofs.Basic
+import Proofs.CanonicalOutput.State
 import Proofs.ToolExecution.State
 import Mathlib.Data.Finset.Basic
 
@@ -62,6 +63,10 @@ def toolResultKey? : MessageKind → Option ToolResultKey
 
 end MessageKind
 
+/-- Sequencing/pairing projection of an immutable native message header.
+`messageId` is assumed to be a fresh, genesis-validated Defra document identity
+when a publication transition enters this model. This surface does not derive
+identity from content or decide identity collisions. -/
 structure MessageRow where
   messageId : MessageId
   sessionId : SessionId
@@ -100,6 +105,20 @@ structure ToolCallRow where
 
 namespace ToolCallRow
 
+def isPending (row : ToolCallRow) : Prop :=
+  row.state = .pending
+
+instance (row : ToolCallRow) : Decidable row.isPending := by
+  unfold isPending
+  infer_instance
+
+def isRunning (row : ToolCallRow) : Prop :=
+  row.state = .running
+
+instance (row : ToolCallRow) : Decidable row.isRunning := by
+  unfold isRunning
+  infer_instance
+
 def isCompleted (row : ToolCallRow) : Prop :=
   row.state = .completed
 
@@ -112,7 +131,12 @@ end ToolCallRow
 structure AssistantTurn where
   sessionId : SessionId
   sequence : Sequence
-  callIds : Finset ToolExecution.ToolCallId
+  /-- Provider order, retained by the pending-row suffix and later dispatch. -/
+  callIds : List ToolExecution.ToolCallId
+  /-- The canonical header owns this field. Transcript only uses it to select
+  dispatchable versus terminal tool rows; bytes and closure validity stay in
+  `CanonicalOutput`. -/
+  outcome : CanonicalOutput.Outcome := .complete
   deriving DecidableEq
 
 namespace AssistantTurn
@@ -135,7 +159,6 @@ structure TranscriptState where
   messages : List MessageRow
   toolCalls : List ToolCallRow
   inFlight : Finset ToolExecution.ToolCallId
-  assistantTurn : Option AssistantTurn
   deriving DecidableEq
 
 def StrictlyIncreasingMessages : List MessageRow → Prop
@@ -169,34 +192,92 @@ def ReservedByPersistedMessage (s : TranscriptState) (call : ToolCallRow) : Prop
   ∃ row, row ∈ s.messages ∧
     row.reservesToolCall call.callId call.sessionId call.messageSequence
 
-def ReservedByAssistantTurn (s : TranscriptState) (call : ToolCallRow) : Prop :=
-  ∃ turn, s.assistantTurn = some turn ∧ turn.reservesToolCall call
-
 def ToolCallReservedByMessage (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls →
-    ReservedByPersistedMessage s call ∨ ReservedByAssistantTurn s call
+    ReservedByPersistedMessage s call
 
-def CompletedToolCallsPaired (s : TranscriptState) : Prop :=
+def DeliveredToolCallsPaired (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls →
-    call.state = .completed →
-      ∀ key, call.resultKey = some key →
-        s.toolResultMessageCount key = 1
+    ∀ key, call.resultKey = some key →
+      s.toolResultMessageCount key = 1
 
 def ToolResultMessagesPaired (s : TranscriptState) : Prop :=
   ∀ row, row ∈ s.messages →
     ∀ callId key, row.kind = .toolResult callId key →
       ∃ call, call ∈ s.toolCalls ∧
         call.callId = callId ∧
-        call.state = .completed ∧
         call.resultKey = some key
 
 def PairClosed (s : TranscriptState) : Prop :=
   s.ToolCallReservedByMessage ∧
-    s.CompletedToolCallsPaired ∧
+    s.DeliveredToolCallsPaired ∧
     s.ToolResultMessagesPaired
 
 def StrongDrain (s : TranscriptState) : Prop :=
   ∀ call, call ∈ s.toolCalls → call.state ≠ .running
+
+def PublishableTurn (s : TranscriptState) (turn : AssistantTurn) : Prop :=
+  turn.sessionId = s.sessionId ∧
+    turn.sequence = s.nextSeq ∧
+    turn.callIds.Nodup ∧
+    ∀ call ∈ s.toolCalls, call.callId ∉ turn.callIds
+
+instance (s : TranscriptState) (turn : AssistantTurn) :
+    Decidable (s.PublishableTurn turn) := by
+  unfold PublishableTurn
+  infer_instance
+
+/-- A call can enter host execution only from a pending row already reserved by
+an immutable assistant header. -/
+def Dispatchable (s : TranscriptState) (callId : ToolExecution.ToolCallId) : Prop :=
+  ∃ call, call ∈ s.toolCalls ∧
+    call.callId = callId ∧
+    call.state = .pending ∧
+    s.ReservedByPersistedMessage call
+
+instance (s : TranscriptState) (callId : ToolExecution.ToolCallId) :
+    Decidable (s.Dispatchable callId) := by
+  unfold Dispatchable ReservedByPersistedMessage
+  infer_instance
+
+/-- Filtering pending rows preserves their publication order. Dispatching the
+head therefore permits parallel startup without reordering calls. -/
+def pendingCallIds (s : TranscriptState) : List ToolExecution.ToolCallId :=
+  s.toolCalls.filterMap fun call =>
+    if call.state = .pending then some call.callId else none
+
+def ReadyToDispatch (s : TranscriptState) (callId : ToolExecution.ToolCallId) : Prop :=
+  s.Dispatchable callId ∧ s.pendingCallIds.head? = some callId
+
+instance (s : TranscriptState) (callId : ToolExecution.ToolCallId) :
+    Decidable (s.ReadyToDispatch callId) := by
+  unfold ReadyToDispatch
+  infer_instance
+
+def RunningPublishedCall (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : Prop :=
+  ∃ call, call ∈ s.toolCalls ∧
+    call.callId = callId ∧
+    call.state = .running ∧
+    callId ∈ s.inFlight ∧
+    s.ReservedByPersistedMessage call
+
+instance (s : TranscriptState) (callId : ToolExecution.ToolCallId) :
+    Decidable (s.RunningPublishedCall callId) := by
+  unfold RunningPublishedCall ReservedByPersistedMessage
+  infer_instance
+
+def CancellablePublishedCall (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : Prop :=
+  ∃ call, call ∈ s.toolCalls ∧
+    call.callId = callId ∧
+    (call.state = .pending ∨ call.state = .running) ∧
+    s.ReservedByPersistedMessage call
+
+instance (s : TranscriptState) (callId : ToolExecution.ToolCallId) :
+    Decidable (s.CancellablePublishedCall callId) := by
+  unfold CancellablePublishedCall ReservedByPersistedMessage
+  infer_instance
 
 def replaceToolCall
     (rows : List ToolCallRow)
@@ -214,51 +295,79 @@ def appendUserMessage (s : TranscriptState) (messageId : MessageId)
        , sequence := s.nextSeq
        , role := .user
        , kind := kind }]
-    assistantTurn := none
   }
 
-def beginAssistantToolCall (s : TranscriptState)
-    (callId : ToolExecution.ToolCallId) : TranscriptState :=
-  let sequence :=
-    match s.assistantTurn with
-    | some turn => turn.sequence
-    | none => s.nextSeq
-  let turn :=
-    match s.assistantTurn with
-    | some existing => { existing with callIds := insert callId existing.callIds }
-    | none =>
-        { sessionId := s.sessionId
-        , sequence := sequence
-        , callIds := insert callId ∅
-        }
-  { s with
-    nextSeq := match s.assistantTurn with | some _ => s.nextSeq | none => s.nextSeq + 1
-    toolCalls := s.toolCalls ++
-      [{ sessionId := s.sessionId
-       , callId := callId
-       , messageSequence := sequence
-       , state := .running
-       , resultKey := none }]
-    inFlight := insert callId s.inFlight
-    assistantTurn := some turn
-  }
+def assistantKind (turn : AssistantTurn) : MessageKind :=
+  if turn.callIds.isEmpty then .ordinary else .assistantToolCalls turn.callIds.toFinset
 
-def persistAssistantMessage (s : TranscriptState) (messageId : MessageId)
+def toolRows (turn : AssistantTurn)
+    (state : ToolExecution.ToolCallState) : List ToolCallRow :=
+  turn.callIds.map fun callId =>
+    { sessionId := turn.sessionId
+    , callId := callId
+    , messageSequence := turn.sequence
+    , state := state
+    , resultKey := none }
+
+/-- Acceptance is one durable transaction at this abstraction boundary: the
+already-closed Complete header and every ordered tool intent appear together,
+all pending and none in flight. -/
+def publishAcceptedAssistant (s : TranscriptState) (messageId : MessageId)
     (turn : AssistantTurn) : TranscriptState :=
   { s with
+    nextSeq := s.nextSeq + 1
     messages := s.messages ++
       [{ messageId := messageId
        , sessionId := turn.sessionId
        , sequence := turn.sequence
        , role := .assistant
-       , kind := .assistantToolCalls turn.callIds }]
-    assistantTurn := none
+       , kind := assistantKind turn }]
+    toolCalls := s.toolCalls ++ toolRows turn .pending
   }
 
-def completeToolWithResult (s : TranscriptState)
+/-- A terminal Partial header may preserve call provenance, but its rows are
+born terminal and can never satisfy `Dispatchable`. -/
+def publishPartialAssistant (s : TranscriptState) (messageId : MessageId)
+    (turn : AssistantTurn) : TranscriptState :=
+  { s with
+    nextSeq := s.nextSeq + 1
+    messages := s.messages ++
+      [{ messageId := messageId
+       , sessionId := turn.sessionId
+       , sequence := turn.sequence
+       , role := .assistant
+       , kind := assistantKind turn }]
+    toolCalls := s.toolCalls ++ toolRows turn .failed
+  }
+
+def dispatchToolCall (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : TranscriptState :=
+  { s with
+    toolCalls := replaceToolCall s.toolCalls callId
+      (fun row => { row with state := .running })
+    inFlight := insert callId s.inFlight
+  }
+
+def dispatchToolCallWithMode (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) (mode : Subagent.AwaitMode) : TranscriptState :=
+  let dispatched := s.dispatchToolCall callId
+  match mode with
+  | .foreground => dispatched
+  | .background => { dispatched with inFlight := dispatched.inFlight.erase callId }
+
+def releaseParentInFlight (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : TranscriptState :=
+  { s with inFlight := s.inFlight.erase callId }
+
+def claimParentInFlight (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId) : TranscriptState :=
+  { s with inFlight := insert callId s.inFlight }
+
+def publishToolResult (s : TranscriptState)
     (callId : ToolExecution.ToolCallId)
     (messageId : MessageId)
-    (key : ToolResultKey) : TranscriptState :=
+    (key : ToolResultKey)
+    (terminal : ToolExecution.ToolCallState) : TranscriptState :=
   if s.hasToolResultKey key then s else
   { s with
     nextSeq := s.nextSeq + 1
@@ -269,12 +378,17 @@ def completeToolWithResult (s : TranscriptState)
        , role := .user
        , kind := .toolResult callId key }]
     toolCalls := replaceToolCall s.toolCalls callId
-      (fun row => { row with state := .completed, resultKey := some key })
+      (fun row => { row with state := terminal, resultKey := some key })
     inFlight := s.inFlight.erase callId
-    assistantTurn := none
   }
 
-def terminalizeInFlight (s : TranscriptState)
+def completeToolWithResult (s : TranscriptState)
+    (callId : ToolExecution.ToolCallId)
+    (messageId : MessageId)
+    (key : ToolResultKey) : TranscriptState :=
+  s.publishToolResult callId messageId key .completed
+
+def terminalizeToolCall (s : TranscriptState)
     (callId : ToolExecution.ToolCallId)
     (terminal : ToolExecution.ToolCallState) : TranscriptState :=
   { s with
@@ -282,6 +396,16 @@ def terminalizeInFlight (s : TranscriptState)
       (fun row => { row with state := terminal })
     inFlight := s.inFlight.erase callId
   }
+
+/-- Request finalization reuses the tool owner's cancel-before-dispatch policy:
+only exact accepted call identities that are still pending are cancelled. -/
+def cancelPendingOwnedCalls (s : TranscriptState)
+    (owned : List (SessionId × Sequence × ToolExecution.ToolCallId)) : TranscriptState :=
+  { s with toolCalls := s.toolCalls.map fun row =>
+      if (row.sessionId, row.messageSequence, row.callId) ∈ owned &&
+          row.state == .pending then
+        { row with state := .cancelled }
+      else row }
 
 def abandonHookOwnership (s : TranscriptState) : TranscriptState :=
   { s with inFlight := ∅ }

@@ -348,7 +348,6 @@ pub async fn build_runtime_snapshot(core: &ClientCore) -> DesktopRuntimeSnapshot
             let sessions = session_summaries(
                 &store.sessions,
                 &store.requests,
-                &store.responses,
                 &peer.agent_did,
                 &tasks,
                 &triggers,

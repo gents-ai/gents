@@ -25,27 +25,33 @@ type PendingUserTurn = Extract<
 >;
 type LiveAssistant = Extract<RenderedTimelineItem, { kind: "liveAssistant" }>;
 
-export function hasVisibleResponseCancelBadgeTarget(
-  item: RenderedTimelineItem,
-  responseMaterializedSequence?: number | null,
-) {
-  switch (item.kind) {
-    case "assistantMessage":
+/** Render the bridge's canonical observation, never infer it from empty text. */
+function MessageAvailability({
+  reconstruction,
+}: {
+  reconstruction: AssistantMessage["reconstruction"];
+}) {
+  switch (reconstruction.state) {
+    case "ready":
+      return null;
+    case "loading":
       return (
-        Boolean(
-          normalizeTranscriptText(item.content) ||
-          normalizeTranscriptText(item.reasoning),
-        ) &&
-        item.sequence != null &&
-        item.sequence === responseMaterializedSequence
+        <p role="status" data-testid="message-output-loading">
+          Loading message…
+        </p>
       );
-    case "liveAssistant":
-      return Boolean(
-        normalizeTranscriptText(item.content) ||
-        normalizeTranscriptText(item.reasoning),
+    case "denied":
+      return (
+        <p role="alert" data-testid="message-output-denied">
+          Message unavailable: access denied.
+        </p>
       );
-    default:
-      return false;
+    case "invalid":
+      return (
+        <p role="alert" data-testid="message-output-invalid">
+          Message could not be reconstructed.
+        </p>
+      );
   }
 }
 
@@ -57,10 +63,15 @@ export function UserMessageItem({ item }: { item: UserMessage }) {
         <div className="message-role">
           user
           <MessageTime value={item.timestamp} />
-          <CopyButton className="message-copy" getText={() => content} />
+          {item.reconstruction.state === "ready" && content ? (
+            <CopyButton className="message-copy" getText={() => content} />
+          ) : null}
         </div>
         <div className="message-content">
-          <MarkdownContent value={content} />
+          <MessageAvailability reconstruction={item.reconstruction} />
+          {item.reconstruction.state === "ready" ? (
+            <MarkdownContent value={content} />
+          ) : null}
         </div>
       </article>
     </div>
@@ -70,41 +81,30 @@ export function UserMessageItem({ item }: { item: UserMessage }) {
 export function AssistantMessageItem({
   item,
   animateReveal = false,
-  responseCancelCause,
-  responseMaterializedSequence,
 }: {
   item: AssistantMessage;
   animateReveal?: boolean;
-  responseCancelCause?: DerivedCancelCauseView | null;
-  responseMaterializedSequence?: number | null;
 }) {
   const content = normalizeTranscriptText(item.content);
   const reasoning = normalizeTranscriptText(item.reasoning);
-  if (!content && !reasoning) {
+  if (item.reconstruction.state === "ready" && !content && !reasoning) {
     return null;
   }
-  const showBadge =
-    responseCancelCause != null &&
-    item.sequence != null &&
-    item.sequence === responseMaterializedSequence;
   return (
     <div className="turn-block">
       <article className="message-card" data-testid="assistant-message">
         <div className="message-role">
           assistant
-          {showBadge ? (
-            <CancelCauseBadge
-              cause={responseCancelCause}
-              className="assistant-turn-cause-badge"
-            />
-          ) : null}
           <MessageTime value={item.timestamp} />
-          {content ? (
+          {item.reconstruction.state === "ready" && content ? (
             <CopyButton className="message-copy" getText={() => content} />
           ) : null}
         </div>
-        <ReasoningDisclosure value={reasoning} />
-        {content ? (
+        <MessageAvailability reconstruction={item.reconstruction} />
+        {item.reconstruction.state === "ready" ? (
+          <ReasoningDisclosure value={reasoning} />
+        ) : null}
+        {item.reconstruction.state === "ready" && content ? (
           <div className="message-content">
             <RevealedMarkdownContent animate={animateReveal} value={content} />
           </div>
@@ -138,13 +138,7 @@ export function PendingUserTurnItem({ item }: { item: PendingUserTurn }) {
   );
 }
 
-export function LiveAssistantItem({
-  item,
-  responseCancelCause,
-}: {
-  item: LiveAssistant;
-  responseCancelCause?: DerivedCancelCauseView | null;
-}) {
+export function LiveAssistantItem({ item }: { item: LiveAssistant }) {
   const content = normalizeTranscriptText(item.content);
   const reasoning = normalizeTranscriptText(item.reasoning);
   if (!content && !reasoning) {
@@ -158,12 +152,6 @@ export function LiveAssistantItem({
           <span className="assistant-live-dot" aria-hidden="true" />
           {content ? "Responding" : "Thinking"}
         </span>
-        {responseCancelCause != null ? (
-          <CancelCauseBadge
-            cause={responseCancelCause}
-            className="assistant-turn-cause-badge"
-          />
-        ) : null}
       </div>
       <ReasoningDisclosure value={reasoning} />
       {content ? (

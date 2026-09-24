@@ -205,11 +205,11 @@ fn init_tool_audit_flags_parse() {
         "--defra-query-collection",
         "AgentRequest",
         "--defra-query-collection",
-        "AgentResponse",
+        "AgentMessage",
     ]);
     assert_eq!(
         scoped.defra_query_collections,
-        vec!["AgentRequest".to_string(), "AgentResponse".to_string()]
+        vec!["AgentRequest".to_string(), "AgentMessage".to_string()]
     );
 }
 
@@ -554,11 +554,11 @@ fn p2p_replicator_add_filter_parses() {
         "--filter",
         "AgentRequest:agent_did=did:key:alice",
         "--filter",
-        "AgentResponse:agent_did=did:key:bob",
+        "AgentMessage:agent_did=did:key:bob",
     ]);
     assert_eq!(args.filters.len(), 2);
     assert_eq!(args.filters[0], "AgentRequest:agent_did=did:key:alice");
-    assert_eq!(args.filters[1], "AgentResponse:agent_did=did:key:bob");
+    assert_eq!(args.filters[1], "AgentMessage:agent_did=did:key:bob");
 }
 
 #[test]

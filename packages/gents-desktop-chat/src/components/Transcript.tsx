@@ -4,22 +4,17 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 
-import {
-  AssistantCancelCauseTurn,
-  hasVisibleResponseCancelBadgeTarget,
-} from "./transcript/MessageItems.js";
+import { AssistantCancelCauseTurn } from "./transcript/MessageItems.js";
 import { TimelineItem } from "./transcript/TimelineItem.js";
 
 export const MessageList = memo(function MessageList({
   timelineItems,
   timelineIdentity,
-  responseCancelCause,
-  responseMaterializedSequence,
+  requestCancelCause,
 }: {
   timelineItems: RenderedTimelineItem[];
   timelineIdentity?: string | null;
-  responseCancelCause?: DerivedCancelCauseView | null;
-  responseMaterializedSequence?: number | null;
+  requestCancelCause?: DerivedCancelCauseView | null;
 }) {
   const previousTailRef = useRef<{
     identity?: string | null;
@@ -46,12 +41,6 @@ export const MessageList = memo(function MessageList({
       : null;
   }, [tail?.itemKey, tail?.kind, timelineIdentity]);
 
-  const shouldRenderStandaloneCancelCause =
-    responseCancelCause != null &&
-    !timelineItems.some((item) =>
-      hasVisibleResponseCancelBadgeTarget(item, responseMaterializedSequence),
-    );
-
   return (
     <>
       {timelineItems.map((item) => (
@@ -59,12 +48,10 @@ export const MessageList = memo(function MessageList({
           item={item}
           key={`${item.kind}-${item.itemKey}`}
           animateAssistantReveal={item.itemKey === revealAssistantItemKey}
-          responseCancelCause={responseCancelCause}
-          responseMaterializedSequence={responseMaterializedSequence}
         />
       ))}
-      {shouldRenderStandaloneCancelCause ? (
-        <AssistantCancelCauseTurn cause={responseCancelCause} />
+      {requestCancelCause ? (
+        <AssistantCancelCauseTurn cause={requestCancelCause} />
       ) : null}
     </>
   );

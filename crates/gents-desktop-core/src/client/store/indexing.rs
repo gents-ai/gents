@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use gents_protocol::row::AgentResponseRow;
-
 use super::{ClientStore, ClientStoreRows};
 
 impl ClientStore {
@@ -24,23 +22,28 @@ impl ClientStore {
                 .then_with(|| left.session_id.cmp(&right.session_id))
             },
         );
-        sort_rows_with_sources(
-            &mut rows.messages,
-            &mut rows.message_source_agent_dids,
-            |left, right| {
-                left.session_id
-                    .cmp(&right.session_id)
-                    .then_with(|| {
-                        left.sequence
-                            .unwrap_or_default()
-                            .cmp(&right.sequence.unwrap_or_default())
-                    })
-                    .then_with(|| {
-                        cmp_opt_str_asc(left.timestamp.as_deref(), right.timestamp.as_deref())
-                    })
-                    .then_with(|| left.message_key.cmp(&right.message_key))
-            },
-        );
+        rows.transcript_messages.sort_by(|left, right| {
+            left.message
+                .session_id
+                .cmp(&right.message.session_id)
+                .then_with(|| left.message.sequence.cmp(&right.message.sequence))
+                .then_with(|| left.doc_id.cmp(&right.doc_id))
+        });
+        rows.output_segments.sort_by(|left, right| {
+            left.segment
+                .request_doc_id
+                .cmp(&right.segment.request_doc_id)
+                .then_with(|| {
+                    serde_json::to_string(&left.segment.source)
+                        .expect("output source serializes")
+                        .cmp(
+                            &serde_json::to_string(&right.segment.source)
+                                .expect("output source serializes"),
+                        )
+                })
+                .then_with(|| left.segment.ordinal.cmp(&right.segment.ordinal))
+                .then_with(|| left.doc_id.cmp(&right.doc_id))
+        });
         rows.requests.sort_by(|left, right| {
             left.session_id
                 .cmp(&right.session_id)
@@ -82,18 +85,6 @@ impl ClientStore {
                         cmp_opt_str_asc(left.started_at.as_deref(), right.started_at.as_deref())
                     })
                     .then_with(|| left.tool_call_key.cmp(&right.tool_call_key))
-            },
-        );
-        sort_rows_with_sources(
-            &mut rows.tool_results,
-            &mut rows.tool_result_source_agent_dids,
-            |left, right| {
-                left.session_id
-                    .cmp(&right.session_id)
-                    .then_with(|| {
-                        cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref())
-                    })
-                    .then_with(|| left.tool_name.cmp(&right.tool_name))
             },
         );
 
@@ -160,14 +151,16 @@ impl ClientStore {
             rows.chain_key_bindings.len(),
         );
 
-        let messages_by_session_id =
-            build_vec_index(&rows.messages, |row| row.session_id.as_deref());
+        let transcript_messages_by_session_id = build_vec_index(&rows.transcript_messages, |row| {
+            Some(row.message.session_id.as_str())
+        });
+        let output_segments_by_request_doc_id = build_vec_index(&rows.output_segments, |row| {
+            Some(row.segment.request_doc_id.as_str())
+        });
         let requests_by_session_id =
             build_vec_index(&rows.requests, |row| row.session_id.as_deref());
         let tool_calls_by_session_id =
             build_vec_index(&rows.tool_calls, |row| row.session_id.as_deref());
-        let tool_results_by_session_id =
-            build_vec_index(&rows.tool_results, |row| row.session_id.as_deref());
 
         let mut runtimes_by_agent_did = HashMap::new();
         for (index, row) in rows.runtimes.iter().enumerate() {
@@ -176,32 +169,6 @@ impl ClientStore {
         let mut behavior_readiness_by_agent_did = HashMap::new();
         for (index, row) in rows.behavior_readiness.iter().enumerate() {
             behavior_readiness_by_agent_did.insert(row.agent_did.clone(), index);
-        }
-
-        let mut latest_response_by_request_id = HashMap::new();
-        let mut response_index_by_key = HashMap::new();
-        for (index, row) in rows.responses.iter().enumerate() {
-            response_index_by_key.insert(super::response_merge_key(row), index);
-            let Some(request_id) = row.request_id.as_deref().filter(|value| !value.is_empty())
-            else {
-                continue;
-            };
-
-            match latest_response_by_request_id.get(request_id).copied() {
-                Some(existing_index)
-                    if compare_response_rows(
-                        &rows.responses[index],
-                        &rows.responses[existing_index],
-                    )
-                    .is_gt() =>
-                {
-                    latest_response_by_request_id.insert(request_id.to_owned(), index);
-                }
-                None => {
-                    latest_response_by_request_id.insert(request_id.to_owned(), index);
-                }
-                _ => {}
-            }
         }
 
         let mut request_index_by_id = HashMap::new();
@@ -216,17 +183,14 @@ impl ClientStore {
             behavior_readiness: rows.behavior_readiness,
             requests: rows.requests,
             mailbox_items: rows.mailbox_items,
-            responses: rows.responses,
-            messages: rows.messages,
+            transcript_messages: rows.transcript_messages,
+            output_segments: rows.output_segments,
             sessions: rows.sessions,
             goals: rows.goals,
             tool_calls: rows.tool_calls,
-            tool_results: rows.tool_results,
             compaction_entries: rows.compaction_entries,
-            message_source_agent_dids: rows.message_source_agent_dids,
             session_source_agent_dids: rows.session_source_agent_dids,
             tool_call_source_agent_dids: rows.tool_call_source_agent_dids,
-            tool_result_source_agent_dids: rows.tool_result_source_agent_dids,
             compaction_entry_source_agent_dids: rows.compaction_entry_source_agent_dids,
             tasks: rows.tasks,
             schedules: rows.schedules,
@@ -266,14 +230,12 @@ impl ClientStore {
             subagent_target_source_agent_dids: rows.subagent_target_source_agent_dids,
             datastore_tool_surface_source_agent_dids: rows.datastore_tool_surface_source_agent_dids,
             chain_key_binding_source_agent_dids: rows.chain_key_binding_source_agent_dids,
-            messages_by_session_id,
+            transcript_messages_by_session_id,
+            output_segments_by_request_doc_id,
             requests_by_session_id,
             tool_calls_by_session_id,
-            tool_results_by_session_id,
             runtimes_by_agent_did,
             behavior_readiness_by_agent_did,
-            latest_response_by_request_id,
-            response_index_by_key,
             request_index_by_id,
         }
     }
@@ -335,16 +297,4 @@ pub(super) fn cmp_opt_str_desc(left: Option<&str>, right: Option<&str>) -> std::
 
 pub(super) fn cmp_opt_str_asc(left: Option<&str>, right: Option<&str>) -> std::cmp::Ordering {
     left.unwrap_or_default().cmp(right.unwrap_or_default())
-}
-
-pub(super) fn compare_response_rows(
-    left: &AgentResponseRow,
-    right: &AgentResponseRow,
-) -> std::cmp::Ordering {
-    left.progress_seq
-        .unwrap_or_default()
-        .cmp(&right.progress_seq.unwrap_or_default())
-        .then_with(|| cmp_opt_str_asc(left.completed_at.as_deref(), right.completed_at.as_deref()))
-        .then_with(|| cmp_opt_str_asc(left.created_at.as_deref(), right.created_at.as_deref()))
-        .then_with(|| left.response_key.cmp(&right.response_key))
 }

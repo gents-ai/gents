@@ -2,7 +2,6 @@ mod control_plane_lookups;
 mod indexing;
 mod merge_helpers;
 mod merges;
-mod observer_projection;
 mod session_lookups;
 mod turns;
 
@@ -16,10 +15,11 @@ use gents::document_config::{
     SkillDocument, SubagentTargetDocument, Task, ToolServiceRegistry, Tools, Trigger,
     TriggerObservation,
 };
+use gents::session::canonical_rows::{OutputSegmentRow, TranscriptMessageRow};
 use gents_protocol::client_protocol::ClientTurnState;
 use gents_protocol::row::{
-    AgentBehaviorReadinessRow, AgentMessageRow, AgentRequestRow, AgentResponseRow, AgentRuntimeRow,
-    AgentToolCallRow, AgentToolResultRow, CompactionEntryRow, GoalRow, MailboxItemRow,
+    AgentBehaviorReadinessRow, AgentRequestRow, AgentRuntimeRow, AgentToolCallRow,
+    CompactionEntryRow, GoalRow, MailboxItemRow,
 };
 use gents_protocol::session::AgentSession;
 use serde::Serialize;
@@ -35,21 +35,18 @@ pub struct ClientStoreRows {
     pub behavior_readiness: Vec<AgentBehaviorReadinessRow>,
     pub requests: Vec<AgentRequestRow>,
     pub mailbox_items: Vec<MailboxItemRow>,
-    pub responses: Vec<AgentResponseRow>,
-    pub messages: Vec<AgentMessageRow>,
+    #[serde(skip)]
+    pub transcript_messages: Vec<TranscriptMessageRow>,
+    #[serde(skip)]
+    pub output_segments: Vec<OutputSegmentRow>,
     pub sessions: Vec<AgentSession>,
     pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
-    pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
-    #[serde(skip)]
-    pub message_source_agent_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub session_source_agent_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub tool_call_source_agent_dids: Vec<Option<String>>,
-    #[serde(skip)]
-    pub tool_result_source_agent_dids: Vec<Option<String>>,
     #[serde(skip)]
     pub compaction_entry_source_agent_dids: Vec<Option<String>>,
     pub tasks: Vec<Task>,
@@ -119,17 +116,14 @@ pub struct ClientStore {
     pub behavior_readiness: Vec<AgentBehaviorReadinessRow>,
     pub requests: Vec<AgentRequestRow>,
     pub mailbox_items: Vec<MailboxItemRow>,
-    pub responses: Vec<AgentResponseRow>,
-    pub messages: Vec<AgentMessageRow>,
+    pub transcript_messages: Vec<TranscriptMessageRow>,
+    pub output_segments: Vec<OutputSegmentRow>,
     pub sessions: Vec<AgentSession>,
     pub goals: Vec<GoalRow>,
     pub tool_calls: Vec<AgentToolCallRow>,
-    pub tool_results: Vec<AgentToolResultRow>,
     pub compaction_entries: Vec<CompactionEntryRow>,
-    pub message_source_agent_dids: Vec<Option<String>>,
     pub session_source_agent_dids: Vec<Option<String>>,
     pub tool_call_source_agent_dids: Vec<Option<String>>,
-    pub tool_result_source_agent_dids: Vec<Option<String>>,
     pub compaction_entry_source_agent_dids: Vec<Option<String>>,
     pub tasks: Vec<Task>,
     pub schedules: Vec<Schedule>,
@@ -169,22 +163,20 @@ pub struct ClientStore {
     pub backend_observation_source_agent_dids: Vec<Option<String>>,
     pub inference_profile_source_agent_dids: Vec<Option<String>>,
     pub tool_service_registry_source_agent_dids: Vec<Option<String>>,
-    messages_by_session_id: HashMap<String, Vec<usize>>,
+    transcript_messages_by_session_id: HashMap<String, Vec<usize>>,
+    output_segments_by_request_doc_id: HashMap<String, Vec<usize>>,
     requests_by_session_id: HashMap<String, Vec<usize>>,
     tool_calls_by_session_id: HashMap<String, Vec<usize>>,
-    tool_results_by_session_id: HashMap<String, Vec<usize>>,
     runtimes_by_agent_did: HashMap<String, usize>,
     behavior_readiness_by_agent_did: HashMap<String, usize>,
-    latest_response_by_request_id: HashMap<String, usize>,
-    response_index_by_key: HashMap<String, usize>,
     request_index_by_id: HashMap<String, usize>,
 }
 
 #[derive(Debug)]
 pub struct TranscriptView<'a> {
-    pub messages: Vec<&'a AgentMessageRow>,
+    pub messages: Vec<&'a TranscriptMessageRow>,
+    pub output_segments: Vec<&'a OutputSegmentRow>,
     pub tool_calls: Vec<&'a AgentToolCallRow>,
-    pub tool_results: Vec<&'a AgentToolResultRow>,
 }
 
 /// Aggregated recent-run bookkeeping for a task, rolled up across all
@@ -213,6 +205,25 @@ impl Default for ClientStore {
 }
 
 pub type SharedClientStore = Arc<ClientStore>;
+
+impl ClientStore {
+    /// The observer retains request/config facts only. Immutable transcript
+    /// facts are read through the exact session projection scope, so an
+    /// observer snapshot cannot accidentally turn a missing dependency into
+    /// an empty rendered message.
+    pub(crate) fn into_observer_projection(mut self) -> Self {
+        self.transcript_messages.clear();
+        self.output_segments.clear();
+        self.transcript_messages_by_session_id.clear();
+        self.output_segments_by_request_doc_id.clear();
+        self.tool_calls.clear();
+        self.tool_call_source_agent_dids.clear();
+        self.tool_calls_by_session_id.clear();
+        self.compaction_entries.clear();
+        self.compaction_entry_source_agent_dids.clear();
+        self
+    }
+}
 
 #[cfg(test)]
 mod tests {

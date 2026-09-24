@@ -11,6 +11,7 @@ use gents::defra_node::EmbeddedNode;
 use gents::graphql::escape_graphql_string;
 use gents::{DocumentRuntimeOptions, Gents, ToolCeiling};
 use gents_protocol::row::AgentRequestRow;
+use gents_protocol::transcript::present_message;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -1021,29 +1022,18 @@ async fn seed_preexisting_hydration_history(
     agent_did: &str,
     behavior_id: &str,
 ) {
-    let requester_did = escape_graphql_string(requester_did);
-    let agent_did = escape_graphql_string(agent_did);
+    let requester_did_gql = escape_graphql_string(requester_did);
+    let agent_did_gql = escape_graphql_string(agent_did);
     let behavior_id = escape_graphql_string(behavior_id);
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mutation = format!(
         r#"mutation {{
             session: create_AgentSession(input: {{
                 session_id: "{HYDRATION_SESSION_ID}",
-                requester_did: "{requester_did}",
-                agent_did: "{agent_did}",
+                requester_did: "{requester_did_gql}",
+                agent_did: "{agent_did_gql}",
                 behavior_id: "{behavior_id}",
                 created_at: "{now}"
-            }}) {{ _docID }}
-            message: create_AgentMessage(input: {{
-                message_key: "{HYDRATION_SESSION_ID}:1",
-                requester_did: "{requester_did}",
-                agent_did: "{agent_did}",
-                behavior_id: "{behavior_id}",
-                session_id: "{HYDRATION_SESSION_ID}",
-                sequence: 1,
-                role: "assistant",
-                content: "pre-existing authenticated hydration history",
-                timestamp: "{now}"
             }}) {{ _docID }}
         }}"#,
     );
@@ -1052,6 +1042,154 @@ async fn seed_preexisting_hydration_history(
         !response.has_errors(),
         "seed pre-existing hydration history: {:?}",
         response.errors
+    );
+
+    // #1571: AgentMessage headers carry no content bytes. Author the
+    // pre-existing history through the canonical publication surface: a real
+    // AgentRequest base, an AgentOutputSegment payload, and a header whose
+    // blocks reference it — the closure the hydration reconciler validates and
+    // serves, and that shared reconstruction consumes for content.
+    use gents::defra_node::{ExecuteRetryPolicy, QueryRequest};
+    use gents::graphql::single_mutation_document;
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents::session::sequence_message_key;
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let request_id = escape_graphql_string("request-enrollment-hydration");
+    let request_mutation = format!(
+        r#"mutation {{
+            create_AgentRequest(input: {{
+                request_id: "{request_id}",
+                agent_did: "{agent_did_gql}",
+                requester_did: "{requester_did_gql}",
+                behavior_id: "{behavior_id}",
+                session_id: "{HYDRATION_SESSION_ID}",
+                retry_parent_request: "",
+                retry_root_request: "{request_id}",
+                superseded_by_request: "",
+                content: "pre-existing hydration request",
+                lifecycle_state: "pending",
+                backend_id: "",
+                execution_origin: "interactive",
+                created_at: "{now}",
+                retry_count: 0,
+                max_retries: {max_retries},
+                subagent_depth: 0
+            }}) {{ _docID }}
+        }}"#,
+        max_retries = gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES,
+    );
+    let request_response = node.execute(&request_mutation).await;
+    assert!(
+        !request_response.has_errors(),
+        "seed pre-existing hydration request: {:?}",
+        request_response.errors
+    );
+    let request_doc_id = single_mutation_document(&request_response, "create_AgentRequest")
+        .expect("request mutation envelope")
+        .expect("created request")["_docID"]
+        .as_str()
+        .expect("request physical id")
+        .to_owned();
+
+    let content = "pre-existing authenticated hydration history";
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: Some(requester_did.into()),
+        session_id: HYDRATION_SESSION_ID.into(),
+        request_doc_id: request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: 1,
+            },
+            turn_index: 0,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: "seed-generation".into(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: content.len().try_into().expect("segment bytes"),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: content.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![content.len() as u64],
+        }),
+        created_at: now.clone(),
+    };
+    let segment_response = node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                .with_variables(output_segment_create_variables(&segment).expect("segment vars")),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(
+        !segment_response.has_errors(),
+        "seed hydration output segment: {:?}",
+        segment_response.errors
+    );
+    let close_doc_id = single_mutation_document(&segment_response, "create_AgentOutputSegment")
+        .expect("segment mutation envelope")
+        .expect("created segment")["_docID"]
+        .as_str()
+        .expect("segment physical id")
+        .to_owned();
+
+    let message = TranscriptMessage {
+        message_key: sequence_message_key(agent_did, HYDRATION_SESSION_ID, Some(requester_did), 1),
+        session_id: HYDRATION_SESSION_ID.into(),
+        agent_did: agent_did.into(),
+        requester_did: Some(requester_did.into()),
+        request_doc_id: Some(request_doc_id),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "seed-generation".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 1,
+        role: MessageRole::Assistant,
+        native_id: Some("native-seed-hydration".into()),
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id,
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: now,
+    };
+    let message_response = node
+        .execute_request_with_retry(
+            QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION).with_variables(
+                transcript_message_create_variables(&message).expect("message vars"),
+            ),
+            ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(
+        !message_response.has_errors(),
+        "seed hydration message header: {:?}",
+        message_response.errors
     );
 }
 
@@ -1114,36 +1252,81 @@ async fn wait_for_hydrated_history(
     agent_did: &str,
     timeout: Duration,
 ) {
+    // #1571: AgentMessage headers carry no content bytes. Assert the exact
+    // expected content by reconstructing each hydrated header through the
+    // shared production boundary (`load_canonical_message_from_node`), which
+    // resolves hydrated AgentOutputSegment documents. A served status without
+    // the expected bytes is not hydration.
+    let expected_content = "pre-existing authenticated hydration history";
+    struct HydratedHeader {
+        doc_id: String,
+        agent_did: String,
+        requester_did: Option<String>,
+    }
     let deadline = Instant::now() + timeout;
     let requester_did = escape_graphql_string(requester_did);
     let agent_did = escape_graphql_string(agent_did);
     loop {
         let status = hydration_status(node, request_key).await;
-        let response = node
+        let headers = node
             .execute(&format!(
                 r#"{{ AgentMessage(filter: {{
                     requester_did: {{ _eq: "{requester_did}" }},
                     agent_did: {{ _eq: "{agent_did}" }},
                     session_id: {{ _eq: "{HYDRATION_SESSION_ID}" }}
-                }}) {{ content }} }}"#,
+                }}) {{ _docID agent_did requester_did }} }}"#,
             ))
             .await;
         assert!(
-            !response.has_errors(),
-            "query hydrated history: {:?}",
-            response.errors
+            !headers.has_errors(),
+            "query hydrated history headers: {:?}",
+            headers.errors
         );
-        let message_present = response
+        let header_rows: Vec<HydratedHeader> = headers
             .data
             .as_ref()
             .and_then(|data| data.get("AgentMessage"))
             .and_then(Value::as_array)
-            .is_some_and(|rows| {
-                rows.iter().any(|row| {
-                    row.get("content").and_then(Value::as_str)
-                        == Some("pre-existing authenticated hydration history")
-                })
-            });
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| HydratedHeader {
+                        doc_id: row
+                            .get("_docID")
+                            .and_then(Value::as_str)
+                            .expect("hydrated header omitted physical identity")
+                            .to_owned(),
+                        agent_did: row
+                            .get("agent_did")
+                            .and_then(Value::as_str)
+                            .expect("hydrated header omitted agent principal")
+                            .to_owned(),
+                        requester_did: row
+                            .get("requester_did")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut message_present = false;
+        let mut unresolved = Vec::new();
+        for header in &header_rows {
+            // P2P can deliver a header before its referenced segments. Keep
+            // polling the real reader; a header alone is not success.
+            match gents::session::load_canonical_message_from_node(
+                node,
+                &header.doc_id,
+                &header.agent_did,
+                header.requester_did.as_deref(),
+            )
+            .await
+            {
+                Ok((_, native)) => {
+                    message_present |= present_message(&native).body_markdown == expected_content;
+                }
+                Err(error) => unresolved.push(format!("{}: {error:#}", header.doc_id)),
+            }
+        }
         if status.as_ref().is_some_and(|row| {
             row.status.as_deref() == Some("served")
                 && row.served_doc_count.is_some_and(|count| count >= 1)
@@ -1151,7 +1334,9 @@ async fn wait_for_hydrated_history(
         {
             return;
         }
-        let last = format!("status={status:?}, message_present={message_present}");
+        let last = format!(
+            "status={status:?}, message_present={message_present}, unresolved={unresolved:?}"
+        );
         assert!(
             Instant::now() < deadline,
             "timed out waiting for authenticated session hydration; last={last}"

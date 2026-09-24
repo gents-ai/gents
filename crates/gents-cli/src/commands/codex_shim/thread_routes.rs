@@ -311,7 +311,10 @@ async fn count_user_messages(state: &ShimState, thread_id: &str) -> Result<u32> 
     );
     let response = query_node_json(
         &state.node,
-        &format!("{{AgentMessage(filter:{{{scope}}}){{role content}}}}"),
+        &format!(
+            "{{AgentMessage(filter:{{{scope}}}){{{}}}}}",
+            gents::session::canonical_rows::AGENT_MESSAGE_FIELDS
+        ),
     )
     .await?;
     let rows = response
@@ -454,8 +457,7 @@ fn map_fork_error(err: ForkError) -> ThreadRouteError {
         | ForkError::ForkNotSameAgent
         | ForkError::ForkSourceBusy
         | ForkError::ForkAtUserTurnOutOfRange(_, _)
-        | ForkError::ForkBehaviorNotFound(_)
-        | ForkError::ForkBehaviorNotOwnedByPrincipal(_, _) => JSONRPC_INVALID_PARAMS,
+        | ForkError::ForkBehaviorNotFound(_) => JSONRPC_INVALID_PARAMS,
     };
     ThreadRouteError {
         code,

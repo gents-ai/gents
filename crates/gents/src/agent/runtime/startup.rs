@@ -6,6 +6,7 @@ use anyhow::{anyhow, Context, Result};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tokio_util::task::AbortOnDropHandle;
 use tracing::Instrument;
 
 use super::context::{RuntimeContext, StartupBarrier};
@@ -373,6 +374,10 @@ async fn run_agent_owned(
     #[cfg(test)] slot_runner: Option<TestSlotRunner>,
 ) -> Result<()> {
     let cancel = CancellationToken::new();
+    // Ask cooperative children to stop if the coordinator future itself is
+    // dropped. Abort-on-drop handles below provide the hard ownership boundary
+    // for tasks which could otherwise remain between cancellation checkpoints.
+    let _cancel_on_drop = cancel.clone().drop_guard();
     let (fatal_error_tx, mut fatal_error_rx) = mpsc::unbounded_channel();
     // Every owned runtime task listens to this internal signal. If any one
     // background task exits unexpectedly, the coordinator closes admission,
@@ -414,12 +419,7 @@ async fn run_agent_owned(
         .document_runtime_context()
         .is_some()
         .then(|| agent.node.subscribe_document_changes());
-    log_recovery(
-        agent.node.as_ref(),
-        agent.agent_did(),
-        agent.default_behavior_id(),
-    )
-    .await;
+    log_recovery(&agent.node, agent.agent_did(), agent.default_behavior_id()).await;
     for (behavior_id, reason) in &agent.unavailable_behaviors {
         tracing::warn!(
             behavior_id = %behavior_id,
@@ -518,7 +518,7 @@ async fn run_agent_owned(
     let (active_snapshot_tx, active_snapshot_rx) = watch::channel(initial_active_snapshot.clone());
     let (reconcile_tx, reconcile_rx) = mpsc::channel(8);
     let _reconcile_tx_guard = reconcile_tx.clone();
-    let health_checker = spawn_health_checker(
+    let health_checker = AbortOnDropHandle::new(spawn_health_checker(
         agent.node.clone(),
         agent.mcp_pool.clone(),
         health_map.clone(),
@@ -527,22 +527,22 @@ async fn run_agent_owned(
         cancel.child_token(),
         agent.health_checker_options.clone(),
         agent.agent_did().to_string(),
-    );
+    ));
     let (backend_health_events_tx, backend_health_events_rx) = mpsc::channel::<()>(1);
-    let backend_prober = crate::backend_health::spawn_backend_prober(
+    let backend_prober = AbortOnDropHandle::new(crate::backend_health::spawn_backend_prober(
         agent.node.clone(),
         agent.backend_health.clone(),
         agent.backend_prober_options.clone(),
         backend_health_events_tx,
         cancel.child_token(),
         agent.agent_did().to_string(),
-    );
+    ));
 
     let runtime_snapshot_observer_handle =
         if let Some(observer) = agent.runtime_snapshot_observer.clone() {
             let mut snapshot_rx = active_snapshot_rx.clone();
             let mut observer_shutdown = shutdown.clone();
-            Some(tokio::spawn(async move {
+            Some(AbortOnDropHandle::new(tokio::spawn(async move {
                 loop {
                     let (generation, fingerprint, runnable) = {
                         let snapshot = snapshot_rx.borrow_and_update();
@@ -565,7 +565,7 @@ async fn run_agent_owned(
                         _ = observer_shutdown.changed() => break,
                     }
                 }
-            }))
+            })))
         } else {
             None
         };
@@ -592,7 +592,7 @@ async fn run_agent_owned(
     let _ = agent.manual_trigger_handle.set(manual_trigger_handle);
     let trigger_engine_agent_did = agent.agent_did().to_string();
     let trigger_engine_runtime_observer = agent.runtime_snapshot_observer.clone();
-    let trigger_engine_handle = tokio::spawn(async move {
+    let trigger_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
             _ = trigger_engine_cancel.cancelled() => return,
             _ = trigger_engine_startup_barrier.wait_ready() => {}
@@ -657,7 +657,7 @@ async fn run_agent_owned(
             materializer,
         );
         engine.run(sources, trigger_engine_cancel).await;
-    });
+    }));
 
     let callback_node = agent.node.clone();
     let callback_agent_did = agent.agent_did().to_string();
@@ -668,7 +668,7 @@ async fn run_agent_owned(
     crate::workspace::install_process_operator_tool_root(callback_ceiling.clone());
     let callback_cancel = cancel.child_token();
     let callback_startup_barrier = startup_barrier.clone();
-    let callback_engine_handle = tokio::spawn(async move {
+    let callback_engine_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         tokio::select! {
             _ = callback_cancel.cancelled() => return,
             _ = callback_startup_barrier.wait_ready() => {}
@@ -683,7 +683,7 @@ async fn run_agent_owned(
         {
             tracing::error!(%error, "callback engine exited");
         }
-    });
+    }));
 
     let ready_cancel = cancel.child_token();
     let ready_startup_barrier = startup_barrier.clone();
@@ -691,7 +691,7 @@ async fn run_agent_owned(
     let ready_behavior_count = initial_active_snapshot.behaviors.len();
     let ready_unavailable_count = initial_active_snapshot.unavailable_behaviors.len();
     let ready_runtime_status = runtime_status.clone();
-    let readiness_handle = tokio::spawn(async move {
+    let readiness_handle = AbortOnDropHandle::new(tokio::spawn(async move {
         let mut watchdog = tokio::time::interval(std::time::Duration::from_secs(60));
         watchdog.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         watchdog.tick().await;
@@ -738,7 +738,7 @@ async fn run_agent_owned(
                 "gents ready (degraded: startup build failures demoted behaviors)"
             );
         }
-    });
+    }));
 
     let mut background_tasks = JoinSet::new();
 
@@ -1047,7 +1047,11 @@ async fn run_agent_owned(
     }
 }
 
-async fn log_recovery(node: &defra_node::EmbeddedNode, agent_did: &str, default_behavior_id: &str) {
+async fn log_recovery(
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    agent_did: &str,
+    default_behavior_id: &str,
+) {
     // Sweep order lives in `startup_recovery`, not here: the inference-call
     // sweep is parent-gated and must run after request repair (#1001).
     let outcome = crate::startup_recovery::run_startup_recovery(node, agent_did).await;

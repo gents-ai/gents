@@ -435,6 +435,7 @@ pub(crate) async fn run_command(
     let (program, command_args, environment, sandbox) =
         prepare_command_launch(&root, command_name, args, &policy).await?;
     let bounds = tool_execution_bounds(timeout);
+    let live_output = bounds.live_output.clone();
     let request_deadline = bounds.request_deadline_at;
     let started = Instant::now();
     let outcome = run_managed_exec(ManagedExecRequest {
@@ -448,7 +449,7 @@ pub(crate) async fn run_command(
         stdin: Vec::new(),
         environment: Some(environment),
         tool_name: Some(tool_name.to_string()),
-        live_output: bounds.live_output,
+        live_output: live_output.clone(),
     })
     .await;
     let duration_ms = elapsed_ms(started);
@@ -539,6 +540,25 @@ pub(crate) async fn run_command(
         stderr: stderr.content,
     };
     let rendered = render_command_output(&output, raw_json).map_err(ToolError::from)?;
+    if let Some(writer) = live_output {
+        let metadata_json = serde_json::to_string(&output.metadata)
+            .context("serializing command metadata for canonical presentation")
+            .map_err(ToolError::from)?;
+        writer
+            .prepare_command_presentation(
+                &rendered,
+                &metadata_json,
+                &stdout_raw,
+                &output.stdout,
+                output.metadata.stdout_truncation.returned_bytes,
+                &stderr_raw,
+                &output.stderr,
+                output.metadata.stderr_truncation.returned_bytes,
+                raw_json,
+            )
+            .await
+            .map_err(ToolError::from)?;
+    }
     if output.metadata.ok {
         Ok(rendered)
     } else {

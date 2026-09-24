@@ -414,6 +414,15 @@ fn exceeds_deadline(now: DateTime<Utc>, delay: Duration, deadline: Option<DateTi
     }
 }
 
+/// Check the actual wake before reissuing a provider attempt. This closes
+/// scheduler overshoot after the planned retry delay was admitted.
+pub fn retry_wake_fits_deadline(
+    observed_at: DateTime<Utc>,
+    deadline: Option<DateTime<Utc>>,
+) -> bool {
+    deadline.is_none_or(|deadline| observed_at <= deadline)
+}
+
 fn deadline_reason(delay: Duration, deadline: Option<DateTime<Utc>>) -> String {
     match deadline {
         Some(deadline) => format!(

@@ -135,20 +135,24 @@ pub(super) fn request_merge_key(row: &AgentRequestRow) -> String {
     )
 }
 
-pub(super) fn response_merge_key(row: &AgentResponseRow) -> String {
-    format!(
-        "{}\0{}",
-        row.agent_did.as_deref().unwrap_or_default(),
-        row.response_key
-    )
-}
-
-pub(super) fn message_merge_key(row: &AgentMessageRow, source_agent_did: Option<&str>) -> String {
-    format!(
-        "{}\0{}",
-        source_agent_did.unwrap_or_default(),
-        row.message_key
-    )
+/// Immutable canonical facts are set-unioned. A duplicated physical identity
+/// with different bytes is retained for reconstruction to classify as an
+/// integrity conflict; it must never be turned into a last-writer-wins row.
+pub(super) fn union_immutable_rows<T: std::fmt::Debug>(
+    target: &mut Vec<T>,
+    incoming: Vec<T>,
+    doc_id: impl Fn(&T) -> &str,
+) {
+    for row in incoming {
+        let id = doc_id(&row).to_string();
+        if target
+            .iter()
+            .any(|existing| doc_id(existing) == id && format!("{existing:?}") == format!("{row:?}"))
+        {
+            continue;
+        }
+        target.push(row);
+    }
 }
 
 pub(super) fn session_merge_key(row: &AgentSession, _source_agent_did: Option<&str>) -> String {
@@ -167,25 +171,6 @@ pub(super) fn tool_call_merge_key(
         "{}\0{}",
         source_agent_did.unwrap_or_default(),
         row.tool_call_key
-    )
-}
-
-pub(super) fn tool_result_merge_key(
-    row: &AgentToolResultRow,
-    source_agent_did: Option<&str>,
-) -> String {
-    if let Some(doc_id) = row.doc_id.as_deref() {
-        return format!("{}\0{doc_id}", source_agent_did.unwrap_or_default());
-    }
-    format!(
-        "{}\0{}\0{}\0{}\0{}\0{}\0{}",
-        source_agent_did.unwrap_or_default(),
-        row.agent_did.as_deref().unwrap_or_default(),
-        row.session_id.as_deref().unwrap_or_default(),
-        row.tool_name.as_deref().unwrap_or_default(),
-        row.tool_input.as_deref().unwrap_or_default(),
-        row.tool_call_doc_id.as_deref().unwrap_or_default(),
-        row.created_at.as_deref().unwrap_or_default()
     )
 }
 

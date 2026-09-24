@@ -1,4 +1,5 @@
 mod support;
+use support::graphql::graphql_mutation_with_variables;
 use support::*;
 
 use std::fs;
@@ -205,6 +206,9 @@ async fn server_sigterm_runs_the_graceful_shutdown_path() -> Result<()> {
     );
     Ok(())
 }
+// Covers OS process loading and Tokio startup under concurrent builds. The
+// port-zero and occupied-port checks still reject before readiness is emitted.
+const SERVER_REJECTION_EXIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Result<()> {
@@ -217,7 +221,7 @@ async fn server_rejects_ephemeral_http_port_before_publishing_readiness() -> Res
     // macOS the instrumented CLI can spend several seconds in _dyld_start
     // before main executes. Keep the semantic checks below (rejection with an
     // actionable error and no published readiness) independent of that delay.
-    let status = wait_for_server_exit(&mut serve, Duration::from_secs(30))?;
+    let status = wait_for_server_exit(&mut serve, SERVER_REJECTION_EXIT_TIMEOUT)?;
     let (stdout, stderr) = serve.captured_output()?;
 
     assert!(!status.success(), "server unexpectedly exited successfully");
@@ -258,7 +262,7 @@ async fn server_fails_closed_when_http_port_is_occupied() -> Result<()> {
         std::net::TcpListener::bind(("127.0.0.1", 0)).context("reserving occupied HTTP port")?;
     let port = listener.local_addr()?.port();
     let mut serve = spawn_server(&home_dir, port)?;
-    let status = wait_for_server_exit(&mut serve, Duration::from_secs(10))?;
+    let status = wait_for_server_exit(&mut serve, SERVER_REJECTION_EXIT_TIMEOUT)?;
     let (stdout, stderr) = serve.captured_output()?;
 
     assert!(!status.success(), "server unexpectedly exited successfully");
@@ -552,10 +556,6 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "self-budget-req", agent_did: "{agent_did}", session_id: "self-budget-session", lifecycle_state: "completed", created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         format!(
-            r#"mutation {{ create_AgentMessage(input: {{ message_key: "self-budget-session:1", agent_did: "{}", session_id: "self-budget-session", sequence: 1, role: "user", content: "hello", timestamp: "2026-06-02T10:01:00Z" }}) {{ _docID }} }}"#,
-            escape_graphql_string(&agent_did),
-        ),
-        format!(
             r#"mutation {{ create_CompactionEntry(input: {{ compaction_key: "self-budget-ce", agent_did: "{}", session_id: "self-budget-session", sequence: 1, original_tokens: 1234, compacted_tokens: 567, created_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#,
             escape_graphql_string(&agent_did),
         ),
@@ -564,6 +564,94 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             .await
             .context("seeding self-view fixtures")?;
     }
+
+    // Keep the local transcript fixture under the canonical header/source
+    // contract. Its visible text is no longer an AgentMessage column.
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TranscriptMessage,
+    };
+    let request = graphql_query(
+        &graphql,
+        r#"{ AgentRequest(filter: { request_id: { _eq: "self-budget-req" } }, limit: 2) { _docID } }"#,
+    )
+    .await?;
+    let request_doc_id = first_graphql_row(&request, "AgentRequest")?["_docID"]
+        .as_str()
+        .context("self-budget request physical ID")?;
+    let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
+    let segment = OutputSegment {
+        agent_did: agent_did.clone(),
+        requester_did: None,
+        session_id: "self-budget-session".into(),
+        request_doc_id: request_doc_id.into(),
+        source: OutputSource::Authored {
+            key: "self-budget-user:1".into(),
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: "self-budget-fixture".into(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: 5,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: "hello".into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![5],
+        }),
+        created_at: "2026-06-02T10:01:00Z".into(),
+    };
+    let segment_response = graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &output_segment_create_variables(&segment)?,
+    )
+    .await?;
+    let close_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
+    let message = TranscriptMessage {
+        message_key: "self-budget-session:1".into(),
+        session_id: "self-budget-session".into(),
+        agent_did: agent_did.clone(),
+        requester_did: None,
+        request_doc_id: Some(request_doc_id.into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "self-budget-fixture".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 1,
+        role: MessageRole::User,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id,
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: "2026-06-02T10:01:00Z".into(),
+    };
+    graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&message)?,
+    )
+    .await?;
 
     // Foreign-principal rows on the same node. Every liveness and readiness
     // projection is scoped to this server's own agent DID, so none of these
@@ -591,7 +679,7 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "foreign-metrics-req", agent_did: "did:test:foreign-cli", behavior_id: "foreign-behavior", session_id: "foreign-metrics-session", lifecycle_state: "processing", created_at: "2026-06-02T11:00:00Z" }}) {{ _docID }} }}"#
         ),
         format!(
-            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", agent_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", args: "{{}}", result: "", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "foreign-metrics-session:tc-foreign", request_id: "foreign-metrics-req", request_doc_id: "", session_id: "foreign-metrics-session", agent_did: "did:test:foreign-cli", tool_name: "bash", tool_call_id: "tc-foreign", status: "running", lifecycle_state: "running", started_at: "2026-06-02T10:00:00Z" }}) {{ _docID }} }}"#
         ),
         format!(
             r#"mutation {{ create_ToolServiceHealthState(input: {{ service_id: "runtime-mcp-pool-obs", agent_did: "did:test:foreign-cli", endpoint: "http://127.0.0.1:9/mcp", status: "unreachable", tool_count: 5, failure_count: 9, k_max: 3, last_probe_at: "2026-06-06T00:00:00Z", last_seen: "2026-06-06T00:00:00Z", updated_at: "2026-06-06T00:00:00Z" }}) {{ _docID }} }}"#
@@ -787,14 +875,17 @@ async fn server_exposes_prometheus_metrics_endpoint() -> Result<()> {
         .send()
         .await
         .context("fetching /sessions")?;
-    assert!(
-        sessions_response.status().is_success(),
-        "unexpected /sessions response: {sessions_response:?}"
-    );
-    let sessions: Value = sessions_response
-        .json()
+    let sessions_status = sessions_response.status();
+    let sessions_body = sessions_response
+        .text()
         .await
         .context("reading /sessions body")?;
+    assert!(
+        sessions_status.is_success(),
+        "unexpected /sessions response: {sessions_status}: {sessions_body}"
+    );
+    let sessions: Value =
+        serde_json::from_str(&sessions_body).context("decoding /sessions body")?;
     assert_eq!(
         sessions.get("agent_did").and_then(Value::as_str),
         Some(agent_did.as_str())
@@ -1809,19 +1900,141 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     wait_for_port(port, &mut serve)?;
     wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
-    let mutations = [
-        format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did}", session_id: "trace-session", lifecycle_state: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
+    let agent_did_literal = escape_graphql_string(&agent_did);
+    let request_response = graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "trace-req", agent_did: "{agent_did_literal}", session_id: "trace-session", lifecycle_state: "completed", content: "hi", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
-        r#"mutation { create_AgentResponse(input: { response_key: "trace-resp", request_id: "trace-req", session_id: "trace-session", content: "hello", status: "completed", token_count: 7 }) { _docID } }"#.to_string(),
-        r#"mutation { create_AgentMessage(input: { message_key: "trace-msg", session_id: "trace-session", sequence: 1, role: "assistant", content: "encoded-blob" }) { _docID } }"#.to_string(),
-        r#"mutation { create_AgentToolCall(input: { tool_call_key: "trace-tc", request_id: "trace-req", session_id: "trace-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
-    ];
-    for mutation in mutations {
-        graphql_query(&graphql, &mutation)
-            .await
-            .context("seeding trace")?;
-    }
+    )
+    .await
+    .context("seeding trace request")?;
+    let request_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&request_response, "AgentRequest")?;
+
+    let request_doc_id_literal = escape_graphql_string(&request_doc_id);
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "trace-tc", request_id: "trace-req", request_doc_id: "{request_doc_id_literal}", session_id: "trace-session", agent_did: "{agent_did_literal}", message_sequence: 1, tool_name: "defra_query", tool_call_id: "trace-tc-1", status: "completed", lifecycle_state: "completed", started_at: "2026-06-03T10:00:01Z", completed_at: "2026-06-03T10:00:02Z" }}) {{ _docID }} }}"#
+        ),
+    )
+    .await
+    .context("seeding trace tool call")?;
+
+    // Canonical durable output fixture (#1571): a closed provider-turn source
+    // whose single text stream carries the answer bytes, then the transcript
+    // header referencing it, then the terminalization owner's selection
+    // stamped on the request. No retired AgentResponse or inline-content rows.
+    use gents::session::canonical_rows::{
+        output_segment_create_variables, transcript_message_create_variables,
+        CREATE_AGENT_MESSAGE_MUTATION, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
+        OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload, TerminalOutput, TranscriptMessage,
+    };
+    use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
+
+    let access = gents::config_client::ConfigAccess::Graphql(graphql.clone());
+    let segment = OutputSegment {
+        agent_did: agent_did.clone(),
+        requester_did: None,
+        session_id: "trace-session".to_string(),
+        request_doc_id: request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: CaptureScopeKind::Inference,
+                seq: 1,
+            },
+            turn_index: 0,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: "trace-generation".to_string(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: "hello".len() as u32,
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::Text,
+            }),
+        }],
+        payload: "hello".to_string(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec!["hello".len() as u64],
+        }),
+        created_at: "2026-06-03T10:00:03Z".to_string(),
+    };
+    let segment_response = graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+        &output_segment_create_variables(&segment)?,
+    )
+    .await?;
+    let close_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&segment_response, "AgentOutputSegment")?;
+
+    let header = TranscriptMessage {
+        message_key: gents::session::sequence_message_key(&agent_did, "trace-session", None, 1),
+        session_id: "trace-session".to_string(),
+        agent_did: agent_did.clone(),
+        requester_did: None,
+        request_doc_id: Some(request_doc_id.clone()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "trace-generation".to_string(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: 1,
+        role: MessageRole::Assistant,
+        native_id: None,
+        blocks: vec![MessageBlock::Text {
+            text: PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id: close_doc_id.clone(),
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            },
+        }],
+        created_at: "2026-06-03T10:00:04Z".to_string(),
+    };
+    let header_response = graphql_mutation_with_variables(
+        &access,
+        CREATE_AGENT_MESSAGE_MUTATION,
+        &transcript_message_create_variables(&header)?,
+    )
+    .await?;
+    let message_doc_id =
+        gents_protocol::graphql::extract_mutation_doc_id(&header_response, "AgentMessage")?;
+
+    // Stamp the terminalization owner's selection onto the terminal request so
+    // the canonical output owner resolves the exact header and dependencies.
+    let selection = serde_json::to_value(TerminalOutput::Message {
+        message_doc_id: message_doc_id.clone(),
+    })?;
+    graphql_mutation_with_variables(
+        &access,
+        r#"mutation($request_doc_id: String!, $terminal_output: JSON!, $lifecycle_state: String!) {
+                update_AgentRequest(
+                    filter: { _docID: { _eq: $request_doc_id } }
+                    input: { terminal_output: $terminal_output, lifecycle_state: $lifecycle_state }
+                ) { _docID }
+            }"#,
+        &serde_json::json!({
+            "request_doc_id": request_doc_id,
+            "terminal_output": selection,
+            "lifecycle_state": "completed",
+        }),
+    )
+    .await
+    .context("stamping trace terminal selection")?;
 
     let request = run_cli_json(
         &home_dir,
@@ -1861,13 +2074,13 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
             "--field",
             "request_id",
             "--field",
+            "request_doc_id",
+            "--field",
             "tool_name",
             "--field",
-            "args",
-            "--field",
-            "result",
-            "--field",
             "status",
+            "--field",
+            "lifecycle_state",
             "--filter",
             r#"{"request_id":{"_eq":"trace-req"}}"#,
         ],
@@ -1879,30 +2092,79 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
     );
     let tc = &tool_calls["results"][0];
     assert_eq!(tc["tool_name"].as_str(), Some("defra_query"));
-    let tc_args: Value = serde_json::from_str(tc["args"].as_str().unwrap())
-        .context("tool call args parse as JSON")?;
-    assert_eq!(tc_args["collection"].as_str(), Some("AgentRequest"));
+    assert_eq!(
+        tc["lifecycle_state"].as_str(),
+        Some("completed"),
+        "tool lifecycle is the execution outcome owner"
+    );
 
-    let responses = run_cli_json(
-        &home_dir,
-        &[
-            "query",
-            "--graphql",
-            &graphql,
-            "--collection",
-            "AgentResponse",
-            "--field",
-            "request_id",
-            "--field",
-            "status",
-            "--field",
-            "token_count",
-            "--filter",
-            r#"{"request_id":{"_eq":"trace-req"}}"#,
-        ],
-    )?;
-    let resp_row = &responses["results"][0];
-    assert_eq!(resp_row["token_count"].as_i64(), Some(7));
+    // Export through the canonical owner: the request row decodes strictly and
+    // the terminal selection resolves the exact header plus its dependencies —
+    // no AgentResponse shape anywhere in the trace.
+    let request_response = graphql_query(
+        &graphql,
+        &format!(
+            r#"{{
+                AgentRequest(
+                    filter: {{ request_id: {{ _eq: "{}" }} }},
+                    limit: 1
+                ) {{
+                    _docID agent_did requester_did session_id request_id
+                    lifecycle_state failure_reason terminal_output
+                }}
+            }}"#,
+            escape_graphql_string("trace-req"),
+        ),
+    )
+    .await?;
+    let request_row_value = first_graphql_row(&request_response, "AgentRequest")?.clone();
+    let request_row: gents_protocol::row::AgentRequestRow =
+        serde_json::from_value(request_row_value).context("decoding canonical AgentRequest row")?;
+    assert_eq!(
+        request_row.session_id.as_deref(),
+        Some("trace-session"),
+        "request row lost session_id"
+    );
+    assert_eq!(
+        request_row
+            .lifecycle_state
+            .context("request row lost lifecycle_state")?
+            .as_str(),
+        "completed"
+    );
+    let output = gents::session::observe_request_output(
+        &gents::config_client::ConfigAccess::Graphql(graphql.clone()),
+        &request_row,
+    )
+    .await?;
+    let gents::session::CanonicalRequestOutput::TerminalMessage {
+        header: exported_header,
+        message: exported_message,
+        ..
+    } = &output
+    else {
+        panic!("expected canonical terminal message export, got: {output:?}");
+    };
+    assert_eq!(
+        exported_header.request_doc_id.as_deref(),
+        request_row.doc_id.as_deref(),
+        "export resolves the exact physical request"
+    );
+    assert_eq!(exported_header.session_id, "trace-session");
+    let gents_protocol::message::Message::Assistant { content, .. } = exported_message else {
+        panic!("expected reconstructed assistant message, got: {exported_message:?}");
+    };
+    assert_eq!(
+        content.first().and_then(|block| match block {
+            gents_protocol::message::AssistantContent::Text(gents_protocol::message::Text {
+                text,
+                ..
+            }) => Some(text.as_str()),
+            _ => None,
+        }),
+        Some("hello"),
+        "exported transcript must reconstruct the streamed text"
+    );
 
     let messages = run_cli_json(
         &home_dir,
@@ -1929,7 +2191,16 @@ async fn query_command_reconstructs_a_trace() -> Result<()> {
         req_row["session_id"].as_str(),
         msg_row["session_id"].as_str()
     );
-    assert_eq!(tc["request_id"].as_str(), resp_row["request_id"].as_str());
+    assert_eq!(
+        tc["request_id"].as_str(),
+        Some("trace-req"),
+        "tool call stays bound to the logical request coordinate"
+    );
+    assert_eq!(
+        exported_header.request_doc_id.as_deref(),
+        request_row.doc_id.as_deref(),
+        "tool call request and terminal header resolve to one physical request"
+    );
 
     let denied = run_cli_failure_stderr(
         &home_dir,
@@ -2035,7 +2306,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
         format!(
             r#"mutation {{ create_AgentRequest(input: {{ request_id: "mcp-req", agent_did: "{agent_did}", session_id: "mcp-session", lifecycle_state: "completed", created_at: "2026-06-03T10:00:00Z" }}) {{ _docID }} }}"#
         ),
-        r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", args: "{\"collection\":\"AgentRequest\"}", result: "{\"ok\":true}", status: "completed" }) { _docID } }"#.to_string(),
+        r#"mutation { create_AgentToolCall(input: { tool_call_key: "mcp-tc", request_id: "mcp-req", session_id: "mcp-session", tool_name: "defra_query", status: "completed" }) { _docID } }"#.to_string(),
     ] {
         graphql_query(&graphql, &mutation)
             .await
@@ -2063,7 +2334,7 @@ async fn mcp_endpoint_serves_defra_query() -> Result<()> {
 
     let args = serde_json::json!({
         "collection": "AgentToolCall",
-        "fields": ["request_id", "tool_name", "args", "result", "status"],
+        "fields": ["request_id", "request_doc_id", "tool_name", "lifecycle_state"],
         "filter": { "request_id": { "_eq": "mcp-req" } }
     });
     let params =

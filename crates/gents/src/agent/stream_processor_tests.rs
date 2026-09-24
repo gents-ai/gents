@@ -47,7 +47,7 @@ fn fixture_agent_request(
         deadline: None,
         execution_generation: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
+        execution_lease_secs: None,
         subagent_depth: 0,
         caused_by_parent_request_id: None,
         caused_by_parent_request_doc_id: None,
@@ -66,7 +66,229 @@ fn fixture_agent_request(
 }
 
 #[tokio::test]
-async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
+async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
+    let data_path =
+        std::env::temp_dir().join(format!("processor-cadence-{}", uuid::Uuid::new_v4()));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("cadence"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.unwrap();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .unwrap();
+    let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "cadence");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "test-agent",
+        "did:test:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
+    processor.process_item(text_item("first")).await.unwrap();
+    async fn count(node: &defra_node::EmbeddedNode, doc: &str) -> usize {
+        let response = node.execute(&format!(r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#, crate::graphql::escape_graphql_string(doc))).await;
+        response.data.as_ref().unwrap()["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .len()
+    }
+    assert_eq!(count(&node, &doc_id).await, 1);
+    processor.process_item(text_item(" second")).await.unwrap();
+    assert_eq!(count(&node, &doc_id).await, 1);
+    assert!(processor.next_flush_deadline().await.is_some());
+    processor.flush_pending().await.unwrap();
+    assert_eq!(count(&node, &doc_id).await, 2);
+    assert!(
+        processor.next_flush_deadline().await.is_none(),
+        "a committed batch must disarm its timer so provider polling can resume"
+    );
+    processor.flush_pending().await.unwrap();
+    assert_eq!(
+        count(&node, &doc_id).await,
+        2,
+        "no-op flush must not append"
+    );
+    assert!(processor.next_flush_deadline().await.is_none());
+    processor.process_item(text_item(" third")).await.unwrap();
+    assert!(processor.next_flush_deadline().await.is_some());
+    processor.flush_pending().await.unwrap();
+    assert_eq!(count(&node, &doc_id).await, 3);
+    assert!(processor.next_flush_deadline().await.is_none());
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::Item(
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta {
+                id: None,
+                reasoning: "first reasoning".into(),
+            }),
+        )))
+        .await
+        .unwrap();
+    assert_eq!(
+        count(&node, &doc_id).await,
+        4,
+        "first reasoning must be durable immediately too"
+    );
+    assert!(processor.next_flush_deadline().await.is_none());
+    processor.process_item(text_item(" fourth")).await.unwrap();
+    assert!(processor.next_flush_deadline().await.is_some());
+    let message = processor.assistant_turn.clone().take_message().unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message,
+        }))
+        .await
+        .unwrap();
+    assert!(processor.assistant_turn.clone().take_message().is_none());
+    assert!(
+        processor.next_flush_deadline().await.is_none(),
+        "publication must consume the pending batch timer before the accumulator disappears"
+    );
+    processor.flush_pending().await.unwrap();
+    assert!(
+        processor.next_flush_deadline().await.is_none(),
+        "the idle processor must let dispatch and finalization run"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(data_path);
+}
+
+#[tokio::test]
+async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
+    let data_path = std::env::temp_dir().join(format!(
+        "processor-pre-stream-failure-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let node = Arc::new(
+        defra_node::EmbeddedNode::builder()
+            .data_path(&data_path)
+            .build()
+            .await
+            .unwrap(),
+    );
+    ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:test",
+        FailurePolicy::default(),
+    );
+    assert!(matches!(
+        hook.on_completion_call(&user_text_message("retry provider"), &[])
+            .await,
+        HookAction::Continue
+    ));
+    let session_id = hook.session_id().await.unwrap();
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
+        .await
+        .unwrap();
+    let request = fixture_agent_request(request_doc_id, &request_id, &session_id, "retry provider");
+    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
+        node.clone(),
+        "test-agent",
+        "did:test:test",
+        request,
+        30,
+        ExecutionOrigin::Interactive,
+        "test-backend",
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let doc_id = lifecycle.request().doc_id.clone();
+    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+
+    for (attempt, will_retry, error) in [
+        (
+            0,
+            true,
+            crate::error::InferenceError::RateLimited {
+                retry_after_secs: 1,
+            },
+        ),
+        (
+            1,
+            false,
+            crate::error::InferenceError::ModelUnreachable {
+                endpoint: "http://provider.invalid".into(),
+            },
+        ),
+    ] {
+        assert!(matches!(
+            processor
+                .process_item::<()>(Ok(LoopStreamItem::AttemptFailed {
+                    turn: 0,
+                    attempt,
+                    error,
+                    will_retry,
+                    backoff: Duration::ZERO,
+                }))
+                .await
+                .unwrap(),
+            StreamAction::Continue
+        ));
+    }
+    drop(processor);
+
+    let request_doc_id = crate::graphql::escape_graphql_string(&doc_id);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(
+        !response.has_errors(),
+        "load output segments: {:?}",
+        response.errors
+    );
+    assert_eq!(
+        response.data.as_ref().unwrap()["AgentOutputSegment"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "a provider failure before stream creation has no canonical output attempt to close"
+    );
+}
+
+#[tokio::test]
+async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_bytes() {
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -117,12 +339,22 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     // Begin a streaming response so reset_tail (called by persist_partial_turn)
     // has a live buffer to clear.
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
 
     processor.assistant_turn.push_reasoning(
         Reasoning::new("Need to inspect directory structure first")
@@ -141,18 +373,104 @@ async fn persist_partial_turn_saves_reasoning_and_text_to_history() {
     let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
         .await
         .unwrap();
-    assert_eq!(history.len(), 2);
+    let assistants = history
+        .iter()
+        .filter(|message| matches!(message, Message::Assistant { .. }))
+        .collect::<Vec<_>>();
+    assert_eq!(assistants.len(), 1);
+    assert_eq!(
+        assistants[0],
+        &Message::assistant("I started by checking the repo layout."),
+        "partial publication must retain only ordinary text, never reasoning or tool intent"
+    );
+    let gents_protocol::output::TerminalOutput::Message { message_doc_id } =
+        stream_writer.terminal_output(&response_doc_id).await
+    else {
+        panic!("retained ordinary text must be selectable terminal output")
+    };
+    let (header, native) = crate::session::load_canonical_message_from_node(
+        node.as_ref(),
+        &message_doc_id,
+        "did:test:test",
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        header.outcome,
+        gents_protocol::output::OutputOutcome::Partial
+    );
     assert!(matches!(
-        &history[1],
-        Message::Assistant { content, .. }
-            if content.len() == 2
-                // Order is text, then reasoning (rig's threading/persist order).
-                && matches!(first_content(content), AssistantContent::Text(Text { text })
-                    if text == "I started by checking the repo layout.")
-                && matches!(content.get(1), Some(AssistantContent::Reasoning(reasoning))
-                    if reasoning.id.as_deref() == Some("rs_partial"))
+        header.publication,
+        gents_protocol::output::MessagePublication::RequestRecovery { .. }
     ));
+    assert_eq!(
+        native,
+        Message::assistant("I started by checking the repo layout.")
+    );
+    assert!(header
+        .blocks
+        .iter()
+        .all(|block| matches!(block, gents_protocol::output::MessageBlock::Text { .. })));
+    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::reconstruction::{reconstruct_stream, ObservedSegment};
+    use gents_protocol::output::{OutputOutcome, PayloadRef, SourceClose};
+    let result = node.execute(&format!(
+        r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+        crate::graphql::escape_graphql_string(&response_doc_id)
+    )).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let records = result.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| decode_output_segment_row(row).unwrap())
+        .collect::<Vec<_>>();
+    let closing = records
+        .iter()
+        .filter(|row| row.segment.close.is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(closing.len(), 1, "partial source closes exactly once");
+    let closing = closing[0];
+    let Some(SourceClose::Closed {
+        outcome: OutputOutcome::Partial,
+        stream_bytes,
+        ..
+    }) = &closing.segment.close
+    else {
+        panic!("expected a partial closure: {:?}", closing.segment.close);
+    };
+    assert_eq!(stream_bytes.len(), 2);
+    let facts = records
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let streams = (0..2)
+        .map(|stream| {
+            reconstruct_stream(
+                &facts,
+                &[],
+                &[],
+                &PayloadRef {
+                    close_doc_id: closing.doc_id.clone(),
+                    stream,
+                },
+            )
+            .expect("partial extent must reconstruct exactly")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(streams.len(), 2);
+    assert!(streams
+        .iter()
+        .any(|stream| stream.text == "I started by checking the repo layout."));
+    assert!(streams
+        .iter()
+        .any(|stream| stream.text == "Need to inspect directory structure first"));
 
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -165,7 +483,21 @@ async fn create_pending_request(
     request_id: &str,
     session_id: &str,
 ) -> String {
-    let created_at = chrono::Utc::now().to_rfc3339();
+    create_pending_request_with_input(node, request_id, session_id, None).await
+}
+
+async fn create_pending_request_with_input(
+    node: &Arc<defra_node::EmbeddedNode>,
+    request_id: &str,
+    session_id: &str,
+    input: Option<&gents_protocol::request_input::RequestInput>,
+) -> String {
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let created_at = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let input =
+        gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
+            .unwrap();
     let mutation = format!(
         r#"mutation {{
             create_AgentRequest(input: {{
@@ -173,10 +505,12 @@ async fn create_pending_request(
                 agent_did: "did:test:test",
                 behavior_id: "general",
                 session_id: "{session_id}",
+                subagent_depth: 0,
                 retry_parent_request: "",
                 retry_root_request: "{request_id}",
                 superseded_by_request: "",
                 content: "test prompt",
+                input: {input},
                 lifecycle_state: "pending",
                 backend_id: "",
                 execution_origin: "interactive",
@@ -228,38 +562,7 @@ async fn create_pending_request(
         .expect("request _docID")
 }
 
-async fn load_response_doc(
-    node: &defra_node::EmbeddedNode,
-    doc_id: &str,
-) -> serde_json::Map<String, serde_json::Value> {
-    let query = format!(
-        r#"{{
-            AgentResponse(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID
-                content
-                reasoning
-                status
-                token_count
-            }}
-        }}"#
-    );
-    let resp = node.execute(&query).await;
-    assert!(
-        !resp.has_errors(),
-        "load_response_doc failed: {:?}",
-        resp.errors
-    );
-    resp.data
-        .as_ref()
-        .and_then(|d| d.get("AgentResponse"))
-        .and_then(|v| v.as_array())
-        .and_then(|rows| rows.first())
-        .and_then(|row| row.as_object())
-        .cloned()
-        .expect("AgentResponse row")
-}
-
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug)]
 struct PersistedMessageShape {
     sequence: u32,
     role: String,
@@ -274,9 +577,10 @@ async fn load_message_shapes(
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{session_id}" }} }},
+                filter: {{ session_id: {{ _eq: "{session_id}" }},
+                    agent_did: {{ _eq: "did:test:test" }}, requester_did: {{ _eq: null }} }},
                 order: {{ sequence: ASC }}
-            ) {{ sequence role content }}
+            ) {{ _docID }}
         }}"#
     );
     let response = node.execute(&query).await;
@@ -285,12 +589,27 @@ async fn load_message_shapes(
         "AgentMessage shape query failed: {:?}",
         response.errors
     );
-    response
-        .data
-        .as_ref()
-        .and_then(|data| data.get("AgentMessage"))
-        .and_then(|rows| serde_json::from_value(rows.clone()).ok())
-        .unwrap_or_default()
+    let rows = response.data.as_ref().unwrap()["AgentMessage"]
+        .as_array()
+        .unwrap();
+    let mut shapes = Vec::with_capacity(rows.len());
+    for row in rows {
+        let doc_id = row["_docID"].as_str().expect("physical message identity");
+        let (header, message) =
+            crate::session::load_canonical_message_from_node(node, doc_id, "did:test:test", None)
+                .await
+                .expect("exact canonical message reconstructs");
+        shapes.push(PersistedMessageShape {
+            sequence: header.sequence,
+            role: serde_json::to_value(header.role)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            content: serde_json::to_string(&message).unwrap(),
+        });
+    }
+    shapes
 }
 
 fn text_item(text: &str) -> Result<LoopStreamItem<()>, rig::agent::StreamingError> {
@@ -439,10 +758,14 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
 
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
+    stream_writer
+        .start_provider_attempt(&response_doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
 
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
@@ -457,9 +780,29 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             "discover_tools",
             tool_args,
             model_result_id,
-            model_result_id,
+            stored_call_id,
             Some(model_result_id),
         ))
+        .await
+        .unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message: Message::Assistant {
+                id: Some("provider-message".to_string()),
+                content: vec![AssistantContent::ToolCall(ToolCall {
+                    id: model_result_id.to_string(),
+                    call_id: Some(model_result_id.to_string()),
+                    function: ToolFunction {
+                        name: "discover_tools".to_string(),
+                        arguments: serde_json::from_str(tool_args).unwrap(),
+                    },
+                    signature: None,
+                    additional_params: None,
+                })],
+            },
+        }))
         .await
         .unwrap();
     let action = hook
@@ -474,10 +817,6 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         matches!(action, crate::llm::ToolCallHookAction::Continue),
         "tool call persistence failed: {action:?}"
     );
-    assert!(processor
-        .persist_partial_turn("persist streamed assistant tool call")
-        .await
-        .unwrap());
     assert!(matches!(
         hook.on_tool_result(
             "discover_tools",
@@ -495,7 +834,7 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
             model_result_id,
             Some(model_result_id),
             tool_result,
-            model_result_id,
+            stored_call_id,
         ))
         .await
         .unwrap();
@@ -525,10 +864,32 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         first_content(&tool_results[0].content),
         ToolResultContent::Text(Text { text }) if text == tool_result
     ));
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{}" }} }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(model_result_id),
+        ))
+        .await;
+    let tool_doc_id = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .and_then(|rows| rows.first())
+        .and_then(|row| row.get("_docID"))
+        .and_then(serde_json::Value::as_str)
+        .expect("physical tool call identity");
+    let native = crate::session::load_tool_call_result(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        tool_doc_id,
+        "did:test:test",
+        &session_id,
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        crate::session::load_tool_call_result(&node, &session_id, stored_call_id)
-            .await
-            .unwrap(),
+        crate::tool_call_lifecycle::query::render_tool_result(&native).unwrap(),
         tool_result
     );
 
@@ -584,13 +945,27 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    stream_writer
+        .publish_authored_message(&lifecycle, "prompt", &user_text_message("read the source"))
+        .await
+        .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
+    let notification_request = lifecycle.request().clone();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
     processor
         .process_item(tool_call_item_with_ids(
             "read_file",
@@ -599,6 +974,20 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
             "internal-1",
             Some("call-1"),
         ))
+        .await
+        .unwrap();
+
+    // Canonical claimed publication: the streamed tool-call envelope is
+    // accepted through the owned completion loop's publication authority
+    // (ProviderTurnReady consuming the accumulated assistant turn) before the
+    // hook may dispatch it. There is no fabricated lifecycle state here.
+    let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message: accepted_message.clone(),
+        }))
         .await
         .unwrap();
 
@@ -617,21 +1006,37 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     // user-role completion while inline tool execution is still active. The
     // streamed tool-call envelope must already own its durable assistant row,
     // so this append allocates the following sequence instead of colliding.
-    let notification = serde_json::to_string(&Message::User {
-        content: vec![UserContent::Text(Text {
-            text: "<tool-notification status=\"completed\" />".to_string(),
-        })],
-    })
-    .unwrap();
-    crate::session::append_message_with_requester_did(
+    // Seed a closed independent tool source, then let the real notification
+    // transaction allocate its header/wake alongside the running foreground
+    // call. The helper does not bypass the notification publication owner.
+    let queue = gents_protocol::request_input::RequestQueue {
+        source: gents_protocol::request_input::QueueSource::BackgroundCompletion,
+        policy: gents_protocol::request_input::QueuePolicy::Coalesce,
+        key: Some(format!("background_completion:{session_id}")),
+        queued_after_request_id: Some(request_id.clone()),
+        interrupted_request_id: None,
+        background_completion_wake_version: None,
+    };
+    // This unit fixture has a synthetic DID, not a signing identity. Seed an
+    // already-admitted pending wake so the real publisher exercises coalescing
+    // rather than asking the fixture to sign a new request.
+    create_pending_request_with_input(
         &node,
+        "concurrent-notification-wake",
         &session_id,
-        "did:test:test",
-        None,
-        "user",
-        &notification,
-        None,
-        Some(&request_id),
+        Some(&gents_protocol::request_input::RequestInput {
+            queue: Some(queue.clone()),
+            ..Default::default()
+        }),
+    )
+    .await;
+    crate::lifecycle::queue::persist_background_completion_with_message(
+        &node,
+        &notification_request,
+        "<tool-notification status=\"completed\" />",
+        "background-completion-notification:concurrent-tool:tool",
+        "Review background completion",
+        queue,
         None,
     )
     .await
@@ -700,12 +1105,9 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
-/// Three parallel tool calls accumulate in ONE assistant turn; persisting that
-/// turn on the first streamed result keeps the gate open for the remaining
-/// results (Lean: `Transcript.parallel_results_complete_independently`). The
-/// historical bug: the first result's user message reset the turn state to
-/// Idle, so the second streamed result tripped the "cannot persist streamed
-/// tool result before its assistant turn is persisted" guard.
+/// Three calls publish in one accepted assistant turn before dispatch. Each
+/// result closes independently and its later streamed observation cannot
+/// duplicate the durable delivery (Lean: `Transcript.parallel_results_complete_independently`).
 #[tokio::test]
 async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     let data_path = std::env::temp_dir().join(format!(
@@ -759,13 +1161,29 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady {
+            context: None,
+            prompt: user_text_message("read several files"),
+        }))
+        .await
+        .unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
     for index in 1..=3 {
         let result_id = format!("result-{index}");
         let internal_id = format!("internal-{index}");
@@ -781,6 +1199,20 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
             ))
             .await
             .unwrap();
+    }
+    let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message: accepted_message.clone(),
+        }))
+        .await
+        .unwrap();
+    for index in 1..=3 {
+        let internal_id = format!("internal-{index}");
+        let call_id = format!("call-{index}");
+        let args = format!(r#"{{"path":"/work/file-{index}.c"}}"#);
         assert!(matches!(
             hook.on_tool_call("read_file", Some(call_id.clone()), &internal_id, &args,)
                 .await,
@@ -817,6 +1249,7 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .await
         .unwrap();
     assert_eq!(history.len(), 5);
+    assert_eq!(history[1], accepted_message);
     assert!(matches!(&history[1], Message::Assistant { content, .. }
         if content.iter().filter(|item| matches!(item, AssistantContent::ToolCall(_))).count() == 3));
     let result_count = history
@@ -828,164 +1261,12 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .count();
     assert_eq!(result_count, 3);
 
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
-async fn backfill_pairs_completed_tool_result_after_provider_stall() {
-    // #442 regression. Owned-loop order on a provider stall: the tool runs
-    // inline (on_tool_result marks the AgentToolCall row .completed and records
-    // its result, but persists NO result message because the assistant turn is
-    // not yet persisted), then the provider stalls so the streamed ToolResult
-    // never arrives. The abort path persists the partial assistant turn (with
-    // the tool call) — leaving a completed tool call with no result message,
-    // violating Transcript.CompletedToolCallsPaired. backfill_completed_tool_results
-    // must reconcile it (and be idempotent).
-    let data_path =
-        std::env::temp_dir().join(format!("agent-442-backfill-{}", uuid::Uuid::new_v4()));
-    let node = Arc::new(
-        defra_node::EmbeddedNode::builder()
-            .data_path(&data_path)
-            .build()
-            .await
-            .unwrap(),
-    );
-    ensure_runtime_schemas(&node).await.unwrap();
-
-    let hook = crate::hook::DefraSessionHook::with_identity(
-        node.clone(),
-        "general",
-        "did:test:test",
-        FailurePolicy::default(),
-    );
-    assert!(matches!(
-        hook.on_completion_call(&user_text_message("use the echo tool"), &[])
-            .await,
-        HookAction::Continue
-    ));
-    let session_id = hook.session_id().await.expect("session id");
-
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let request_doc_id = create_pending_request(&node, &request_id, &session_id).await;
-    // The AgentToolCall row records its request_id from the hook's active request,
-    // which is what backfill scopes its query by.
-    hook.set_active_request_lineage(Some(request_id.clone()), None)
-        .await
-        .expect("bind persisted request lineage");
-    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
-        .await;
-    let request = fixture_agent_request(
-        request_doc_id,
-        &request_id,
-        &session_id,
-        "use the echo tool",
-    );
-    let mut lifecycle = RequestLifecycle::new_with_execution_binding(
-        node.clone(),
-        "general",
-        "did:test:test",
-        request,
-        30,
-        ExecutionOrigin::Interactive,
-        "test-backend",
-    );
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let stream_writer =
-        DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
-        .begin_owned_execution(&stream_writer)
-        .await
-        .unwrap();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
-
-    let call_id = "call-1";
-    let tool_args = r#"{"x":1}"#;
-    let tool_output = "ECHOED-RESULT";
-
-    // Accumulate the assistant tool call so persist_partial_turn writes the turn.
-    processor.assistant_turn.push_tool_call(ToolCall {
-        id: call_id.to_string(),
-        call_id: Some(call_id.to_string()),
-        function: ToolFunction {
-            name: "echo".to_string(),
-            arguments: serde_json::from_str(tool_args).unwrap(),
-        },
-        signature: None,
-        additional_params: None,
-    });
-    hook.register_stream_tool_call_identity(call_id, call_id, Some(call_id))
-        .await;
-
-    // Tool runs inline: lifecycle started, then completed with its result. No
-    // result message persists yet (assistant turn not persisted).
-    assert!(matches!(
-        hook.on_tool_call("echo", Some(call_id.to_string()), call_id, tool_args)
-            .await,
-        crate::llm::ToolCallHookAction::Continue
-    ));
-    assert!(matches!(
-        hook.on_tool_result(
-            "echo",
-            Some(call_id.to_string()),
-            call_id,
-            tool_args,
-            &crate::tool_call_lifecycle::ToolOutcome::Completed(tool_output.to_string())
-        )
-        .await,
-        HookAction::Continue
-    ));
-
-    // Abort: persist the partial assistant turn (the tool-call message).
-    assert!(processor
-        .persist_partial_turn("persist errored assistant turn")
-        .await
-        .unwrap());
-
-    // The orphan: the completed tool call has no paired result message yet.
-    assert_eq!(
-        count_tool_result_messages(&node, &session_id).await,
-        0,
-        "result message must be absent before backfill (the #442 orphan)"
-    );
-
-    // Backfill reconciles the completed tool call's result message.
-    let reconciled = hook.backfill_completed_tool_results().await.unwrap();
-    assert_eq!(
-        reconciled, 1,
-        "one completed tool call should be reconciled"
-    );
-    assert_eq!(
-        count_tool_result_messages(&node, &session_id).await,
-        1,
-        "backfill must persist exactly one tool-result message (pair closure)"
-    );
-
-    // Idempotent: a second backfill must not duplicate the result message.
-    hook.backfill_completed_tool_results().await.unwrap();
-    assert_eq!(
-        count_tool_result_messages(&node, &session_id).await,
-        1,
-        "backfill must be idempotent (dedup)"
-    );
-
-    let _ = std::fs::remove_dir_all(&data_path);
-}
-
-async fn count_tool_result_messages(node: &defra_node::EmbeddedNode, session_id: &str) -> usize {
-    crate::session::load_history(node, session_id, "did:test:test", None)
-        .await
-        .unwrap()
-        .iter()
-        .filter(|message| {
-            matches!(message, Message::User { content }
-                if matches!(first_content(content), UserContent::ToolResult(_)))
-        })
-        .count()
-}
-
-#[tokio::test]
-async fn post_tool_resumed_resets_response_tail() {
+async fn post_tool_resumption_keeps_each_provider_turn_separate() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-stream-processor-tool-reset-{}",
         uuid::Uuid::new_v4()
@@ -1041,71 +1322,123 @@ async fn post_tool_resumed_resets_response_tail() {
     // Use 0 ms batch interval so write_tokens flushes immediately to DB.
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
 
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
-    // Feed: Text → Text → ToolCall → ToolResult
-    processor.process_item(text_item("hello ")).await.unwrap();
-    processor.process_item(text_item("world")).await.unwrap();
-    processor
-        .process_item(tool_call_item("search", r#"{"q":"x"}"#, "call-1"))
+    hook.set_active_request_lineage(Some(request_id.clone()), None)
         .await
         .unwrap();
+    hook.set_request_deadline_at(Some(chrono::Utc::now() + chrono::Duration::seconds(60)))
+        .await;
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
+    // Publication precedes dispatch; the result closes its own tool source.
+    processor.process_item(text_item("hello ")).await.unwrap();
+    processor.process_item(text_item("world")).await.unwrap();
+    let args = r#"{"tool":"discover_tools"}"#;
+    processor
+        .process_item(tool_call_item("discover_tools", args, "call-1"))
+        .await
+        .unwrap();
+    let accepted_message = processor.assistant_turn.clone().take_message().unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message: accepted_message.clone(),
+        }))
+        .await
+        .unwrap();
+    let action = hook
+        .on_tool_call("discover_tools", None, "call-1", args)
+        .await;
+    assert!(
+        matches!(action, crate::llm::ToolCallHookAction::Continue),
+        "{action:?}"
+    );
+    assert!(matches!(
+        hook.on_tool_result(
+            "discover_tools",
+            None,
+            "call-1",
+            args,
+            &crate::tool_call_lifecycle::ToolOutcome::Completed(r#"{"hit":1}"#.into())
+        )
+        .await,
+        HookAction::Continue
+    ));
     processor
         .process_item(tool_result_item("call-1", r#"{"hit":1}"#, "call-1"))
         .await
         .unwrap();
-
-    // After ToolResult: tail must be reset to empty.
-    let after_tool = load_response_doc(&node, &response_doc_id).await;
-    assert_eq!(
-        after_tool["content"].as_str(),
-        Some(""),
-        "content must be reset after tool-result persisted"
-    );
-    assert_eq!(
-        after_tool["reasoning"].as_str(),
-        Some(""),
-        "reasoning must be reset after tool-result persisted"
-    );
+    assert!(processor.assistant_turn.clone().take_message().is_none());
+    assert!(processor.next_flush_deadline().await.is_none());
 
     // Feed: Text("done") after the tool boundary.
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 1,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
     processor.process_item(text_item("done")).await.unwrap();
-
-    // The new text is live in the tail.
-    let after_resume = load_response_doc(&node, &response_doc_id).await;
+    let final_message = Message::Assistant {
+        id: None,
+        content: vec![AssistantContent::Text(Text {
+            text: "done".into(),
+        })],
+    };
     assert_eq!(
-        after_resume["content"].as_str(),
-        Some("done"),
-        "post-boundary text must appear in fresh tail"
+        processor.assistant_turn.clone().take_message(),
+        Some(final_message.clone())
     );
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 1,
+            attempt: 0,
+            message: final_message.clone(),
+        }))
+        .await
+        .unwrap();
 
     // Feed: FinalResponse.
     processor.process_item(final_item("done")).await.unwrap();
 
-    // After FinalResponse the tail is cleared again.
-    let after_final = load_response_doc(&node, &response_doc_id).await;
+    let history = crate::session::load_history(&node, &session_id, "did:test:test", None)
+        .await
+        .unwrap();
     assert_eq!(
-        after_final["content"].as_str(),
-        Some(""),
-        "content must be cleared after final-response persisted"
+        history.len(),
+        3,
+        "two provider headers and exactly one tool result"
     );
-    assert_eq!(
-        after_final["reasoning"].as_str(),
-        Some(""),
-        "reasoning must be cleared after final-response persisted"
-    );
+    assert_eq!(history[0], accepted_message);
+    assert!(matches!(&history[1], Message::User { content }
+        if matches!(first_content(content), UserContent::ToolResult(result)
+            if result.id == "call-1" && matches!(first_content(&result.content),
+                ToolResultContent::Text(text) if text.text == r#"{"hit":1}"#))));
+    assert_eq!(history[2], final_message);
 
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
 #[tokio::test]
-async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
+async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
     let data_path = std::env::temp_dir().join(format!(
         "agent-stream-processor-turn-retract-{}",
         uuid::Uuid::new_v4()
@@ -1148,39 +1481,56 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
 
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
     processor.process_item(text_item("Hel")).await.unwrap();
-    let before_retract = load_response_doc(&node, &response_doc_id).await;
-    assert_eq!(before_retract["content"].as_str(), Some("Hel"));
 
     processor
         .process_item(turn_retracted_item(0, 0))
         .await
         .unwrap();
-    let after_retract = load_response_doc(&node, &response_doc_id).await;
-    assert_eq!(
-        after_retract["content"].as_str(),
-        Some(""),
-        "retraction must clear uncommitted live text"
-    );
     assert_eq!(processor.streamed_text, "");
 
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 1,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
     processor
         .process_item(text_item("Hello world"))
         .await
         .unwrap();
-    let after_retry_text = load_response_doc(&node, &response_doc_id).await;
-    assert_eq!(
-        after_retry_text["content"].as_str(),
-        Some("Hello world"),
-        "retry text must rebuild the live tail after retraction"
-    );
+
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 1,
+            message: Message::Assistant {
+                id: None,
+                content: vec![AssistantContent::Text(Text {
+                    text: "Hello world".into(),
+                })],
+            },
+        }))
+        .await
+        .unwrap();
 
     processor
         .process_item(final_item("Hello world"))
@@ -1207,6 +1557,53 @@ async fn turn_retraction_resets_live_tail_and_discards_partial_assistant() {
         "partial retracted text must not persist as an assistant message"
     );
 
+    use crate::session::canonical_rows::{decode_output_segment_row, AGENT_OUTPUT_SEGMENT_FIELDS};
+    use gents_protocol::output::live::reconstruct_dense_prefix;
+    use gents_protocol::output::reconstruction::ObservedSegment;
+    use gents_protocol::output::{OutputSource, SourceClose};
+    let result = node.execute(&format!(
+        r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}"#,
+        crate::graphql::escape_graphql_string(&response_doc_id)
+    )).await;
+    assert!(!result.has_errors(), "{:?}", result.errors);
+    let records = result.data.as_ref().unwrap()["AgentOutputSegment"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| decode_output_segment_row(row).unwrap())
+        .collect::<Vec<_>>();
+    let old = records
+        .iter()
+        .find(|row| {
+            matches!(
+                row.segment.source,
+                OutputSource::ProviderTurn { attempt: 0, .. }
+            )
+        })
+        .expect("old attempt remains durable");
+    assert!(records
+        .iter()
+        .any(|row| row.segment.source == old.segment.source
+            && matches!(row.segment.close, Some(SourceClose::Retracted))));
+    let facts = records
+        .iter()
+        .map(|row| ObservedSegment {
+            doc_id: &row.doc_id,
+            segment: &row.segment,
+        })
+        .collect::<Vec<_>>();
+    let prefix = reconstruct_dense_prefix(
+        &facts,
+        &response_doc_id,
+        &old.segment.source,
+        &old.segment.writer,
+        None,
+    )
+    .unwrap();
+    assert_eq!(prefix.streams.len(), 1);
+    assert_eq!(prefix.streams[0].text, "Hel");
+
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
@@ -1268,13 +1665,22 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     let stream_writer =
         DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_millis(0));
-    let response_doc_id = lifecycle
+    lifecycle
         .begin_owned_execution(&stream_writer)
         .await
         .unwrap();
+    let response_doc_id = lifecycle.request().doc_id.clone();
     let mut processor =
         StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
 
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
+            turn: 0,
+            attempt: 0,
+            capture_scope: "inference.1".parse().unwrap(),
+        }))
+        .await
+        .unwrap();
     // The wire parser could not shape the corrupt bytes, so the streamed rig
     // ToolCall carries them as a raw Value::String — the exact production shape.
     let corrupt_call: Result<LoopStreamItem<()>, rig::agent::StreamingError> =
@@ -1296,6 +1702,16 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
             }),
         ));
     processor.process_item(corrupt_call).await.unwrap();
+
+    let message = processor.assistant_turn.clone().take_message().unwrap();
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderTurnReady {
+            turn: 0,
+            attempt: 0,
+            message,
+        }))
+        .await
+        .unwrap();
 
     assert!(matches!(
         hook.on_tool_call(
@@ -1353,5 +1769,6 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         "the salvageable #589 payload must persist its intended object"
     );
 
+    node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);
 }

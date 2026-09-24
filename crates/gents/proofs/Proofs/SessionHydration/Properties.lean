@@ -25,24 +25,11 @@ theorem rejected_hydration_attempts_nothing (cat : Catalog) (st : State) (r : Re
   · simp [applyStep, hterminal]
   · cases terminalWrite <;> simp [applyStep, hterminal, hnot]
 
-/-- Every selected document is scoped to the requester's lineage. -/
-theorem selected_tenancy_sound (cat : Catalog) (r : Request) (doc : Document)
-    (hdoc : doc ∈ selectedDocuments cat r) : doc.requester = r.requester := by
-  simp [selectedDocuments, eligible] at hdoc
-  exact hdoc.2.2.1
-
-/-- Selection also preserves the exact agent/session ownership tuple. -/
-theorem selected_session_sound (cat : Catalog) (r : Request) (doc : Document)
-    (hdoc : doc ∈ selectedDocuments cat r) :
-    doc.agent = r.agent ∧ doc.session = r.session := by
-  simp [selectedDocuments, eligible] at hdoc
-  exact ⟨hdoc.2.2.2.1, hdoc.2.2.2.2⟩
-
-/-- Hydration can only select the client-routable transcript collections named by #1142. -/
-theorem selected_collection_sound (cat : Catalog) (r : Request) (doc : Document)
-    (hdoc : doc ∈ selectedDocuments cat r) : doc.collection ∈ transcriptCollections := by
-  simp [selectedDocuments, eligible] at hdoc
-  exact hdoc.2.1
+theorem selected_has_exact_request_input (cat : Catalog) (r : Request)
+    (documents : Finset Document) (hselected : selectedDocuments cat r = some documents) :
+    ∃ input ∈ cat.closureInputs,
+      input.request = r ∧ buildDocuments input = .ok documents :=
+  selected_documents_have_exact_input cat r documents hselected
 
 /-- An unknown or mismatched session owner cannot cause delivery. -/
 theorem session_ownership_required (cat : Catalog) (st : State) (r : Request)
@@ -71,12 +58,17 @@ theorem applied_pairing_route_required (cat : Catalog) (st : State) (r : Request
   intro hadmits
   exact hpairing hadmits.1
 
-/-- A confirmed admitted delivery reaches `served` once its terminal receipt commits. -/
+/-- A confirmed admitted request reaches a terminal once its receipt commits:
+`served` for a successfully built closure, `rejected` for invalid closure input. -/
 theorem confirmed_admitted_commit_reaches_terminal (cat : Catalog) (st : State) (r : Request)
     (hpending : ¬ terminalFor st r.key) (hadmits : admits cat r) :
     terminalFor (applyStep cat st r .confirmed .committed) r.key := by
   simp only [applyStep, hpending, hadmits, ↓reduceIte]
-  apply terminalFor_insert_self
+  cases hselected : selectedDocuments cat r with
+  | none => simp [hselected, terminalFor_insert_self]
+  | some documents =>
+      simp only [hselected]
+      exact terminalFor_insert_self st r .served documents
 
 /-- A denied request reaches `rejected` once its terminal receipt commits. -/
 theorem denied_commit_reaches_terminal (cat : Catalog) (st : State) (r : Request)
@@ -94,16 +86,17 @@ theorem indeterminate_delivery_confirms_nothing (cat : Catalog) (st : State) (r 
   by_cases hterminal : terminalFor st r.key
   · simp [applyStep, hterminal]
   · by_cases hadmits : admits cat r
-    · simp [applyStep, hterminal, hadmits]
+    · cases hselected : selectedDocuments cat r <;> simp [applyStep, hterminal, hadmits, hselected]
     · simp [applyStep, hterminal, hadmits]
 
 /-- Every admitted transport attempt is limited to the exact selected set,
 including when the transport returns an indeterminate result. -/
 theorem indeterminate_attempt_is_scope_bounded (cat : Catalog) (st : State) (r : Request)
+    (documents : Finset Document) (hselected : selectedDocuments cat r = some documents)
     (hpending : ¬ terminalFor st r.key) (hadmits : admits cat r) :
     (applyStep cat st r .indeterminate .notAttempted).attempted =
-      st.attempted ∪ selectedDocuments cat r := by
-  simp [applyStep, hpending, hadmits]
+      st.attempted ∪ documents := by
+  simp [applyStep, hpending, hadmits, hselected]
 
 /-- An ambiguous transport result is not a rejection: it remains pending so a
 later sweep can safely replay the same content-addressed document set. -/
@@ -114,7 +107,7 @@ theorem indeterminate_delivery_stays_pending (cat : Catalog) (st : State) (r : R
   rw [if_neg hpending]
   by_cases hadmits : admits cat r
   · rw [if_pos hadmits]
-    simpa [terminalFor] using hpending
+    cases hselected : selectedDocuments cat r <;> simpa [hselected, terminalFor] using hpending
   · rw [if_neg hadmits]
     exact hpending
 
@@ -128,7 +121,8 @@ theorem failed_terminal_write_stays_pending (cat : Catalog) (st : State) (r : Re
   rw [if_neg hpending]
   by_cases hadmits : admits cat r
   · rw [if_pos hadmits]
-    cases delivery <;> simpa [terminalFor] using hpending
+    cases hselected : selectedDocuments cat r <;>
+      cases delivery <;> simpa [hselected, terminalFor] using hpending
   · rw [if_neg hadmits]
     exact hpending
 
@@ -146,11 +140,13 @@ theorem indeterminate_replay_is_idempotent (cat : Catalog) (st : State) (r : Req
   by_cases hterminal : terminalFor st r.key
   · simp [applyStep, hterminal]
   · by_cases hadmits : admits cat r
-    · let docs := selectedDocuments cat r
+    · cases hselected : selectedDocuments cat r with
+      | none => simp [applyStep, hterminal, hadmits, hselected]
+      | some docs =>
       have hpendingAfter :
           ¬ terminalFor { st with attempted := st.attempted ∪ docs } r.key := by
         simpa [terminalFor] using hterminal
-      simp [applyStep, hterminal, hadmits, docs, hpendingAfter, Finset.union_assoc]
+      simp [applyStep, hterminal, hadmits, hselected, hpendingAfter, Finset.union_assoc]
     · simp [applyStep, hterminal, hadmits]
 
 /-- Repeating a confirmed push after its terminal write failed has the same
@@ -161,13 +157,15 @@ theorem confirmed_replay_is_idempotent (cat : Catalog) (st : State) (r : Request
   by_cases hterminal : terminalFor st r.key
   · simp [applyStep, hterminal]
   · by_cases hadmits : admits cat r
-    · let docs := selectedDocuments cat r
+    · cases hselected : selectedDocuments cat r with
+      | none => simp [applyStep, hterminal, hadmits, hselected]
+      | some docs =>
       have hpendingAfter :
           ¬ terminalFor { st with
             attempted := st.attempted ∪ docs
             confirmedDelivered := st.confirmedDelivered ∪ docs } r.key := by
         simpa [terminalFor] using hterminal
-      simp [applyStep, hterminal, hadmits, docs, hpendingAfter, Finset.union_assoc]
+      simp [applyStep, hterminal, hadmits, hselected, hpendingAfter, Finset.union_assoc]
     · simp [applyStep, hterminal, hadmits]
 
 end SessionHydration

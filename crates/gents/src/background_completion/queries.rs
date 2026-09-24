@@ -1,5 +1,4 @@
 use super::*;
-use anyhow::Context as _;
 
 pub(super) async fn load_child_linkage(
     node: &EmbeddedNode,

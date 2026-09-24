@@ -58,14 +58,12 @@ def requestTransitionAction? (source target : String) : Option String :=
 /-- Request edges that no single `RequestContext.Action` takes, but that
 registered recovery sweeps legitimately perform on persisted rows.
 
-`claimed -> completed` is terminal repair finishing a claimed request whose
-response document already landed; `claimed -> dead` and `processing -> dead` are
-the subagent-liveness sweep terminalizing an expired child. The licensing models
+`claimed -> dead` and `processing -> dead` are the subagent-liveness sweep
+terminalizing an expired child. The licensing models
 live in `Proofs/Recovery/` — the request machine alone does not model them, so
 publishing these as `illegal` made the emitted contract assert that Rust has no
 writer for edges the product actually performs. -/
 def requestRecoverySweepReachable : RequestState → RequestState → Bool
-  | .claimed, .completed => true
   | .claimed, .dead => true
   | .processing, .dead => true
   | _, _ => false

@@ -97,6 +97,18 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 #[allow(dead_code)]
 pub enum LoopStreamItem<R> {
     Item(MultiTurnStreamItem<R>),
+    ProviderAttemptStarted {
+        turn: usize,
+        attempt: u32,
+        capture_scope: gents_protocol::rendered_request::CaptureScope,
+    },
+    /// A complete provider turn ready for atomic durable acceptance. The loop
+    /// resumes into tool dispatch only after the consumer returns.
+    ProviderTurnReady {
+        turn: usize,
+        attempt: u32,
+        message: Message,
+    },
     TurnRetracted {
         turn: usize,
         attempt: u32,
@@ -115,6 +127,12 @@ pub enum LoopStreamItem<R> {
     },
     OutputObligationPending {
         reminder: Message,
+    },
+    /// Owned execution publishes admitted input before the first provider
+    /// invocation. Tool continuation messages already have delivery owners.
+    AuthoredInputReady {
+        context: Option<Message>,
+        prompt: Message,
     },
 }
 

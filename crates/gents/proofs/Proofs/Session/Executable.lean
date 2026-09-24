@@ -46,6 +46,14 @@ def step? (pre : SessionQueueState) : Action → Option SessionQueueState
       else
         none
 
+theorem coalescePending_preserves_active
+    (before after : SessionQueueState) (entry : QueueEntry)
+    (h : step? before (.coalescePending entry) = some after) :
+    after.active = before.active := by
+  unfold step? at h
+  repeat' split at h <;> try contradiction
+  all_goals cases h; rfl
+
 /-- Existing queue step behind its database selection boundary. A missing requester
 is an exact scope value, never a wildcard over requester-owned queues. -/
 def scopedStep? (target : AgentSession.Scope) (pre : SessionQueueState)

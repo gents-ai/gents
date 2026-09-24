@@ -137,7 +137,7 @@ pub mod crash {
                         .iter()
                         .any(|c| c.request_id == child.request_id
                             && c.lifecycle_state == child.lifecycle_state),
-                    "Crash({crashed}) lost durable child request {}",
+                    "Crash({crashed}) lost durable child request {}: before={child:?}, after={curr_children:?}",
                     child.request_id
                 );
             }

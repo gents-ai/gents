@@ -11,7 +11,6 @@
 //! require unsafe memory tricks and the integration coverage is sufficient.
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
 use defra_node::{EmbeddedNode, QueryResponse};
 
 use crate::graphql::{escape_graphql_string, response_has_documents};
@@ -97,6 +96,7 @@ impl ToolCallLifecycle {
         self.await_mode = current.await_mode;
         self.cancel_policy = current.cancel_policy;
         self.child_request_id = current.child_request_id;
+        self.spawned_by_tool_call_doc_id = current.spawned_by_tool_call_doc_id;
         self.unclaimed_deadline_at = current.unclaimed_deadline_at;
         Ok(())
     }
@@ -135,6 +135,7 @@ impl ToolCallLifecycle {
         self.await_mode = current.await_mode;
         self.cancel_policy = current.cancel_policy;
         self.child_request_id = current.child_request_id;
+        self.spawned_by_tool_call_doc_id = current.spawned_by_tool_call_doc_id;
         self.unclaimed_deadline_at = current.unclaimed_deadline_at;
         Ok(())
     }
@@ -177,79 +178,9 @@ impl ToolCallLifecycle {
     }
 }
 
-fn command_denial_fields_fragment(denial: Option<&CommandPolicyDenial>) -> String {
-    let Some(denial) = denial else {
-        return String::new();
-    };
-    format!(
-        r#"denial_reason: {denial_reason},
-                        denied_argv: {denied_argv},
-                        denied_command: {denied_command},
-                        denied_argument: {denied_argument},
-                        denied_subcommand: {denied_subcommand},
-                        denied_prefix: {denied_prefix},
-                        policy_mode: {policy_mode},
-                        policy_network: {policy_network},"#,
-        denial_reason = optional_string_literal(Some(denial.to_contract())),
-        denied_argv = optional_string_array_literal(denial.reason.denied_argv()),
-        denied_command = optional_string_literal(denial.reason.denied_command()),
-        denied_argument = optional_string_literal(denial.reason.denied_argument()),
-        denied_subcommand = optional_string_literal(denial.reason.denied_subcommand()),
-        denied_prefix = optional_string_array_literal(denial.reason.matched_prefix()),
-        policy_mode = optional_string_literal(Some(denial.policy_mode.as_str())),
-        policy_network = optional_string_literal(Some(denial.policy_network.as_str())),
-    )
-}
-
-fn optional_string_literal(value: Option<&str>) -> String {
-    value
-        .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-        .unwrap_or_else(|| "null".to_string())
-}
-
-fn optional_string_array_literal(values: Option<&[String]>) -> String {
-    values
-        .map(|values| {
-            let values = values
-                .iter()
-                .map(|value| format!(r#""{}""#, escape_graphql_string(value)))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("[{values}]")
-        })
-        .unwrap_or_else(|| "null".to_string())
-}
-
 mod bridge;
 mod mode_policy;
 mod native;
 
 #[cfg(test)]
 mod tests;
-
-/// Helper to extract `_docID` from a `create_*` mutation response.
-/// Patterned off `crates/gents/src/lifecycle/materialize.rs`.
-///
-/// DefraDB versions may return the key as either `"create_AgentToolCall"` or
-/// `"add_AgentToolCall"` (the latter is observed at runtime). Both the scalar
-/// and array forms are handled:
-///   `{ "add_AgentToolCall": [{ "_docID": "..." }] }`
-///   `{ "create_AgentToolCall": { "_docID": "..." } }`
-fn extract_doc_id_from_create_response(resp: &QueryResponse) -> Option<String> {
-    let data = resp.data.as_ref()?;
-    // Try both "create_" and "add_" prefixes — DefraDB may return either.
-    let value = data
-        .get("create_AgentToolCall")
-        .or_else(|| data.get("add_AgentToolCall"))?;
-    value
-        .get("_docID")
-        .and_then(|doc_id| doc_id.as_str())
-        .or_else(|| {
-            value
-                .as_array()
-                .and_then(|rows| rows.first())
-                .and_then(|row| row.get("_docID"))
-                .and_then(|doc_id| doc_id.as_str())
-        })
-        .map(|s| s.to_string())
-}

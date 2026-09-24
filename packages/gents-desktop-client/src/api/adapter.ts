@@ -26,6 +26,7 @@ import type {
 import type { DesktopOperationsSnapshot } from "../types/operations.js";
 import { createDesktopInvoker } from "./invoke.js";
 import type { DesktopApiAdapter, ManagedServerStatus } from "./types.js";
+import type { ManagedServerResetResult } from "../generated/ManagedServerResetResult.js";
 import type { ProviderAccountView } from "../generated/ProviderAccountView.js";
 import type { InferenceSetupCatalog } from "../generated/InferenceSetupCatalog.js";
 import type { InferenceDiscoveryResult } from "../generated/InferenceDiscoveryResult.js";
@@ -62,6 +63,10 @@ export function createDesktopApiAdapter(
     restartManagedServer: (agentName, authority) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_restart", {
         request: { agentName, ...authority },
+      }),
+    resetManagedServer: (confirmation) =>
+      invokeDesktop<ManagedServerResetResult>("desktop_managed_server_reset", {
+        request: { confirmation: confirmation ?? null },
       }),
     validateManagedServerRoot: (path) =>
       invokeDesktop<{ canonicalPath: string }>(

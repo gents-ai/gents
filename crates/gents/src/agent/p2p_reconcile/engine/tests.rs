@@ -2483,10 +2483,9 @@ fn data_plane_desired_machine_scopes_session_set_and_owned_directory() {
         .contains(crate::agent::p2p_reconcile::templates::AGENT_DIRECTORY_COLLECTION));
     for col in [
         "AgentRequest",
-        "AgentResponse",
+        "AgentOutputSegment",
         "AgentMessage",
         "AgentToolCall",
-        "AgentToolResult",
         "AgentSession",
         "CompactionEntry",
     ] {

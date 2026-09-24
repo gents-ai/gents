@@ -126,8 +126,11 @@ fn canonical_bridge_row(
         "agent_did": parent_agent_did,
         "requester_did": null,
         "tool_call_id": tool_call_id,
-        "args": format!(r#"{{"name":"{child_request_id}"}}"#),
-        "result": if lifecycle_state == "completed" { "done" } else { "" },
+        "tool_name": "spawn_subagent",
+        // Sequence of the accepted assistant header that binds this bridge's
+        // input; `args`/`result` are retired AgentToolCall columns.
+        "message_sequence": ACCEPTED_HEADER_SEQUENCE,
+        "spawn_behavior_id": "amy-code",
         "status": lifecycle_state,
         "lifecycle_state": lifecycle_state,
         "started_at": "2026-08-01T00:00:00Z",
@@ -184,6 +187,164 @@ fn canonical_messages_empty() -> Value {
     json!({ "data": { "AgentMessage": [] } })
 }
 
+/// Envelope for the accepted-header lookup
+/// (`AgentMessage` filtered by request doc id + sequence).
+fn canonical_accepted_header_response(rows: Vec<Value>) -> Value {
+    json!({ "data": { "AgentMessage": rows } })
+}
+
+/// Envelope for the header-coordinate twin-validation query (exact
+/// `message_key`/`sequence` scope) in `load_canonical_message`.
+fn canonical_accepted_header_twin_response(rows: Vec<Value>) -> Value {
+    json!({ "data": { "AgentMessage": rows } })
+}
+
+/// Envelope for `AgentOutputSegment` reads (argument-stream hydration).
+fn canonical_output_segment_response(rows: Vec<Value>) -> Value {
+    json!({ "data": { "AgentOutputSegment": rows } })
+}
+
+/// Sequence of the accepted assistant header that binds the bridge's input
+/// through its ToolCall block (`load_bridge_accepted_arguments` resolves it).
+const ACCEPTED_HEADER_SEQUENCE: u32 = 7;
+/// Physical document id of the accepted assistant header.
+const ACCEPTED_HEADER_DOC_ID: &str = "doc-msg-header";
+/// The logical child request id the accepted bridge spawn targets; the
+/// accepted header's argument stream carries it as its native tool input.
+const BRIDGE_CHILD_REQUEST_ID: &str = "req-child";
+
+/// One `AgentMessage` header row for the accepted-header lookup
+/// (`load_bridge_accepted_arguments`): the canonical assistant header whose
+/// `sequence` binds the bridge's input through its ToolCall block.
+fn canonical_accepted_header_row() -> Value {
+    use gents_protocol::output::{
+        MessageBlock, MessagePublication, MessageRole, OutputOutcome, PayloadRef, TranscriptMessage,
+    };
+    let header = TranscriptMessage {
+        message_key: "sess-root:accepted-header".into(),
+        session_id: "sess-root".into(),
+        agent_did: "deployment-a".into(),
+        requester_did: None,
+        request_doc_id: Some("doc-root".into()),
+        publication: MessagePublication::RequestExecution {
+            execution_generation: "gen-1".into(),
+        },
+        outcome: OutputOutcome::Complete,
+        sequence: ACCEPTED_HEADER_SEQUENCE,
+        role: MessageRole::Assistant,
+        native_id: Some("assistant-accepted".into()),
+        blocks: vec![MessageBlock::ToolCall {
+            tool_call_doc_id: "doc-tc-bridge".into(),
+            id: "tc-bridge".into(),
+            call_id: None,
+            name: "spawn_subagent".into(),
+            arguments: PayloadRef {
+                close_doc_id: "seg-close-args".into(),
+                stream: 0,
+            },
+            signature: None,
+            additional_params: None,
+        }],
+        created_at: "2026-08-01T00:00:00Z".into(),
+    };
+    let mut row = serde_json::to_value(header).unwrap();
+    row["_docID"] = json!(ACCEPTED_HEADER_DOC_ID);
+    row
+}
+
+/// The argument stream for the accepted bridge ToolCall block: one flush
+/// carrying the exact emitted JSON argument text, sealed `Complete` by the
+/// accepted execution generation. Reconstructed through the canonical output
+/// owners; the retired `args` column never carries bridge input.
+fn canonical_accepted_arguments_segment() -> Value {
+    use gents_protocol::output::{
+        OutputOutcome, OutputSegment, OutputSource, OutputWriter, SegmentRun, SourceClose,
+        StreamDeclaration, StreamPayload,
+    };
+    let payload = accepted_bridge_arguments();
+    let bytes = payload.len();
+    let segment = OutputSegment {
+        agent_did: "deployment-a".into(),
+        requester_did: None,
+        session_id: "sess-root".into(),
+        request_doc_id: "doc-root".into(),
+        source: OutputSource::ProviderTurn {
+            scope: "inference.1".parse().unwrap(),
+            turn_index: 0,
+            attempt: 0,
+        },
+        writer: OutputWriter::RequestExecution {
+            execution_generation: "gen-1".into(),
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: bytes.try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: StreamPayload::ToolArguments {
+                    id: "tc-bridge".into(),
+                    call_id: None,
+                    name: "spawn_subagent".into(),
+                },
+            }),
+        }],
+        payload,
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![bytes as u64],
+        }),
+        created_at: "2026-08-01T00:00:00Z".into(),
+    };
+    let mut row = serde_json::to_value(segment).unwrap();
+    row["_docID"] = json!("seg-close-args");
+    row
+}
+
+/// The exact emitted JSON argument text of the accepted bridge ToolCall.
+/// `canonical_accepted_arguments_segment`'s payload carries these bytes.
+fn accepted_bridge_arguments() -> String {
+    format!(r#"{{"name":"{BRIDGE_CHILD_REQUEST_ID}"}}"#)
+}
+
+#[test]
+fn accepted_bridge_fixture_reconstructs_exact_native_arguments() {
+    use gents_protocol::output::{
+        reconstruction::{reconstruct_message, ObservedSegment},
+        OutputSegment, TranscriptMessage,
+    };
+    let mut header = canonical_accepted_header_row();
+    header.as_object_mut().unwrap().remove("_docID");
+    let header: TranscriptMessage = serde_json::from_value(header).unwrap();
+    let mut segment = canonical_accepted_arguments_segment();
+    segment.as_object_mut().unwrap().remove("_docID");
+    let segment: OutputSegment = serde_json::from_value(segment).unwrap();
+    let message = reconstruct_message(
+        &[ObservedSegment {
+            doc_id: "seg-close-args",
+            segment: &segment,
+        }],
+        &[],
+        &[],
+        &header,
+    )
+    .unwrap();
+    let gents_protocol::message::Message::Assistant { content, .. } = message else {
+        panic!("accepted header must reconstruct an assistant message");
+    };
+    let [gents_protocol::message::AssistantContent::ToolCall(call)] = content.as_slice() else {
+        panic!("accepted header must retain its single native call");
+    };
+    assert_eq!(call.id, "tc-bridge");
+    assert_eq!(call.function.name, "spawn_subagent");
+    assert_eq!(
+        call.function.arguments,
+        serde_json::from_str::<Value>(&accepted_bridge_arguments()).unwrap()
+    );
+}
+
 fn canonical_standard_walk_responses() -> Vec<Value> {
     vec![
         root_response(),
@@ -202,13 +363,18 @@ fn canonical_standard_walk_responses() -> Vec<Value> {
             "sess-root",
             "deployment-a",
             "tc-bridge",
-            "req-child",
+            BRIDGE_CHILD_REQUEST_ID,
             "background",
             "running",
         )]),
+        canonical_accepted_header_response(vec![canonical_accepted_header_row()]),
+        canonical_accepted_header_response(vec![canonical_accepted_header_row()]),
+        canonical_accepted_header_twin_response(vec![canonical_accepted_header_row()]),
+        canonical_output_segment_response(vec![canonical_accepted_arguments_segment()]),
+        canonical_output_segment_response(vec![canonical_accepted_arguments_segment()]),
         canonical_children_response(vec![canonical_child_row(
             "doc-child",
-            "req-child",
+            BRIDGE_CHILD_REQUEST_ID,
             "sess-child",
             "deployment-b",
             "amy-code",
@@ -255,7 +421,12 @@ async fn tree_aggregates_labeled_accesses_and_records_partial_error_for_dead_pee
 
     let tree = build_subagent_tree(&accesses, "req-root", false, 4).await?;
 
-    assert_eq!(tree.nodes.len(), 2, "the healthy access still resolves");
+    assert_eq!(
+        tree.nodes.len(),
+        2,
+        "the healthy access still resolves: {:?}",
+        tree.partial_errors
+    );
     assert!(
         !tree.truncated,
         "the healthy access's shallow tree is not truncated"

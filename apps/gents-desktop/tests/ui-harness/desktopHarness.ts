@@ -31,11 +31,12 @@ import type {
   AgentBehavior,
   AgentContext,
   BehaviorView,
-  ResponseView,
   SessionSummary,
   SessionProvenance,
   TriggerView,
 } from "@source-inc/gents-desktop-client";
+import type { RequestOutcomeView } from "@source-inc/gents-desktop-client/generated/RequestOutcomeView";
+import type { MessageReconstructionView } from "@source-inc/gents-desktop-client/generated/MessageReconstructionView";
 import type { SessionContextView } from "@source-inc/gents-desktop-client/generated/SessionContextView";
 import type { ConcurrencyMode } from "@source-inc/gents-desktop-client/generated/ConcurrencyMode";
 import type { Task } from "@source-inc/gents-desktop-client/generated/Task";
@@ -70,27 +71,29 @@ function harnessSessionContext(
   };
 }
 
-function harnessResponseView(overrides: Partial<ResponseView> = {}): ResponseView {
+const HARNESS_READY_RECONSTRUCTION: MessageReconstructionView = { state: "ready" };
+
+function harnessRequestOutcome(
+  overrides: Partial<RequestOutcomeView> = {},
+): RequestOutcomeView {
   return {
-    status: null,
-    content: null,
-    reasoning: null,
-    errorMessage: null,
-    tokenCount: null,
-    materializedMessageSequence: null,
-    materializedAt: null,
-    interruptedAt: null,
-    completedAt: null,
+    failureReason: null,
     cancelCause: null,
-    backendId: null,
     ...overrides,
   };
 }
 
 function harnessAssistantItem(
-  item: Omit<Extract<RenderedTimelineItem, { kind: "assistantMessage" }>, "kind">,
+  item: Omit<
+    Extract<RenderedTimelineItem, { kind: "assistantMessage" }>,
+    "kind" | "reconstruction"
+  >,
 ): RenderedTimelineItem {
-  return { kind: "assistantMessage", ...item };
+  return {
+    kind: "assistantMessage",
+    reconstruction: HARNESS_READY_RECONSTRUCTION,
+    ...item,
+  };
 }
 
 export type DesktopUiHarnessScenario =
@@ -293,22 +296,13 @@ export function createDesktopUiHarness(
     behaviorId: DEFAULT_BEHAVIOR_ID,
     title: "introduction-and-greetings",
     previewText: greeting,
-    status: activeTurn ? "processing" : "completed",
-    turnState: activeTurn ? "streaming" : "completed",
+    status: "active",
+    turnState: activeTurn ? "running" : "completed",
     latestRequestId: "request-intro",
     goal: null,
     retryEligibility: { eligible: false, denialReason: null },
-    latestResponse: harnessResponseView({
-      status: activeTurn ? "streaming" : "completed",
-      content: greeting,
-      tokenCount: 24,
-      materializedMessageSequence: 1,
-      materializedAt: STARTED_AT,
-      completedAt: activeTurn ? null : STARTED_AT,
-      backendId: "backend-openai",
-    }),
+    latestRequestOutcome: harnessRequestOutcome(),
     pendingTurn: null,
-    activeResponseOverlay: null,
     context:
       scenario === "long-content"
         ? harnessSessionContext({
@@ -331,6 +325,16 @@ export function createDesktopUiHarness(
       ...(activeTurn
         ? [
             {
+              kind: "liveAssistant" as const,
+              itemKey: "intro-live",
+              content: null,
+              reasoning: null,
+            },
+          ]
+        : []),
+      ...(activeTurn
+        ? [
+            {
               kind: "toolGroup" as const,
               itemKey: "live-tools",
               messageSequence: 2,
@@ -339,6 +343,7 @@ export function createDesktopUiHarness(
                   itemKey: "live-exec",
                   toolName: "gents_exec",
                   statusKind: "running",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "command" as const,
                     command: "cargo test -p gents",
@@ -372,6 +377,7 @@ export function createDesktopUiHarness(
                   itemKey: "intro-edit-file",
                   toolName: "edit_file",
                   statusKind: "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "fileEdit" as const,
                     operation: "edit_file",
@@ -389,6 +395,7 @@ export function createDesktopUiHarness(
                   itemKey: "intro-bash",
                   toolName: "bash",
                   statusKind: "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "command" as const,
                     command: "cargo test parser",
@@ -408,6 +415,7 @@ export function createDesktopUiHarness(
                   itemKey: "intro-subagent",
                   toolName: "spawn_subagent",
                   statusKind: "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "subagent" as const,
                     action: "spawn",
@@ -422,6 +430,7 @@ export function createDesktopUiHarness(
                   itemKey: "intro-process",
                   toolName: "spawn_process",
                   statusKind: "running",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "process" as const,
                     action: "spawn",
@@ -436,6 +445,7 @@ export function createDesktopUiHarness(
                   itemKey: "intro-mcp",
                   toolName: "call_tool",
                   statusKind: "success",
+                  reconstruction: HARNESS_READY_RECONSTRUCTION,
                   presentation: {
                     kind: "mcp" as const,
                     serviceId: "github",
@@ -466,14 +476,13 @@ export function createDesktopUiHarness(
       behaviorId: DEFAULT_BEHAVIOR_ID,
       title: "Desktop-started session",
       previewText: "hello from desktop",
-      status: "completed",
+      status: "active",
       turnState: "completed",
       latestRequestId: "request-remote",
       goal: null,
       retryEligibility: { eligible: false, denialReason: null },
-      latestResponse: null,
+      latestRequestOutcome: null,
       pendingTurn: null,
-      activeResponseOverlay: null,
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -482,6 +491,7 @@ export function createDesktopUiHarness(
           sequence: 1,
           content: "hello from desktop",
           timestamp: THIRTY_DAYS_AGO,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
         },
       ],
       hydration: {
@@ -508,13 +518,12 @@ export function createDesktopUiHarness(
         behaviorId: DEFAULT_BEHAVIOR_ID,
         title: `Comparable session ${String(index).padStart(3, "0")}`,
         previewText: `Durable session-index fixture row ${index}`,
-        status: "completed",
+        status: "active",
         turnState: "completed",
         latestRequestId: `request-index-${index}`,
         goal: null,
         retryEligibility: { eligible: false, denialReason: null },
-        latestResponse: null,
-        activeResponseOverlay: null,
+        latestRequestOutcome: null,
         pendingTurn: null,
         context: harnessSessionContext(),
         timelineItems: [],
@@ -584,15 +593,6 @@ export function createDesktopUiHarness(
       ...session,
       previewText: `stream-chunk-${streamSequence}`,
       timelineItems,
-      latestResponse: session.latestResponse
-        ? { ...session.latestResponse, content: liveContent }
-        : null,
-      activeResponseOverlay: harnessResponseView({
-        ...session.activeResponseOverlay,
-        status: "streaming",
-        content: liveContent,
-        reasoning: null,
-      }),
     });
     return streamSequence;
   }
@@ -731,22 +731,13 @@ export function createDesktopUiHarness(
       behaviorId: behaviorId || deployment.agentPrincipal.defaultBehaviorId,
       title,
       previewText: response,
-      status: "completed",
+      status: "active",
       turnState: "completed",
       latestRequestId: requestId,
       goal: null,
       retryEligibility: { eligible: false, denialReason: null },
-      latestResponse: harnessResponseView({
-        status: "completed",
-        content: response,
-        tokenCount: 32,
-        materializedMessageSequence: 2,
-        materializedAt: now,
-        completedAt: now,
-        backendId: "backend-openai",
-      }),
+      latestRequestOutcome: harnessRequestOutcome(),
       pendingTurn: null,
-      activeResponseOverlay: null,
       context: harnessSessionContext(),
       timelineItems: [
         {
@@ -755,6 +746,7 @@ export function createDesktopUiHarness(
           sequence: 1,
           content: prompt,
           timestamp: now,
+          reconstruction: HARNESS_READY_RECONSTRUCTION,
         },
         harnessAssistantItem({
           itemKey: `${requestId}-assistant`,
@@ -1162,19 +1154,22 @@ export function createDesktopUiHarness(
           requestId: request.requestId,
           progressSeq: streamSequence,
           turnState: session.turnState,
-          status: session.latestResponse?.status ?? null,
+          status: session.status,
           content: null,
           reasoning: null,
         };
       }
-      const response = session.activeResponseOverlay ?? session.latestResponse;
+      const live = session.timelineItems.find((item) => item.kind === "liveAssistant");
+      const liveContent = live && live.kind === "liveAssistant" ? live.content : null;
+      const liveReasoning =
+        live && live.kind === "liveAssistant" ? live.reasoning : null;
       const content = harnessLiveTextPatch(
-        response?.content ?? "",
+        liveContent ?? "",
         request.baseContentByteLen,
         request.baseContentHash,
       );
       const reasoning = harnessLiveTextPatch(
-        response?.reasoning ?? "",
+        liveReasoning ?? "",
         request.baseReasoningByteLen,
         request.baseReasoningHash,
       );
@@ -1187,7 +1182,7 @@ export function createDesktopUiHarness(
         requestId: request.requestId,
         progressSeq: streamSequence,
         turnState: session.turnState,
-        status: session.latestResponse?.status ?? null,
+        status: session.status,
         content,
         reasoning,
       };
@@ -1209,18 +1204,10 @@ export function createDesktopUiHarness(
         const updated: DesktopSessionSnapshot = {
           ...existing,
           previewText: response,
-          status: "completed",
+          status: "active",
           turnState: "completed",
           latestRequestId: requestId,
-          latestResponse: harnessResponseView({
-            status: "completed",
-            content: response,
-            tokenCount: 32,
-            materializedMessageSequence: nextSequence + 1,
-            materializedAt: new Date().toISOString(),
-            completedAt: new Date().toISOString(),
-            backendId: "backend-openai",
-          }),
+          latestRequestOutcome: harnessRequestOutcome(),
           timelineItems: [
             ...existing.timelineItems,
             {
@@ -1229,6 +1216,7 @@ export function createDesktopUiHarness(
               sequence: nextSequence,
               content,
               timestamp: new Date().toISOString(),
+              reconstruction: HARNESS_READY_RECONSTRUCTION,
             },
             harnessAssistantItem({
               itemKey: `${requestId}-assistant`,
@@ -2442,18 +2430,15 @@ export function createDesktopUiHarness(
                     content: item.content,
                     reasoning: item.reasoning,
                     timestamp: STARTED_AT,
+                    reconstruction: HARNESS_READY_RECONSTRUCTION,
                   }
                 : item,
             );
             sessions.set("session-large", {
               ...session,
-              status: "completed",
+              status: "active",
               turnState: "completed",
               timelineItems,
-              latestResponse: session.latestResponse
-                ? { ...session.latestResponse, status: "completed" }
-                : null,
-              activeResponseOverlay: null,
             });
             syncSessions();
             notify("store");
@@ -2603,6 +2588,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
             sequence: index,
             content: `User fixture row ${index}: ${filler}`,
             timestamp: STARTED_AT,
+            reconstruction: HARNESS_READY_RECONSTRUCTION,
           }
         : {
             kind: "assistantMessage" as const,
@@ -2611,6 +2597,7 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
             content: `Assistant fixture row ${index}: ${filler}`,
             reasoning: index % 10 === 1 ? `Reasoning fixture ${index}` : null,
             timestamp: STARTED_AT,
+            reconstruction: HARNESS_READY_RECONSTRUCTION,
           };
     },
   );
@@ -2620,22 +2607,13 @@ function createLargePerformanceSession(): DesktopSessionSnapshot {
     behaviorId: DEFAULT_BEHAVIOR_ID,
     title: "Large local transcript — 600 timeline items",
     previewText: "stream-start",
-    status: "processing",
-    turnState: "streaming",
+    status: "active",
+    turnState: "running",
     latestRequestId: "large-request-live",
     goal: null,
     retryEligibility: { eligible: false, denialReason: null },
-    latestResponse: harnessResponseView({
-      status: "streaming",
-      content: "stream-start",
-      tokenCount: 1,
-      backendId: "backend-openai",
-    }),
+    latestRequestOutcome: null,
     pendingTurn: null,
-    activeResponseOverlay: harnessResponseView({
-      status: "streaming",
-      content: "stream-start",
-    }),
     context: harnessSessionContext(),
     timelineItems,
   };

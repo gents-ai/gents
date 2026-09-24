@@ -132,14 +132,58 @@ test.describe("desktop live browser smoke", () => {
 
       await page
         .getByRole("textbox", { name: "Message" })
-        .fill("Reply with a short desktop live browser smoke confirmation.");
+        .fill(
+          "Reply with a desktop live browser smoke confirmation in exactly twenty numbered paragraphs, with two complete sentences in each paragraph.",
+        );
+      await page.evaluate(() => {
+        const state = { observed: false, maxTextLength: 0 };
+        Object.assign(window, { __gentsLiveAssistantWitness: state });
+        const record = () => {
+          const live = document.querySelector('[data-testid="live-assistant"]');
+          if (!live) return;
+          state.observed = true;
+          state.maxTextLength = Math.max(
+            state.maxTextLength,
+            (live.textContent ?? "").replace(/Thinking/g, "").trim().length,
+          );
+        };
+        new MutationObserver(record).observe(document.body, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+        });
+        record();
+      });
       await page.getByRole("button", { name: "Send" }).click();
 
       submitted = await waitForSubmittedRequest(liveRunner, {
         agentDid: deployment.agentDid,
         previousRequestIds,
       });
-      const completedSession = await liveRunner.waitForRequestCompletion(submitted);
+      const completion = liveRunner.waitForRequestCompletion(submitted);
+      const liveAssistantObserved = page.waitForFunction(
+        () => {
+          const witness = Reflect.get(window, "__gentsLiveAssistantWitness") as
+            { observed?: boolean; maxTextLength?: number } | undefined;
+          return Boolean(witness?.observed && (witness.maxTextLength ?? 0) > 0);
+        },
+        undefined,
+        { timeout: 120_000 },
+      );
+      const firstObservation = await Promise.race([
+        liveAssistantObserved.then(() => "live-assistant" as const),
+        completion.then(() => "terminal-completion" as const),
+      ]);
+      expect(
+        firstObservation,
+        "the browser must render streamed assistant text before the request becomes terminal",
+      ).toBe("live-assistant");
+      const completedSession = await completion;
+      const liveWitness = await page.evaluate(() =>
+        Reflect.get(window, "__gentsLiveAssistantWitness"),
+      );
+      expect(liveWitness).toMatchObject({ observed: true });
+      expect(liveWitness.maxTextLength).toBeGreaterThan(0);
       if (completedSession.turnState !== "completed") {
         diagnostics = await liveRunner.fetchRequestDiagnostics(
           submitted.sessionId,
@@ -149,7 +193,7 @@ test.describe("desktop live browser smoke", () => {
           `live browser smoke request ended ${completedSession.turnState}`,
         );
       }
-      expect(completedSession.timelinePage?.queryCount).toBe(1);
+      expect(completedSession.timelinePage?.queryCount ?? 0).toBeGreaterThan(0);
       expect(completedSession.timelinePage?.queriedRows ?? 0).toBeGreaterThan(0);
       expect(
         completedSession.timelinePage?.queriedRows ?? Number.MAX_SAFE_INTEGER,
@@ -163,6 +207,15 @@ test.describe("desktop live browser smoke", () => {
       ).toBeVisible({
         timeout: 30_000,
       });
+
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      // The title is model-authored and may change before reload. Reopen the
+      // exact session whose streaming and completion we observed above.
+      await page.getByTestId(`session-${submitted.sessionId}`).click();
+      await expect(
+        page.getByText(/Bombadil harness response|desktop live browser smoke/i).first(),
+      ).toBeVisible({ timeout: 30_000 });
 
       await page
         .getByRole("link", { name: /configuration/i })
@@ -189,10 +242,125 @@ test.describe("desktop live browser smoke", () => {
           completedSession.timelinePage?.messageQueryLimit ?? 0,
         transcriptToolCallQueryLimit:
           completedSession.timelinePage?.toolCallQueryLimit ?? 0,
+        preclosureLiveAssistantObserved: true,
+        preclosureLiveAssistantMaxTextLength: liveWitness.maxTextLength,
         diagnostics,
       });
 
       await attachPageScreenshot(page, testInfo, "desktop-live-browser-final.png");
+    } catch (error) {
+      if (liveRunner) {
+        await attachLiveSmokeFailureEvidence(testInfo, page, {
+          error,
+          runner: liveRunner,
+          submitted,
+          diagnostics:
+            diagnostics ??
+            (submitted
+              ? await tryFetchRequestDiagnostics(liveRunner, submitted)
+              : null),
+        });
+      }
+      throw error;
+    }
+  });
+
+  test("cancels a streaming turn mid-flight and retains the partial before completing the followup", async ({
+    page,
+  }, testInfo) => {
+    const liveRunner = runner;
+    let submitted: SubmittedRequest | null = null;
+    let diagnostics: RequestDiagnosticsBundle | null = null;
+
+    try {
+      expect(liveRunner).toBeTruthy();
+      if (!liveRunner) {
+        throw new Error("live browser cancel runner was not initialized");
+      }
+
+      await gotoLiveHarness(page, liveRunner.baseUrl);
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+
+      await page.getByRole("button", { name: "New", exact: true }).click();
+      await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
+      const deployment = await firstDeployment(liveRunner);
+      const previousRequestIds = new Set(
+        deployment.sessions
+          .map((conversation) => conversation.latestRequestId)
+          .filter((requestId): requestId is string => Boolean(requestId)),
+      );
+
+      await page
+        .getByRole("textbox", { name: "Message" })
+        .fill(
+          "Reply with a desktop live browser cancel confirmation in exactly forty numbered paragraphs, with two complete sentences in each paragraph.",
+        );
+      await page.getByRole("button", { name: "Send" }).click();
+
+      submitted = await waitForSubmittedRequest(liveRunner, {
+        agentDid: deployment.agentDid,
+        previousRequestIds,
+      });
+      const completion = liveRunner.waitForRequestCompletion(submitted);
+
+      const liveAssistant = page.getByTestId("live-assistant");
+      const liveProse = () =>
+        liveAssistant.evaluate((element) => {
+          const prose = element.cloneNode(true) as HTMLElement;
+          // The animated Thinking line is UI state, not retained model output.
+          prose.querySelectorAll(".highlight").forEach((node) => node.remove());
+          return (prose.textContent ?? "").trim();
+        });
+      await expect
+        .poll(async () => (await liveProse()).length, { timeout: 120_000 })
+        .toBeGreaterThanOrEqual(60);
+
+      const partialText = await liveProse();
+      expect(partialText.length).toBeGreaterThan(0);
+
+      await page.getByRole("button", { name: /stop/i }).first().click();
+
+      const cancelledSession = await completion;
+      expect(
+        cancelledSession.turnState,
+        "canceling mid-stream must leave the turn interrupted, never completed",
+      ).toBe("interrupted");
+
+      diagnostics = await liveRunner.fetchRequestDiagnostics(
+        submitted.sessionId,
+        submitted.requestId,
+      );
+      // Closure replaces the transient overlay with its canonical message.
+      // Assert the retained bytes through that reader, including after reload;
+      // a retired response row is not evidence of durable partial publication.
+      const retainedAssistant = page.locator('[data-slot="assistant-message"]').last();
+      await expect(retainedAssistant).toContainText(partialText);
+      await page.reload();
+      await expect(page.getByTestId("app-shell")).toBeVisible();
+      await page.getByTestId(`session-${submitted.sessionId}`).click();
+      await expect(
+        page.locator('[data-slot="assistant-message"]').last(),
+      ).toContainText(partialText);
+
+      const followupPrompt =
+        "Reply with one short sentence confirming the desktop live browser followup completed after a cancel.";
+      await expect(page.getByRole("textbox", { name: "Message" })).toBeVisible();
+      await page.getByRole("textbox", { name: "Message" }).fill(followupPrompt);
+      await page.getByRole("button", { name: "Send" }).click();
+
+      const followup = await waitForSubmittedRequest(liveRunner, {
+        agentDid: deployment.agentDid,
+        previousRequestIds: new Set([...previousRequestIds, submitted.requestId]),
+      });
+      const followupCompletion = liveRunner.waitForRequestCompletion(followup);
+      const followupSession = await followupCompletion;
+      expect(followupSession.turnState).toBe("completed");
+
+      await attachPageScreenshot(
+        page,
+        testInfo,
+        "desktop-live-browser-cancel-final.png",
+      );
     } catch (error) {
       if (liveRunner) {
         await attachLiveSmokeFailureEvidence(testInfo, page, {

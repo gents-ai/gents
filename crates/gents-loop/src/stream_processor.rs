@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use gents_protocol::message::{
     AssistantContent as AssistantMessageContent, Message as CompletionMessage,
     Reasoning as AssistantReasoning, Text as CompletionText, ToolCall as AssistantToolCall,
@@ -8,8 +8,8 @@ use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use crate::loop_stream::LoopStreamItem;
 use crate::request_lifecycle::RequestLifecycleControl;
-use crate::session_hook::SessionHook;
-use crate::stream_writer::StreamWriter;
+use crate::session_hook::{CanonicalSessionHook, SessionHook};
+use crate::stream_writer::{CanonicalStreamWriter, StreamWriter};
 
 pub enum StreamAction {
     Continue,
@@ -17,7 +17,12 @@ pub enum StreamAction {
     Error(rig::agent::StreamingError),
 }
 
-pub struct StreamProcessor<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> {
+pub struct StreamProcessor<'a, H, W, L>
+where
+    L: RequestLifecycleControl,
+    W: CanonicalStreamWriter<L>,
+    H: CanonicalSessionHook<W::AcceptedToolCall, W::SpawnAdmissionPlan>,
+{
     persistence_hook: &'a H,
     stream_writer: &'a W,
     lifecycle: &'a mut L,
@@ -27,10 +32,19 @@ pub struct StreamProcessor<'a, H: SessionHook, W: StreamWriter, L: RequestLifecy
     pub streamed_text: String,
     committed_text_len: usize,
     pub final_text: Option<String>,
+    pub final_message_doc_id: Option<String>,
+    pending_tool_internal_ids: Vec<String>,
+    active_provider_attempt: Option<(usize, u32)>,
+    authored_index: u32,
     doc_id: &'a str,
 }
 
-impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProcessor<'a, H, W, L> {
+impl<'a, H, W, L> StreamProcessor<'a, H, W, L>
+where
+    L: RequestLifecycleControl,
+    W: CanonicalStreamWriter<L>,
+    H: CanonicalSessionHook<W::AcceptedToolCall, W::SpawnAdmissionPlan>,
+{
     pub fn new(
         persistence_hook: &'a H,
         stream_writer: &'a W,
@@ -45,6 +59,10 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
             streamed_text: String::new(),
             committed_text_len: 0,
             final_text: None,
+            final_message_doc_id: None,
+            pending_tool_internal_ids: Vec::new(),
+            active_provider_attempt: None,
+            authored_index: 0,
             doc_id,
         }
     }
@@ -62,7 +80,13 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
 
     /// Writes whatever is buffered for this turn now.
     pub async fn flush_pending(&self) -> Result<()> {
-        self.stream_writer.flush_pending(self.doc_id).await?;
+        if let Some(message) = self.assistant_turn.message_snapshot() {
+            self.stream_writer
+                .flush_native_partial(self.lifecycle, &message)
+                .await?;
+            // A successful durable flush consumes the due batching signal.
+            self.stream_writer.flush_pending(self.doc_id).await?;
+        }
         Ok(())
     }
 
@@ -71,19 +95,71 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
         item: Result<LoopStreamItem<R>, rig::agent::StreamingError>,
     ) -> Result<StreamAction> {
         match item {
+            Ok(LoopStreamItem::ProviderAttemptStarted {
+                turn,
+                attempt,
+                capture_scope,
+            }) => {
+                self.stream_writer
+                    .start_provider_attempt(self.doc_id, turn, attempt, capture_scope)
+                    .await;
+                self.active_provider_attempt = Some((turn, attempt));
+                Ok(StreamAction::Continue)
+            }
+            Ok(LoopStreamItem::ProviderTurnReady {
+                turn,
+                attempt,
+                message,
+            }) => {
+                let spawn_admissions = self
+                    .persistence_hook
+                    .preplan_spawn_admissions(&message, &self.pending_tool_internal_ids)
+                    .await;
+                let published = self
+                    .stream_writer
+                    .publish_native_turn_with_spawn_admissions(
+                        self.lifecycle,
+                        turn,
+                        attempt,
+                        &message,
+                        &spawn_admissions,
+                    )
+                    .await?;
+                // Acceptance also commits bytes still waiting for the batch
+                // timer. Consume that signal before clearing the accumulator,
+                // or a due timer can starve post-publication dispatch/finalization.
+                self.stream_writer.flush_pending(self.doc_id).await?;
+                anyhow::ensure!(
+                    published.accepted_tools.len() == self.pending_tool_internal_ids.len(),
+                    "accepted tool bindings do not match streamed native tool calls"
+                );
+                let accepted = self
+                    .pending_tool_internal_ids
+                    .drain(..)
+                    .zip(published.accepted_tools)
+                    .collect();
+                self.persistence_hook
+                    .adopt_accepted_tool_calls(accepted)
+                    .await?;
+                self.final_message_doc_id = Some(published.message_doc_id);
+                self.active_provider_attempt = None;
+                self.assistant_turn = AssistantTurnAccumulator::default();
+                self.committed_text_len = self.streamed_text.len();
+                Ok(StreamAction::Continue)
+            }
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                 StreamedAssistantContent::Text(text),
             ))) => {
                 let had_visible_text = !self.streamed_text.trim().is_empty();
                 self.assistant_turn.push_text(&text.text);
                 self.streamed_text.push_str(&text.text);
-                let _ = self
+                let flush_due = self
                     .stream_writer
                     .write_tokens(self.doc_id, &text.text)
                     .await?;
                 let has_visible_text = !self.streamed_text.trim().is_empty();
-                if !had_visible_text && has_visible_text {
-                    let _ = self.stream_writer.flush_pending(self.doc_id).await?;
+                if flush_due || (!had_visible_text && has_visible_text) {
+                    self.flush_pending().await?;
                 }
                 Ok(StreamAction::Continue)
             }
@@ -94,10 +170,13 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                 let rendered = render_reasoning_text(&reasoning);
                 self.assistant_turn.push_reasoning(reasoning);
                 if !rendered.is_empty() {
-                    let _ = self
+                    let flush_due = self
                         .stream_writer
                         .write_reasoning(self.doc_id, &rendered)
                         .await?;
+                    if flush_due {
+                        self.flush_pending().await?;
+                    }
                 }
                 Ok(StreamAction::Continue)
             }
@@ -106,10 +185,13 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
             ))) => {
                 self.assistant_turn.push_reasoning_delta(id, &reasoning);
                 if !reasoning.is_empty() {
-                    let _ = self
+                    let flush_due = self
                         .stream_writer
                         .write_reasoning(self.doc_id, &reasoning)
                         .await?;
+                    if flush_due {
+                        self.flush_pending().await?;
+                    }
                 }
                 Ok(StreamAction::Continue)
             }
@@ -119,7 +201,7 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                     internal_call_id,
                 },
             ))) => {
-                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
+                self.flush_pending().await?;
                 self.persistence_hook
                     .register_stream_tool_call_identity(
                         &internal_call_id,
@@ -127,22 +209,10 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                         tool_call.call_id.as_deref(),
                     )
                     .await;
+                self.pending_tool_internal_ids
+                    .push(internal_call_id.clone());
                 self.assistant_turn
                     .push_tool_call(crate::rig_compat::from_rig_tool_call(&tool_call));
-                if let Some(message) = self.assistant_turn.message_snapshot() {
-                    let persisted = self
-                        .persistence_hook
-                        .persist_inflight_assistant_turn(&message)
-                        .await;
-                    let advanced = persisted.is_ok();
-                    self.persistence_hook.apply_persistence_policy(
-                        persisted.map(|_| ()),
-                        "persist in-flight assistant tool-call turn",
-                    )?;
-                    if advanced {
-                        self.lifecycle.advance().await?;
-                    }
-                }
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamUserItem(
@@ -151,84 +221,89 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
                     internal_call_id,
                 },
             ))) => {
-                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                if let Some(message) = self.assistant_turn.take_message() {
-                    self.persistence_hook.apply_persistence_policy(
-                        self.persistence_hook
-                            .persist_message(&message)
-                            .await
-                            .map(|_| ()),
-                        "persist streamed assistant turn",
-                    )?;
-                }
+                self.flush_pending().await?;
+                self.assistant_turn = AssistantTurnAccumulator::default();
                 self.committed_text_len = self.streamed_text.len();
-                let persisted = self
-                    .persistence_hook
-                    .persist_stream_tool_result_progress(
-                        &crate::rig_compat::from_rig_tool_result(&tool_result),
-                        &internal_call_id,
-                    )
-                    .await;
-                let advanced = matches!(persisted, Ok(true));
-                self.persistence_hook.apply_persistence_policy(
-                    persisted.map(|_| ()),
-                    "persist streamed tool result",
-                )?;
-                if advanced {
-                    self.lifecycle.advance().await?;
-                }
+                let _ = (tool_result, internal_call_id);
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::FinalResponse(response))) => {
                 self.assistant_turn.reconcile_text(response.response());
-                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                if let Some(message) = self.assistant_turn.take_message() {
-                    let sequence = self.persistence_hook.persist_message(&message).await?;
-                    self.lifecycle.advance().await?;
-                    self.persistence_hook.apply_persistence_policy(
-                        self.persistence_hook
-                            .mark_current_response_materialized(sequence)
-                            .await,
-                        "mark final assistant turn materialized",
-                    )?;
-                    self.committed_text_len = self.streamed_text.len();
-                    self.stream_writer.reset_tail(self.doc_id).await?;
-                }
                 self.final_text = Some(response.response().to_string());
                 Ok(StreamAction::Done)
             }
-            Ok(LoopStreamItem::TurnRetracted { .. }) => {
+            Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }) => {
+                self.stream_writer
+                    .close_provider_attempt(
+                        self.lifecycle,
+                        turn,
+                        attempt,
+                        crate::stream_writer::ProviderAttemptClose::Retracted,
+                    )
+                    .await?;
+                self.active_provider_attempt = None;
                 self.assistant_turn = AssistantTurnAccumulator::default();
                 self.streamed_text.truncate(self.committed_text_len);
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::OutputObligationPending { reminder }) => {
-                let _ = self.stream_writer.flush_pending(self.doc_id).await?;
-                if let Some(message) = self.assistant_turn.take_message() {
-                    self.persistence_hook.apply_persistence_policy(
-                        self.persistence_hook
-                            .persist_message(&message)
-                            .await
-                            .map(|_| ()),
-                        "persist assistant output-obligation proposal",
-                    )?;
+            Ok(LoopStreamItem::AuthoredInputReady { context, prompt }) => {
+                if let Some(context) = context.as_ref() {
+                    self.stream_writer
+                        .publish_authored_message(self.lifecycle, "context", context)
+                        .await?;
                 }
-                self.persistence_hook.apply_persistence_policy(
-                    self.persistence_hook
-                        .persist_message(&reminder)
-                        .await
-                        .map(|_| ()),
-                    "persist output-obligation reminder",
-                )?;
+                self.stream_writer
+                    .publish_authored_message(self.lifecycle, "prompt", &prompt)
+                    .await?;
+                Ok(StreamAction::Continue)
+            }
+            Ok(LoopStreamItem::OutputObligationPending { reminder }) => {
+                self.flush_pending().await?;
+                let key = format!("output-obligation:{}", self.authored_index);
+                self.stream_writer
+                    .publish_authored_message(self.lifecycle, &key, &reminder)
+                    .await?;
+                self.authored_index = self
+                    .authored_index
+                    .checked_add(1)
+                    .context("authored message index exhausted")?;
                 self.streamed_text.truncate(self.committed_text_len);
                 self.stream_writer.reset_tail(self.doc_id).await?;
                 Ok(StreamAction::Continue)
             }
-            Ok(LoopStreamItem::Item(_)) | Ok(LoopStreamItem::AttemptFailed { .. }) => {
+            Ok(LoopStreamItem::AttemptFailed {
+                turn,
+                attempt,
+                will_retry,
+                ..
+            }) => {
+                if !will_retry {
+                    self.flush_pending().await?;
+                }
+                if let Some(active) = self.active_provider_attempt {
+                    anyhow::ensure!(
+                        active == (turn, attempt),
+                        "provider failure does not match the exact active attempt"
+                    );
+                    self.stream_writer
+                        .close_provider_attempt(
+                            self.lifecycle,
+                            turn,
+                            attempt,
+                            if will_retry {
+                                crate::stream_writer::ProviderAttemptClose::Retracted
+                            } else {
+                                crate::stream_writer::ProviderAttemptClose::Partial
+                            },
+                        )
+                        .await?;
+                    self.active_provider_attempt = None;
+                }
                 Ok(StreamAction::Continue)
             }
+            Ok(LoopStreamItem::Item(_)) => Ok(StreamAction::Continue),
             Err(error) => Ok(StreamAction::Error(error)),
         }
     }
@@ -246,25 +321,20 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
     }
 
     pub async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
+        self.flush_pending().await?;
         let Some(message) = self.assistant_turn.take_message() else {
             return Ok(false);
         };
-
-        let sequence = match self.persistence_hook.persist_message(&message).await {
-            Ok(sequence) => Some(sequence),
-            Err(error) => {
-                self.persistence_hook
-                    .apply_persistence_policy(Err(error), context)?;
-                None
-            }
-        };
-        if let Some(sequence) = sequence {
-            self.persistence_hook.apply_persistence_policy(
-                self.persistence_hook
-                    .mark_current_response_materialized(sequence)
-                    .await,
-                "mark interrupted assistant turn materialized",
-            )?;
+        let _ = (message, context);
+        if let Some((turn, attempt)) = self.active_provider_attempt.take() {
+            self.stream_writer
+                .close_provider_attempt(
+                    self.lifecycle,
+                    turn,
+                    attempt,
+                    crate::stream_writer::ProviderAttemptClose::Partial,
+                )
+                .await?;
         }
         self.stream_writer.reset_tail(self.doc_id).await?;
 
@@ -274,38 +344,52 @@ impl<'a, H: SessionHook, W: StreamWriter, L: RequestLifecycleControl> StreamProc
 
 #[derive(Clone, Default)]
 pub struct AssistantTurnAccumulator {
-    text: String,
-    reasoning: Vec<AssistantReasoning>,
-    pending_reasoning_delta_text: String,
-    pending_reasoning_delta_id: Option<String>,
-    tool_calls: Vec<AssistantToolCall>,
+    content: Vec<AssistantMessageContent>,
 }
 
 impl AssistantTurnAccumulator {
     pub fn push_text(&mut self, text: &str) {
-        self.text.push_str(text);
-    }
-
-    pub fn push_reasoning(&mut self, reasoning: AssistantReasoning) {
-        merge_reasoning_blocks(&mut self.reasoning, &reasoning);
-    }
-
-    pub fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
-        self.pending_reasoning_delta_text.push_str(reasoning);
-        if self.pending_reasoning_delta_id.is_none() {
-            self.pending_reasoning_delta_id = id;
+        match self.content.last_mut() {
+            Some(AssistantMessageContent::Text(current)) => current.text.push_str(text),
+            _ => self
+                .content
+                .push(AssistantMessageContent::Text(CompletionText {
+                    text: text.into(),
+                })),
         }
     }
 
+    pub fn push_reasoning(&mut self, reasoning: AssistantReasoning) {
+        match self.content.last_mut() {
+            Some(AssistantMessageContent::Reasoning(current)) if current.id == reasoning.id => {
+                current.content.extend(reasoning.content)
+            }
+            _ => self
+                .content
+                .push(AssistantMessageContent::Reasoning(reasoning)),
+        }
+    }
+
+    pub fn push_reasoning_delta(&mut self, id: Option<String>, reasoning: &str) {
+        self.push_reasoning(AssistantReasoning {
+            id,
+            content: vec![gents_protocol::message::ReasoningContent::Text {
+                text: reasoning.into(),
+                signature: None,
+            }],
+        });
+    }
+
     pub fn push_tool_call(&mut self, tool_call: AssistantToolCall) {
-        self.tool_calls.push(tool_call);
+        self.content
+            .push(AssistantMessageContent::ToolCall(tool_call));
     }
 
     pub fn take_message(&mut self) -> Option<CompletionMessage> {
         self.build_message()
     }
 
-    fn message_snapshot(&self) -> Option<CompletionMessage> {
+    pub fn message_snapshot(&self) -> Option<CompletionMessage> {
         self.clone().build_message()
     }
 
@@ -313,75 +397,26 @@ impl AssistantTurnAccumulator {
         if final_text.is_empty() {
             return;
         }
-        if self.text.is_empty() {
-            self.text.push_str(final_text);
-        } else if let Some(remainder) = final_text.strip_prefix(&self.text) {
-            self.text.push_str(remainder);
+        let accumulated = self
+            .content
+            .iter()
+            .filter_map(|item| match item {
+                AssistantMessageContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+        if let Some(remainder) = final_text.strip_prefix(&accumulated) {
+            self.push_text(remainder);
         }
     }
 
     fn build_message(&mut self) -> Option<CompletionMessage> {
-        if self.reasoning.is_empty() && !self.pending_reasoning_delta_text.is_empty() {
-            let mut assembled =
-                AssistantReasoning::new(&std::mem::take(&mut self.pending_reasoning_delta_text));
-            if let Some(id) = self.pending_reasoning_delta_id.take() {
-                assembled = assembled.with_id(id);
-            }
-            self.push_reasoning(assembled);
-        }
-
-        let mut content = Vec::new();
-        if !self.text.is_empty() {
-            content.push(AssistantMessageContent::Text(CompletionText {
-                text: std::mem::take(&mut self.text),
-            }));
-        }
-        content.extend(
-            self.reasoning
-                .drain(..)
-                .map(AssistantMessageContent::Reasoning),
-        );
-        content.extend(
-            self.tool_calls
-                .drain(..)
-                .map(AssistantMessageContent::ToolCall),
-        );
-
-        self.pending_reasoning_delta_text.clear();
-        self.pending_reasoning_delta_id = None;
-
+        let content = std::mem::take(&mut self.content);
         (!content.is_empty()).then_some(CompletionMessage::Assistant { id: None, content })
     }
 
-    // Not `#[cfg(test)]`: `has_observable_activity` above calls this
-    // unconditionally now that it too is not test-only.
     fn has_content(&self) -> bool {
-        !self.text.is_empty()
-            || !self.reasoning.is_empty()
-            || !self.pending_reasoning_delta_text.is_empty()
-            || !self.tool_calls.is_empty()
-    }
-}
-
-fn merge_reasoning_blocks(
-    accumulated_reasoning: &mut Vec<AssistantReasoning>,
-    incoming: &AssistantReasoning,
-) {
-    let ids_match = |existing: &AssistantReasoning| {
-        matches!(
-            (&existing.id, &incoming.id),
-            (Some(existing_id), Some(incoming_id)) if existing_id == incoming_id
-        )
-    };
-
-    if let Some(existing) = accumulated_reasoning
-        .iter_mut()
-        .rev()
-        .find(|existing| ids_match(existing))
-    {
-        existing.content.extend(incoming.content.clone());
-    } else {
-        accumulated_reasoning.push(incoming.clone());
+        !self.content.is_empty()
     }
 }
 

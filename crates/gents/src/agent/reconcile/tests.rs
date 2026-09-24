@@ -124,7 +124,7 @@ fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
         deadline: None,
         execution_generation: None,
         execution_lease_expires_at: None,
-        execution_progress_seq: 0,
+        execution_lease_secs: None,
         subagent_depth: 1,
         caused_by_parent_request_id: Some("parent-request".to_string()),
         caused_by_parent_request_doc_id: Some("parent-request-doc".to_string()),
@@ -330,9 +330,12 @@ async fn slot_panic_restarts_behavior() {
         shutdown_rx,
     );
 
+    // The fixed pool has extra parked-continuation tasks. One initial start
+    // per task does not demonstrate that the panicked runner restarted.
+    let restarted_start = slot.worker_task_count + 1;
     let restarted = tokio::time::timeout(
         Duration::from_secs(30),
-        starts_rx.wait_for(|starts| *starts >= 2),
+        starts_rx.wait_for(|starts| *starts >= restarted_start),
     )
     .await
     .is_ok_and(|result| result.is_ok());
@@ -342,6 +345,65 @@ async fn slot_panic_restarts_behavior() {
         restarted,
         "a panicked slot must restart the behavior on its retry policy"
     );
+}
+
+#[tokio::test]
+async fn dropping_behavior_slot_aborts_a_held_executor() {
+    struct DropProbe(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = Arc::new(
+        PendingAgentBehavior::new("general")
+            .build_with_identity_for_test(test_identity("slot-abort-on-owner-drop")),
+    );
+    let tool_surface = Arc::new(
+        behavior
+            .tools
+            .resolve(node.as_ref(), behavior.agent_did())
+            .await
+            .unwrap(),
+    );
+    let entered = Arc::new(Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let runner = {
+        let entered = entered.clone();
+        let dropped = dropped.clone();
+        move |_, _, _, _, _| {
+            let entered = entered.clone();
+            let dropped = dropped.clone();
+            async move {
+                let _probe = DropProbe(dropped);
+                entered.notify_one();
+                std::future::pending::<()>().await;
+                Ok(())
+            }
+        }
+    };
+    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let slot = spawn_slot(
+        behavior,
+        tool_surface,
+        crate::retry::RetryPolicy::default(),
+        runner,
+        shutdown_rx,
+    );
+    entered.notified().await;
+
+    drop(slot);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while !dropped.load(Ordering::SeqCst) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("dropping the slot owner must abort and drop its held executor");
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -364,7 +426,8 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
     .await;
 
     let (started_tx, mut started_rx) = mpsc::channel::<String>(8);
-    let release = Arc::new(Notify::new());
+    let (dequeued_tx, mut dequeued_rx) = mpsc::channel::<String>(8);
+    let release = Arc::new(Semaphore::new(0));
     let runner = {
         let release = release.clone();
         move |_behavior: Arc<ResolvedBehavior>,
@@ -373,6 +436,7 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
               _generation: u64,
               mut shutdown: watch::Receiver<bool>| {
             let started_tx = started_tx.clone();
+            let dequeued_tx = dequeued_tx.clone();
             let release = release.clone();
             async move {
                 loop {
@@ -386,13 +450,27 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
                     let Some(request) = message else {
                         return Ok(());
                     };
+                    dequeued_tx.send(request.request_id.clone()).await.unwrap();
+                    let capacity = crate::agent::worker_capacity::current_slot_capacity()
+                        .expect("test runner has slot generation capacity");
+                    let cancellation = tokio_util::sync::CancellationToken::new();
+                    let unbound = tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        guard = capacity.acquire_unbound(&cancellation) => guard.unwrap(),
+                    };
+                    let _active = unbound
+                        .bind(crate::agent::worker_capacity::WorkerTicket::new(
+                            request.doc_id,
+                            format!("fixture-generation-{_generation}"),
+                        ))
+                        .unwrap_or_else(|_| panic!("bind exact fixture request ticket"));
                     started_tx
                         .send(request.request_id)
                         .await
                         .expect("test receiver should stay open");
                     tokio::select! {
                         _ = shutdown.changed() => return Ok(()),
-                        _ = release.notified() => {}
+                        permit = release.acquire() => permit.expect("release semaphore open").forget(),
                     }
                 }
             }
@@ -418,14 +496,25 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
         .dispatcher
         .clone();
 
-    for index in 0..3 {
+    for index in 0..4 {
         dispatcher
             .send(background_child_request(index, "general"))
             .await
             .unwrap();
     }
 
-    let started = tokio::time::timeout(Duration::from_millis(300), async {
+    let dequeued = tokio::time::timeout(Duration::from_secs(1), async {
+        let mut request_ids = BTreeSet::new();
+        while request_ids.len() < 4 {
+            request_ids.insert(dequeued_rx.recv().await.expect("runner dequeued request"));
+        }
+        request_ids
+    })
+    .await
+    .expect("all fixed workers should dequeue available requests");
+    assert_eq!(dequeued.len(), 4);
+
+    let started = tokio::time::timeout(Duration::from_secs(1), async {
         let mut request_ids = BTreeSet::new();
         while request_ids.len() < 3 {
             let request_id = started_rx
@@ -440,19 +529,176 @@ async fn behavior_slot_fans_out_background_children_to_backend_capacity() {
     .expect("executor should start all same-behavior background children concurrently");
 
     assert_eq!(
-        started,
-        BTreeSet::from([
-            "child-request-0".to_string(),
-            "child-request-1".to_string(),
-            "child-request-2".to_string(),
-        ])
+        started.len(),
+        3,
+        "logical active work is bounded by backend capacity"
+    );
+    assert!(started.is_subset(&dequeued));
+    let fourth = dequeued.difference(&started).next().unwrap().clone();
+
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), started_rx.recv())
+            .await
+            .is_err(),
+        "fourth request must wait for an active worker permit"
     );
 
-    release.notify_waiters();
+    release.add_permits(3);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+            .await
+            .expect("freed active permit admits queued child")
+            .expect("fourth child is reported"),
+        fourth
+    );
     let _ = shutdown_tx.send(true);
     for slot in slots.into_values() {
         retire_slot(slot);
     }
+}
+
+#[tokio::test]
+async fn capacity_one_slot_retains_parent_while_child_uses_freed_worker() {
+    use crate::agent::worker_capacity::{
+        bind_current_claim, current_slot_capacity, park_current, reserve_current_park,
+        resume_current, scope_request_capacity, WorkerTicket,
+    };
+
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let behavior = Arc::new(
+        PendingAgentBehavior::new("general")
+            .build_with_identity_for_test(test_identity("capacity-one-child-resume")),
+    );
+    let surface = Arc::new(
+        behavior
+            .tools
+            .resolve(node.as_ref(), behavior.agent_did())
+            .await
+            .unwrap(),
+    );
+    let (parked_tx, mut parked_rx) = watch::channel(false);
+    let (child_active_tx, mut child_active_rx) = watch::channel(false);
+    let (resumed_tx, mut resumed_rx) = watch::channel(false);
+    let child_release = Arc::new(Semaphore::new(0));
+    let child_finished = Arc::new(Notify::new());
+    let runner = {
+        let child_release = child_release.clone();
+        let child_finished = child_finished.clone();
+        move |_behavior: Arc<ResolvedBehavior>,
+              _surface: Arc<ToolSurface>,
+              request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+              generation: u64,
+              mut shutdown: watch::Receiver<bool>| {
+            let parked_tx = parked_tx.clone();
+            let child_active_tx = child_active_tx.clone();
+            let resumed_tx = resumed_tx.clone();
+            let child_release = child_release.clone();
+            let child_finished = child_finished.clone();
+            async move {
+                loop {
+                    let request = tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        request = async { request_rx.lock().await.recv().await } => request,
+                    };
+                    let Some(request) = request else {
+                        return Ok(());
+                    };
+                    let capacity = current_slot_capacity().expect("slot worker capacity scope");
+                    let cancellation = tokio_util::sync::CancellationToken::new();
+                    let unbound = tokio::select! {
+                        _ = shutdown.changed() => return Ok(()),
+                        guard = capacity.acquire_unbound(&cancellation) => guard.unwrap(),
+                    };
+                    let parent = request.request_id == "parent";
+                    scope_request_capacity(unbound, async {
+                        bind_current_claim(WorkerTicket::new(
+                            request.doc_id,
+                            format!("fixture-generation-{generation}"),
+                        ))
+                        .unwrap();
+                        if parent {
+                            let reservation =
+                                reserve_current_park("accepted-child-bridge-doc").unwrap();
+                            assert!(park_current(reservation).unwrap());
+                            parked_tx.send_replace(true);
+                            child_finished.notified().await;
+                            let resumed =
+                                resume_current(&cancellation, |ticket, document| async move {
+                                    anyhow::ensure!(ticket.request_doc_id == "parent-doc");
+                                    anyhow::ensure!(document == "accepted-child-bridge-doc");
+                                    Ok(())
+                                })
+                                .await
+                                .unwrap();
+                            assert!(resumed);
+                            resumed_tx.send_replace(true);
+                        } else {
+                            child_active_tx.send_replace(true);
+                            child_release.acquire().await.unwrap().forget();
+                        }
+                    })
+                    .await;
+                    if !parent {
+                        child_finished.notify_one();
+                    }
+                }
+            }
+        }
+    };
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let slot = spawn_slot(
+        behavior,
+        surface,
+        crate::retry::RetryPolicy::default(),
+        runner,
+        shutdown_rx,
+    );
+    assert_eq!(slot.executor_capacity, 1);
+    assert_eq!(
+        slot.worker_task_count,
+        1 + usize::try_from(crate::tool_call_lifecycle::MAX_SUBAGENT_DEPTH).unwrap()
+    );
+    slot.dispatcher
+        .send(AgentRequest {
+            doc_id: "parent-doc".into(),
+            request_id: "parent".into(),
+            ..background_child_request(0, "general")
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), parked_rx.wait_for(|value| *value))
+        .await
+        .expect("parent must park")
+        .unwrap();
+    assert!(!*child_active_rx.borrow());
+    slot.dispatcher
+        .send(AgentRequest {
+            doc_id: "child-doc".into(),
+            request_id: "child".into(),
+            ..background_child_request(1, "general")
+        })
+        .await
+        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        child_active_rx.wait_for(|value| *value),
+    )
+    .await
+    .expect("child must use freed active permit")
+    .unwrap();
+    assert!(
+        !*resumed_rx.borrow(),
+        "parent must retain its parked continuation until child releases"
+    );
+    child_release.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(2), resumed_rx.wait_for(|value| *value))
+        .await
+        .expect("parent resumes after child frees active permit")
+        .unwrap();
+    let _ = shutdown_tx.send(true);
+    retire_slot(slot);
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -1149,6 +1395,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
     )
     .await
     .unwrap();
+    let workers_per_slot = supervisor.active_slots["general"].worker_task_count;
     runtime_status
         .readiness()
         .publish_snapshot(supervisor.current_snapshot().as_ref())
@@ -1182,7 +1429,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
         !apply.is_finished(),
         "failed source publication detached the staged generation"
     );
-    generation_two_exit.add_permits(1);
+    generation_two_exit.add_permits(workers_per_slot);
     let (supervisor, result) = apply.await.unwrap();
     let error = result.expect_err("injected source publication must fail apply");
     assert!(error.to_string().contains("behavior readiness"));
@@ -1212,7 +1459,7 @@ async fn source_publish_failure_rolls_back_and_joins_staged_slots() {
             .is_err(),
         "old active generation was detached during staged rollback"
     );
-    generation_one_exit.add_permits(1);
+    generation_one_exit.add_permits(workers_per_slot);
     shutdown.await.unwrap();
     runtime_status_owner.close().await.unwrap();
 }
@@ -1302,6 +1549,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
     )
     .await
     .unwrap();
+    let workers_per_slot = supervisor.active_slots["general"].worker_task_count;
     let (active_tx, active_rx) = watch::channel(supervisor.current_snapshot());
 
     let apply = tokio::spawn(async move {
@@ -1319,7 +1567,7 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
         !apply.is_finished(),
         "closed watch rollback must retain the staged generation until it joins"
     );
-    generation_two_exit.add_permits(1);
+    generation_two_exit.add_permits(workers_per_slot);
     let (supervisor, result) = apply.await.unwrap();
     let error = result.expect_err("closed active snapshot receiver must reject publication");
     assert!(error.to_string().contains("receiver closed"));
@@ -1333,19 +1581,19 @@ async fn closed_snapshot_receiver_does_not_detach_retired_or_active_slots() {
             .is_err(),
         "shutdown detached the blocked slot owners"
     );
-    assert_eq!(exited.load(Ordering::SeqCst), 1);
+    assert_eq!(exited.load(Ordering::SeqCst), workers_per_slot);
     assert!(
         tokio::time::timeout(Duration::from_millis(20), &mut shutdown_task)
             .await
             .is_err(),
         "shutdown completed before joining the retired generation-one slot"
     );
-    generation_one_exit.add_permits(1);
+    generation_one_exit.add_permits(workers_per_slot);
     shutdown_task.await.unwrap();
     runtime_status_owner.close().await.unwrap();
     assert_eq!(
         exited.load(Ordering::SeqCst),
-        2,
+        2 * workers_per_slot,
         "both the retired generation and replacement generation must be joined"
     );
 }

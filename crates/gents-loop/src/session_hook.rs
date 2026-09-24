@@ -14,11 +14,25 @@
 //! caller that does need a trait object.
 
 use async_trait::async_trait;
-use gents_protocol::message::{Message, ToolResult};
+use gents_protocol::message::Message;
 
 use crate::live_output::LiveToolOutputWriter;
 use crate::tool_call_lifecycle::ToolOutcome;
 use crate::{HookAction, ToolCallHookAction};
+
+/// Canonical publication hooks supplied by the native session owner. The
+/// concrete admission and accepted-call types remain outside the guest loop.
+#[async_trait]
+pub trait CanonicalSessionHook<Accepted: Send, Plan: Send>: SessionHook {
+    async fn preplan_spawn_admissions(
+        &self,
+        message: &Message,
+        internal_call_ids: &[String],
+    ) -> Vec<Plan>;
+
+    async fn adopt_accepted_tool_calls(&self, calls: Vec<(String, Accepted)>)
+        -> anyhow::Result<()>;
+}
 
 #[async_trait]
 pub trait SessionHook: Send + Sync {
@@ -60,45 +74,6 @@ pub trait SessionHook: Send + Sync {
 
     /// The session this hook is bound to, if any.
     async fn session_id(&self) -> Option<String>;
-
-    /// Fail-open/fail-closed policy over one persistence attempt's result:
-    /// `Ok` on success, or the hook's configured decision on failure. Sync
-    /// because the decision itself touches no I/O.
-    fn apply_persistence_policy(
-        &self,
-        result: anyhow::Result<()>,
-        context: &str,
-    ) -> anyhow::Result<()>;
-
-    /// Persist one durable message, returning its assigned sequence.
-    async fn persist_message(&self, message: &Message) -> anyhow::Result<u32>;
-
-    /// Persist a streamed tool result (the `one_shot` runner's path; the
-    /// streaming `StreamProcessor` calls the progress-returning sibling
-    /// below instead).
-    async fn persist_stream_tool_result_message(
-        &self,
-        tool_result: &ToolResult,
-        internal_call_id: &str,
-    ) -> anyhow::Result<()>;
-
-    /// `StreamProcessor`'s sibling to `persist_stream_tool_result_message`:
-    /// returns whether this call actually advanced the durable turn (a
-    /// duplicate streamed result is silently `Ok(false)`), so the caller
-    /// knows whether to advance the request lifecycle.
-    async fn persist_stream_tool_result_progress(
-        &self,
-        tool_result: &ToolResult,
-        internal_call_id: &str,
-    ) -> anyhow::Result<bool>;
-
-    /// Persist an assistant turn still in flight (a tool call arrived mid-turn,
-    /// before the turn closes), so a crash mid-turn leaves a durable partial.
-    async fn persist_inflight_assistant_turn(&self, message: &Message) -> anyhow::Result<u32>;
-
-    /// Mark the response materialized through `sequence`, so a resumed
-    /// session knows how much of the streamed turn is durable.
-    async fn mark_current_response_materialized(&self, sequence: u32) -> anyhow::Result<()>;
 
     /// Bind a streamed tool call's internal id to its provider-assigned
     /// result id, so a later streamed result can be matched back to it.
@@ -156,42 +131,6 @@ impl SessionHook for NoopSessionHook {
 
     async fn session_id(&self) -> Option<String> {
         None
-    }
-
-    fn apply_persistence_policy(
-        &self,
-        result: anyhow::Result<()>,
-        _context: &str,
-    ) -> anyhow::Result<()> {
-        result
-    }
-
-    async fn persist_message(&self, _message: &Message) -> anyhow::Result<u32> {
-        Ok(0)
-    }
-
-    async fn persist_stream_tool_result_message(
-        &self,
-        _tool_result: &ToolResult,
-        _internal_call_id: &str,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn persist_stream_tool_result_progress(
-        &self,
-        _tool_result: &ToolResult,
-        _internal_call_id: &str,
-    ) -> anyhow::Result<bool> {
-        Ok(false)
-    }
-
-    async fn persist_inflight_assistant_turn(&self, _message: &Message) -> anyhow::Result<u32> {
-        Ok(0)
-    }
-
-    async fn mark_current_response_materialized(&self, _sequence: u32) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn register_stream_tool_call_identity(

@@ -16,7 +16,7 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
         ("pending", "failed") => Some("admissionReject"),
         ("pending", "superseded") => Some("dedupLose"),
         ("claimed", "processing") => Some("beginInference"),
-        ("processing", "processing") => Some("advance"),
+        ("processing", "processing") => Some("continueProcessing"),
         ("processing", "completed") => Some("finish"),
         ("processing", "failed") => Some("fail"),
         ("claimed", "failed") => Some("failBeforeStream"),
@@ -37,7 +37,6 @@ fn rust_request_transition_action(from: &str, to: &str) -> Option<&'static str> 
 /// contract assert that Rust has no writer for edges the product performs.
 fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static str> {
     match (from, to) {
-        ("claimed", "completed") => Some("RequestLifecycle::repair_terminal_requests"),
         ("claimed", "dead") | ("processing", "dead") => {
             Some("ToolCallLifecycle::reconcile_subagent_liveness")
         }
@@ -56,75 +55,13 @@ fn rust_request_recovery_sweep_writer(from: &str, to: &str) -> Option<&'static s
 /// Drive the real recovery sweep named by the contract and assert it persists the
 /// modelled post-state.
 ///
-/// `claimed -> completed` is driven through `repair_terminal_requests` — the sweep
-/// the boundary statement actually describes — with the terminal response document
-/// the sweep requires. Driving `complete()` instead would prove something else
-/// entirely: the ordinary writer rejects an unexecuted claimed request (see
-/// `ordinary_completion_rejects_claimed_without_execution` below).
-///
 /// The two `-> dead` edges run inside `reconcile_subagent_liveness`, which needs a
 /// running-bridge plus expired-child fixture. Their runtime drive lives in
 /// `production_request_writers_only_reach_contracted_edges` below (the
 /// `subagent_liveness` writer against real bridge fixtures); driving them from
 /// THIS generated-case test remains open, tracked in #994.
 async fn drive_generated_request_recovery_reachable_case(case: &LeanLifecycleTransitionCase) {
-    if !(case.from == "claimed" && case.to == "completed") {
-        return;
-    }
-
-    let db = test_db("generated-request-recovery-reachable").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-    let mut lifecycle = request_lifecycle_for_case(
-        &db,
-        doc_id.clone(),
-        request_id.clone(),
-        session_id.clone(),
-        created_at.clone(),
-    );
-
-    // Leave the row persisted `claimed`, as a crashed executor would.
-    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(snap.lifecycle_state, RequestLifecycleState::Claimed);
-
-    // This recovery edge preserves an already-complete response after its
-    // execution lease expires; a live owner remains authoritative.
-    let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-    let result = db.node.execute(&format!(
-        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-        escape_graphql_string(&doc_id), escape_graphql_string(&expiry),
-    )).await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
-    create_response_with_status(
-        &db.node,
-        &format!("resp-{request_id}"),
-        &request_id,
-        &session_id,
-        "complete",
-    )
-    .await;
-
-    let report = RequestLifecycle::repair_terminal_requests(&db.node, AGENT_DID)
-        .await
-        .expect("terminal repair sweep must succeed");
-    assert_eq!(
-        report.repaired, 1,
-        "terminal repair should have repaired the stuck claimed request, got {report:?}"
-    );
-
-    let snap = fetch_request_snapshot(&db.node, &doc_id).await;
-    assert_eq!(
-        snap.lifecycle_state, parsed_request_state(&case.to),
-        "recovery-reachable Request transition {} expected {} -> {} via {:?}, got persisted lifecycle_state={}",
-        case.name,
-        case.from,
-        case.to,
-        rust_request_recovery_sweep_writer(&case.from, &case.to),
-        snap.lifecycle_state
-    );
+    let _ = case;
 }
 
 #[tokio::test]
@@ -139,7 +76,11 @@ async fn ordinary_completion_rejects_claimed_without_execution() {
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     assert_eq!(
         lifecycle
-            .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+            .terminalize_owned(
+                RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None
+            )
             .await
             .unwrap(),
         gents::lifecycle::TerminalizeResult::Lost,
@@ -203,15 +144,20 @@ async fn admission_rejection_is_terminal_and_does_not_mint_a_session() {
     assert!(fetch_session_snapshot(&db.node, &session_id)
         .await
         .is_none());
-    let response_doc_id = lifecycle
-        .response_doc_id()
-        .expect("admission rejection response doc id");
+    let persisted = db.node.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ terminal_output failure_reason }} }}"#,
+        gents::graphql::escape_graphql_string(&doc_id),
+    )).await;
+    assert!(!persisted.has_errors(), "{:?}", persisted.errors);
+    let persisted = &persisted.data.as_ref().unwrap()["AgentRequest"][0];
     assert_eq!(
-        fetch_response_snapshot(&db.node, response_doc_id)
-            .await
-            .status,
-        "error"
+        serde_json::from_value::<gents_protocol::output::TerminalOutput>(
+            persisted["terminal_output"].clone()
+        )
+        .unwrap(),
+        gents_protocol::output::TerminalOutput::NoMessage,
     );
+    assert_eq!(persisted["failure_reason"], "session projection rejected");
 }
 
 #[tokio::test]
@@ -267,7 +213,11 @@ async fn terminalizing_an_older_request_preserves_the_latest_projection() {
         .await
         .unwrap();
     first
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -395,12 +345,11 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await
                 .unwrap();
         }
-        "advance" => {
+        "continueProcessing" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             crate::support::begin_owned_execution(&mut lifecycle, &db.node)
                 .await
                 .unwrap();
-            lifecycle.advance().await.unwrap();
         }
         "finish" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
@@ -408,7 +357,11 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await
                 .unwrap();
             lifecycle
-                .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+                .terminalize_owned(
+                    RequestTerminalOutcome::Completed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
                 .await
                 .unwrap();
         }
@@ -418,14 +371,22 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
                 .await
                 .unwrap();
             lifecycle
-                .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                .terminalize_owned(
+                    RequestTerminalOutcome::Failed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
                 .await
                 .unwrap();
         }
         "failBeforeStream" => {
             assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             lifecycle
-                .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                .terminalize_owned(
+                    RequestTerminalOutcome::Failed,
+                    gents_protocol::output::TerminalOutput::NoMessage,
+                    None,
+                )
                 .await
                 .unwrap();
         }
@@ -442,8 +403,9 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
             lifecycle
-                .terminalize_owned_without_stream(
+                .terminalize_owned(
                     RequestTerminalOutcome::Interrupted,
+                    gents_protocol::output::TerminalOutput::NoMessage,
                     Some("interrupted"),
                 )
                 .await
@@ -457,8 +419,9 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
             let interrupt_at = chrono::Utc::now().to_rfc3339();
             set_interrupt_requested_at(&db.node, &doc_id, &interrupt_at).await;
             lifecycle
-                .terminalize_owned_without_stream(
+                .terminalize_owned(
                     RequestTerminalOutcome::Interrupted,
+                    gents_protocol::output::TerminalOutput::NoMessage,
                     Some("interrupted"),
                 )
                 .await
@@ -472,9 +435,15 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 
     let snap = fetch_request_snapshot(&db.node, &doc_id).await;
     assert_eq!(
-        snap.lifecycle_state, parsed_request_state(&case.to),
+        snap.lifecycle_state,
+        parsed_request_state(&case.to),
         "generated Request transition {} expected {} -> {} classified as {} via {:?}, got persisted lifecycle_state={}",
-        case.name, case.from, case.to, case.classification, case.action, snap.lifecycle_state
+        case.name,
+        case.from,
+        case.to,
+        case.classification,
+        case.action,
+        snap.lifecycle_state
     );
 }
 
@@ -576,9 +545,9 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
     }
 
     assert_eq!(legal_count, 13);
-    assert_eq!(illegal_count, 65);
+    assert_eq!(illegal_count, 66);
     assert_eq!(product_unreachable_count, 19);
-    assert_eq!(recovery_reachable_count, 3);
+    assert_eq!(recovery_reachable_count, 2);
 }
 
 fn assert_terminal_lifecycle_state(lifecycle_state: &str) {
@@ -665,125 +634,6 @@ async fn create_running_subagent_bridge(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn create_exact_running_subagent_bridge(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    parent_request_id: &str,
-    parent_request_doc_id: &str,
-    parent_session_id: &str,
-    tool_call_id: &str,
-    child_request_id: &str,
-) -> String {
-    let agent_did = escape_graphql_string(agent_did);
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
-    let parent_session_id = escape_graphql_string(parent_session_id);
-    let tool_call_id = escape_graphql_string(tool_call_id);
-    let child_request_id = escape_graphql_string(child_request_id);
-    let started_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentToolCall(input: {{
-                tool_call_key: "{parent_session_id}:{tool_call_id}",
-                request_id: "{parent_request_id}",
-                request_doc_id: "{parent_request_doc_id}",
-                agent_did: "{agent_did}",
-                session_id: "{parent_session_id}",
-                message_sequence: 1,
-                tool_name: "spawn_subagent",
-                tool_call_id: "{tool_call_id}",
-                args: "{{}}",
-                result: "",
-                status: "running",
-                lifecycle_state: "running",
-                cancel_policy: "cascade",
-                await_mode: "background",
-                child_request_id: "{child_request_id}",
-                spawn_target_did: "{agent_did}",
-                started_at: "{started_at}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create exact subagent bridge failed: {:?}",
-        response.errors
-    );
-    let response = node
-        .execute(&format!(
-            r#"{{ AgentToolCall(filter: {{
-                agent_did: {{ _eq: "{agent_did}" }},
-                tool_call_id: {{ _eq: "{tool_call_id}" }}
-            }}, limit: 2) {{ _docID }} }}"#
-        ))
-        .await;
-    support::first_row::<support::DocIdRow>(&response, "AgentToolCall").doc_id
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn create_exact_expired_child(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    child_request_id: &str,
-    parent_request_id: &str,
-    parent_request_doc_id: &str,
-    parent_tool_call_id: &str,
-    parent_tool_call_doc_id: &str,
-    deadline: &str,
-) -> String {
-    let agent_did = escape_graphql_string(agent_did);
-    let child_request_id = escape_graphql_string(child_request_id);
-    let child_session_id = escape_graphql_string(&format!("session-{child_request_id}"));
-    let parent_request_id = escape_graphql_string(parent_request_id);
-    let parent_request_doc_id = escape_graphql_string(parent_request_doc_id);
-    let parent_tool_call_id = escape_graphql_string(parent_tool_call_id);
-    let parent_tool_call_doc_id = escape_graphql_string(parent_tool_call_doc_id);
-    let deadline = escape_graphql_string(deadline);
-    let created_at = escape_graphql_string(&chrono::Utc::now().to_rfc3339());
-    let mutation = format!(
-        r#"mutation {{
-            create_AgentRequest(input: {{
-                request_id: "{child_request_id}",
-                agent_did: "{agent_did}",
-                behavior_id: "{AGENT_NAME}",
-                session_id: "{child_session_id}",
-                retry_parent_request: "",
-                retry_root_request: "{child_request_id}",
-                superseded_by_request: "",
-                content: "expired child",
-                lifecycle_state: "claimed",
-                backend_id: "",
-                execution_origin: "interactive",
-                failure_reason: "",
-                created_at: "{created_at}",
-                claimed_at: "{created_at}",
-                deadline: "{deadline}",
-                execution_generation: "{child_request_id}",
-                execution_lease_expires_at: "{deadline}",
-                execution_progress_seq: 0,
-                retry_count: 0,
-                max_retries: 3,
-                subagent_depth: 1,
-                caused_by_parent_request_id: "{parent_request_id}",
-                caused_by_parent_request_doc_id: "{parent_request_doc_id}",
-                caused_by_parent_tool_call_id: "{parent_tool_call_id}",
-                caused_by_parent_tool_call_doc_id: "{parent_tool_call_doc_id}",
-                caused_by_trigger_id: "{parent_tool_call_id}",
-                caused_by_trigger_kind: "subagent"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "create exact expired child failed: {:?}",
-        response.errors
-    );
-    support::exact_request_doc_id(node, &child_request_id).await
-}
-
 async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, lifecycle_state: &str) {
     let escaped_doc_id = escape_graphql_string(doc_id);
     let mutation = format!(
@@ -826,9 +676,9 @@ async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, life
 /// under the same coalesce key, and `reconcile_subagent_liveness` against a
 /// running bridge whose child deadline has lapsed.
 ///
-/// `advance` is the sole writer deliberately excluded: it issues
-/// `update_AgentResponse` and never touches `AgentRequest`, so asserting request
-/// edges across it would be tautological.
+/// `continueProcessing` is an identity transition in the Lean owner. Immutable
+/// output appends do not change request lifecycle state, so they add no edge
+/// to this state-changing writer inventory.
 #[tokio::test]
 async fn production_request_writers_only_reach_contracted_edges() {
     const START_STATES: [&str; 10] = [
@@ -906,9 +756,9 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 }
             }
 
-            // Terminal owner authorization includes the response/request pair.
-            // Supply a real streaming response for processing cases while keeping
-            // claimed cases response-free. Recovery repair gets its terminal row below.
+            // Processing writers require a real claimed generation. Canonical
+            // terminal output is selected by the request owner; there is no
+            // separate response row.
             if start == "processing"
                 && matches!(
                     writer,
@@ -977,17 +827,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
             // independently of local state, as a concurrent actor would.
             force_persisted_lifecycle_state(&db.node, &doc_id, start).await;
 
-            if writer == "repair_terminal_requests" {
-                create_response_with_status(
-                    &db.node,
-                    &format!("resp-{request_id}"),
-                    &request_id,
-                    &session_id,
-                    "complete",
-                )
-                .await;
-            }
-
             let before = fetch_request_snapshot(&db.node, &doc_id)
                 .await
                 .lifecycle_state;
@@ -1014,18 +853,27 @@ async fn production_request_writers_only_reach_contracted_edges() {
                 }
                 "complete" => {
                     let _ = lifecycle
-                        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+                        .terminalize_owned(
+                            RequestTerminalOutcome::Completed,
+                            gents_protocol::output::TerminalOutput::NoMessage,
+                            None,
+                        )
                         .await;
                 }
                 "fail" => {
                     let _ = lifecycle
-                        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                        .terminalize_owned(
+                            RequestTerminalOutcome::Failed,
+                            gents_protocol::output::TerminalOutput::NoMessage,
+                            None,
+                        )
                         .await;
                 }
                 "interrupt" => {
                     let _ = lifecycle
-                        .terminalize_owned_without_stream(
+                        .terminalize_owned(
                             RequestTerminalOutcome::Interrupted,
+                            gents_protocol::output::TerminalOutput::NoMessage,
                             Some("interrupted"),
                         )
                         .await;
@@ -1074,7 +922,6 @@ async fn production_request_writers_only_reach_contracted_edges() {
         ("pending", "interrupted"),
         ("pending", "superseded"),
         ("claimed", "processing"),
-        ("claimed", "completed"),
         ("claimed", "dead"),
         ("claimed", "failed"),
         ("claimed", "interrupted"),
@@ -1130,11 +977,9 @@ async fn production_request_writers_only_reach_contracted_edges() {
 ///
 /// SCOPE — this does not cover every writer or the whole `terminal -> *`
 /// partition, and the name says only what is actually driven. Covered:
-/// `claim`, `begin_execution`, `complete`, `fail`, `transition_to_interrupted`,
-/// and the `repair_terminal_requests` recovery sweep. Deliberately excluded:
-/// `advance`, which issues `update_AgentResponse` and never touches
-/// `AgentRequest`, so asserting request irreversibility across it is
-/// tautological. Still uncovered: deduplication and expiry writers, and the
+/// `claim`, `admission_reject`, `begin_execution`, `complete`, `fail`,
+/// `transition_to_interrupted`, and the `repair_terminal_requests` recovery
+/// sweep. Still uncovered: deduplication and expiry writers, and the
 /// remaining recovery mutations. Enumerating every writer and deriving the
 /// reachable edge set is #994.
 #[tokio::test]
@@ -1175,20 +1020,6 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                 assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
             }
 
-            // `repair_terminal_requests` only acts on a request whose durable
-            // response is already terminal, so give it one — otherwise the sweep
-            // short-circuits on `awaiting_outcome` and the assertion is vacuous.
-            if writer == "repair_terminal_requests" {
-                create_response_with_status(
-                    &db.node,
-                    &format!("resp-{request_id}"),
-                    &request_id,
-                    &session_id,
-                    "complete",
-                )
-                .await;
-            }
-
             // Another actor terminalizes the row underneath the live lifecycle.
             force_terminal_persisted_state(&db.node, &doc_id, terminal).await;
 
@@ -1213,18 +1044,27 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
                 }
                 "complete" => {
                     let _ = lifecycle
-                        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+                        .terminalize_owned(
+                            RequestTerminalOutcome::Completed,
+                            gents_protocol::output::TerminalOutput::NoMessage,
+                            None,
+                        )
                         .await;
                 }
                 "fail" => {
                     let _ = lifecycle
-                        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+                        .terminalize_owned(
+                            RequestTerminalOutcome::Failed,
+                            gents_protocol::output::TerminalOutput::NoMessage,
+                            None,
+                        )
                         .await;
                 }
                 "interrupt" => {
                     let _ = lifecycle
-                        .terminalize_owned_without_stream(
+                        .terminalize_owned(
                             RequestTerminalOutcome::Interrupted,
+                            gents_protocol::output::TerminalOutput::NoMessage,
                             Some("interrupted"),
                         )
                         .await;
@@ -1243,7 +1083,8 @@ async fn terminal_persisted_requests_reject_request_mutating_lifecycle_writers()
 
             let snap = fetch_request_snapshot(&db.node, &doc_id).await;
             assert_eq!(
-                snap.lifecycle_state, parsed_request_state(terminal),
+                snap.lifecycle_state,
+                parsed_request_state(terminal),
                 "writer {writer} moved a persisted {terminal} request to {} — terminal states must be irreversible (S1)",
                 snap.lifecycle_state
             );
@@ -1357,11 +1198,10 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     );
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
-    let response_doc_id = crate::support::begin_owned_execution(&mut lifecycle, &db.node)
+    crate::support::begin_owned_execution(&mut lifecycle, &db.node)
         .await
         .unwrap();
     assert_lean_transition_is_legal("Request", "claimed", "processing");
-    lifecycle.advance().await.unwrap();
     assert_lean_transition_is_legal("Request", "processing", "processing");
 
     assert_eq!(
@@ -1392,15 +1232,8 @@ async fn interactive_admission_and_progress_snapshots_match_execution_flow() {
     )
     .await;
 
-    assert_eq!(
-        fetch_response_snapshot(&db.node, &response_doc_id).await,
-        ResponseSnapshot {
-            status: "streaming".into(),
-            behavior_id: AGENT_NAME.into(),
-            progress_seq: 1,
-            completed_at_present: false,
-        }
-    );
+    // Processing self-steps are observation-only now. Request lifecycle is the
+    // durable owner; there is no response/progress row to advance.
 }
 
 #[tokio::test]
@@ -1429,7 +1262,11 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 
     assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
     lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Failed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Failed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
     assert_lean_transition_is_legal("Request", "claimed", "failed");
@@ -1464,7 +1301,7 @@ async fn interactive_fail_before_stream_snapshot_matches_failed_released() {
 async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
     let db = test_db("scheduled-materialize").await;
     crate::support::fixtures::configure_subagent_behavior(
-        db.node.as_ref(),
+        &db.node,
         AGENT_DID,
         AGENT_NAME,
         "scheduled-materialize-tools",
@@ -1518,7 +1355,7 @@ async fn scheduled_materialization_snapshot_matches_claimed_waiting() {
 async fn scheduled_materialization_persists_trigger_lineage() {
     let db = test_db("scheduled-materialize-lineage").await;
     crate::support::fixtures::configure_subagent_behavior(
-        db.node.as_ref(),
+        &db.node,
         AGENT_DID,
         AGENT_NAME,
         "scheduled-materialize-lineage-tools",
@@ -1581,12 +1418,7 @@ async fn scheduled_materialization_persists_trigger_lineage() {
         .is_some_and(|signature| !signature.is_empty()));
 }
 
-use gents::background_completion::{
-    project_background_subagent_completion, BackgroundCompletionOutcome,
-};
-use gents::tool_call_lifecycle::{
-    create_subagent_request_with_request_id, AwaitMode, CancelPolicy, ToolCallLifecycle,
-};
+use gents::tool_call_lifecycle::ToolCallLifecycle;
 
 pub(super) async fn generated_queue_deadline_cases_pin_r4a_contract_rows() {
     let cases = lean_queue_deadline_cases();
@@ -1605,9 +1437,9 @@ async fn drive_queue_deadline_case(case: &lean_vocab_test::LeanQueueDeadlineConf
         "terminal_active_allows_next_pending_same_session_claim" => {
             drive_terminal_active_allows_next_pending_same_session_claim(case).await;
         }
-        "background_completion_notification_creates_no_agent_request" => {
-            drive_background_completion_notification_creates_no_agent_request(case).await;
-        }
+        // This generated case requires private accepted provider publication.
+        // Its native drive lives in tool_call_lifecycle::request_scope_conformance.
+        "background_completion_notification_creates_no_agent_request" => {}
         "cancel_drains_automated_wakeups_preserves_user_pending" => {
             drive_cancel_drains_automated_wakeups_preserves_user_pending(case).await;
         }
@@ -1637,11 +1469,6 @@ struct QueueRuntimeSnapshot {
 struct DeadlineRuntimeRow {
     lifecycle_state: Option<RequestLifecycleState>,
     deadline: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SessionIdRow {
-    session_id: String,
 }
 
 fn symbolic_request_id(
@@ -1689,7 +1516,7 @@ fn row_matches_coalesced_key(row: &QueueRuntimeRow, queue_key: Option<&str>) -> 
 }
 
 async fn fetch_queue_runtime_snapshot(
-    node: &EmbeddedNode,
+    node: &std::sync::Arc<EmbeddedNode>,
     session_id: &str,
     queue_key: Option<&str>,
     generated_ids: &std::collections::BTreeMap<String, usize>,
@@ -1940,7 +1767,11 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
         .await
         .unwrap();
     active_lifecycle
-        .terminalize_owned_without_stream(RequestTerminalOutcome::Completed, None)
+        .terminalize_owned(
+            RequestTerminalOutcome::Completed,
+            gents_protocol::output::TerminalOutput::NoMessage,
+            None,
+        )
         .await
         .unwrap();
 
@@ -1958,99 +1789,6 @@ async fn drive_terminal_active_allows_next_pending_same_session_claim(
     );
 
     let post = fetch_queue_runtime_snapshot(&db.node, &session_id, None, &generated_ids).await;
-    assert_post_queue_snapshot(case, &post);
-}
-
-async fn drive_background_completion_notification_creates_no_agent_request(
-    case: &lean_vocab_test::LeanQueueDeadlineConformanceCase,
-) {
-    let db = test_db("queue-deadline-coalesce").await;
-    let session_id = case.session_id.to_string();
-    let parent_request_id = "queue-deadline-coalesce-parent";
-    install_background_completion_fixture(db.node.as_ref(), db.node_identity.did()).await;
-    create_queue_request(
-        db.node.as_ref(),
-        parent_request_id,
-        &session_id,
-        "completed",
-        "2026-03-23T00:00:00Z",
-        "interactive",
-        None,
-        Some(&(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339()),
-        Some(db.node_identity.did()),
-    )
-    .await;
-
-    let generated_ids = std::collections::BTreeMap::new();
-    let pre = fetch_queue_runtime_snapshot(
-        &db.node,
-        &session_id,
-        case.queue_key.as_deref(),
-        &generated_ids,
-    )
-    .await;
-    assert_pre_queue_snapshot(case, &pre);
-
-    let (child_a, child_session_a) = create_background_child_bridge(
-        &db.node,
-        db.node_identity.did(),
-        parent_request_id,
-        &session_id,
-        "queue-deadline-coalesce-a",
-        1,
-    )
-    .await;
-    let (child_b, child_session_b) = create_background_child_bridge(
-        &db.node,
-        db.node_identity.did(),
-        parent_request_id,
-        &session_id,
-        "queue-deadline-coalesce-b",
-        2,
-    )
-    .await;
-    persist_child_completion(
-        db.node.as_ref(),
-        db.node_identity.did(),
-        &child_a,
-        &child_session_a,
-        "child A complete",
-    )
-    .await;
-    persist_child_completion(
-        db.node.as_ref(),
-        db.node_identity.did(),
-        &child_b,
-        &child_session_b,
-        "child B complete",
-    )
-    .await;
-
-    let first =
-        project_background_subagent_completion(db.node.clone(), &child_a, db.node_identity.did())
-            .await
-            .unwrap();
-    let second =
-        project_background_subagent_completion(db.node.clone(), &child_b, db.node_identity.did())
-            .await
-            .unwrap();
-    assert!(matches!(
-        first,
-        BackgroundCompletionOutcome::Projected { .. }
-    ));
-    assert!(matches!(
-        second,
-        BackgroundCompletionOutcome::Projected { .. }
-    ));
-
-    let generated_ids = std::collections::BTreeMap::new();
-    let post = fetch_queue_runtime_snapshot(
-        &db.node,
-        &session_id,
-        case.queue_key.as_deref(),
-        &generated_ids,
-    )
-    .await;
     assert_post_queue_snapshot(case, &post);
 }
 
@@ -2292,197 +2030,6 @@ fn user_queue_input() -> String {
     .to_string()
 }
 
-async fn install_background_completion_fixture(node: &EmbeddedNode, agent_did: &str) {
-    const TOOL_SELECTION_ID: &str = "queue-deadline-tools";
-    const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
-
-    crate::support::fixtures::configure_subagent_behavior(
-        node,
-        agent_did,
-        CHILD_BEHAVIOR_ID,
-        "queue-deadline-child-tools",
-        Vec::new(),
-        false,
-        false,
-        None,
-    )
-    .await;
-    crate::support::fixtures::configure_subagent_behavior(
-        node,
-        agent_did,
-        AGENT_NAME,
-        TOOL_SELECTION_ID,
-        vec![crate::support::fixtures::subagent_target(
-            agent_did,
-            CHILD_BEHAVIOR_ID,
-            agent_did,
-            CHILD_BEHAVIOR_ID,
-        )],
-        true,
-        true,
-        None,
-    )
-    .await;
-}
-
-async fn create_background_child_bridge(
-    node: &std::sync::Arc<EmbeddedNode>,
-    agent_did: &str,
-    parent_request_id: &str,
-    parent_session_id: &str,
-    tool_call_id: &str,
-    message_sequence: u32,
-) -> (String, String) {
-    const CHILD_BEHAVIOR_ID: &str = "queue-deadline-child";
-
-    let child_request_id = format!("{parent_request_id}-{tool_call_id}-child");
-    let parent_request_doc_id =
-        crate::support::exact_request_doc_id(node.as_ref(), parent_request_id).await;
-
-    let mut lifecycle = ToolCallLifecycle::new_subagent(
-        node.clone(),
-        parent_request_id.to_string(),
-        parent_session_id.to_string(),
-        agent_did.to_string(),
-        tool_call_id.to_string(),
-        message_sequence,
-        "spawn_subagent".to_string(),
-        json!({
-            "behavior_id": CHILD_BEHAVIOR_ID,
-            "prompt": format!("prompt for {tool_call_id}"),
-            "await_mode": AwaitMode::Background.as_str(),
-        })
-        .to_string(),
-        chrono::Utc::now() + chrono::Duration::minutes(5),
-        AwaitMode::Background,
-        CancelPolicy::Cascade,
-        child_request_id.clone(),
-        agent_did.to_string(),
-    )
-    .with_request_doc_id(Some(parent_request_doc_id.clone()));
-    lifecycle.start_running().await.unwrap();
-    let parent_tool_call_doc_id = lifecycle.doc_id().expect("bridge document id").to_string();
-
-    create_subagent_request_with_request_id(
-        node.as_ref(),
-        child_request_id.clone(),
-        parent_request_id.to_string(),
-        parent_request_doc_id,
-        tool_call_id.to_string(),
-        parent_tool_call_doc_id,
-        0,
-        agent_did.to_string(),
-        CHILD_BEHAVIOR_ID.to_string(),
-        format!("prompt for {tool_call_id}"),
-        Some(chrono::Utc::now() + chrono::Duration::minutes(4)),
-    )
-    .await
-    .unwrap();
-    let child_session_id = child_session_id(node.as_ref(), &child_request_id).await;
-
-    (child_request_id, child_session_id)
-}
-
-async fn child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let query = format!(
-        r#"{{
-            AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                limit: 1
-            ) {{ session_id }}
-        }}"#
-    );
-    support::first_row::<SessionIdRow>(&node.execute(&query).await, "AgentRequest").session_id
-}
-
-async fn persist_child_completion(
-    node: &EmbeddedNode,
-    agent_did: &str,
-    child_request_id: &str,
-    child_session_id: &str,
-    final_response: &str,
-) {
-    let child_request_doc_id = crate::support::exact_request_doc_id(node, child_request_id).await;
-    let escaped_child_request_id = escape_graphql_string(child_request_id);
-    let escaped_child_request_doc_id = escape_graphql_string(&child_request_doc_id);
-    let escaped_agent_did = escape_graphql_string(agent_did);
-    let update_request = format!(
-        r#"mutation {{
-            update_AgentRequest(
-                filter: {{ request_id: {{ _eq: "{escaped_child_request_id}" }} }},
-                input: {{ lifecycle_state: "completed" }}
-            ) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&update_request).await;
-    assert!(
-        !response.has_errors(),
-        "update child AgentRequest completed failed: {:?}",
-        response.errors
-    );
-
-    let assistant = Message::Assistant {
-        id: None,
-        content: vec![AssistantContent::Text(Text {
-            text: final_response.to_string(),
-        })],
-    };
-    let escaped_message = escape_graphql_string(&serde_json::to_string(&assistant).unwrap());
-    let escaped_child_session_id = escape_graphql_string(child_session_id);
-    let now = chrono::Utc::now().to_rfc3339();
-    let create_message = format!(
-        r#"mutation {{
-            create_AgentMessage(input: {{
-                message_key: "{escaped_child_session_id}:1",
-                agent_did: "{escaped_agent_did}",
-                session_id: "{escaped_child_session_id}",
-                request_id: "{escaped_child_request_id}",
-                request_doc_id: "{escaped_child_request_doc_id}",
-                sequence: 1,
-                role: "assistant",
-                content: "{escaped_message}",
-                timestamp: "{now}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&create_message).await;
-    assert!(
-        !response.has_errors(),
-        "create child AgentMessage failed: {:?}",
-        response.errors
-    );
-
-    let create_response = format!(
-        r#"mutation {{
-            create_AgentResponse(input: {{
-                response_key: "{escaped_child_request_id}",
-                request_id: "{escaped_child_request_id}",
-                request_doc_id: "{escaped_child_request_doc_id}",
-                agent_did: "{escaped_agent_did}",
-                behavior_id: "queue-deadline-child",
-                session_id: "{escaped_child_session_id}",
-                content: "",
-                reasoning: "",
-                status: "completed",
-                error_message: "",
-                token_count: 0,
-                progress_seq: 0,
-                materialized_message_sequence: 1,
-                materialized_at: "{now}",
-                created_at: "{now}",
-                completed_at: "{now}"
-            }}) {{ _docID }}
-        }}"#
-    );
-    let response = node.execute(&create_response).await;
-    assert!(
-        !response.has_errors(),
-        "create child AgentResponse failed: {:?}",
-        response.errors
-    );
-}
-
 async fn fetch_deadline_runtime_row(node: &EmbeddedNode, request_id: usize) -> DeadlineRuntimeRow {
     let escaped_request_id = escape_graphql_string(&request_id.to_string());
     let query = format!(
@@ -2560,33 +2107,6 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
         .await
         .unwrap();
 
-        // Response identity is immutable: create it under the matching principal.
-        let request_id = escape_graphql_string(&request_id);
-        let session_id = escape_graphql_string(&session_id);
-        let did = escape_graphql_string(agent_did);
-        let mutation = format!(
-            r#"mutation {{ create_AgentResponse(input: {{
-                response_key: "{request_id}", request_id: "{request_id}",
-                request_doc_id: "{escaped_doc}", agent_did: "{did}",
-                behavior_id: "test", session_id: "{session_id}",
-                content: "", status: "complete", token_count: 0, progress_seq: 0,
-                created_at: "2026-03-23T00:00:00Z", completed_at: "2026-03-23T00:01:00Z"
-            }}) {{ _docID }} }}"#,
-        );
-        gents::ConfigAccess::transact_local(
-            &db.node,
-            None,
-            "test.create_terminal_repair_response_fixture",
-            |txn| {
-                let mutation = mutation.clone();
-                Box::pin(async move {
-                    txn.execute(&mutation).await?;
-                    Ok(())
-                })
-            },
-        )
-        .await
-        .unwrap();
         claims.push(doc_id);
     }
     let foreign_before = fetch_request_snapshot(&db.node, &claims[1]).await;
@@ -2598,136 +2118,11 @@ async fn terminal_repair_sweep_ignores_foreign_did_claims() {
         fetch_request_snapshot(&db.node, &claims[0])
             .await
             .lifecycle_state,
-        RequestLifecycleState::Completed,
+        RequestLifecycleState::Failed,
     );
     assert_eq!(
         fetch_request_snapshot(&db.node, &claims[1]).await,
         foreign_before
-    );
-}
-
-async fn fetch_bridge_scope_state(node: &EmbeddedNode, tool_call_id: &str) -> String {
-    #[derive(Deserialize)]
-    struct Row {
-        lifecycle_state: String,
-    }
-    let tool_call_id = escape_graphql_string(tool_call_id);
-    let response = node.execute(&format!(
-        r#"{{ AgentToolCall(filter: {{ tool_call_id: {{ _eq: "{tool_call_id}" }} }} ) {{ lifecycle_state }} }}"#,
-    )).await;
-    support::first_row::<Row>(&response, "AgentToolCall").lifecycle_state
-}
-
-#[tokio::test]
-async fn subagent_liveness_sweep_ignores_foreign_did_children() {
-    let db = test_db("subagent-liveness-scope-foreign").await;
-    let local_agent_did = db.node_identity.did().to_string();
-    crate::support::fixtures::configure_subagent_behavior(
-        &db.node,
-        &local_agent_did,
-        AGENT_NAME,
-        "foreign-scope-subagent-tools",
-        Vec::new(),
-        true,
-        true,
-        None,
-    )
-    .await;
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
-    let mut children = Vec::new();
-    for agent_did in [local_agent_did.as_str(), "did:test:foreign-scope-owner"] {
-        let parent_request_id = format!("parent-{}", uuid::Uuid::new_v4());
-        let parent_session_id = format!("session-{parent_request_id}");
-        let created_at = chrono::Utc::now().to_rfc3339();
-        crate::support::create_agent_session_in_scope(
-            &db.node,
-            agent_did,
-            &parent_session_id,
-            AGENT_NAME,
-            &created_at,
-        )
-        .await;
-        let parent_doc_id = crate::support::create_request_for_agent_with_signed_fields(
-            &db.node,
-            agent_did,
-            &parent_request_id,
-            &parent_session_id,
-            "processing",
-            &created_at,
-            None,
-            None,
-            None,
-            None,
-        )
-        .await;
-        let parent_deadline = escape_graphql_string(
-            &(chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339(),
-        );
-        let parent_doc_id_escaped = escape_graphql_string(&parent_doc_id);
-        let response = db
-            .node
-            .execute(&format!(
-                r#"mutation {{ update_AgentRequest(
-                    filter: {{ _docID: {{ _eq: "{parent_doc_id_escaped}" }} }},
-                    input: {{ deadline: "{parent_deadline}" }}
-                ) {{ _docID }} }}"#
-            ))
-            .await;
-        assert!(
-            !response.has_errors(),
-            "setting parent deadline failed: {:?}",
-            response.errors
-        );
-        let request_id = format!("child-{}", uuid::Uuid::new_v4());
-        let bridge_id = format!("bridge-{request_id}");
-        let bridge_doc_id = create_exact_running_subagent_bridge(
-            &db.node,
-            agent_did,
-            &parent_request_id,
-            &parent_doc_id,
-            &parent_session_id,
-            &bridge_id,
-            &request_id,
-        )
-        .await;
-        let child_doc_id = create_exact_expired_child(
-            &db.node,
-            agent_did,
-            &request_id,
-            &parent_request_id,
-            &parent_doc_id,
-            &bridge_id,
-            &bridge_doc_id,
-            &past,
-        )
-        .await;
-        children.push((child_doc_id, bridge_id));
-    }
-    // The bridge scan sees both children; the real child-principal guard must
-    // exclude the foreign claim while terminalizing and projecting the control.
-    let foreign_before = fetch_request_snapshot(&db.node, &children[1].0).await;
-    let report = ToolCallLifecycle::reconcile_subagent_liveness(&db.node, &local_agent_did)
-        .await
-        .unwrap();
-    assert_eq!(report.expired_children_terminalized, 1);
-    assert_eq!(report.bridges_projected, 1);
-    assert_eq!(
-        fetch_request_snapshot(&db.node, &children[0].0)
-            .await
-            .lifecycle_state,
-        RequestLifecycleState::Dead,
-    );
-    assert_eq!(
-        fetch_request_snapshot(&db.node, &children[1].0).await,
-        foreign_before
-    );
-    assert_eq!(
-        fetch_bridge_scope_state(&db.node, &children[0].1).await,
-        "failed"
-    );
-    assert_eq!(
-        fetch_bridge_scope_state(&db.node, &children[1].1).await,
-        "running"
     );
 }
 

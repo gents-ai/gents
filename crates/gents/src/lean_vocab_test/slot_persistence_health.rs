@@ -178,26 +178,22 @@ pub(crate) struct LeanToolRetryCase {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct LeanCompletionRetryCase {
     pub(crate) name: String,
     pub(crate) domain: String,
     pub(crate) action: String,
-    pub(crate) rust_surface: String,
-    pub(crate) failure_class: Option<String>,
-    pub(crate) selected_wake: Option<usize>,
     pub(crate) legal: bool,
     pub(crate) pre_phase: String,
+    pub(crate) pre_now: i64,
+    pub(crate) pre_deadline: Option<i64>,
+    pub(crate) pre_scheduled_wake: Option<i64>,
     pub(crate) expected_phase: Option<String>,
-    pub(crate) intermediate_phase: Option<String>,
     pub(crate) expected_transport_used: Option<usize>,
     pub(crate) expected_resample_used: Option<usize>,
+    pub(crate) expected_attempt: Option<usize>,
     pub(crate) expected_repair_used: Option<bool>,
-    pub(crate) expected_last_parse_error: Option<String>,
-    pub(crate) expected_turn_index: Option<usize>,
-    pub(crate) intermediate_turn_index: Option<usize>,
-    pub(crate) expected_effects: Option<usize>,
-    pub(crate) expected_rendered: Option<usize>,
-    pub(crate) intermediate_rendered: Option<usize>,
+    pub(crate) expected_usage_charged: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]

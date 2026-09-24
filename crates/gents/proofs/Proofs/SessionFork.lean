@@ -1,182 +1,241 @@
 import Proofs.AgentSession
+import Proofs.CanonicalOutput.Message
+import Proofs.CanonicalOutput.Hydration
 import Mathlib.Data.List.Basic
+import Mathlib.Data.List.Dedup
 
-/-! The fork copier consumes one authorized transaction snapshot. Its ordinal cut
-is resolved once from the user-turn API. Rows are selected by sequence/call identity,
-never separate wall clocks. This models durable copy/link publication, not provider
-sanitization or a new session execution framework. -/
+/-!
+# Header-only session forks
+
+The source owner supplies one authorized coherent snapshot and an exclusive
+message-sequence cut. A fork creates child `MessageEnvelope` rows so the native
+blocks, native ID, references, outcome and creation provenance stay exact; only
+the child header identity/session/publication, child-scoped key and request
+membership change. It creates no payload, segment or tool-call row.
+-/
 namespace SessionFork
 
-/-- Copy projection: for a call, `sequence` is resolved from its exact transcript
-association; for compaction it is the persisted entry sequence. Never a new call field. -/
-structure Row where
-  /-- Interned (collection, _docID) reference, NOT a raw cross-collection _docID.
-  Equal raw IDs in different collections have distinct tokens in this projection. -/
-  docId : Nat
-  scope : AgentSession.Scope
-  sequence : Nat
-  requestId : Option RequestId := none
-  requestDocId : Option Nat := none
-  spillRefs : List Nat := []
-  deriving DecidableEq, Repr
-structure Spill where
-  row : Row
-  callDocId : Nat
-  deriving DecidableEq, Repr
+open CanonicalOutput
+
+/-- Compaction entries remain child-session metadata. Their inclusive cursor
+must name a retained child message sequence. -/
 structure Compaction where
-  row : Row
+  id : DocId
+  session : SessionId
+  sequence : Nat
   throughSequence : Nat
-  keySession : SessionId
   deriving DecidableEq, Repr
+
 structure History where
-  messages : List Row
-  calls : List Row
-  spills : List Spill
+  messages : List MessageEnvelope
   compactions : List Compaction
   deriving DecidableEq, Repr
 
-/-- Map collection-qualified reference tokens to corresponding child tokens.
-Injective assignment is local copy work, not durable metadata or a DB-wide
-uniqueness requirement on raw _docID strings. -/
-def copyRow (child : AgentSession.Scope) (ids : Nat → Nat) (row : Row) : Row :=
-  { row with
-    docId := ids row.docId
-    scope := child
-    requestId := none
-    requestDocId := none
-    spillRefs := row.spillRefs.map ids }
+def copyMessage (child : AgentSession.Scope) (childId : DocId)
+    (childKey : String → String) (message : MessageEnvelope) : MessageEnvelope :=
+  { message with
+    header := forkHeader message.header childId child.session
+    key := childKey message.key }
 
 def copyPrefix (source : History) (child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) : History :=
-  let calls := source.calls.filter (fun row => row.sequence < cut)
-  { messages := (source.messages.filter (fun row => row.sequence < cut)).map (copyRow child ids)
-    calls := calls.map (copyRow child ids)
-    spills := (source.spills.filter fun spill => calls.any (·.docId == spill.callDocId)).map
-      (fun spill => { row := copyRow child ids spill.row, callDocId := ids spill.callDocId })
-    compactions := (source.compactions.filter (fun c => c.throughSequence < cut)).map
-      (fun c => { c with row := copyRow child ids c.row, keySession := child.session }) }
+    (childDocumentId : DocId → DocId) (childKey : String → String)
+    (cut : Nat) : History :=
+  { messages := (source.messages.filter (fun message => message.sequence < cut)).map
+      (fun message => copyMessage child (childDocumentId message.header.id) childKey message)
+  , compactions := (source.compactions.filter (fun c => c.throughSequence < cut)).map
+      (fun c => { c with id := childDocumentId c.id, session := child.session }) }
 
-/-- Actual loader validates contiguous entry sequence, session chain key and
-strictly increasing canonical cursors. Previous cursor is traversal state only. -/
+theorem copied_header_satisfies_reader_provenance (child : AgentSession.Scope)
+    (id : DocId) (key : String → String) (origin : MessageEnvelope) :
+    Hydration.forkMetadataMatches (copyMessage child id key origin) origin = true := by
+  simp [Hydration.forkMetadataMatches, copyMessage, forkHeader]
+
+/-- The publisher and reader use the same sequence space. No per-message
+remapping can change tool-pair order or what an inherited compaction cursor names. -/
+theorem copied_prefix_preserves_order (source : History) (child : AgentSession.Scope)
+    (ids : DocId → DocId) (keys : String → String) (cut : Nat) :
+    ((copyPrefix source child ids keys cut).messages.map (·.sequence)) =
+      (source.messages.filter (fun message => message.sequence < cut)).map (·.sequence) := by
+  simp [copyPrefix, copyMessage, List.map_map]
+
 def validChain (session : SessionId) : Nat → Option Nat → List Compaction → Bool
   | _, _, [] => true
-  | expected, previous, c :: rest => c.row.sequence == expected &&
-      c.keySession == session && previous.all (· < c.throughSequence) &&
+  | expected, previous, c :: rest => c.sequence == expected &&
+      c.session == session && previous.all (· < c.throughSequence) &&
       validChain session (expected + 1) (some c.throughSequence) rest
 
-/-- Canonical cursor is inclusive and names an actual durable message sequence.
-A count, out-of-range number, or missing source row cannot validate a copied
-summary. Provider-space CursorDenotes remains the original compaction writer's
-separate contract; this copy projection does not reconstruct provider messages. -/
-def cursorPrefixesExist (h : History) : Bool :=
-  h.compactions.all (fun c => h.messages.any (·.sequence == c.throughSequence))
+def cursorPrefixesExist (history : History) : Bool :=
+  history.compactions.all fun cursor =>
+    history.messages.any (·.sequence == cursor.throughSequence)
 
-def documentIds (h : History) : List Nat :=
-  h.messages.map (·.docId) ++ h.calls.map (·.docId) ++
-    h.spills.map (·.row.docId) ++ h.compactions.map (·.row.docId)
+def allInSession (history : History) (session : SessionId) : Bool :=
+  history.messages.all (·.header.session == session) &&
+    history.compactions.all (·.session == session)
 
-def allInScope (h : History) (scope : AgentSession.Scope) : Bool :=
-  h.messages.all (·.scope == scope) && h.calls.all (·.scope == scope) &&
-    h.spills.all (·.row.scope == scope) && h.compactions.all (·.row.scope == scope)
+def documentIds (history : History) : List DocId :=
+  history.messages.map (·.header.id) ++ history.compactions.map (·.id)
 
-/-- Retained full-output references must resolve exactly, including references
-inside copied truncated call output. A cut splitting a required link is rejected. -/
-def linksResolve (h : History) : Bool :=
-  (h.messages ++ h.calls).all (fun row => row.spillRefs.all
-    (fun id => h.spills.any (fun spill => spill.row.docId == id))) &&
-  h.spills.all (fun spill => h.calls.any (fun call => call.docId == spill.callDocId))
+def structurallyValid (history : History) : Bool :=
+  decide (history.messages.map (·.sequence)).Nodup &&
+    decide (history.messages.map (·.key)).Nodup &&
+    decide (documentIds history).Nodup && cursorPrefixesExist history
 
-/-- The copy requires unique canonical message sequence keys and actual message
-associations for calls. Snapshot-generation consistency alone does not prove either. -/
-def structurallyValid (h : History) : Bool :=
-  decide (h.messages.map (·.sequence)).Nodup &&
-    h.calls.all (fun call => h.messages.any (·.sequence == call.sequence))
+/-- Exact source snapshot grant returned by the existing document owner.  The
+complete parent scope is part of the grant and every copied header/compaction
+must be named; a session-only or boolean grant is not accepted. -/
+structure SourceAuthorization where
+  owner : AgentSession.Scope
+  messageDocuments : List DocId
+  compactionDocuments : List DocId
+  deriving DecidableEq, Repr
 
-/-- Snapshot revision/busy/authorization are supplied by existing DB/source owners.
-No partial child becomes visible: publication happens only after links/chain checks. -/
+def authorizes (authorization : SourceAuthorization) (parent : AgentSession.Scope)
+    (source : History) : Bool :=
+  authorization.owner == parent &&
+    source.messages.all (fun message => authorization.messageDocuments.contains message.header.id) &&
+    source.compactions.all (fun compaction => authorization.compactionDocuments.contains compaction.id)
+
+/-- Revision, authorization and source idleness remain inputs from existing
+owners. Allocators apply only to child messages/compactions and message keys;
+payload, segment and tool identities are never remapped. -/
 def publish (source : History) (parent child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) (authorized idle coherent : Bool) : Option History :=
-  let copied := copyPrefix source child ids cut
-  if authorized && idle && coherent && allInScope source parent &&
+    (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
+    (authorization : SourceAuthorization) (idle coherent : Bool) : Option History :=
+  let copied := copyPrefix source child childDocumentId childKey cut
+  if authorizes authorization parent source && idle && coherent &&
+      allInSession source parent.session &&
       decide (parent.agent = child.agent ∧ parent.requester = child.requester ∧
         parent.session ≠ child.session) &&
-      validChain parent.session 1 none source.compactions && validChain child.session 1 none copied.compactions &&
-      linksResolve source && linksResolve copied &&
-      cursorPrefixesExist source && cursorPrefixesExist copied &&
+      validChain parent.session 1 none source.compactions &&
+      validChain child.session 1 none copied.compactions &&
       structurallyValid source && structurallyValid copied &&
-      (documentIds source).Nodup && (documentIds copied).Nodup &&
       (documentIds copied).all (fun id => !(documentIds source).contains id) then
     some copied
   else none
 
-theorem copy_detaches (child : AgentSession.Scope) (ids : Nat → Nat) (row : Row) :
-    (copyRow child ids row).scope = child ∧
-    (copyRow child ids row).requestId = none ∧
-    (copyRow child ids row).requestDocId = none := by simp [copyRow]
+theorem copy_message_detaches_live_membership (child : AgentSession.Scope)
+    (childId : DocId) (childKey : String → String) (message : MessageEnvelope) :
+    (copyMessage child childId childKey message).header.request = none ∧
+    (copyMessage child childId childKey message).header.session = child.session ∧
+    (copyMessage child childId childKey message).header.origin = some message.header.id ∧
+    (copyMessage child childId childKey message).header.publication = .fork message.header.id := by
+  simp [copyMessage, forkHeader]
 
-/-- Every retained spill points to a copied child call, independently of timestamps. -/
-theorem copied_spill_resolves (source : History) (child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) (spill : Spill)
-    (hs : spill ∈ (copyPrefix source child ids cut).spills) :
-    ∃ call ∈ (copyPrefix source child ids cut).calls, call.docId = spill.callDocId := by
-  simp only [copyPrefix, List.mem_map, List.mem_filter] at hs
-  obtain ⟨original, ⟨_, hcall⟩, rfl⟩ := hs
-  simp only [List.any_eq_true, List.mem_filter, beq_iff_eq] at hcall
-  obtain ⟨call, ⟨hc, hcut⟩, hid⟩ := hcall
-  refine ⟨copyRow child ids call, ?_, ?_⟩
-  · simp only [copyPrefix, List.mem_map, List.mem_filter]
-    exact ⟨call, ⟨hc, hcut⟩, rfl⟩
-  · simp [copyRow, hid]
+theorem copy_message_preserves_native_content (child : AgentSession.Scope)
+    (childId : DocId) (childKey : String → String) (message : MessageEnvelope) :
+    (copyMessage child childId childKey message).header.refs = message.header.refs ∧
+    (copyMessage child childId childKey message).nativeId = message.nativeId ∧
+    (copyMessage child childId childKey message).blocks = message.blocks ∧
+    (copyMessage child childId childKey message).createdAt = message.createdAt ∧
+    (copyMessage child childId childKey message).sequence = message.sequence := by
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
 
-theorem failed_copy_not_published (source : History) (parent child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) (authorized idle : Bool) :
-    publish source parent child ids cut authorized idle false = none := by
-  simp [publish]
+theorem copy_message_rewrites_only_child_key (child : AgentSession.Scope)
+    (childId : DocId) (childKey : String → String) (message : MessageEnvelope) :
+    (copyMessage child childId childKey message).key = childKey message.key := rfl
 
-theorem published_chain_valid (source : History) (parent child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) (authorized idle coherent : Bool) (copied : History)
-    (h : publish source parent child ids cut authorized idle coherent = some copied) :
-    validChain child.session 1 none copied.compactions = true := by
-  unfold publish at h
-  dsimp only at h
-  split at h
-  · simp only [Option.some.injEq] at h
+theorem copied_message_carries_exact_origin
+    (source : History) (child : AgentSession.Scope)
+    (childDocumentId : DocId → DocId) (childKey : String → String)
+    (cut : Nat) (copied : MessageEnvelope)
+    (h : copied ∈ (copyPrefix source child childDocumentId childKey cut).messages) :
+    ∃ origin ∈ source.messages,
+      origin.sequence < cut ∧
+      copied.header.origin = some origin.header.id ∧
+      copied.header.refs = origin.header.refs ∧
+      copied.blocks = origin.blocks ∧ copied.nativeId = origin.nativeId := by
+  simp only [copyPrefix, List.mem_map, List.mem_filter] at h
+  obtain ⟨origin, ⟨hmem, hcut⟩, rfl⟩ := h
+  exact ⟨origin, hmem, of_decide_eq_true hcut,
+    by simp [copyMessage, forkHeader], rfl, rfl, rfl⟩
+
+theorem published_cursor_names_child_message
+    (source : History) (parent child : AgentSession.Scope)
+    (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
+    (authorization : SourceAuthorization) (idle coherent : Bool) (copied : History)
+    (hpub : publish source parent child childDocumentId childKey cut
+      authorization idle coherent = some copied)
+    (cursor : Compaction) (hcursor : cursor ∈ copied.compactions) :
+    ∃ message ∈ copied.messages, message.sequence = cursor.throughSequence := by
+  have hvalid : cursorPrefixesExist copied = true := by
+    unfold publish at hpub
+    dsimp only at hpub
+    split at hpub
+    · simp only [Option.some.injEq] at hpub
+      subst copied
+      simp_all [structurallyValid]
+    · contradiction
+  simp only [cursorPrefixesExist, List.all_eq_true] at hvalid
+  simpa only [List.any_eq_true, beq_iff_eq] using hvalid cursor hcursor
+
+/-- Successful publication restores the durable postconditions: every output
+row is in the child session, has a fresh identity, and retains its exact source
+origin. -/
+theorem publish_postconditions
+    (source : History) (parent child : AgentSession.Scope)
+    (childDocumentId : DocId → DocId) (childKey : String → String) (cut : Nat)
+    (authorization : SourceAuthorization) (idle coherent : Bool) (copied : History)
+    (hpub : publish source parent child childDocumentId childKey cut
+      authorization idle coherent = some copied) :
+    allInSession copied child.session = true ∧
+    (documentIds copied).all (fun id => !(documentIds source).contains id) = true ∧
+    ∀ message ∈ copied.messages, ∃ origin ∈ source.messages,
+      message.header.origin = some origin.header.id := by
+  unfold publish at hpub
+  dsimp only at hpub
+  split at hpub
+  · simp only [Option.some.injEq] at hpub
     subst copied
-    simp_all
+    rename_i hguard
+    simp only [Bool.and_eq_true] at hguard
+    have hfresh : (documentIds (copyPrefix source child childDocumentId childKey cut)).all
+        (fun id => !(documentIds source).contains id) = true := by
+      aesop
+    refine ⟨?_, hfresh, ?_⟩
+    · simp [allInSession, copyPrefix, copyMessage, forkHeader]
+    intro message hmessage
+    obtain ⟨origin, horigin, _, hcopy, _, _, _⟩ :=
+      copied_message_carries_exact_origin source child childDocumentId childKey cut message hmessage
+    exact ⟨origin, horigin, hcopy⟩
   · contradiction
 
-/-- Publication establishes a concrete retained canonical row for every cursor;
-a numerically increasing but nonexistent prefix is insufficient. -/
-theorem published_cursor_names_message (source : History) (parent child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) (authorized idle coherent : Bool) (copied : History)
-    (h : publish source parent child ids cut authorized idle coherent = some copied)
-    (c : Compaction) (hc : c ∈ copied.compactions) :
-    ∃ row ∈ copied.messages, row.sequence = c.throughSequence := by
-  have hv : cursorPrefixesExist copied = true := by
-    unfold publish at h
-    dsimp only at h
-    split at h
-    · simp only [Option.some.injEq] at h
-      subst copied
-      simp_all
-    · contradiction
-  simp only [cursorPrefixesExist, List.all_eq_true] at hv
-  simpa only [List.any_eq_true, beq_iff_eq] using hv c hc
+/-- Origin messages and closing records are retention dependencies, not copied
+child payload. Exact extents and derived request/tool owners are added by
+canonical hydration closure. -/
+structure RetentionDependencies where
+  originMessages : List DocId
+  closingRecords : List DocId
+  deriving DecidableEq, Repr
 
-theorem published_structure_valid (source : History) (parent child : AgentSession.Scope)
-    (ids : Nat → Nat) (cut : Nat) (authorized idle coherent : Bool) (copied : History)
-    (h : publish source parent child ids cut authorized idle coherent = some copied) :
-    (copied.messages.map (·.sequence)).Nodup ∧
-    ∀ call ∈ copied.calls, ∃ message ∈ copied.messages, message.sequence = call.sequence := by
-  have hv : structurallyValid copied = true := by
-    unfold publish at h
-    dsimp only at h
-    split at h
-    · simp only [Option.some.injEq] at h
-      subst copied
-      simp_all
-    · contradiction
-  simpa only [structurallyValid, Bool.and_eq_true, decide_eq_true_eq,
-    List.all_eq_true, List.any_eq_true, beq_iff_eq] using hv
+def retentionDependencies (history : History) : RetentionDependencies :=
+  { originMessages := (history.messages.filterMap (·.header.origin)).dedup
+  , closingRecords :=
+      (history.messages.flatMap fun message => message.header.refs.map (·.closeId)).dedup }
+
+def canDeleteOriginMessage (dependencies : RetentionDependencies) (id : DocId) : Bool :=
+  !dependencies.originMessages.contains id
+
+def canDeleteClosingRecord (dependencies : RetentionDependencies) (id : DocId) : Bool :=
+  !dependencies.closingRecords.contains id
+
+theorem copied_reference_is_retained (history : History) (message : MessageEnvelope)
+    (ref : PayloadRef) (hmessage : message ∈ history.messages)
+    (href : ref ∈ message.header.refs) :
+    canDeleteClosingRecord (retentionDependencies history) ref.closeId = false := by
+  have hmem : ref.closeId ∈
+      (history.messages.flatMap fun message => message.header.refs.map (·.closeId)).dedup := by
+    rw [List.mem_dedup]
+    exact List.mem_flatMap.mpr
+      ⟨message, hmessage, List.mem_map.mpr ⟨ref, href, rfl⟩⟩
+  simpa [canDeleteClosingRecord, retentionDependencies, List.contains_eq_mem] using hmem
+
+theorem copied_origin_message_is_retained (history : History) (message : MessageEnvelope)
+    (origin : DocId) (hmessage : message ∈ history.messages)
+    (horigin : message.header.origin = some origin) :
+    canDeleteOriginMessage (retentionDependencies history) origin = false := by
+  have hmem : origin ∈ (history.messages.filterMap (·.header.origin)).dedup := by
+    rw [List.mem_dedup, List.mem_filterMap]
+    exact ⟨message, hmessage, horigin⟩
+  simpa [canDeleteOriginMessage, retentionDependencies, List.contains_eq_mem] using hmem
 
 end SessionFork

@@ -500,7 +500,7 @@ async fn stamp_notification(
     match open.as_slice() {
         [] => {}
         [item] if item.requester_did == context.requester_did => {
-            return notification::reuse_or_update(node, context, &args, identity, item).await
+            return notification::reuse_or_update(node, context, &args, identity, item).await;
         }
         [_] => bail!("mailbox open-row owner mismatch"),
         _ => bail!("mailbox invariant violation: more than one owner-matching open row"),
@@ -640,7 +640,11 @@ impl crate::llm::tool::Tool for MailboxCreateTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: FILE_MAILBOX_ITEM_TOOL_NAME.to_string(),
-            description: format!("{} Configured policy: {}. Supply findings only; never supply IDs or routing. Receipt reports created, reused, or updated and the stored item.", canonical_mailbox_write_decl().description, serde_json::to_string(&self.policy).expect("serialize policy")),
+            description: format!(
+                "{} Configured policy: {}. Supply findings only; never supply IDs or routing. Receipt reports created, reused, or updated and the stored item.",
+                canonical_mailbox_write_decl().description,
+                serde_json::to_string(&self.policy).expect("serialize policy")
+            ),
             parameters: json!({
                 "type": "object",
                 "additionalProperties": false,

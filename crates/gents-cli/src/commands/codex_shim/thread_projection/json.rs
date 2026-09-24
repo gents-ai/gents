@@ -117,7 +117,7 @@ pub(in crate::commands::codex_shim) fn projected_thread_status(
             active_flags: vec![codex::ThreadActiveFlag::WaitingOnUserInput],
         },
         Some(ClientHeadProjection {
-            turn_state: ClientTurnState::WaitingForClaim | ClientTurnState::Streaming,
+            turn_state: ClientTurnState::WaitingForClaim | ClientTurnState::Running,
             ..
         }) => codex::ThreadStatus::Active {
             active_flags: Vec::new(),
@@ -286,7 +286,6 @@ mod tests {
                 client_projection: gents_protocol::client_protocol::project_persisted_attempt(
                     "processing",
                     false,
-                    None,
                 ),
                 failure_reason: None,
                 created_at: None,
@@ -316,25 +315,20 @@ mod tests {
     #[test]
     fn thread_status_projects_runtime_request_lifecycle() {
         let cases = [
-            ("pending", None, "active", None),
-            ("claimed", None, "active", None),
-            ("processing", None, "active", None),
-            ("inputRequired", None, "active", Some("waitingOnUserInput")),
-            ("completed", None, "idle", None),
-            ("superseded", None, "idle", None),
-            ("interrupted", None, "idle", None),
-            ("failed", None, "systemError", None),
-            ("dead", None, "systemError", None),
-            ("processing", Some("complete"), "idle", None),
-            ("processing", Some("error"), "systemError", None),
+            ("pending", "active", None),
+            ("claimed", "active", None),
+            ("processing", "active", None),
+            ("inputRequired", "active", Some("waitingOnUserInput")),
+            ("completed", "idle", None),
+            ("superseded", "idle", None),
+            ("interrupted", "idle", None),
+            ("failed", "systemError", None),
+            ("dead", "systemError", None),
         ];
 
-        for (runtime_state, response_status, expected_type, expected_flag) in cases {
-            let head = gents_protocol::client_protocol::project_persisted_attempt(
-                runtime_state,
-                false,
-                response_status,
-            );
+        for (runtime_state, expected_type, expected_flag) in cases {
+            let head =
+                gents_protocol::client_protocol::project_persisted_attempt(runtime_state, false);
             let encoded =
                 serde_json::to_value(projected_thread_status(head)).expect("encode thread status");
             assert_eq!(

@@ -309,7 +309,7 @@ impl GoalSource {
         }
 
         let has_activity = terminal != GoalRequestTerminal::Completed
-            || self.request_has_activity(&latest.request_id).await?;
+            || self.request_has_activity(&latest).await?;
         let tokens_used = refresh_goal_usage(&self.node, &goal).await?;
         let refreshed_goal = load_goal_by_id(&self.node, &goal.agent_did, &goal.goal_id)
             .await?
@@ -646,40 +646,54 @@ impl GoalSource {
             .is_some_and(|rows| !rows.is_empty()))
     }
 
-    async fn request_has_activity(&self, request_id: &str) -> Result<bool> {
-        let request_id = escape_graphql_string(request_id);
+    async fn request_has_activity(&self, request: &AgentRequestRow) -> Result<bool> {
+        let physical_id = request
+            .doc_id
+            .as_deref()
+            .filter(|id| !id.is_empty())
+            .context("goal activity requires the physical request document")?;
+        let request_doc_id = escape_graphql_string(physical_id);
+        let segment_fields = crate::session::canonical_rows::AGENT_OUTPUT_SEGMENT_FIELDS;
         let query = format!(
             r#"{{
                 InferenceCall(
-                    filter: {{ request_id: {{ _eq: "{request_id}" }}, call_state: {{ _eq: "completed" }} }},
+                    filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, call_state: {{ _eq: "completed" }} }},
                     limit: 1
                 ) {{ call_id }}
-                AgentToolCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ tool_call_key }}
-                AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 1) {{ content reasoning }}
+                AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}, limit: 1) {{ _docID }}
+                AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }} }}) {{ {segment_fields} }}
             }}"#
         );
         let response = self.node.execute(&query).await;
         if response.has_errors() {
             bail!("query goal request activity failed: {:?}", response.errors);
         }
-        let data = response.data.as_ref();
-        let has_rows = |collection: &str| {
-            data.and_then(|data| data.get(collection))
+        let data = response
+            .data
+            .as_ref()
+            .context("goal activity query omitted data")?;
+        let has_rows = |collection: &str| -> Result<bool> {
+            Ok(!data
+                .get(collection)
                 .and_then(|value| value.as_array())
-                .is_some_and(|rows| !rows.is_empty())
+                .with_context(|| format!("goal activity query omitted {collection}"))?
+                .is_empty())
         };
-        let response_text = data
-            .and_then(|data| data.get("AgentResponse"))
+        let segments = data
+            .get("AgentOutputSegment")
             .and_then(|value| value.as_array())
-            .and_then(|rows| rows.first())
-            .is_some_and(|row| {
-                ["content", "reasoning"].iter().any(|field| {
-                    row.get(field)
-                        .and_then(|value| value.as_str())
-                        .is_some_and(|value| !value.trim().is_empty())
-                })
-            });
-        Ok(has_rows("InferenceCall") || has_rows("AgentToolCall") || response_text)
+            .context("goal activity query omitted canonical output records")?
+            .iter()
+            .map(crate::session::canonical_rows::decode_output_segment_row)
+            .collect::<Result<Vec<_>>>()?;
+        let provider_output = segments.iter().any(|row| {
+            row.segment.request_doc_id == physical_id
+                && matches!(&row.segment.source,
+                    gents_protocol::output::OutputSource::ProviderTurn { scope, .. }
+                        if scope.kind == gents_protocol::rendered_request::CaptureScopeKind::Inference)
+                && !row.segment.payload.trim().is_empty()
+        });
+        Ok(has_rows("InferenceCall")? || has_rows("AgentToolCall")? || provider_output)
     }
 
     async fn request_usage_limit_failure(&self, request_id: &str) -> Result<Option<String>> {

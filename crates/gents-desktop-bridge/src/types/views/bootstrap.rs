@@ -65,3 +65,15 @@ pub struct ManagedServerStatus {
 pub struct ManagedServerRootValidation {
     pub canonical_path: String,
 }
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedServerResetResult {
+    pub managed_home: String,
+    pub data_path: String,
+    pub confirmation: String,
+    pub consequence: String,
+    pub completed: bool,
+    pub backup_path: Option<String>,
+    pub archived_paths: Vec<String>,
+}

@@ -101,7 +101,7 @@ impl RenderedRequestSource {
 /// Declaration order is the ordering `CaptureOrderKey` sorts kinds by; it is a
 /// stable identity order, not a temporal one (temporal interleaving across
 /// loops comes from `created_at` and the admission join).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CaptureScopeKind {
     /// The request's own owned completion loop (`agent/loop_stream.rs`).
     Inference,
@@ -151,10 +151,29 @@ impl std::fmt::Display for CaptureScopeKind {
 /// A parsed `capture_scope` column: which loop, and which allocation of that
 /// loop within the request. The producer writes `"{kind}.{seq}"` with `seq`
 /// starting at 1 per kind (`gents::rendered_request::scope`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// Serializes as that same `"{kind}.{seq}"` label, so the provider-turn
+/// coordinate in `output::OutputSource` is the capture's coordinate, not a
+/// second encoding of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct CaptureScope {
     pub kind: CaptureScopeKind,
     pub seq: u64,
+}
+
+impl From<CaptureScope> for String {
+    fn from(scope: CaptureScope) -> Self {
+        scope.to_string()
+    }
+}
+
+impl TryFrom<String> for CaptureScope {
+    type Error = CaptureScopeParseError;
+
+    fn try_from(label: String) -> Result<Self, Self::Error> {
+        label.parse()
+    }
 }
 
 /// Why a `capture_scope` string failed to parse. Malformed scope is an error a

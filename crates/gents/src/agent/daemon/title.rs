@@ -14,8 +14,7 @@ const GENERATED_TITLE_MAX_WORDS: usize = 5;
 const GENERATED_TITLE_MAX_LEN: usize = 48;
 const TITLE_GENERATION_MAX_ATTEMPTS: i64 = 2;
 const TITLE_GENERATION_TIMEOUT_SECS: u64 = 10;
-const TITLE_GENERATION_PREAMBLE: &str =
-    "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
+const TITLE_GENERATION_PREAMBLE: &str = "Generate concise conversation titles. Return only a lowercase hyphenated 3-5 word title. Never call tools. Never explain.";
 
 impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
     pub(super) fn spawn_conversation_title_generation(
@@ -158,9 +157,8 @@ async fn generate_title_with_fallback<M: rig::completion::CompletionModel + 'sta
         match admission::scope_call(CallKind::OneOff, attempt, async move {
             tokio::time::timeout(
                 Duration::from_secs(TITLE_GENERATION_TIMEOUT_SECS),
-                crate::agent::loop_stream::run_loop_to_text::<M, crate::hook::DefraSessionHook>(
+                crate::agent::loop_stream::run_loop_to_text::<M>(
                     model,
-                    None,
                     crate::llm::message::Message::user(prompt),
                     Vec::new(),
                     std::sync::Arc::new(Vec::new()),

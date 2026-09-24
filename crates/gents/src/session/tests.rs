@@ -5,77 +5,62 @@ use crate::test_support::first_content;
 
 #[tokio::test]
 async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(tempdir.path())
-        .build()
-        .await
-        .unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let session_id = "session-steering-provider-history";
-    append_message_once_with_key_and_requester_did(
+    import_history_observation(
         &node,
+        "doc-old",
         session_id,
         "did:test:test",
         None,
-        "user",
         "older steering",
+        &canonical_rows::authored_message_key("doc-old", "prompt"),
+        1,
         None,
-        Some("request-old"),
-        Some("doc-old"),
-        "steering-input:request-old",
-        Some(1),
     )
-    .await
-    .unwrap();
+    .await;
     let tool_result = Message::User {
         content: vec![UserContent::ToolResult(ToolResult {
-            id: "result-current".to_string(),
+            id: "call-current".to_string(),
             call_id: Some("call-current".to_string()),
             content: vec![ToolResultContent::Text(Text {
                 text: "tool finished".to_string(),
             })],
         })],
     };
-    append_message_once_with_key_and_requester_did(
+    import_history_observation(
         &node,
+        "doc-current",
         session_id,
         "did:test:test",
         None,
-        "user",
-        &serde_json::to_string(&tool_result).unwrap(),
-        None,
-        Some("request-current"),
-        Some("doc-current"),
+        "tool finished",
         "session-steering-provider-history:tool-result:current",
-        Some(3),
+        3,
+        Some(("physical-current-tool", "call-current")),
     )
-    .await
-    .unwrap();
-    append_message_once_with_key_and_requester_did(
+    .await;
+    import_history_observation(
         &node,
+        "doc-current",
         session_id,
         "did:test:test",
         None,
-        "user",
         "current steering",
+        &canonical_rows::authored_message_key("doc-current", "prompt"),
+        2,
         None,
-        Some("request-current"),
-        Some("doc-current"),
-        "session-steering-provider-history:2",
-        Some(2),
     )
-    .await
-    .unwrap();
+    .await;
 
-    let current_input = Message::user("current steering");
     let history = history::load_history_projection(
         &node,
         session_id,
         "did:test:test",
         None,
         None,
-        Some(("request-current", current_input)),
+        Some("doc-current"),
     )
     .await
     .unwrap();
@@ -87,6 +72,7 @@ async fn provider_history_excludes_current_input_but_keeps_its_tool_results() {
             if matches!(first_content(&content), UserContent::Text(Text { text }) if text == "older steering")
     ));
     assert_eq!(history.get(1), Some(&tool_result));
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -336,36 +322,69 @@ async fn exact_compaction_redelivery_is_idempotent() {
 
 #[tokio::test]
 async fn history_sequence_cursor_loads_only_the_sparse_suffix() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    for (sequence, content) in [(10, "old-a"), (20, "old-b"), (40, "active")] {
-        save_message(
+    // Exercise selection over received facts, including an out-of-scope
+    // middle header. This does not authorize a requester to change the owner
+    // of an existing session; publication authority is tested separately.
+    let turns = [
+        ("request-cursor-old", None, "sparse-old"),
+        (
+            "request-cursor-remote",
+            Some("did:key:requester"),
+            "sparse-remote",
+        ),
+        ("request-cursor-latest", None, "sparse-latest"),
+    ];
+    for (index, (request_id, requester, text)) in turns.into_iter().enumerate() {
+        import_history_observation(
             &node,
+            request_id,
             "session-cursor",
-            "did:test:test",
-            sequence,
-            "user",
-            content,
+            "did:key:owner",
+            requester,
+            text,
+            &format!("scope-fixture-{index}"),
+            index as u32 + 1,
             None,
         )
-        .await
-        .unwrap();
+        .await;
     }
 
+    // Full owner-local history keeps the sparse sequence selection: the
+    // remote turn occupies sequence 2 and must not appear.
+    let local = history::load_sequenced_history_projection(
+        &node,
+        "session-cursor",
+        "did:key:owner",
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        local.iter().map(|row| row.sequence).collect::<Vec<_>>(),
+        vec![1, 3]
+    );
+
+    // The sequence cursor loads only the suffix after sequence 1: sequence 3,
+    // never the compacted prefix and never the out-of-scope remote sequence.
     let rows = history::load_sequenced_history_projection(
         &node,
         "session-cursor",
-        "did:test:test",
+        "did:key:owner",
         None,
         None,
-        Some(20),
+        Some(1),
         None,
     )
     .await
     .unwrap();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].sequence, 40);
-    assert_eq!(rows[0].message, Message::user("active"));
+    assert_eq!(rows[0].sequence, 3);
+    assert_eq!(rows[0].message, Message::user("sparse-latest"));
 }
 
 #[tokio::test]
@@ -543,9 +562,153 @@ async fn create_session_with_behavior_id_rejects_mismatched_existing_binding() {
     let _ = std::fs::remove_dir_all(&data_path);
 }
 
+/// Insert canonical replica observations for reader filtering tests. These
+/// tests intentionally place foreign facts beside local ones; they establish
+/// no claim about admission or publication authority. The writer tests below
+/// use the claimed execution owner instead.
+/// Seed an already-published canonical observation for reader/claim tests.
+/// This does not exercise publication authorization or producer transitions.
+pub(crate) async fn import_history_observation(
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    request_id: &str,
+    session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    text: &str,
+    message_key_suffix: &str,
+    sequence: u32,
+    tool_call: Option<(&str, &str)>,
+) {
+    use canonical_rows::*;
+    use gents_protocol::output::*;
+    let now = chrono::Utc::now().to_rfc3339();
+    let segment = OutputSegment {
+        agent_did: agent_did.into(),
+        requester_did: requester_did.map(str::to_owned),
+        session_id: session_id.into(),
+        request_doc_id: request_id.into(),
+        source: match tool_call {
+            Some((doc_id, _)) => OutputSource::ToolCall {
+                tool_call_doc_id: doc_id.into(),
+            },
+            None => OutputSource::Authored {
+                key: message_key_suffix.into(),
+            },
+        },
+        writer: match tool_call {
+            Some((doc_id, _)) => OutputWriter::ToolExecution {
+                tool_call_doc_id: doc_id.into(),
+            },
+            None => OutputWriter::RequestExecution {
+                execution_generation: "observed-generation".into(),
+            },
+        },
+        ordinal: Some(0),
+        runs: vec![SegmentRun {
+            stream: 0,
+            bytes: text.len().try_into().unwrap(),
+            declaration: Some(StreamDeclaration {
+                block_index: 0,
+                part_index: 0,
+                payload: if tool_call.is_some() {
+                    StreamPayload::ToolOutput
+                } else {
+                    StreamPayload::Text
+                },
+            }),
+        }],
+        payload: text.into(),
+        close: Some(SourceClose::Closed {
+            outcome: OutputOutcome::Complete,
+            segments: 1,
+            stream_bytes: vec![text.len() as u64],
+        }),
+        created_at: now.clone(),
+    };
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION)
+                .with_variables(output_segment_create_variables(&segment).unwrap()),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = crate::graphql::single_mutation_document(&response, "create_AgentOutputSegment")
+        .unwrap()
+        .unwrap();
+    let header = TranscriptMessage {
+        message_key: message_key_suffix.into(),
+        session_id: session_id.into(),
+        agent_did: agent_did.into(),
+        requester_did: requester_did.map(str::to_owned),
+        request_doc_id: Some(request_id.into()),
+        publication: match tool_call {
+            Some((doc_id, _)) => MessagePublication::ToolDelivery {
+                tool_call_doc_id: doc_id.into(),
+            },
+            None => MessagePublication::RequestExecution {
+                execution_generation: "observed-generation".into(),
+            },
+        },
+        outcome: OutputOutcome::Complete,
+        sequence,
+        role: MessageRole::User,
+        native_id: None,
+        blocks: vec![{
+            let payload = PresentedPayload {
+                output: PayloadRef {
+                    close_doc_id: row["_docID"].as_str().unwrap().into(),
+                    stream: 0,
+                },
+                presentation: PayloadPresentation::Full,
+            };
+            match tool_call {
+                Some((doc_id, call_id)) => MessageBlock::ToolResult {
+                    tool_call_doc_id: doc_id.into(),
+                    id: call_id.into(),
+                    call_id: Some(call_id.into()),
+                    parts: vec![ToolResultPart::Text { text: payload }],
+                },
+                None => MessageBlock::Text { text: payload },
+            }
+        }],
+        created_at: now,
+    };
+    let response = node
+        .execute_request_with_retry(
+            defra_node::QueryRequest::new(CREATE_AGENT_MESSAGE_MUTATION)
+                .with_variables(transcript_message_create_variables(&header).unwrap()),
+            defra_node::ExecuteRetryPolicy::default(),
+        )
+        .await;
+    assert!(!response.has_errors(), "{:?}", response.errors);
+    let row = crate::graphql::single_mutation_document(&response, "create_AgentMessage")
+        .unwrap()
+        .unwrap();
+    let (_, reconstructed) = load_canonical_message_from_node(
+        node,
+        row["_docID"].as_str().unwrap(),
+        agent_did,
+        requester_did,
+    )
+    .await
+    .unwrap();
+    let expected = match tool_call {
+        Some((_, call_id)) => Message::User {
+            content: vec![UserContent::ToolResult(ToolResult {
+                id: call_id.into(),
+                call_id: Some(call_id.into()),
+                content: vec![ToolResultContent::Text(Text { text: text.into() })],
+            })],
+        },
+        None => Message::user(text),
+    };
+    assert_eq!(reconstructed, expected);
+}
+
 #[tokio::test]
 async fn history_reads_exact_principal_and_requester_scope() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
     let rows = [
         ("did:key:owner", None, "local"),
@@ -557,20 +720,18 @@ async fn history_reads_exact_principal_and_requester_scope() {
         ),
     ];
     for (index, (owner, requester, text)) in rows.into_iter().enumerate() {
-        let mutation = create_message_mutation(
+        import_history_observation(
+            &node,
+            &format!("request-scope-{index}"),
             "shared-session",
             owner,
             requester,
-            1,
-            "user",
             text,
+            &format!("scope-fixture-{index}"),
+            index as u32 + 1,
             None,
-            None,
-            None,
-            Some(&format!("scope-fixture-{index}")),
-        );
-        let response = node.execute(&mutation).await;
-        assert!(!response.has_errors(), "{:?}", response.errors);
+        )
+        .await;
     }
     assert_eq!(
         load_history(&node, "shared-session", "did:key:owner", None)
@@ -598,50 +759,61 @@ async fn history_reads_exact_principal_and_requester_scope() {
 }
 
 #[tokio::test]
-async fn append_sequences_and_default_keys_are_scoped() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+async fn authored_keys_are_immutable_and_sequences_are_principal_scoped() {
+    let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    for (owner, requester, text) in [
-        ("did:key:owner", None, "local"),
-        ("did:key:other", None, "foreign"),
-        ("did:key:owner", Some("did:key:requester"), "requested"),
-    ] {
-        let sequence = append_message_with_requester_did(
-            &node, "same", owner, requester, "user", text, None, None, None,
-        )
-        .await
-        .unwrap();
-        assert_eq!(sequence, 1);
-    }
-    save_message(
-        &node,
-        "same",
-        "did:key:owner",
-        1,
-        "user",
-        "updated local",
-        None,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        load_history(&node, "same", "did:key:other", None)
+    for (owner, text) in [("did:key:owner", "local"), ("did:key:other", "foreign")] {
+        let mut lifecycle = claimed_authored_request(&node, owner, owner, "same").await;
+        let writer = crate::streaming::DefraStreamWriter::new(
+            node.clone(),
+            owner,
+            std::time::Duration::ZERO,
+        );
+        lifecycle.begin_owned_execution(&writer).await.unwrap();
+        let message = Message::user(text);
+        let first = writer
+            .publish_authored_message(&lifecycle, "prompt", &message)
             .await
-            .unwrap(),
-        vec![Message::user("foreign")]
-    );
-    assert_eq!(
+            .unwrap();
+        assert_eq!(
+            writer
+                .publish_authored_message(&lifecycle, "prompt", &message)
+                .await
+                .unwrap(),
+            first
+        );
+        assert!(
+            writer
+                .publish_authored_message(&lifecycle, "prompt", &Message::user("replacement"))
+                .await
+                .is_err(),
+            "an existing canonical key cannot overwrite immutable content"
+        );
+        let (header, native) = load_canonical_message_from_node(&node, &first, owner, None)
+            .await
+            .unwrap();
+        assert_eq!(header.sequence, 1);
+        assert_eq!(native, message);
+        assert_eq!(
+            load_history(&node, "same", owner, None).await.unwrap(),
+            vec![message]
+        );
+        lifecycle
+            .terminalize_owned(
+                crate::lifecycle::RequestTerminalOutcome::Completed,
+                gents_protocol::output::TerminalOutput::NoMessage,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+    assert!(
         load_history(&node, "same", "did:key:owner", Some("did:key:requester"))
             .await
-            .unwrap(),
-        vec![Message::user("requested")]
+            .unwrap()
+            .is_empty()
     );
-    assert_eq!(
-        load_history(&node, "same", "did:key:owner", None)
-            .await
-            .unwrap(),
-        vec![Message::user("updated local")]
-    );
+    node.shutdown().await;
 }
 
 #[tokio::test]
@@ -690,121 +862,100 @@ async fn compaction_chains_with_equal_session_labels_remain_owner_scoped() {
     .is_empty());
 }
 
+async fn claimed_authored_request(
+    node: &std::sync::Arc<defra_node::EmbeddedNode>,
+    request_id: &str,
+    agent_did: &str,
+    session_id: &str,
+) -> crate::lifecycle::RequestLifecycle {
+    use crate::lifecycle::{ClaimOutcome, RequestLifecycle};
+    let request_id = crate::graphql::escape_graphql_string(request_id);
+    let escaped_agent = crate::graphql::escape_graphql_string(agent_did);
+    let session_id = crate::graphql::escape_graphql_string(session_id);
+    let now = crate::graphql::escape_graphql_string(&chrono::Utc::now().to_rfc3339());
+    let created = node
+        .execute(&format!(
+            r#"mutation {{ create_AgentRequest(input: {{
+        request_id: "{request_id}", agent_did: "{escaped_agent}",
+        behavior_id: "general", session_id: "{session_id}", content: "race",
+        lifecycle_state: "pending", execution_origin: "interactive", created_at: "{now}",
+        retry_count: 0, max_retries: 3, subagent_depth: 0
+    }}) {{ _docID }} }}"#
+        ))
+        .await;
+    assert!(!created.has_errors(), "{:?}", created.errors);
+    let response = node
+        .execute(&format!(
+            r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{request_id}"}}}}) {{ {} }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ))
+        .await;
+    let request: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&response, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let mut lifecycle = RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        agent_did,
+        request.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(lifecycle.claim().await.unwrap(), ClaimOutcome::Claimed);
+    lifecycle
+}
+
 #[tokio::test]
 async fn concurrent_keyed_appends_resolve_sequence_conflicts_without_duplicates() {
-    let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
+    use crate::streaming::DefraStreamWriter;
+    use std::{sync::Arc, time::Duration};
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
     ensure_runtime_schemas(&node).await.unwrap();
-    let append = |key: &'static str| {
-        append_message_once_with_key_and_requester_did(
-            &node,
-            "append-race",
-            "did:key:owner",
-            None,
-            "user",
-            key,
-            None,
-            None,
-            None,
-            key,
-            Some(1),
-        )
-    };
-    let (left, right) = tokio::join!(append("left"), append("right"));
-    let (left, fresh_left) = left.unwrap();
-    let (right, fresh_right) = right.unwrap();
-    assert!(fresh_left && fresh_right);
+    let mut lifecycle =
+        claimed_authored_request(&node, "append-race-request", "did:test:test", "append-race")
+            .await;
+    let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::ZERO);
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+    let left_message = Message::user("left");
+    let right_message = Message::user("right");
+    let (left, right) = tokio::join!(
+        writer.publish_authored_message(&lifecycle, "left", &left_message),
+        writer.publish_authored_message(&lifecycle, "right", &right_message),
+    );
+    let left = left.unwrap();
+    let right = right.unwrap();
     assert_ne!(left, right);
-    assert_eq!(append("left").await.unwrap(), (left, false));
     assert_eq!(
-        load_history(&node, "append-race", "did:key:owner", None)
+        writer
+            .publish_authored_message(&lifecycle, "left", &left_message)
+            .await
+            .unwrap(),
+        left
+    );
+    let (left_header, left_native) =
+        load_canonical_message_from_node(&node, &left, "did:test:test", None)
+            .await
+            .unwrap();
+    let (right_header, right_native) =
+        load_canonical_message_from_node(&node, &right, "did:test:test", None)
+            .await
+            .unwrap();
+    assert_ne!(left_header.sequence, right_header.sequence);
+    let mut sequences = [left_header.sequence, right_header.sequence];
+    sequences.sort();
+    assert_eq!(
+        sequences,
+        [1, 2],
+        "racing publications must not leave a sequence hole"
+    );
+    assert_eq!(left_native, left_message);
+    assert_eq!(right_native, right_message);
+    assert_eq!(
+        load_history(&node, "append-race", "did:test:test", None)
             .await
             .unwrap()
             .len(),
         2
     );
-}
-
-#[tokio::test]
-async fn response_materialization_uses_physical_request_and_exact_session_scope() {
-    let tempdir = tempfile::tempdir().unwrap();
-    let node = defra_node::EmbeddedNode::builder()
-        .data_path(tempdir.path())
-        .build()
-        .await
-        .unwrap();
-    ensure_runtime_schemas(&node).await.unwrap();
-    for (key, owner, requester, document) in [
-        ("selected", "owner", "null", "selected-doc"),
-        ("other-request", "owner", "null", "other-doc"),
-        ("other-owner", "foreign", "null", "selected-doc"),
-        ("other-requester", "owner", "\"requester\"", "selected-doc"),
-    ] {
-        let result = node
-            .execute(&format!(
-                r#"mutation {{ create_AgentResponse(input: {{
-            response_key: "{key}", request_id: "same-label", request_doc_id: "{document}",
-            agent_did: "{owner}", requester_did: {requester}, session_id: "session"
-        }}) {{ _docID }} }}"#
-            ))
-            .await;
-        assert!(!result.has_errors(), "{:?}", result.errors);
-    }
-    mark_response_materialized(&node, "owner", "session", None, "selected-doc", 7)
-        .await
-        .unwrap();
-    let response = node
-        .execute("{AgentResponse {response_key materialized_message_sequence}}")
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    for row in response.data.as_ref().unwrap()["AgentResponse"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            row["materialized_message_sequence"],
-            if row["response_key"] == "selected" {
-                serde_json::json!(7)
-            } else {
-                serde_json::Value::Null
-            }
-        );
-    }
-    assert!(
-        mark_response_materialized(&node, "owner", "session", None, "missing-doc", 8)
-            .await
-            .is_err()
-    );
-
-    // A malformed duplicate must abort the transaction, including its first update.
-    let result = node
-        .execute(
-            r#"mutation {create_AgentResponse(input: {
-        response_key: "duplicate", request_id: "same-label", request_doc_id: "selected-doc",
-        agent_did: "owner", session_id: "session"
-    }) {_docID}}"#,
-        )
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
-    assert!(
-        mark_response_materialized(&node, "owner", "session", None, "selected-doc", 9)
-            .await
-            .is_err()
-    );
-    let response = node
-        .execute("{AgentResponse {response_key materialized_message_sequence}}")
-        .await;
-    assert!(!response.has_errors(), "{:?}", response.errors);
-    for row in response.data.as_ref().unwrap()["AgentResponse"]
-        .as_array()
-        .unwrap()
-    {
-        assert_eq!(
-            row["materialized_message_sequence"],
-            if row["response_key"] == "selected" {
-                serde_json::json!(7)
-            } else {
-                serde_json::Value::Null
-            }
-        );
-    }
+    node.shutdown().await;
 }

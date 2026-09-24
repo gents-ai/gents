@@ -5,6 +5,7 @@ import Proofs.Background.CompletionDelivery
 import Proofs.Background.Properties
 import Proofs.Background.Executable
 import Proofs.Background.ToolOutput
+import Proofs.Background.ToolOutputCases
 import Proofs.Background.CompletionContinuation
 import Proofs.Background.ProcessControl
 

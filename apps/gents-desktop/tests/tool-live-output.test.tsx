@@ -16,6 +16,7 @@ function toolGroup(statusKind: string, tail: string | null): RenderedTimelineIte
         statusKind,
         status: statusKind,
         presentation: { kind: "generic", summary: null, input: null, output: null },
+        reconstruction: { state: "ready" },
         partialOutputTail: tail,
       },
     ],

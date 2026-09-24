@@ -411,7 +411,9 @@ impl DirectoryStore for GraphqlDirectoryStore {
         // source Update event, and homes running concurrent automation
         // multiply that rate — per-collection executes here would each pay
         // their own parse/plan/transaction overhead per sweep.
-        let mut query = String::from("{ AgentPrincipal { agent_did display_name default_behavior_id enabled } AgentBehaviorReadiness { agent_did snapshot_json updated_at } WorkspaceRoot { root_path enabled }");
+        let mut query = String::from(
+            "{ AgentPrincipal { agent_did display_name default_behavior_id enabled } AgentBehaviorReadiness { agent_did snapshot_json updated_at } WorkspaceRoot { root_path enabled }",
+        );
         for collection in DIRECTORY_CONFIG_COLLECTIONS {
             let (fields, _) = crate::config_client::config_projection(*collection, None)?;
             query.push_str(&format!(

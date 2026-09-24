@@ -41,12 +41,15 @@ fn gents_refs(owner: &str, value: serde_json::Value) -> anyhow::Result<()> {
 #[test]
 fn projection_resource_map_preserves_runtime_scope_and_rejects_bad_names() {
     let parsed = parse_projection_resource_map(Some(
-        r#"{"AgentSession":" sessions ","RenderedRequest":"capture"}"#,
+        r#"{"AgentSession":" sessions ","RenderedRequest":"capture","AgentOutputSegment":"output"}"#,
     ))
     .unwrap();
     assert_eq!(parsed["AgentSession"], "sessions");
     assert_eq!(parsed["RenderedRequest"], "capture");
+    assert_eq!(parsed["AgentOutputSegment"], "output");
     for raw in [
+        r#"{"AgentResponse":"output"}"#,
+        r#"{"AgentToolResult":"output"}"#,
         r#"{"UnknownCollection":"sessions"}"#,
         r#"{"AgentMesage":"messages"}"#,
         r#"{"AgentRequest":""}"#,
