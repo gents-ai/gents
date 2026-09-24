@@ -1203,7 +1203,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
             ))
             .await?;
         let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1223,6 +1223,14 @@ async fn terminalize_transaction(
                 durable_state.is_terminal(),
                 "tool terminal contender lost to a non-terminal lifecycle"
             );
+            return Ok(false);
+        }
+        if durable_state == fields.state.as_str()
+            && !terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status)
+        {
+            // The winning terminal may have the same state and rendered text
+            // but a different cause. It still owns the CAS; the caller must
+            // adopt its durable row rather than reject its own lost compare.
             return Ok(false);
         }
     }
@@ -1386,11 +1394,7 @@ async fn terminalize_transaction(
             let durable_state = lifecycle_rows[0]["lifecycle_state"]
                 .as_str()
                 .context("canonical tool delivery replay lifecycle omitted state")?;
-            if durable_state != fields.state.as_str() {
-                anyhow::ensure!(
-                    adopt_competing_terminal,
-                    "canonical tool delivery replay conflicts with terminal lifecycle"
-                );
+            if adopt_competing_terminal && durable_state != fields.state.as_str() {
                 let durable_state = ToolCallState::from_persisted(durable_state)
                     .context("canonical tool delivery replay has unknown lifecycle vocabulary")?;
                 anyhow::ensure!(
@@ -1399,10 +1403,12 @@ async fn terminalize_transaction(
                 );
                 return Ok(false);
             }
-            anyhow::ensure!(
-                terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status),
-                "canonical tool delivery replay conflicts with terminal cause"
-            );
+            if durable_state == fields.state.as_str() {
+                anyhow::ensure!(
+                    terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status),
+                    "canonical tool delivery replay conflicts with terminal cause"
+                );
+            }
 
             let result_payload = match existing.message.blocks.as_slice() {
                 [MessageBlock::ToolResult { parts, .. }]
@@ -2300,10 +2306,15 @@ mod spawned_background_tests {
                     .unwrap());
                 let mut conflicting_cancel =
                     conflicting_cancel.take().expect("cancel cause contender");
-                assert!(conflicting_cancel
+                assert!(!conflicting_cancel
                     .cancel_during_run(CancelCause::UserCancelled)
                     .await
-                    .is_err());
+                    .unwrap());
+                assert_eq!(conflicting_cancel.state, ToolCallState::Cancelled);
+                assert_eq!(
+                    conflicting_cancel.cancel_cause,
+                    Some(CancelCause::Interrupted)
+                );
             }
             let mut after_messages = tool_delivery_rows(&node, &tool.session_id)
                 .await
