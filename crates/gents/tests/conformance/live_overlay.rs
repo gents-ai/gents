@@ -60,9 +60,17 @@ fn queued_steering_traces_are_derived_from_connected_owners() {
             "{} has no generated script",
             case.name
         );
-        assert!(case.accepted_input, "{} lost its signed admission", case.name);
+        assert!(
+            case.accepted_input,
+            "{} lost its signed admission",
+            case.name
+        );
         if matches!(case.lifecycle_state.as_str(), "failed" | "interrupted") {
-            assert_eq!(case.queue_active, None, "{} left terminal work active", case.name);
+            assert_eq!(
+                case.queue_active, None,
+                "{} left terminal work active",
+                case.name
+            );
         }
     }
 }
@@ -72,7 +80,11 @@ fn queued_steering_rejects_incoherent_claim_and_interrupted_publication() {
     let cases = lean_queued_steering_guard_cases();
     assert_eq!(cases.len(), 2);
     for case in cases {
-        assert!(case.prefix_admitted, "case {:?} never reached its rejecting stage", case.name);
+        assert!(
+            case.prefix_admitted,
+            "case {:?} never reached its rejecting stage",
+            case.name
+        );
         assert!(
             !case.admitted,
             "case {:?} was unexpectedly admitted",
