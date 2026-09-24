@@ -1310,6 +1310,9 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
 // receipt never reaches the publication owner. #1630 relies on the existing
 // idempotent transaction retry to reconstruct committed publication; no
 // rollback is simulated and no model policy changes.
+/// Covers native dispatch-start election and one persisted completion after
+/// publication receipt loss. It does not execute an external `ToolDyn` effect
+/// or fault the dispatch transaction's own commit receipt.
 #[tokio::test]
 async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
@@ -1348,7 +1351,7 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
         r#"{{
             AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID sequence }}
             AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal close }}
-            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID lifecycle_state }}
         }}"#
     );
     let before = crate::graphql::graphql_with_transaction_retry(
@@ -1399,7 +1402,97 @@ async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
     let tool_rows = rows["AgentToolCall"].as_array().unwrap();
     assert_eq!(tool_rows.len(), 1);
     assert_eq!(tool_rows[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(tool_rows[0]["lifecycle_state"], "pending");
     assert_eq!(a.accepted_header_doc_id, first.message_doc_id);
+
+    // Both the lost-receipt return and an external replay refer to the same
+    // accepted physical call. Only one can win the real dispatch admission CAS.
+    let deadline = lifecycle.claimed_deadline_at().unwrap();
+    let mut first_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+        node.clone(),
+        lifecycle.request().agent_did.clone(),
+        lifecycle.request().requester_did.clone(),
+        a.clone(),
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .unwrap();
+    let mut replay_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+        node.clone(),
+        lifecycle.request().agent_did.clone(),
+        lifecycle.request().requester_did.clone(),
+        b.clone(),
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .unwrap();
+    let (first_start, replay_start) = tokio::join!(
+        first_dispatch.start_running(),
+        replay_dispatch.start_running(),
+    );
+    assert_ne!(
+        first_start.is_ok(),
+        replay_start.is_ok(),
+        "exactly one accepted handle must win pending-to-running dispatch: first={first_start:?}, replay={replay_start:?}"
+    );
+    let loser_error = if first_start.is_ok() {
+        replay_start.as_ref().unwrap_err()
+    } else {
+        first_start.as_ref().unwrap_err()
+    };
+    assert!(
+        format!("{loser_error:#}").contains("no longer pending"),
+        "the losing handle must be rejected by the physical pending-row fence: {loser_error:#}"
+    );
+    let dispatched = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_after_dispatch_race",
+    )
+    .await
+    .expect("read single dispatched tool row");
+    let dispatched_tools = dispatched.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(dispatched_tools.len(), 1);
+    assert_eq!(dispatched_tools[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(dispatched_tools[0]["lifecycle_state"], "running");
+
+    let winner = if first_start.is_ok() {
+        &mut first_dispatch
+    } else {
+        &mut replay_dispatch
+    };
+    winner
+        .complete("one receipt-loss dispatch result")
+        .await
+        .unwrap();
+    let completed = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_after_single_completion",
+    )
+    .await
+    .expect("read completed tool row");
+    let completed_tools = completed.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(completed_tools.len(), 1);
+    assert_eq!(completed_tools[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(completed_tools[0]["lifecycle_state"], "completed");
+    let output = crate::background_tools::canonical_tool_output(
+        &node,
+        &a.tool_call_doc_id,
+        &lifecycle.request().doc_id,
+        &lifecycle.request().session_id,
+        &lifecycle.request().agent_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, "one receipt-loss dispatch result");
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }
