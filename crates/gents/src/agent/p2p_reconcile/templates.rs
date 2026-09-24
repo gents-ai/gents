@@ -602,6 +602,19 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
     (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
 }
 
+/// Fingerprint of the schemas an enrolled client and its runtime replicate.
+///
+/// Both ends of the `client` route compute this from their own bundled SDLs;
+/// equal values are required for client-authored rows to merge.
+pub fn client_replicated_schema_fingerprint() -> String {
+    gents_protocol::peer_schema::replicated_schema_fingerprint(CLIENT_COLLECTIONS.iter().map(
+        |name| {
+            let sdl = gents_protocol::schemas::sdl_for(name).unwrap_or_default();
+            (*name, sdl)
+        },
+    ))
+}
+
 /// Look up a template by id.  Returns `None` for unknown ids.
 pub fn resolve_template(id: &str) -> Option<&'static ScopeTemplate> {
     BUILTIN_TEMPLATES.iter().find(|t| t.id == id)
@@ -684,6 +697,31 @@ mod tests {
         .collect();
 
         assert!(to_replication_filters(&filters).is_err());
+    }
+
+    #[test]
+    fn client_schema_fingerprint_covers_every_client_route_collection() {
+        let client = resolve_template(CLIENT_TEMPLATE).unwrap();
+        let mut sdls = Vec::new();
+        for name in client.collections {
+            let sdl = gents_protocol::schemas::sdl_for(name)
+                .unwrap_or_else(|| panic!("client route collection {name} has no bundled SDL"));
+            sdls.push((*name, sdl));
+        }
+        assert_eq!(
+            client_replicated_schema_fingerprint(),
+            gents_protocol::peer_schema::replicated_schema_fingerprint(sdls.iter().copied())
+        );
+
+        let session = sdls
+            .iter_mut()
+            .find(|(name, _)| *name == "AgentSession")
+            .expect("client route replicates AgentSession");
+        session.1 = "type AgentSession { skewed: String }";
+        assert_ne!(
+            client_replicated_schema_fingerprint(),
+            gents_protocol::peer_schema::replicated_schema_fingerprint(sdls.iter().copied())
+        );
     }
 
     #[test]

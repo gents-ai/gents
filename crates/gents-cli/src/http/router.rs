@@ -564,6 +564,10 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             },
         };
         map.insert("enrollment".to_string(), json!(enrollment));
+        map.insert(
+            gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD.to_string(),
+            json!(gents::agent::p2p_reconcile::client_replicated_schema_fingerprint()),
+        );
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
 

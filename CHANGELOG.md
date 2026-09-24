@@ -15,6 +15,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- The desktop refuses to enroll with an agent runtime from a different Gents
+  version, and shows "Update required" in the sync status when its managed
+  runtime is a different version, instead of accepting messages the runtime
+  can never receive. Update the app and the runtime to the same version.
 - Desktop startup waits for a background agent that is still booting instead
   of failing, and shows how long it has waited. It fails when the service
   stops, when it keeps exiting (with the exit reason), or after five minutes,

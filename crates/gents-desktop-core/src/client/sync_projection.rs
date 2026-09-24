@@ -17,6 +17,9 @@ pub enum SyncHealthState {
     Syncing,
     Offline,
     Failed,
+    /// A runtime advertises a different replicated schema; no retry or
+    /// reconnect can merge writes until both sides run the same version.
+    Incompatible,
 }
 
 impl SyncHealthState {
@@ -26,6 +29,7 @@ impl SyncHealthState {
             Self::Syncing => "syncing",
             Self::Offline => "offline",
             Self::Failed => "failed",
+            Self::Incompatible => "incompatible",
         }
     }
 }
@@ -48,13 +52,15 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     let transport = &sync.transport;
     let database = sync.database_sync.as_ref();
     let database_error = sync.database_sync_error.as_ref();
+    let schema_skew = sync.runtime_schema_skew.values().next();
     let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
     let offline = is_offline(
         transport.status,
         !sync.peers.is_empty(),
         connected_peer_count,
     );
-    if database.is_none()
+    if schema_skew.is_none()
+        && database.is_none()
         && database_error.is_none()
         && transport.status == P2PHealthStatus::Healthy
         && !offline
@@ -77,7 +83,9 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
             || status.push_backlog.active_jobs > 0
     });
 
-    let state = if failed || database_error.is_some() {
+    let state = if schema_skew.is_some() {
+        SyncHealthState::Incompatible
+    } else if failed || database_error.is_some() {
         SyncHealthState::Failed
     } else if offline {
         SyncHealthState::Offline
@@ -86,7 +94,9 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     } else {
         SyncHealthState::Healthy
     };
-    let last_error = if database_error.is_some() {
+    let last_error = if let Some(skew) = schema_skew {
+        Some(skew.to_string())
+    } else if database_error.is_some() {
         database_error.cloned()
     } else if failed {
         Some("DefraDB quarantined a document DAG that could not be merged".to_string())
@@ -162,6 +172,7 @@ mod tests {
             transport,
             database_sync,
             database_sync_error: None,
+            runtime_schema_skew: Default::default(),
             directory: Vec::new(),
             peers,
         })
@@ -181,6 +192,7 @@ mod tests {
             transport: transport(P2PHealthStatus::Healthy),
             database_sync: None,
             database_sync_error: Some("incompatible sync status".into()),
+            runtime_schema_skew: Default::default(),
             directory: Vec::new(),
             peers: Vec::new(),
         })
@@ -191,6 +203,49 @@ mod tests {
             Some("incompatible sync status")
         );
         assert_eq!(health.pending_dag_count, None);
+    }
+
+    #[test]
+    fn runtime_schema_skew_projects_incompatible_over_every_other_fact() {
+        let skew = gents_protocol::peer_schema::check_replicated_schema(
+            "sha256:app",
+            Some("sha256:runtime"),
+        )
+        .unwrap_err();
+        let health = project_sync_health(&ClientSyncStateSnapshot {
+            transport: transport(P2PHealthStatus::Wedged),
+            database_sync: Some(P2pSyncStatusSnapshot {
+                quarantined_pending_dags: 1,
+                ..P2pSyncStatusSnapshot::default()
+            }),
+            database_sync_error: Some("decode failure".into()),
+            runtime_schema_skew: [("did:test:agent".to_string(), skew.clone())].into(),
+            directory: Vec::new(),
+            peers: vec![peer(false)],
+        })
+        .unwrap();
+        assert_eq!(health.state, SyncHealthState::Incompatible);
+        assert_eq!(health.state.as_str(), "incompatible");
+        assert_eq!(health.last_error, Some(skew.to_string()));
+        assert!(health
+            .last_error
+            .unwrap()
+            .contains("update the app and the runtime to the same version"));
+        assert_eq!(health.quarantined_dag_count, Some(1));
+
+        let before_database_observation = project_sync_health(&ClientSyncStateSnapshot {
+            transport: transport(P2PHealthStatus::Healthy),
+            database_sync: None,
+            database_sync_error: None,
+            runtime_schema_skew: [("did:test:agent".to_string(), skew)].into(),
+            directory: Vec::new(),
+            peers: Vec::new(),
+        })
+        .expect("schema skew is visible before the first database observation");
+        assert_eq!(
+            before_database_observation.state,
+            SyncHealthState::Incompatible
+        );
     }
 
     #[test]

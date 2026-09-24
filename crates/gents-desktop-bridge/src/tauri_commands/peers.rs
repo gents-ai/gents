@@ -58,14 +58,7 @@ pub async fn desktop_peer_enroll_status(
         .map(str::trim)
         .filter(|label| !label.is_empty())
         .map(str::to_owned);
-    let token = status
-        .pointer("/enrollment/token")
-        .and_then(serde_json::Value::as_str)
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| {
-            BridgeError::untyped("server does not advertise authenticated status enrollment")
-        })?;
-    core.request_status_enrollment_with_label(token, server_label.as_deref())
+    core.request_status_enrollment_with_label(&status, server_label.as_deref())
         .await
         .map(|result| {
             let mut view = EnrollmentRequestView::from(result);

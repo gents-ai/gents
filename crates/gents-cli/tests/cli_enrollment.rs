@@ -79,7 +79,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
             wait_for_runtime_ready(&graphql, &agent_did, Duration::from_secs(30)).await?;
 
             let status_url = format!("http://127.0.0.1:{port}");
-            let (status, offer_token) = wait_for_enrollment_token(&status_url).await?;
+            let (status, _) = wait_for_enrollment_token(&status_url).await?;
             assert_eq!(
                 status.get("agent_name").and_then(Value::as_str),
                 Some(agent_name.as_str())
@@ -97,7 +97,7 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
             .context("starting fresh desktop ClientCore")?;
 
             let pending = core
-                .request_status_enrollment_with_label(&offer_token, Some(&agent_name))
+                .request_status_enrollment_with_label(&status, Some(&agent_name))
                 .await
                 .context("requesting status enrollment from /status offer")?;
             assert_eq!(pending.state, "pending_approval");

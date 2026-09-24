@@ -9,7 +9,7 @@ mod writes;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::sync::RwLock as StdRwLock;
@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use defra_p2p_adapter::P2POperations as P2POps;
 use gents::P2pSyncStatusSnapshot;
+use gents_protocol::peer_schema::ReplicatedSchemaSkew;
 use p2p::iroh::{IrohDiscoveryConfig, IrohRelayModeConfig};
 use tokio::sync::{mpsc, watch, Mutex};
 use tokio::task::JoinHandle;
@@ -310,6 +311,10 @@ pub struct ClientSyncStateSnapshot {
     pub database_sync: Option<P2pSyncStatusSnapshot>,
     /// Decode failure from the database's current sync-status envelope.
     pub database_sync_error: Option<String>,
+    /// Runtimes, by agent DID, whose advertised replicated schema differs
+    /// from this build's. DefraDB accepts the connection but never merges
+    /// either side's writes, so this is the only visible signal.
+    pub runtime_schema_skew: BTreeMap<String, ReplicatedSchemaSkew>,
     /// The exact durable configured-peer revision that caused this snapshot.
     /// Bridge projections consume this copy instead of racing a second
     /// directory read after receiving a sync update.

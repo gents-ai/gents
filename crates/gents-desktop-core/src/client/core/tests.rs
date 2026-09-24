@@ -1081,3 +1081,49 @@ async fn observer_metrics_returns_snapshot() {
         "observer metrics should be None after shutdown"
     );
 }
+
+#[tokio::test]
+async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync() {
+    use crate::client::paths::DesktopPaths;
+    use crate::client::{project_sync_health, SyncHealthState};
+    use gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+    let skewed = serde_json::json!({
+        "enrollment": { "token": "unused-offer" },
+        STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD: "sha256:other-release",
+    });
+
+    let error = format!(
+        "{:#}",
+        core.request_status_enrollment(&skewed).await.unwrap_err()
+    );
+    assert!(
+        error.contains("update the app and the runtime to the same version"),
+        "{error}"
+    );
+    assert!(core.sync_state().runtime_schema_skew.is_empty());
+
+    core.observe_runtime_schema("did:key:runtime", &skewed)
+        .unwrap_err();
+    let health = project_sync_health(&core.sync_state()).expect("skew is visible");
+    assert_eq!(health.state, SyncHealthState::Incompatible);
+    assert!(health
+        .last_error
+        .as_deref()
+        .is_some_and(|error| error.contains("sha256:other-release")));
+
+    let matching = serde_json::json!({
+        STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD:
+            gents::agent::p2p_reconcile::client_replicated_schema_fingerprint(),
+    });
+    core.observe_runtime_schema("did:key:runtime", &matching)
+        .expect("same build is compatible");
+    assert!(core.sync_state().runtime_schema_skew.is_empty());
+
+    core.shutdown().await.expect("shutdown");
+}

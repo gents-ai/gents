@@ -1528,6 +1528,17 @@ async fn ensure_managed_runtime_pairing(
     agent_home: &std::path::Path,
     target: &ManagedPairingTarget,
 ) -> Result<(), String> {
+    let mut status_url = reqwest::Url::parse(&target.graphql)
+        .map_err(|error| format!("parsing managed runtime GraphQL URL: {error}"))?;
+    status_url.set_path("/status");
+    status_url.set_query(None);
+    status_url.set_fragment(None);
+    let status = fetch_runtime_connection_payload(status_url.as_str())
+        .await
+        .map_err(|error| format!("loading managed runtime status: {error:#}"))?;
+    core.observe_runtime_schema(&target.agent_did, &status)
+        .map_err(|error| format!("{error:#}"))?;
+
     if core.peer_records().await.iter().any(|peer| {
         peer.agent_did == target.agent_did
             && peer.is_enrollment()
@@ -1537,21 +1548,8 @@ async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
-    let mut status_url = reqwest::Url::parse(&target.graphql)
-        .map_err(|error| format!("parsing managed runtime GraphQL URL: {error}"))?;
-    status_url.set_path("/status");
-    status_url.set_query(None);
-    status_url.set_fragment(None);
-    let status = fetch_runtime_connection_payload(status_url.as_str())
-        .await
-        .map_err(|error| format!("loading managed runtime enrollment offer: {error:#}"))?;
-    let token = status
-        .pointer("/enrollment/token")
-        .and_then(serde_json::Value::as_str)
-        .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "managed runtime did not advertise an enrollment offer".to_string())?;
     let enrollment = core
-        .request_status_enrollment_with_label(token, Some(&target.agent_name))
+        .request_status_enrollment_with_label(&status, Some(&target.agent_name))
         .await
         .map_err(|error| format!("requesting managed runtime enrollment: {error:#}"))?;
 

@@ -4,6 +4,7 @@ use tokio::sync::watch;
 use tokio::sync::RwLock;
 
 use gents::P2pSyncStatusSnapshot;
+use gents_protocol::peer_schema::{check_replicated_schema, ReplicatedSchemaSkew};
 
 use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
 #[cfg(test)]
@@ -69,6 +70,7 @@ impl ClientSyncStateOwner {
             transport,
             database_sync: None,
             database_sync_error: None,
+            runtime_schema_skew: BTreeMap::new(),
             directory: records,
             peers,
         });
@@ -306,6 +308,28 @@ impl ClientSyncStateOwner {
         });
     }
 
+    /// Record the replicated schema a runtime advertises. Only a compatible
+    /// advertisement from the same runtime clears an earlier skew.
+    pub(super) fn observe_runtime_schema(
+        &self,
+        runtime_did: &str,
+        advertised: Option<&str>,
+    ) -> Result<(), ReplicatedSchemaSkew> {
+        let local = gents::agent::p2p_reconcile::client_replicated_schema_fingerprint();
+        let observed = check_replicated_schema(&local, advertised);
+        self.tx.send_if_modified(|state| match &observed {
+            Ok(()) => state.runtime_schema_skew.remove(runtime_did).is_some(),
+            Err(skew) => {
+                state
+                    .runtime_schema_skew
+                    .insert(runtime_did.to_string(), skew.clone())
+                    .as_ref()
+                    != Some(skew)
+            }
+        });
+        observed
+    }
+
     /// Patch one diagnostic only while both the durable peer generation and
     /// the previously observed diagnostic still match. Delayed projection
     /// work cannot use this path to overwrite newer supervisor state.
@@ -541,6 +565,47 @@ mod tests {
                 "{name} retained a direct PeerDirectory mutation seam"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_skew_is_published_until_that_runtime_matches() {
+        let (_tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
+        let mut updates = owner.subscribe();
+        let local = gents::agent::p2p_reconcile::client_replicated_schema_fingerprint();
+
+        let skew = owner
+            .observe_runtime_schema("did:key:runtime", Some("sha256:other"))
+            .unwrap_err();
+        assert_eq!(skew.remote.as_deref(), Some("sha256:other"));
+        assert!(updates.has_changed().unwrap());
+        assert_eq!(
+            updates
+                .borrow_and_update()
+                .runtime_schema_skew
+                .get("did:key:runtime"),
+            Some(&skew)
+        );
+
+        owner
+            .observe_runtime_schema("did:key:runtime", Some("sha256:other"))
+            .unwrap_err();
+        assert!(
+            !updates.has_changed().unwrap(),
+            "same skew is not republished"
+        );
+
+        owner
+            .observe_runtime_schema("did:key:other-runtime", Some(&local))
+            .unwrap();
+        assert!(owner
+            .snapshot()
+            .runtime_schema_skew
+            .contains_key("did:key:runtime"));
+
+        owner
+            .observe_runtime_schema("did:key:runtime", Some(&local))
+            .unwrap();
+        assert!(owner.snapshot().runtime_schema_skew.is_empty());
     }
 
     #[tokio::test]

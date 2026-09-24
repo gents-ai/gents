@@ -7,6 +7,7 @@ use defra_p2p_adapter::{
     P2PError, P2POperations as P2POps, P2pDocumentRequest, ReplicationFilter, TransportPeerId,
 };
 use futures::{stream, StreamExt};
+use gents::agent::p2p_reconcile::client_replicated_schema_fingerprint;
 use gents::agent::p2p_reconcile::enrollment::{
     AuthorizationRevision as PureRevision, AuthorizationRevisionKind as PureRevisionKind,
     DurableEnrollmentDocuments, EnrollmentDecision as PureDecision,
@@ -23,6 +24,9 @@ use gents_protocol::enrollment::{
     ENROLLMENT_PROTOCOL_VERSION,
 };
 use gents_protocol::network_token::EndpointRecord;
+use gents_protocol::peer_schema::{
+    check_replicated_schema, STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD,
+};
 use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
@@ -33,6 +37,12 @@ use super::super::principal_identity::PrincipalIdentity;
 use super::route_manager::ClientRouteManager;
 use super::sync_state::ClientSyncStateOwner;
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
+
+fn advertised_replicated_schema(status: &Value) -> Option<&str> {
+    status
+        .get(STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD)
+        .and_then(Value::as_str)
+}
 
 pub(super) async fn current_local_endpoint(
     p2p: &Arc<dyn P2POps>,
@@ -73,19 +83,38 @@ struct AdminPinRow {
 }
 
 impl ClientCore {
+    /// Record whether the runtime `runtime_did` serving `status` replicates
+    /// the same schemas as this app; a mismatch stays visible in sync health.
+    pub fn observe_runtime_schema(&self, runtime_did: &str, status: &Value) -> Result<()> {
+        self.sync_state
+            .observe_runtime_schema(runtime_did, advertised_replicated_schema(status))
+            .context("runtime cannot sync with this app")
+    }
+
+    /// Author an enrollment request from a runtime's `/status` payload.
     pub async fn request_status_enrollment(
         &self,
-        offer_token: &str,
+        status: &Value,
     ) -> Result<EnrollmentRequestResult> {
-        self.request_status_enrollment_with_label(offer_token, None)
+        self.request_status_enrollment_with_label(status, None)
             .await
     }
 
     pub async fn request_status_enrollment_with_label(
         &self,
-        offer_token: &str,
+        status: &Value,
         advertised_label: Option<&str>,
     ) -> Result<EnrollmentRequestResult> {
+        let offer_token = status
+            .pointer("/enrollment/token")
+            .and_then(Value::as_str)
+            .filter(|token| !token.trim().is_empty())
+            .context("server does not advertise authenticated status enrollment")?;
+        check_replicated_schema(
+            &client_replicated_schema_fingerprint(),
+            advertised_replicated_schema(status),
+        )
+        .context("refusing to enroll with an incompatible runtime")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
         anyhow::ensure!(
             offer.schema_fingerprint == enrollment_schema_fingerprint(),
