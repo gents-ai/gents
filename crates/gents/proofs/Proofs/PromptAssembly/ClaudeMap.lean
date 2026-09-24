@@ -20,9 +20,10 @@ The runtime's `toolu_*` → `Nat` injection is a separate plumbing obligation
 
 namespace PromptAssembly.ClaudeMap
 
-/-- Only explicit supported effort enters the Messages body. Arbitrary extra
-parameters and absent settings cannot enable thinking. Catalog support is an
-adapter fact; the serializer narrows to the provider's effort vocabulary. -/
+/-- Only explicit supported effort is emitted by this mapper; absent settings
+emit no thinking configuration. Provider defaults and capability policy are
+outside this mapper. Catalog support is an adapter fact; the serializer narrows
+to the provider's effort vocabulary. -/
 def selectedEffort (supported : Option (List String)) (requested : Option String) : Option String :=
   supported.bind fun choices =>
     requested.filter (fun value => value ∈ choices && value ∈ ["low", "medium", "high", "xhigh", "max"])
@@ -66,7 +67,6 @@ inductive MapError where
   | malformedRedacted
   | unsupportedReasoning
   | unsupportedReplayBlock
-  | missingCallId
   deriving DecidableEq, Repr
 
 def errorName : MapError → String
@@ -82,7 +82,6 @@ def errorName : MapError → String
   | .malformedRedacted => "malformedRedacted"
   | .unsupportedReasoning => "unsupportedReasoning"
   | .unsupportedReplayBlock => "unsupportedReplayBlock"
-  | .missingCallId => "missingCallId"
 
 def blockTag : Block → String
   | .text => "text"
@@ -281,7 +280,7 @@ inductive StreamEvent where
   | start (id : ToolCallId) (name : String) (input : Option String)
   | delta (fragment : String)
   | stop
-  | thinkingStart (index : Nat)
+  | thinkingStart (index : Nat) (initialText : String)
   | thinkingDelta (index : Nat) (fragment : String)
   | signatureDelta (index : Nat) (fragment : String)
   | redactedStart (index : Nat) (data : String)
@@ -397,10 +396,10 @@ def step (surface : Surface) (st : StreamState) : StreamEvent → Except MapErro
     | some (.tool p) => .ok { st with pending := some (.tool { p with deltas := fragment :: p.deltas }) }
     | _ => .error .wrongBlock
   | .stop => flush surface st
-  | .thinkingStart index =>
+  | .thinkingStart index initialText =>
       if st.pending.isSome then .error .wrongBlock
       else if st.lastIndexedBlock.any (index ≤ ·) then .error (.wrongIndex index)
-      else .ok { st with pending := some (.thinking index [] [] false) }
+      else .ok { st with pending := some (.thinking index [initialText] [] false) }
   | .thinkingDelta index fragment =>
       match st.pending with
       | some (.thinking current text signature started) =>
@@ -462,7 +461,7 @@ inductive ReplayBlock where
   | text (payload : List UInt8)
   | signedThinking (payload : List UInt8) (signature : String)
   | redactedThinking (payload : List UInt8)
-  | toolUse (callId name : String) (arguments : List UInt8)
+  | toolUse (id name : String) (arguments : List UInt8)
   deriving DecidableEq, Repr
 
 def replayPart : CanonicalOutput.ReasoningPart (List UInt8) →
@@ -478,11 +477,11 @@ def replayPart : CanonicalOutput.ReasoningPart (List UInt8) →
 
 def replayBlock : CanonicalOutput.MessageBlock (List UInt8) →
     Except MapError (List ReplayBlock)
-  | .text payload => .ok [.text payload]
+  | .text payload =>
+      if payload.isEmpty then .ok [] else .ok [.text payload]
   | .reasoning _ parts => parts.mapM replayPart
-  | .toolCall _ _ (some callId) name arguments _ _ =>
-      .ok [.toolUse callId name arguments]
-  | .toolCall _ _ none _ _ _ _ => .error .missingCallId
+  | .toolCall _ id _ name arguments _ _ =>
+      .ok [.toolUse id name arguments]
   | .toolResult .. | .media .. => .error .unsupportedReplayBlock
 
 def replayBlocks (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
@@ -505,6 +504,15 @@ theorem replay_reasoning_parts_in_order
     (parts : List (CanonicalOutput.ReasoningPart (List UInt8))) :
     replayBlocks [.reasoning none parts] = parts.mapM replayPart := by
   simp [replayBlocks, replayBlock]
+
+theorem replay_empty_ordinary_text_is_omitted :
+    replayBlocks [.text []] = .ok [] := by
+  rfl
+
+theorem replay_assistant_media_fails_closed :
+    replayBlocks [.media { kind := .image, data := .unknown }] =
+      .error .unsupportedReplayBlock := by
+  rfl
 
 /-- `Except` ships no `DecidableEq`; the `runStream` witnesses below decide
 equality on `Except MapError (List (ToolCallId × String))`. -/
@@ -547,22 +555,35 @@ theorem runStream_unterminated_flushes :
   native_decide
 
 theorem signed_thinking_fragments_seal_once :
-    runContentStream {} [.thinkingStart 0, .thinkingDelta 0 "考",
+    runContentStream {} [.thinkingStart 0 "", .thinkingDelta 0 "考",
       .thinkingDelta 0 "慮", .signatureDelta 0 "署", .signatureDelta 0 "名",
       .contentStop 0] =
       .ok [.reasoning [.text "考慮" (some "署名")]] := by
   native_decide
 
 theorem provisional_thinking_keeps_previous_bytes :
-    (runContentTrace {} [.thinkingStart 0, .thinkingDelta 0 "考",
+    (runContentTrace {} [.thinkingStart 0 "", .thinkingDelta 0 "考",
       .thinkingDelta 0 "慮", .signatureDelta 0 "署", .signatureDelta 0 "名",
       .contentStop 0]).map (fun result => result.1.map (·.provisionalThinking)) =
       .ok [some "", some "考", some "考慮", some "考慮", some "考慮", none] := by
   native_decide
 
 theorem empty_thinking_text_keeps_signature :
-    runContentStream {} [.thinkingStart 0, .signatureDelta 0 "sig", .contentStop 0] =
+    runContentStream {} [.thinkingStart 0 "", .signatureDelta 0 "sig", .contentStop 0] =
       .ok [.reasoning [.text "" (some "sig")]] := by
+  native_decide
+
+theorem initial_thinking_text_precedes_deltas :
+    runContentStream {} [.thinkingStart 0 "初", .thinkingDelta 0 "続",
+      .signatureDelta 0 "sig", .contentStop 0] =
+      .ok [.reasoning [.text "初続" (some "sig")]] := by
+  native_decide
+
+theorem initial_thinking_text_is_provisional :
+    (runContentTrace {} [.thinkingStart 0 "初", .thinkingDelta 0 "続",
+      .signatureDelta 0 "sig", .contentStop 0]).map
+      (fun result => result.1.map (·.provisionalThinking)) =
+      .ok [some "初", some "初続", some "初続", none] := by
   native_decide
 
 theorem redacted_before_tool_keeps_order :
@@ -573,18 +594,18 @@ theorem redacted_before_tool_keeps_order :
   native_decide
 
 theorem unsigned_thinking_does_not_seal :
-    runContentStream {} [.thinkingStart 0, .thinkingDelta 0 "text", .contentStop 0] =
+    runContentStream {} [.thinkingStart 0 "", .thinkingDelta 0 "text", .contentStop 0] =
       .error .missingSignature := by
   native_decide
 
 theorem thinking_eof_is_not_tool_eof_flush :
-    runContentStream {} [.thinkingStart 0, .signatureDelta 0 "sig"] =
+    runContentStream {} [.thinkingStart 0 "", .signatureDelta 0 "sig"] =
       .error .incompleteBlock := by
   native_decide
 
 theorem replay_preserves_ordered_reasoning_parts :
     replayBlocks [.reasoning none [.text [65] (some "sig"), .redacted [66]],
-      .toolCall 1 "tool" (some "call-1") "echo" [123, 125] none none] =
+      .toolCall 1 "call-1" none "echo" [123, 125] none none] =
       .ok [.signedThinking [65] "sig", .redactedThinking [66],
            .toolUse "call-1" "echo" [123, 125]] := by
   native_decide
