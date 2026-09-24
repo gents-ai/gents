@@ -127,6 +127,65 @@ describe("BehaviorPicker popover lifetime", () => {
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
+  it("opens the create sheet only after the picker has closed", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await screen.findByRole("dialog", { name: "Choose behavior" });
+    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
+
+    // The closing picker stays mounted for its exit; the sheet must wait.
+    expect(screen.getByRole("dialog", { name: "Choose behavior" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("dialog", { name: "New behavior" }),
+    ).not.toBeInTheDocument();
+
+    await acknowledgeClose();
+    expect(await screen.findByRole("dialog", { name: "New behavior" })).toBeVisible();
+    expect(
+      screen.queryByRole("dialog", { name: "Choose behavior" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("lets a popover opened during the picker's exit take the turn from create", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await screen.findByRole("dialog", { name: "Choose behavior" });
+    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
+    await user.click(screen.getByRole("button", { name: /Show sync diagnostics/ }));
+
+    await acknowledgeClose();
+    expect(
+      await screen.findByRole("dialog", { name: "Database sync details" }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("dialog", { name: "New behavior" }),
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("withdraws a pending create when the picker is reopened during its exit", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await screen.findByRole("dialog", { name: "Choose behavior" });
+    await user.click(screen.getByRole("button", { name: /Create new behavior/ }));
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    expect(screen.getByRole("dialog", { name: "Choose behavior" })).toBeVisible();
+
+    // The next ordinary close must not replay the withdrawn create.
+    await user.click(screen.getByRole("button", { name: "Behavior" }));
+    await acknowledgeClose();
+    expect(
+      screen.queryByRole("dialog", { name: "New behavior" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("dialog")).toHaveLength(0);
+  });
+
   it("cancels a pending picker when its chosen behavior disappears", async () => {
     const user = userEvent.setup();
     const view = render(<Harness />);
