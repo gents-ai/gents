@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
 use crate::defra_node::{EmbeddedNode, P2PConfig, QueryResponse};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::{ensure_runtime_schemas, AgentIdentity, DocumentRuntimeOptions, Gents, KeyIdentity};
 
 // A full conformance run starts many embedded DefraDB nodes in parallel. On a
@@ -313,7 +313,7 @@ async fn fetch_runtime_snapshot(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
+    let response = graphql_with_transaction_retry(node, &query, "runtime snapshot").await?;
     let Some(diagnostic) =
         optional_row::<gents_protocol::row::AgentRuntimeRow>(&response, "AgentRuntime")?
     else {
@@ -353,10 +353,8 @@ async fn fetch_behavior_readiness_snapshot(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!("behavior readiness query failed: {:?}", response.errors);
-    }
+    let response =
+        graphql_with_transaction_retry(node, &query, "behavior readiness snapshot").await?;
     Ok(response
         .data
         .as_ref()
