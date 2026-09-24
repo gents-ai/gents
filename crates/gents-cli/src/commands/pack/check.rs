@@ -109,7 +109,9 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
             Ok(config) => {
                 if manifest.metadata.kind == PackKind::Graph {
                     match gents::graph_package::check_graph_pack(&archive, PLACEHOLDER_OWNER) {
-                        Ok(graphs) => report.graphs = graphs,
+                        Ok(plans) => {
+                            report.graphs = plans.into_iter().map(|plan| plan.graph_id).collect()
+                        }
                         Err(error) => report.problems.push(format!("{error:#}")),
                     }
                     check_topology(dir, &config, &mut report.problems);

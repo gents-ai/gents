@@ -313,6 +313,9 @@ async fn prepare_package(
         &options.agent_did,
         &CompilerPolicy::default(),
     )?;
+    super::catalog::verify_shipped_plan(&base, &|path| {
+        package.asset(path).ok().map(<[u8]>::to_vec)
+    })?;
     let mut artifacts = Vec::new();
     for document in desired_state.documents() {
         artifacts.push(PlannedPackageArtifact {

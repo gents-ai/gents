@@ -219,6 +219,9 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
     )
     .context("writing manifest.json")?;
     if template == PackTemplate::Graph {
+        let manifest: gents::pack::PackManifest =
+            serde_json::from_slice(&std::fs::read(dir.join("manifest.json"))?)?;
+        super::build::build_graph_plans(dir, &manifest)?;
         super::check::write_topology(dir)?;
     }
 
@@ -511,6 +514,29 @@ mod tests {
                 assert_eq!(check.graphs, vec!["review-toolkit".to_owned()]);
             }
         }
+    }
+
+    /// A shipped plan that is not what this build compiles is refused by
+    /// name, the same way install refuses it.
+    #[tokio::test]
+    async fn a_shipped_plan_that_differs_from_compilation_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("review_toolkit");
+        scaffold(&dir, "review_toolkit", &options(PackTemplate::Graph)).unwrap();
+        let plan_path = dir.join("graphs/review_toolkit.plan.json");
+        let mut plan: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&plan_path).unwrap()).unwrap();
+        plan["digest"] = "sha256:0".into();
+        std::fs::write(&plan_path, serde_json::to_vec_pretty(&plan).unwrap()).unwrap();
+        let report = super::super::check::check_dir(&dir).await;
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|problem| problem.contains("rebuild the pack")),
+            "{:#?}",
+            report.problems
+        );
     }
 
     #[tokio::test]

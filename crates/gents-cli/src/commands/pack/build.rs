@@ -88,6 +88,9 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
     for plugin in &manifest.metadata.plugins {
         build_plugin(dir, &manifest, plugin)?;
     }
+    if manifest.metadata.kind == gents::pack::PackKind::Graph {
+        build_graph_plans(dir, &manifest)?;
+    }
 
     let out_dir = match out.and_then(Path::parent) {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
@@ -141,6 +144,67 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
             })
             .collect(),
     })
+}
+
+/// Compiles every graph the pack declares and writes each plan to
+/// `graphs/<graph_id>.plan.json`, declaring it in `manifest.json` when it is
+/// not yet, so the pack digest covers the plan install will verify.
+pub(crate) fn build_graph_plans(dir: &Path, manifest: &PackManifest) -> Result<()> {
+    let plans = gents::graph_package::compile_pack_graphs(
+        manifest,
+        &|path| std::fs::read(dir.join(path)).with_context(|| format!("reading {path}")),
+        "did:key:zPackBuildPlaceholderOwner",
+    )?;
+    let mut missing = Vec::new();
+    for plan in &plans {
+        let path = gents::graph_package::graph_plan_path(&plan.graph_id);
+        let target = dir.join(&path);
+        std::fs::create_dir_all(target.parent().context("plan path has no parent")?)?;
+        write_if_changed(
+            &target,
+            (serde_json::to_string_pretty(plan)? + "\n").as_bytes(),
+        )?;
+        if !manifest.metadata.assets.contains(&path) {
+            missing.push(path);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let manifest_path = dir.join("manifest.json");
+    let text = std::fs::read_to_string(&manifest_path).context("reading manifest.json")?;
+    // Appended: the author's order stays, and the digest sorts anyway.
+    let mut assets = manifest.metadata.assets.clone();
+    assets.extend(missing);
+    std::fs::write(&manifest_path, replace_assets(&text, &assets)?).context("writing manifest.json")
+}
+
+/// `text` with its top-level `"assets"` list replaced by `assets`, one per
+/// line at the list's own indentation; nothing else in the file moves.
+fn replace_assets(text: &str, assets: &[String]) -> Result<String> {
+    let key = text
+        .find("\"assets\"")
+        .context("manifest.json has no assets list")?;
+    let open = key
+        + text[key..]
+            .find('[')
+            .context("manifest.json assets is not a list")?;
+    let close = open
+        + text[open..]
+            .find(']')
+            .context("manifest.json assets list is not closed")?;
+    let line_start = text[..key].rfind('\n').map_or(0, |i| i + 1);
+    let indent = &text[line_start..key];
+    let items = assets
+        .iter()
+        .map(|asset| format!("{indent}  {}", serde_json::Value::from(asset.as_str())))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    Ok(format!(
+        "{}[\n{items}\n{indent}]{}",
+        &text[..open],
+        &text[close + 1..]
+    ))
 }
 
 /// Makes sure one plugin's artifact exists on disk before the pack is
@@ -479,6 +543,17 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("is not a directory"), "{message}");
+    }
+
+    #[test]
+    fn declaring_a_plan_touches_only_the_assets_list() {
+        let text = "{\n  \"name\": \"x\",\n  \"assets\": [\n    \"README.md\"\n  ],\n  \"kind\": \"graph\"\n}\n";
+        let updated =
+            replace_assets(text, &["README.md".into(), "graphs/x.plan.json".into()]).unwrap();
+        assert_eq!(
+            updated,
+            "{\n  \"name\": \"x\",\n  \"assets\": [\n    \"README.md\",\n    \"graphs/x.plan.json\"\n  ],\n  \"kind\": \"graph\"\n}\n"
+        );
     }
 
     /// A second build of unchanged source reuses the artifact; a source edit
