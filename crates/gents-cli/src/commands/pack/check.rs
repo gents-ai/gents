@@ -242,11 +242,10 @@ async fn check_filters(
             "{{ {}(filter: {filter}, limit: 1) {{ _docID }} }}",
             source.source_collection
         );
-        let response = node.execute(&query).await;
-        if let Some(error) = response.errors.first() {
+        if let Err(error) = access.execute(&query).await {
             problems.push(format!(
-                "event source {} filter is not valid on {}: {}",
-                source.event_source_id, source.source_collection, error.message
+                "event source {} filter is not valid on {}: {error:#}",
+                source.event_source_id, source.source_collection
             ));
         }
     }
