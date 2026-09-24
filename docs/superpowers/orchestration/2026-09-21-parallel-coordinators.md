@@ -349,3 +349,13 @@ removed first (clean, pushed) so every branch is free to check out.
   light gate clean.
 - 2026-09-24 rebase: tip 6 `feat/eval-cli` `e5a9b4363` → `07ac76bc6`; no conflicts; bindings
   commit applied cleanly; light gate plus the bindings drift test clean.
+- 2026-09-24 rebase: tip 7 `feat/eval-init-wizard` `524843870` → `a7f807c26`, full gate: fmt,
+  Lean scripts, packs, `lake build` + importClosure, workspace check, wasm, bindings drift all
+  clean; gents+gents-loop 3624 passed / 2 failed (main's e2e_subagent failure, and
+  `write_owner_structure::production_defradb_node_execution_only_shrinks`, ours: main `a64d985f2`'s
+  ratchet flagged two direct `node.execute` reads in `EmbeddedHome`); gents-cli 1226 passed / 4
+  known environmental. Fix `b891c78d7` at tip 3 (10 lines) routes the readiness reads through
+  `graphql_with_transaction_retry`; tips 4 to 7 restacked: 4 `91f207aa3`, 5 `3c609d221`,
+  6 `69dc8cdff`, 7 `a7f807c26`. Wizard conflicts: Cargo.toml (jsonschema, async-trait as normal
+  deps; main's wait-timeout and futures kept), chat visibility; `turn.rs` now reads replies through
+  main's `chat_turn_text_content` and passes `verbose=false` to `stream_turn_progress`.
