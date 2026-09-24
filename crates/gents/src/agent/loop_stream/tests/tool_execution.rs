@@ -135,12 +135,18 @@ async fn policy_rejection_settles_pending_call_without_dispatch_election() {
             let stream = run_loop_stream(
                 model,
                 Some(hook.clone()),
-                Message::user("remove everything"),
+                TaggedMessage::unassociated(Message::user("remove everything")),
                 Vec::new(),
                 Arc::new(tools),
                 owned_config(4),
             );
-            let collect = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle);
+            let collect = collect_owned_scripted_stream(
+                stream,
+                &hook,
+                &writer,
+                &mut lifecycle,
+                gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+            );
             let (collected, fired) =
                 crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss_for_operation(
                     Some("tool_call.start_running_canonical"),
