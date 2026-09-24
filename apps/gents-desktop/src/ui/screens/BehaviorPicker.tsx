@@ -65,6 +65,8 @@ function MountedBehaviorPicker({
   /* search is hidden until asked for: the icon in the footer, or typing */
   const [searching, setSearching] = useState(false);
   const [creating, setCreating] = useState(false);
+  /* the create sheet waits for the popover's exit animation: one dialog at a time */
+  const createAfterClose = useRef(false);
   const popover = useExclusivePopover(() => {
     setQuery("");
     setSearching(false);
@@ -89,7 +91,13 @@ function MountedBehaviorPicker({
       <Popover
         open={popover.open}
         onOpenChange={popover.onOpenChange}
-        onOpenChangeComplete={popover.onOpenChangeComplete}
+        onOpenChangeComplete={(next) => {
+          popover.onOpenChangeComplete(next);
+          if (!next && createAfterClose.current) {
+            createAfterClose.current = false;
+            setCreating(true);
+          }
+        }}
       >
         <PopoverTrigger
           render={
@@ -221,8 +229,8 @@ function MountedBehaviorPicker({
               type="button"
               onClick={() => {
                 /* a draft behavior beside the session; saved enabled and chosen */
+                createAfterClose.current = true;
                 popover.onOpenChange(false);
-                setCreating(true);
               }}
               className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-2 text-left text-sm hover:bg-accent"
             >
