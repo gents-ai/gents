@@ -343,3 +343,5 @@ removed first (clean, pushed) so every branch is free to check out.
   test runs every observe query against an embedded home's schema. Eval lib 96/0, embedded canary
   10/0 (was 8/2). Behavior note: tool-call evidence now spans the request plus its direct children
   (main's timeline scope); no shipped check reads it yet.
+- 2026-09-24 rebase: tip 4 `feat/optimization-policy` `b146bc35e` → `c05efe035`; one conflict
+  (conformance_consumers.rs, policy consumer kept); light gate clean including `lake build`.
