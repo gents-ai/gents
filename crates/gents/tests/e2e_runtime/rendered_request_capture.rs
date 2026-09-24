@@ -1332,6 +1332,12 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let boundary_json = serde_json::to_string(&boundary).unwrap();
     let empty_prefix_json = serde_json::to_string(&Vec::<Message>::new()).unwrap();
     let checkpoint_json = serde_json::to_string(&request_local_checkpoint).unwrap();
+    let replay_associations_json = serde_json::json!({
+        "required": [],
+        "prefix_sources": [],
+        "retained_sources": [null],
+    })
+    .to_string();
     let fixture = format!(
         r#"mutation {{ create_ProviderContextReduction(input: {{
             reduction_key: "{reduction_key}"
@@ -1351,6 +1357,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
             retained_suffix_json: "{checkpoint_json}"
             pair_closed: true
             checkpoint_messages_json: "{checkpoint_json}"
+            replay_associations_json: "{replay_associations_json}"
             summary: ""
             messages_compacted: 0
             original_tokens: 10
@@ -1365,6 +1372,7 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
         boundary_json = gents::graphql::escape_graphql_string(&boundary_json),
         empty_prefix_json = gents::graphql::escape_graphql_string(&empty_prefix_json),
         checkpoint_json = gents::graphql::escape_graphql_string(&checkpoint_json),
+        replay_associations_json = gents::graphql::escape_graphql_string(&replay_associations_json),
     );
     let response = db.node.execute(&fixture).await;
     assert!(

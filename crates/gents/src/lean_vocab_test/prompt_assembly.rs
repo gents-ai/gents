@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use super::LeanCanonicalCoordinate;
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCurrentInputHeader {
@@ -25,6 +27,23 @@ pub(crate) struct LeanPromptAssemblyItem {
     pub(crate) value: u64,
 }
 
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LeanAssistantOrderMode {
+    Grouped,
+    NativePreserved,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyAssistantOrderCase {
+    pub(crate) name: String,
+    pub(crate) order_mode: LeanAssistantOrderMode,
+    pub(crate) input: Vec<LeanPromptAssemblyItem>,
+    pub(crate) expected: Vec<LeanPromptAssemblyItem>,
+    pub(crate) expected_twice: Vec<LeanPromptAssemblyItem>,
+}
+
 /// One provider-bound row: the abstract transcript row plus its content.
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanPromptAssemblyRow {
@@ -32,6 +51,16 @@ pub(crate) struct LeanPromptAssemblyRow {
     pub(crate) kind: String,
     pub(crate) call_ids: Vec<u64>,
     pub(crate) content: Vec<LeanPromptAssemblyItem>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyModeSanitizeCase {
+    pub(crate) name: String,
+    pub(crate) order_mode: LeanAssistantOrderMode,
+    pub(crate) input: Vec<LeanPromptAssemblyRow>,
+    pub(crate) expected: Vec<LeanPromptAssemblyRow>,
+    pub(crate) expected_twice: Vec<LeanPromptAssemblyRow>,
 }
 
 /// `sanitize` applied to a suffix of the input, for split-stability.
@@ -213,6 +242,81 @@ pub(crate) struct LeanPromptAssemblyClaudeReplayCase {
     pub(crate) blocks: Vec<LeanClaudeReplayInputBlock>,
     pub(crate) outcome: String,
     pub(crate) replay: Vec<LeanClaudeReplayBlock>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeNarrowingCase {
+    pub(crate) name: String,
+    pub(crate) rows: Vec<LeanClaudeNarrowingInput>,
+    pub(crate) carriers: Vec<String>,
+    pub(crate) outcome: String,
+    pub(crate) replay: Vec<Vec<LeanClaudeReplayBlock>>,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LeanClaudeReplayUsage {
+    Historical,
+    RequiredCurrent,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum LeanClaudeReplayOrigin {
+    ClaudeSubscription,
+    Foreign,
+    Missing,
+    Ambiguous,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeNarrowingInput {
+    pub(crate) usage: LeanClaudeReplayUsage,
+    pub(crate) origin: LeanClaudeReplayOrigin,
+    pub(crate) expected_reasoning: Option<Vec<LeanClaudeReasoningWitness>>,
+    pub(crate) blocks: Vec<LeanClaudeReplayInputBlock>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeReasoningWitness {
+    pub(crate) block_index: usize,
+    pub(crate) parts: Vec<LeanClaudeReplayInputPart>,
+}
+
+/// Selected assistant occurrences, not the complete native request. The split
+/// is measured in this projection; user and tool-result rows stay with their
+/// native assembly owner.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanPromptAssemblyClaudeCheckpointCase {
+    pub(crate) name: String,
+    pub(crate) required: Vec<LeanCanonicalCoordinate>,
+    pub(crate) rows: Vec<LeanClaudeTaggedReplayRow>,
+    pub(crate) split: usize,
+    pub(crate) carrier_ids: Vec<String>,
+    pub(crate) resolutions: Vec<LeanClaudeCheckpointResolution>,
+    pub(crate) outcome: String,
+    pub(crate) prefix_rows: Vec<LeanClaudeTaggedReplayRow>,
+    pub(crate) retained: Vec<LeanClaudeTaggedReplayRow>,
+    pub(crate) replay: Vec<Vec<LeanClaudeReplayBlock>>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeTaggedReplayRow {
+    pub(crate) source: Option<LeanCanonicalCoordinate>,
+    pub(crate) blocks: Vec<LeanClaudeReplayInputBlock>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanClaudeCheckpointResolution {
+    pub(crate) tag: LeanCanonicalCoordinate,
+    pub(crate) origin: LeanClaudeReplayOrigin,
+    pub(crate) expected_reasoning: Vec<LeanClaudeReasoningWitness>,
 }
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]

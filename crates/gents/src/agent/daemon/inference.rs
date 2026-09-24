@@ -10,6 +10,7 @@ use tracing::Instrument;
 
 use super::{BehaviorDaemon, HandleRequestOutcome};
 use crate::admission::{self, CallKind};
+use crate::agent::loop_stream::{LoopReplayInput, TaggedMessage};
 use crate::compaction::ReductionOptions;
 use crate::config::ResolvedBehavior;
 use crate::hook::DefraSessionHook;
@@ -102,7 +103,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
         &mut self,
         request: &crate::watcher::AgentRequest,
         doc_id: &str,
-        history: &[crate::llm::message::Message],
+        history: &[TaggedMessage],
+        mut replay: LoopReplayInput,
         lifecycle: &mut crate::lifecycle::RequestLifecycle,
         shutdown: &mut tokio::sync::watch::Receiver<bool>,
         interrupt_rx: &mut tokio::sync::watch::Receiver<Option<crate::interrupt::InterruptIntent>>,
@@ -191,6 +193,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 loop_config.output_obligation_gate = output_obligation_gate
                     .map(|gate| Arc::new(gate) as Arc<dyn OutputObligationCheck>);
                 let turn_compactor = self.compactor.clone();
+                let provider_profile = loop_config.provider_input_counter.profile();
                 let turn_context_window = self.behavior.context_window;
                 let turn_compaction_options = self.compaction_options_for_request(
                     request_deadline,
@@ -220,9 +223,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let request = turn_request.clone();
                     let request_commit_cid = turn_request_commit_cid.clone();
                     Box::pin(async move {
+                        let native_messages = compaction_request
+                            .messages
+                            .iter()
+                            .map(|row| row.message.clone())
+                            .collect::<Vec<_>>();
                         options.keep_recent_tokens = compactor.retention_target(
                             options.keep_recent_tokens,
-                            &compaction_request.messages,
+                            &native_messages,
                             compaction_request.admission,
                         )?;
                         // This is a request-local sticky projection, not a
@@ -244,7 +252,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             CallKind::Compaction,
                             1,
                             compactor.reduce(
-                                compaction_request.messages,
+                                native_messages,
                                 turn_context_window,
                                 &options,
                                 compaction_request.admission,
@@ -258,20 +266,48 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 call_id: join.call_id,
                                 call_seq: join.call_seq,
                             });
+                        let provider_view = crate::agent::loop_stream::provider_view_tagged(
+                            provider_profile,
+                            compaction_request.messages,
+                        )
+                        .map_err(|error| anyhow!("projecting tagged provider view: {error}"))?;
+                        let provider_values = provider_view
+                            .iter()
+                            .map(|row| row.message.clone())
+                            .collect::<Vec<_>>();
                         let Some(exact) = result.exact_reduction() else {
                             if result.cannot_fit() {
                                 return Ok(
                                     crate::agent::loop_stream::TurnCompactionOutcome::CannotFit,
                                 );
                             }
+                            anyhow::ensure!(
+                                result.provider_messages()? == provider_values,
+                                "repaired provider view disagrees with source-index projection"
+                            );
                             return Ok(
                                 crate::agent::loop_stream::TurnCompactionOutcome::ProviderViewRepaired {
-                                    messages: result.provider_messages()?.to_vec(),
+                                    messages: provider_view,
                                 },
                             );
                         };
+                        anyhow::ensure!(
+                            exact
+                                .compacted_prefix
+                                .iter()
+                                .chain(exact.retained_suffix)
+                                .eq(provider_values.iter()),
+                            "exact reduction split disagrees with source-index provider view"
+                        );
+                        let split = exact.compacted_prefix.len();
+                        let associations =
+                            crate::provider_context_reduction::ReplayAssociations::from_tagged_split(
+                                compaction_request.required,
+                                &provider_view[..split],
+                                &provider_view[split..],
+                            );
                         let reduction_index = compaction_request.prior_reduction_keys.len() + 1;
-                        let (row, provider_messages) =
+                        let (row, _) =
                             crate::provider_context_reduction::persist_exact(
                             node.as_ref(),
                             crate::provider_context_reduction::NewExactProviderContextReduction {
@@ -289,6 +325,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                     .map(String::as_str),
                                 producer_call: producer_call.as_ref(),
                                 source_boundary: &source_boundary,
+                                replay_associations: &associations,
                                 original_tokens: result.original_token_estimate,
                                 compacted_tokens: result.compacted_token_estimate,
                             },
@@ -296,7 +333,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         )
                         .await?;
                         Ok(crate::agent::loop_stream::TurnCompactionOutcome::Reduced {
-                            messages: provider_messages,
+                            messages: row.checkpoint_tagged_messages()?,
                             reduction_key: row.reduction_key,
                         })
                     })
@@ -310,10 +347,60 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 )
                 .await?;
                 let (loop_history, loop_prompt) = if let Some((row, lineage_keys)) = restored {
-                    let mut messages = row.checkpoint_messages()?;
+                    let mut messages = row.checkpoint_tagged_messages()?;
                     let prompt = messages.pop().context(
                         "durable provider-context checkpoint has no current prompt",
                     )?;
+                    anyhow::ensure!(
+                        row.agent_did == request.agent_did
+                            && row.requester_did == request.requester_did
+                            && row.session_id == request.session_id
+                            && row.request_id == request.request_id
+                            && row.request_doc_id == request.doc_id,
+                        "durable provider-context checkpoint crossed its current request scope"
+                    );
+                    let boundary = row.source_boundary()?;
+                    let replay_scope = crate::session::CanonicalReplayScope {
+                        agent_did: &request.agent_did,
+                        requester_did: request.requester_did.as_deref(),
+                        session_id: &request.session_id,
+                        request_id: &request.request_id,
+                        request_doc_id: &request.doc_id,
+                        request_commit_cid: &row.request_commit_cid,
+                    };
+                    replay.required = row.replay_associations()?.required;
+                    replay.evidence.clear();
+                    replay.resolved.clear();
+                    if replay.required.is_empty() {
+                        // Even with no signed continuation, verify that this
+                        // stored boundary names the real physical request and
+                        // bounded canonical view before activating its bytes.
+                        let _ = crate::session::load_current_request_assistant_candidates(
+                            self.node.as_ref(),
+                            replay_scope,
+                            &boundary,
+                        )
+                        .await?;
+                    }
+                    for tag in &replay.required {
+                        let resolved = crate::session::resolve_current_replay_tag(
+                            self.node.as_ref(),
+                            replay_scope,
+                            &boundary,
+                            tag,
+                        )
+                        .await
+                        .with_context(|| {
+                            format!("resolving restored canonical replay tag {tag:?}")
+                        })?;
+                        replay.evidence.extend(resolved.into_iter().map(|evidence| {
+                            crate::agent::loop_stream::ReplayEvidenceRow {
+                                tag: tag.clone(),
+                                evidence,
+                            }
+                        }));
+                        replay.resolved.push(tag.clone());
+                    }
                     loop_config.context_message = None;
                     loop_config.active_reduction_keys = row.active_reduction_keys();
                     loop_config.reduction_chain_keys = lineage_keys;
@@ -338,9 +425,12 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                         .collect();
                     (
                         history.to_vec(),
-                        crate::llm::message::Message::user(request.content.clone()),
+                        TaggedMessage::unassociated(crate::llm::message::Message::user(
+                            request.content.clone(),
+                        )),
                     )
                 };
+                loop_config.replay = replay;
                 let loop_tools = self.loop_tools.clone();
                 let inference_token = request_token.child_token();
                 let inference_token_for_start = inference_token.clone();

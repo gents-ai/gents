@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 
 use crate::graphql::escape_graphql_string;
 use crate::llm::message::Message;
+use gents_loop::claude_messages_body::{prepare_replay_checkpoint, ReplayTag, TaggedAssistantRow};
+use gents_loop::loop_stream::TaggedMessage;
 
 const REDUCTION_KEY_PREFIX: &str = "provider-context-reduction:v1";
 const SOURCE_BOUNDARY_VERSION: u32 = 2;
@@ -40,6 +42,31 @@ pub struct ProducerCallRef {
     pub call_seq: i64,
 }
 
+/// Tag-only source association for the exact stored native split. Required
+/// current tags are supplied independently of the surviving rows; neither
+/// reasoning witnesses nor message bytes are copied into this sidecar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplayAssociations {
+    pub required: Vec<ReplayTag>,
+    pub prefix_sources: Vec<Option<ReplayTag>>,
+    pub retained_sources: Vec<Option<ReplayTag>>,
+}
+
+impl ReplayAssociations {
+    pub(crate) fn from_tagged_split(
+        required: Vec<ReplayTag>,
+        prefix: &[TaggedMessage],
+        suffix: &[TaggedMessage],
+    ) -> Self {
+        Self {
+            required,
+            prefix_sources: prefix.iter().map(|row| row.source.clone()).collect(),
+            retained_sources: suffix.iter().map(|row| row.source.clone()).collect(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderContextReduction {
     #[serde(default, rename = "_docID")]
@@ -65,6 +92,7 @@ pub struct ProviderContextReduction {
     pub retained_suffix_json: String,
     pub pair_closed: bool,
     pub checkpoint_messages_json: String,
+    pub replay_associations_json: String,
     pub summary: String,
     pub messages_compacted: i64,
     pub original_tokens: i64,
@@ -76,6 +104,38 @@ impl ProviderContextReduction {
     pub fn checkpoint_messages(&self) -> Result<Vec<Message>> {
         serde_json::from_str(&self.checkpoint_messages_json)
             .context("decoding ProviderContextReduction checkpoint_messages_json")
+    }
+
+    pub(crate) fn replay_associations(&self) -> Result<ReplayAssociations> {
+        serde_json::from_str(&self.replay_associations_json)
+            .context("decoding ProviderContextReduction replay_associations_json")
+    }
+
+    /// Return the already validated stored checkpoint with the exact retained
+    /// source sidecar. A synthesized summary is unassociated by construction.
+    pub(crate) fn checkpoint_tagged_messages(&self) -> Result<Vec<TaggedMessage>> {
+        let prefix: Vec<Message> = serde_json::from_str(&self.compacted_prefix_json)
+            .context("decoding ProviderContextReduction compacted_prefix_json")?;
+        let suffix: Vec<Message> = serde_json::from_str(&self.retained_suffix_json)
+            .context("decoding ProviderContextReduction retained_suffix_json")?;
+        let associations = self.replay_associations()?;
+        validate_replay_associations(&associations, &prefix, &suffix, &self.request_doc_id)?;
+        let checkpoint = self.checkpoint_messages()?;
+        anyhow::ensure!(
+            checkpoint_matches_stored_projection(&checkpoint, &suffix, &self.summary),
+            "ProviderContextReduction checkpoint has invalid stored projection structure"
+        );
+        let mut tagged = Vec::with_capacity(checkpoint.len());
+        if !self.summary.trim().is_empty() {
+            tagged.push(TaggedMessage::unassociated(checkpoint[0].clone()));
+        }
+        tagged.extend(
+            suffix
+                .into_iter()
+                .zip(associations.retained_sources)
+                .map(|(message, source)| TaggedMessage { message, source }),
+        );
+        Ok(tagged)
     }
 
     pub fn source_boundary(&self) -> Result<SourceBoundary> {
@@ -106,6 +166,7 @@ pub(crate) struct NewProviderContextReduction<'a> {
     pub compacted_prefix: &'a [Message],
     pub retained_suffix: &'a [Message],
     pub checkpoint_messages: &'a [Message],
+    pub replay_associations: &'a ReplayAssociations,
     pub summary: &'a str,
     pub original_tokens: usize,
     pub compacted_tokens: usize,
@@ -126,6 +187,7 @@ pub(crate) struct NewExactProviderContextReduction<'a> {
     pub(crate) parent_reduction_key: Option<&'a str>,
     pub(crate) producer_call: Option<&'a ProducerCallRef>,
     pub(crate) source_boundary: &'a SourceBoundary,
+    pub(crate) replay_associations: &'a ReplayAssociations,
     pub(crate) original_tokens: usize,
     pub(crate) compacted_tokens: usize,
 }
@@ -246,6 +308,12 @@ pub(crate) async fn persist(
             "provider-context reduction checkpoint disagrees with its summary and retained suffix"
         );
     }
+    validate_replay_associations(
+        input.replay_associations,
+        input.compacted_prefix,
+        input.retained_suffix,
+        input.request_doc_id,
+    )?;
     let reduction_key = reduction_key(
         input.agent_did,
         input.session_id,
@@ -299,6 +367,7 @@ pub(crate) async fn persist(
                 retained_suffix_json: "{retained_suffix_json}"
                 pair_closed: true
                 checkpoint_messages_json: "{checkpoint_messages_json}"
+                replay_associations_json: "{replay_associations_json}"
                 summary: "{summary}"
                 messages_compacted: {messages_compacted}
                 original_tokens: {original_tokens}
@@ -318,6 +387,7 @@ pub(crate) async fn persist(
         compacted_prefix_json = escape_graphql_string(&intended.compacted_prefix_json),
         retained_suffix_json = escape_graphql_string(&intended.retained_suffix_json),
         checkpoint_messages_json = escape_graphql_string(&intended.checkpoint_messages_json),
+        replay_associations_json = escape_graphql_string(&intended.replay_associations_json),
         summary = escape_graphql_string(input.summary.trim()),
         messages_compacted = input.compacted_prefix.len(),
         original_tokens = input.original_tokens,
@@ -369,6 +439,7 @@ pub(crate) async fn persist_exact(
             compacted_prefix: reduction.compacted_prefix,
             retained_suffix: reduction.retained_suffix,
             checkpoint_messages: &checkpoint_messages,
+            replay_associations: input.replay_associations,
             summary: reduction.checkpoint,
             original_tokens: input.original_tokens,
             compacted_tokens: input.compacted_tokens,
@@ -522,7 +593,7 @@ pub fn rendered_capture_cites_reduction(
         .any(|key| key == reduction_key)
 }
 
-const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json summary messages_compacted original_tokens compacted_tokens created_at";
+const REDUCTION_FIELDS: &str = "_docID reduction_key agent_did requester_did session_id request_id request_doc_id request_commit_cid reduction_index turn_index parent_reduction_key producer_call_id producer_call_seq source_boundary_json compacted_prefix_json retained_suffix_json pair_closed checkpoint_messages_json replay_associations_json summary messages_compacted original_tokens compacted_tokens created_at";
 
 async fn load_by_key(
     node: &EmbeddedNode,
@@ -563,6 +634,7 @@ struct IntendedReduction {
     compacted_prefix_json: String,
     retained_suffix_json: String,
     checkpoint_messages_json: String,
+    replay_associations_json: String,
     request_commit_cid: String,
     reduction_index: i64,
     turn_index: i64,
@@ -596,6 +668,9 @@ impl IntendedReduction {
             checkpoint_messages_json: crate::rendered_request::canonical_json_string(
                 &serde_json::to_value(input.checkpoint_messages)?,
             )?,
+            replay_associations_json: crate::rendered_request::canonical_json_string(
+                &serde_json::to_value(input.replay_associations)?,
+            )?,
             request_commit_cid: input.request_commit_cid.to_string(),
             reduction_index: i64::try_from(input.reduction_index).unwrap_or(i64::MAX),
             turn_index: i64::try_from(input.turn_index).unwrap_or(i64::MAX),
@@ -627,6 +702,7 @@ impl IntendedReduction {
             && row.retained_suffix_json == self.retained_suffix_json
             && row.pair_closed
             && row.checkpoint_messages_json == self.checkpoint_messages_json
+            && row.replay_associations_json == self.replay_associations_json
             && row.summary == self.summary
             && row.messages_compacted == self.messages_compacted
             && row.original_tokens == self.original_tokens
@@ -745,7 +821,71 @@ fn validate_recoverable_rows(rows: &[ProviderContextReduction]) -> Result<()> {
                 row.reduction_key
             );
         }
+        validate_replay_associations(
+            &row.replay_associations()?,
+            &prefix,
+            &suffix,
+            &row.request_doc_id,
+        )?;
     }
+    Ok(())
+}
+
+/// Project the existing whole-native split onto assistant occurrences only;
+/// this is representation alignment, not a second continuation policy. The
+/// executable ClaudeMap owner decides association validity and required-row
+/// survival in its prescribed first-error order.
+pub(crate) fn validate_replay_associations(
+    associations: &ReplayAssociations,
+    prefix: &[Message],
+    suffix: &[Message],
+    request_doc_id: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        associations.prefix_sources.len() == prefix.len()
+            && associations.retained_sources.len() == suffix.len(),
+        "ProviderContextReduction replay association lengths disagree with the exact native split"
+    );
+    anyhow::ensure!(
+        associations
+            .required
+            .iter()
+            .chain(associations.prefix_sources.iter().flatten())
+            .chain(associations.retained_sources.iter().flatten())
+            .all(|tag| tag.request_doc_id == request_doc_id),
+        "ProviderContextReduction replay association crosses its physical request"
+    );
+    let mut assistant_rows = Vec::new();
+    let mut assistant_split = 0;
+    for (messages, sources, in_prefix) in [
+        (prefix, associations.prefix_sources.as_slice(), true),
+        (suffix, associations.retained_sources.as_slice(), false),
+    ] {
+        for (message, source) in messages.iter().zip(sources) {
+            match message {
+                Message::Assistant { id, content } => {
+                    assistant_rows.push(TaggedAssistantRow {
+                        source: source.clone(),
+                        id: id.clone(),
+                        content: content.clone(),
+                    });
+                    if in_prefix {
+                        assistant_split += 1;
+                    }
+                }
+                _ => anyhow::ensure!(
+                    source.is_none(),
+                    "ProviderContextReduction associates a non-assistant native row"
+                ),
+            }
+        }
+    }
+    prepare_replay_checkpoint(
+        associations.required.clone(),
+        assistant_rows,
+        assistant_split,
+    )
+    .context("validating ProviderContextReduction canonical replay associations")?;
     Ok(())
 }
 
@@ -777,7 +917,7 @@ fn checkpoint_matches_stored_projection(
     checkpoint.len() == suffix.len() + 1 && checkpoint.get(1..) == Some(suffix)
 }
 
-fn validate_source_boundary(
+pub(crate) fn validate_source_boundary(
     boundary: &SourceBoundary,
     request_doc_id: &str,
     request_commit_cid: &str,
@@ -847,6 +987,7 @@ mod tests {
             retained_suffix_json: "[]".to_string(),
             pair_closed: true,
             checkpoint_messages_json: "[]".to_string(),
+            replay_associations_json: "{}".to_string(),
             summary: String::new(),
             messages_compacted: 0,
             original_tokens: 0,
@@ -873,6 +1014,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn replay_associations_bind_exact_native_split_and_assistant_rows() {
+        let tag = ReplayTag {
+            request_doc_id: "request-doc".into(),
+            source: gents_protocol::output::OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index: 0,
+                attempt: 0,
+            },
+        };
+        let prefix = vec![Message::user("prior")];
+        let suffix = vec![Message::assistant("current")];
+        let associations = ReplayAssociations {
+            required: vec![tag.clone()],
+            prefix_sources: vec![None],
+            retained_sources: vec![Some(tag.clone())],
+        };
+        assert!(
+            validate_replay_associations(&associations, &prefix, &suffix, "request-doc").is_ok()
+        );
+
+        let mut changed = associations.clone();
+        changed.retained_sources.clear();
+        assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
+        changed = associations.clone();
+        changed.prefix_sources[0] = Some(tag.clone());
+        assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
+        changed = associations.clone();
+        changed.retained_sources[0] = None;
+        assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
+        changed = associations;
+        changed.retained_sources[0].as_mut().unwrap().request_doc_id = "foreign-doc".into();
+        assert!(validate_replay_associations(&changed, &prefix, &suffix, "request-doc").is_err());
+    }
+
     #[tokio::test]
     async fn durable_chain_is_idempotent_conflict_visible_and_restartable() {
         let node = EmbeddedNode::builder().build().await.unwrap();
@@ -880,6 +1056,11 @@ mod tests {
         let prefix = vec![Message::user("old")];
         let suffix = vec![Message::user("current")];
         let checkpoint = checkpoint_from_suffix(&suffix, "summary");
+        let associations = ReplayAssociations {
+            required: vec![],
+            prefix_sources: vec![None; prefix.len()],
+            retained_sources: vec![None; suffix.len()],
+        };
         let source = boundary("request-doc");
         let boundary_compaction = node
             .execute(
@@ -919,6 +1100,7 @@ mod tests {
                 compacted_prefix: &prefix,
                 retained_suffix: &suffix,
                 checkpoint_messages: &checkpoint,
+                replay_associations: &associations,
                 summary: "summary",
                 original_tokens: 100,
                 compacted_tokens: 20,
@@ -943,6 +1125,7 @@ mod tests {
                 compacted_prefix: &prefix,
                 retained_suffix: &suffix,
                 checkpoint_messages: &checkpoint,
+                replay_associations: &associations,
                 summary: "summary",
                 original_tokens: 100,
                 compacted_tokens: 20,
@@ -970,6 +1153,7 @@ mod tests {
                 compacted_prefix: &prefix,
                 retained_suffix: &suffix,
                 checkpoint_messages: &conflicting_checkpoint,
+                replay_associations: &associations,
                 summary: "different",
                 original_tokens: 100,
                 compacted_tokens: 20,
@@ -984,6 +1168,16 @@ mod tests {
             .unwrap()
             .expect("persisted checkpoint is unconsumed");
         assert_eq!(restored.0.checkpoint_messages().unwrap(), checkpoint);
+        let tagged = restored.0.checkpoint_tagged_messages().unwrap();
+        assert_eq!(tagged.len(), checkpoint.len());
+        assert!(tagged.iter().all(|row| row.source.is_none()));
+        assert_eq!(
+            tagged
+                .into_iter()
+                .map(|row| row.message)
+                .collect::<Vec<_>>(),
+            checkpoint
+        );
         assert_eq!(restored.1, vec![first.reduction_key.clone()]);
 
         let second_checkpoint = checkpoint_from_suffix(&suffix, "summary 2");
@@ -1006,6 +1200,7 @@ mod tests {
                 compacted_prefix: &prefix,
                 retained_suffix: &suffix,
                 checkpoint_messages: &second_checkpoint,
+                replay_associations: &associations,
                 summary: "summary 2",
                 original_tokens: 110,
                 compacted_tokens: 18,
@@ -1264,6 +1459,11 @@ mod tests {
                 compacted_prefix: &[call],
                 retained_suffix: &[result.clone()],
                 checkpoint_messages: &[result],
+                replay_associations: &ReplayAssociations {
+                    required: vec![],
+                    prefix_sources: vec![None],
+                    retained_sources: vec![None],
+                },
                 summary: "summary",
                 original_tokens: 10,
                 compacted_tokens: 5,

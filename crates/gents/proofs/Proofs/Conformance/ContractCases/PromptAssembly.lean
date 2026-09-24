@@ -151,6 +151,39 @@ private def itemCase : Item → PromptAssemblyItemCase
   | .other index => { item := "other", value := index }
   | .call callId => { item := "call", value := callId }
 
+/-- Provider-specific intra-assistant order. `other` can represent reasoning,
+but this abstract case does not carry signatures or claim Claude acceptance. -/
+structure PromptAssemblyAssistantOrderCase where
+  name : String
+  orderMode : String
+  input : List PromptAssemblyItemCase
+  expected : List PromptAssemblyItemCase
+  expectedTwice : List PromptAssemblyItemCase
+  deriving Repr
+
+private def assistantOrderCase (name : String)
+    (mode : PromptAssembly.Content.OrderMode) (items : List Item) :
+    PromptAssemblyAssistantOrderCase :=
+  let once := PromptAssembly.Content.normalizeFor mode items
+  { name
+  , orderMode := match mode with
+      | .grouped => "grouped"
+      | .nativePreserved => "nativePreserved"
+  , input := items.map itemCase
+  , expected := once.map itemCase
+  , expectedTwice := (PromptAssembly.Content.normalizeFor mode once).map itemCase }
+
+def promptAssemblyAssistantOrderCases : List PromptAssemblyAssistantOrderCase :=
+  [ assistantOrderCase "interleaved-grouped" .grouped
+      [.call 11, .text 1, .other 2, .call 12, .text 3]
+  , assistantOrderCase "interleaved-native-preserved" .nativePreserved
+      [.call 11, .text 1, .other 2, .call 12, .text 3]
+  , assistantOrderCase "reasoning-between-text-and-call-native" .nativePreserved
+      [.text 4, .other 5, .call 13, .other 6]
+  , assistantOrderCase "reasoning-between-text-and-call-grouped" .grouped
+      [.text 4, .other 5, .call 13, .other 6]
+  ]
+
 /-- The announced call ids, read off the content in content order.
 
 `Finset` has no computable ordered projection here (`Finset.toList` is
@@ -214,6 +247,41 @@ private def userText (sequence : Nat) (index : Nat) : ProviderRow :=
 /-- Assistant prose with no tool calls. -/
 private def assistantText (sequence : Nat) (index : Nat) : ProviderRow :=
   mkRow sequence .assistant .ordinary [Item.text index]
+
+/-- Same coherent, paired transcript under both provider order modes. The
+expected rows come from the complete sanitizer, not a copied ordering policy;
+its soundness still requires the Provider owner's UniqueCallIds premise. -/
+structure PromptAssemblyModeSanitizeCase where
+  name : String
+  orderMode : String
+  input : List PromptAssemblyRowCase
+  expected : List PromptAssemblyRowCase
+  expectedTwice : List PromptAssemblyRowCase
+  deriving Repr
+
+private def modeSanitizeCase (name : String)
+    (mode : PromptAssembly.Content.OrderMode) (rows : List ProviderRow) :
+    PromptAssemblyModeSanitizeCase :=
+  let once := PromptAssembly.Provider.sanitizeForProviderGlobalFor mode rows
+  { name
+  , orderMode := match mode with
+      | .grouped => "grouped"
+      | .nativePreserved => "nativePreserved"
+  , input := rowCases rows
+  , expected := rowCases once
+  , expectedTwice := rowCases
+      (PromptAssembly.Provider.sanitizeForProviderGlobalFor mode once) }
+
+private def interleavedCoherentRows : List ProviderRow :=
+  [ mkRow 0 .assistant (.assistantToolCalls [1].toFinset)
+      [Item.call 1, Item.text 4, Item.other 5]
+  , toolResult 1 1
+  , userText 2 6 ]
+
+def promptAssemblyModeSanitizeCases : List PromptAssemblyModeSanitizeCase :=
+  [ modeSanitizeCase "paired-interleaved-grouped" .grouped interleavedCoherentRows
+  , modeSanitizeCase "paired-interleaved-native-preserved" .nativePreserved
+      interleavedCoherentRows ]
 
 private def witnessTranscripts : List (String × List ProviderRow) :=
   [ ("empty", [])
@@ -914,6 +982,184 @@ def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
       [.reasoning none [.encrypted (utf8Bytes "opaque")]]
   , claudeReplayCase "summary-is-not-signed"
       [.reasoning none [.summary (utf8Bytes "summary")]]
+  ]
+
+/-- The carrier labels are fixture observations only. `narrowReplayRows` sees
+the explicit origin, current-continuation use, and exact expected reasoning
+projection, never Rig's history/prompt placement. Native binding must supply
+these fields from canonical header/closing-segment/capture owners. -/
+structure PromptAssemblyClaudeNarrowingCase where
+  name : String
+  rows : List PromptAssembly.ClaudeMap.ReplayInput
+  carriers : List String
+  outcome : String
+  replay : List (List PromptAssembly.ClaudeMap.ReplayBlock)
+  deriving Repr
+
+private def claudeNarrowingCase (name : String)
+    (rows : List PromptAssembly.ClaudeMap.ReplayInput)
+    (carriers : List String) : PromptAssemblyClaudeNarrowingCase :=
+  match PromptAssembly.ClaudeMap.narrowReplayRows rows with
+  | .ok replay => { name, rows, carriers, outcome := "ok", replay }
+  | .error error =>
+      { name, rows, carriers, outcome := PromptAssembly.ClaudeMap.errorName error,
+        replay := [] }
+
+private def signedCurrentBlocks : List (CanonicalOutput.MessageBlock (List UInt8)) :=
+  [.text (utf8Bytes "current text"),
+   .reasoning none [.text (utf8Bytes "thinking") (some "signed")],
+   .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none]
+
+private def signedCurrentRow : PromptAssembly.ClaudeMap.ReplayInput :=
+  { usage := .requiredCurrent, origin := .claudeSubscription,
+    expectedReasoning := some (PromptAssembly.ClaudeMap.reasoningProjection signedCurrentBlocks),
+    blocks := signedCurrentBlocks }
+
+private def oldForeignRow : PromptAssembly.ClaudeMap.ReplayInput :=
+  { usage := .historical, origin := .foreign, expectedReasoning := none,
+    blocks := [.text (utf8Bytes "old text"),
+      .reasoning none [.text (utf8Bytes "old thinking") (some "foreign-signed")],
+      .toolCall 2 "toolu-2" none "echo" (utf8Bytes "{}") none none] }
+
+def promptAssemblyClaudeNarrowingCases : List PromptAssemblyClaudeNarrowingCase :=
+  [ claudeNarrowingCase "mixed-historical-and-current" [oldForeignRow, signedCurrentRow]
+      ["history", "prior"]
+  , claudeNarrowingCase "restored-required-current"
+      [{ usage := .requiredCurrent, origin := .claudeSubscription,
+         expectedReasoning := some (PromptAssembly.ClaudeMap.reasoningProjection
+           [.reasoning none [.text (utf8Bytes "retained") (some "sig"),
+                             .redacted (utf8Bytes "opaque")],
+            .toolCall 3 "toolu-3" none "echo" (utf8Bytes "{}") none none]),
+         blocks := [.reasoning none [.text (utf8Bytes "retained") (some "sig"),
+                                       .redacted (utf8Bytes "opaque")],
+                    .toolCall 3 "toolu-3" none "echo" (utf8Bytes "{}") none none] }]
+      ["restored-checkpoint"]
+  , claudeNarrowingCase "foreign-signed-current"
+      [{ signedCurrentRow with origin := .foreign }] ["prior"]
+  , claudeNarrowingCase "missing-current-origin"
+      [{ signedCurrentRow with origin := .missing }] ["prior"]
+  , claudeNarrowingCase "ambiguous-current-origin"
+      [{ signedCurrentRow with origin := .ambiguous }] ["prior"]
+  , claudeNarrowingCase "missing-current-witness"
+      [{ signedCurrentRow with expectedReasoning := none }] ["prior"]
+  , claudeNarrowingCase "altered-current-reasoning"
+      [{ signedCurrentRow with blocks :=
+        [.text (utf8Bytes "current text"),
+         .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none] }]
+      ["prior"]
+  , claudeNarrowingCase "altered-current-reasoning-bytes"
+      [{ signedCurrentRow with blocks :=
+        [.text (utf8Bytes "current text"),
+         .reasoning none [.text (utf8Bytes "different") (some "signed")],
+         .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none] }]
+      ["prior"]
+  , claudeNarrowingCase "moved-current-reasoning-block"
+      [{ signedCurrentRow with blocks :=
+        [.reasoning none [.text (utf8Bytes "thinking") (some "signed")],
+         .text (utf8Bytes "current text"),
+         .toolCall 1 "toolu-1" none "echo" (utf8Bytes "{}") none none] }]
+      ["prior"]
+  , claudeNarrowingCase "repair-carrier-history" [oldForeignRow, signedCurrentRow]
+      ["history", "history"]
+  , claudeNarrowingCase "compaction-carrier-prior" [oldForeignRow, signedCurrentRow]
+      ["history", "prior"]
+  ]
+
+/-! The checkpoint cases carry canonical coordinates independently of the
+surviving rows. `carrierIds` are observations only, deliberately duplicated in
+the positive case; neither construction nor replay reads them. -/
+structure PromptAssemblyClaudeCheckpointResolution where
+  tag : PromptAssembly.ClaudeMap.ReplayTag
+  evidence : PromptAssembly.ClaudeMap.ResolvedReplayEvidence
+  deriving Repr
+
+structure PromptAssemblyClaudeCheckpointCase where
+  name : String
+  required : List PromptAssembly.ClaudeMap.ReplayTag
+  rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  split : Nat
+  carrierIds : List String
+  resolutions : List PromptAssemblyClaudeCheckpointResolution
+  outcome : String
+  prefixRows : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  retained : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  replay : List (List PromptAssembly.ClaudeMap.ReplayBlock)
+  deriving Repr
+
+private def checkpointCase (name : String)
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) (split : Nat)
+    (carrierIds : List String)
+    (resolutions : List PromptAssemblyClaudeCheckpointResolution) :
+    PromptAssemblyClaudeCheckpointCase :=
+  match PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows split with
+  | .error error =>
+      { name, required, rows, split, carrierIds, resolutions,
+        outcome := PromptAssembly.ClaudeMap.errorName error,
+        prefixRows := [], retained := [], replay := [] }
+  | .ok checkpoint =>
+      let resolve tag := (resolutions.filter fun entry => entry.tag == tag).map (·.evidence)
+      match PromptAssembly.ClaudeMap.restoreAndNarrowReplay checkpoint resolve with
+      | .error error =>
+          { name, required, rows, split, carrierIds, resolutions,
+            outcome := PromptAssembly.ClaudeMap.errorName error,
+            prefixRows := checkpoint.prefixRows, retained := checkpoint.retained,
+            replay := [] }
+      | .ok replay =>
+          { name, required, rows, split, carrierIds, resolutions,
+            outcome := "ok", prefixRows := checkpoint.prefixRows,
+            retained := checkpoint.retained, replay }
+
+private def checkpointTag (turn : Nat) : PromptAssembly.ClaudeMap.ReplayTag :=
+  { request := 7, source := .provider 2 turn 1 }
+
+private def checkpointRow (tag : Option PromptAssembly.ClaudeMap.ReplayTag)
+    (value : String) : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  { source := tag,
+    blocks := [.reasoning none [.text (utf8Bytes value) (some ("sig-" ++ value))],
+      .toolCall 9 ("tool-" ++ value) none "echo" (utf8Bytes "{}") none none] }
+
+private def checkpointEvidence (turn : Nat) (value : String) :
+    PromptAssemblyClaudeCheckpointResolution :=
+  let reasoning := PromptAssembly.ClaudeMap.reasoningProjection
+    (checkpointRow (some (checkpointTag turn)) value).blocks
+  { tag := checkpointTag turn,
+    evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .claudeSubscription reasoning }
+
+def promptAssemblyClaudeCheckpointCases : List PromptAssemblyClaudeCheckpointCase :=
+  let first := checkpointRow (some (checkpointTag 1)) "first"
+  let second := checkpointRow (some (checkpointTag 2)) "second"
+  let old := checkpointRow none "old"
+  let unsignedFirst : PromptAssembly.ClaudeMap.TaggedReplayRow :=
+    { first with blocks :=
+      [.reasoning none [.text (utf8Bytes "first") none],
+       .toolCall 9 "tool-first" none "echo" (utf8Bytes "{}") none none] }
+  let unsignedEvidence : PromptAssemblyClaudeCheckpointResolution :=
+    { tag := checkpointTag 1,
+      evidence := PromptAssembly.ClaudeMap.ResolvedReplayEvidence.mk .claudeSubscription
+        (PromptAssembly.ClaudeMap.reasoningProjection unsignedFirst.blocks) }
+  let resolutions := [checkpointEvidence 1 "first", checkpointEvidence 2 "second"]
+  [ checkpointCase "two-required-same-provider-id" [checkpointTag 1, checkpointTag 2]
+      [first, second] 0 ["same-provider-id", "same-provider-id"] resolutions
+  , checkpointCase "missing-required-association" [checkpointTag 1, checkpointTag 2]
+      [first, { second with source := none }] 0 ["same", "same"] resolutions
+  , checkpointCase "duplicate-association" [checkpointTag 1, checkpointTag 2]
+      [first, { second with source := some (checkpointTag 1) }] 0 ["same", "same"]
+      resolutions
+  , checkpointCase "moved-association-alters-reasoning" [checkpointTag 1, checkpointTag 2]
+      [{ first with source := some (checkpointTag 2) },
+       { second with source := some (checkpointTag 1) }] 0 ["same", "same"] resolutions
+  , checkpointCase "compaction-cannot-remove-required" [checkpointTag 1, checkpointTag 2]
+      [first, second] 1 ["same", "same"] resolutions
+  , checkpointCase "historical-prefix-reduction-allowed" [checkpointTag 1, checkpointTag 2]
+      [old, first, second] 1 ["old", "same", "same"] resolutions
+  , checkpointCase "required-capture-missing" [checkpointTag 1]
+      [first] 0 ["same"] []
+  , checkpointCase "required-capture-ambiguous" [checkpointTag 1]
+      [first] 0 ["same"] [checkpointEvidence 1 "first", checkpointEvidence 1 "first"]
+  , checkpointCase "first-row-codec-error-precedes-later-missing-capture"
+      [checkpointTag 1, checkpointTag 2] [unsignedFirst, second] 0 ["same", "same"]
+      [unsignedEvidence]
   ]
 
 end Conformance.ContractCases

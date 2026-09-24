@@ -1,5 +1,57 @@
 use super::*;
 
+use crate::claude_messages_body::{ReplayTag, ResolvedReplayEvidence};
+
+/// One native row and its independently established canonical provider source.
+/// The tag follows this row through provider-view projection by the projection's
+/// emitted source index, never by provider-generated IDs or equal content.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TaggedMessage {
+    pub message: Message,
+    pub source: Option<ReplayTag>,
+}
+
+impl TaggedMessage {
+    pub fn unassociated(message: Message) -> Self {
+        Self {
+            message,
+            source: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ReplayEvidenceRow {
+    pub tag: ReplayTag,
+    pub evidence: ResolvedReplayEvidence,
+}
+
+/// A native canonical lookup. The returned list deliberately retains zero or
+/// multiple matches so the replay owner can reject missing/ambiguous evidence.
+pub type ReplayEvidenceResolver = Arc<
+    dyn Fn(
+            ReplayTag,
+        )
+            -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ResolvedReplayEvidence>>> + Send>>
+        + Send
+        + Sync,
+>;
+
+#[derive(Clone, Default)]
+pub struct LoopReplayInput {
+    /// Present only for a persisted request with a real canonical owner.
+    pub request_doc_id: Option<String>,
+    /// Required-current coordinates are independent of the surviving rows.
+    pub required: Vec<ReplayTag>,
+    /// Cached canonical owner results; do not turn this into a map because
+    /// duplicate physical matches must remain observable as ambiguity.
+    pub evidence: Vec<ReplayEvidenceRow>,
+    pub resolve: Option<ReplayEvidenceResolver>,
+    /// Coordinates already queried, including those with zero physical
+    /// matches. This prevents a later retry from silently changing evidence.
+    pub resolved: Vec<ReplayTag>,
+}
+
 /// `(turn_index, attempt, request, assembly_trace)`.
 ///
 /// The trace rides alongside the request because the assembled
@@ -21,7 +73,10 @@ pub type RenderedRequestSink = Arc<
 
 #[derive(Clone, Debug)]
 pub struct TurnCompactionRequest {
-    pub messages: Vec<Message>,
+    pub messages: Vec<TaggedMessage>,
+    /// Independent required-current coordinates, checked before persisting
+    /// any reduced provider checkpoint.
+    pub required: Vec<ReplayTag>,
     pub admission: crate::compaction::ReductionAdmission,
     pub turn_index: usize,
     pub prior_reduction_keys: Vec<String>,
@@ -30,10 +85,10 @@ pub struct TurnCompactionRequest {
 #[derive(Clone, Debug)]
 pub enum TurnCompactionOutcome {
     ProviderViewRepaired {
-        messages: Vec<Message>,
+        messages: Vec<TaggedMessage>,
     },
     Reduced {
-        messages: Vec<Message>,
+        messages: Vec<TaggedMessage>,
         reduction_key: String,
     },
     CannotFit,
@@ -141,6 +196,7 @@ pub struct LoopConfig {
     /// One backend/wire-selected provider projection shared by every budget
     /// decision in this completion loop and its nested compactor.
     pub provider_input_counter: Arc<crate::provider_input::ProviderInputCounter>,
+    pub replay: LoopReplayInput,
     pub preamble: Option<String>,
     pub context_message: Option<Message>,
     pub temperature: Option<f64>,

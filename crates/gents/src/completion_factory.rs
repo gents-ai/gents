@@ -52,6 +52,7 @@ pub(crate) fn loop_config(
     capture_scope: CaptureScopeKind,
 ) -> LoopConfig {
     LoopConfig {
+        replay: Default::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 behavior.backend_provider_kind,

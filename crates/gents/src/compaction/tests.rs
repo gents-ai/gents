@@ -13,8 +13,11 @@ use super::*;
 use crate::ensure_runtime_schemas;
 use crate::prompt::{LayeredPromptBuilder, PromptBuilder};
 use crate::provider_input::budget::can_dispatch;
+use crate::provider_input::ProviderInputProfile;
 use crate::session;
 use crate::test_support::first_content;
+
+const GROUPED_PROFILE: ProviderInputProfile = ProviderInputProfile::OpenAiChatCompletions;
 
 fn text_msg(role: &str, text: &str) -> Message {
     match role {
@@ -149,6 +152,7 @@ fn generated_reduction_engine_cases_drive_shared_decision_outcome() {
 /// accidentally supply behavior that the constructor is meant to own.
 fn gate_test_loop_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -284,7 +288,7 @@ fn normalize_assistant_content_order_moves_text_before_tool_calls() {
         tool_result_msg("call-A", "A-result"),
     ];
 
-    let out = super::history::normalize_assistant_content_order(messages);
+    let out = super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages);
 
     let (id, kinds): (Option<String>, Vec<&'static str>) = match &out[0] {
         Message::Assistant { id, content } => (
@@ -347,7 +351,7 @@ fn normalize_assistant_content_order_is_identity_when_already_ordered() {
         },
         tool_result_msg("call-A", "A-result"),
     ];
-    let out = super::history::normalize_assistant_content_order(messages.clone());
+    let out = super::history::normalize_assistant_content_order(GROUPED_PROFILE, messages.clone());
     assert_eq!(out, messages);
 }
 
@@ -471,7 +475,7 @@ fn sanitize_history_for_provider_drops_stale_result_and_now_unpaired_call() {
         tool_result_msg("call-A", "late result"),
     ];
 
-    let out = super::sanitize_history_for_provider(messages);
+    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
     assert_eq!(
         out,
         vec![text_msg("assistant", "No tool result arrived.")],
@@ -495,7 +499,7 @@ fn sanitize_history_for_provider_drops_orphans_in_both_directions() {
         },
         tool_result_msg("call-A", "A-result"),
     ];
-    let out = super::sanitize_history_for_provider(messages);
+    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
     assert_eq!(
         out.len(),
         2,
@@ -518,7 +522,7 @@ fn sanitize_repairs_result_preceding_its_call() {
             content: vec![tool_call_content("call-A")],
         },
     ];
-    let out = super::sanitize_history_for_provider(messages);
+    let out = super::sanitize_history_for_provider(GROUPED_PROFILE, messages);
     assert!(
         out.is_empty(),
         "result-before-call must sanitize to empty (orphan and unpaired both dropped); got {out:?}"
@@ -1268,7 +1272,7 @@ async fn stripping_alone_can_satisfy_an_admitted_complete_input() {
     ];
     let counter = config.provider_input_counter.as_ref();
     let original_tokens = counter.estimate_message_request(&messages).unwrap();
-    let stripped_messages = provider_view(messages.clone()).0;
+    let stripped_messages = provider_view(GROUPED_PROFILE, messages.clone()).0;
     let stripped_tokens = counter
         .estimate_message_request(&stripped_messages)
         .unwrap();
@@ -1600,6 +1604,7 @@ fn summary_worthy_messages() -> Vec<Message> {
 
 fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
+        replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -2523,8 +2528,8 @@ fn provider_view_is_idempotent() {
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         tool_result_msg("call-1", "fn main() {}"),
     ];
-    let (once, _) = provider_view(history);
-    let (twice, _) = provider_view(once.clone());
+    let (once, _) = provider_view(GROUPED_PROFILE, history);
+    let (twice, _) = provider_view(GROUPED_PROFILE, once.clone());
     assert_eq!(once, twice);
 }
 
@@ -2543,7 +2548,7 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
         text_msg("user", "second turn"),
     ];
 
-    let (view, _) = provider_view(history.clone());
+    let (view, _) = provider_view(GROUPED_PROFILE, history.clone());
     assert_eq!(
         view.len(),
         5,
@@ -2562,7 +2567,7 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
 
     // The next request rebuilds the view from the same durable history and
     // drops the same count. It must land on exactly the retained rows.
-    let (reread, _) = provider_view(history.clone());
+    let (reread, _) = provider_view(GROUPED_PROFILE, history.clone());
     assert_eq!(
         reread.into_iter().skip(compacted).collect::<Vec<_>>(),
         retained
@@ -2574,8 +2579,10 @@ fn compacted_prefix_is_counted_and_dropped_in_the_same_space() {
     // summarized turn, so "first real turn" survives verbatim alongside its own
     // summary.
     let (stripped, _) = strip_tool_results(history);
-    let old_order =
-        sanitize_history_for_provider(stripped.into_iter().skip(compacted).collect::<Vec<_>>());
+    let old_order = sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        stripped.into_iter().skip(compacted).collect::<Vec<_>>(),
+    );
     assert_eq!(
         old_order.len(),
         retained.len() + 1,
@@ -2602,7 +2609,7 @@ fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
         tool_result_msg("call-1", "fn main() {}"),
         text_msg("assistant", "done"),
     ];
-    let (view, _) = provider_view(history);
+    let (view, _) = provider_view(GROUPED_PROFILE, history);
 
     // A noncanonical count of 2 lands between the call and its result.
     let noncanonical = 2usize;
@@ -2618,7 +2625,7 @@ fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
         "dropping at a noncanonical boundary orphans the result"
     );
 
-    let repaired = sanitize_history_for_provider(dropped);
+    let repaired = sanitize_history_for_provider(GROUPED_PROFILE, dropped);
     assert!(
         pair_closed_messages(&repaired),
         "re-narrowing after the drop must remove the orphan"
@@ -2628,7 +2635,7 @@ fn noncanonical_counts_can_drop_mid_turn_and_must_be_re_narrowed() {
     let safe = super::history::pair_safe_boundary(&view, noncanonical);
     let safe_tail = view.into_iter().skip(safe).collect::<Vec<_>>();
     assert_eq!(
-        sanitize_history_for_provider(safe_tail.clone()),
+        sanitize_history_for_provider(GROUPED_PROFILE, safe_tail.clone()),
         safe_tail,
         "Compaction.sanitize_drop_noop: free for counts this runtime writes"
     );
@@ -2686,10 +2693,10 @@ fn reused_call_ids_no_longer_shift_the_provider_view_prefix() {
         tool_result_msg("call-1", "b"),
     ];
 
-    let (short_view, _) = provider_view(prefix.clone());
+    let (short_view, _) = provider_view(GROUPED_PROFILE, prefix.clone());
     let mut whole = prefix;
     whole.extend(suffix);
-    let (long_view, _) = provider_view(whole);
+    let (long_view, _) = provider_view(GROUPED_PROFILE, whole);
 
     assert_eq!(
         short_view.len(),
@@ -2720,7 +2727,7 @@ fn safe_to_reduce_accepts_reused_provider_ids_across_complete_turns() {
         tool_result_msg("call-1", "pub fn library() {}"),
         text_msg("assistant", "second turn complete"),
     ];
-    assert!(safe_to_reduce(&messages));
+    assert!(safe_to_reduce(GROUPED_PROFILE, &messages));
 }
 
 #[test]
@@ -2729,15 +2736,15 @@ fn safe_to_reduce_requires_a_sanitizer_fixed_point_and_turn_boundary() {
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         tool_result_msg("call-1", "fn main() {}"),
     ];
-    assert!(!safe_to_reduce(&incomplete_turn));
+    assert!(!safe_to_reduce(GROUPED_PROFILE, &incomplete_turn));
 
     let unstable = vec![
         tool_call_msg("read_file", r#"{"path": "/src/main.rs"}"#),
         text_msg("assistant", "ordinary boundary after an unpaired call"),
     ];
-    assert!(!safe_to_reduce(&unstable));
+    assert!(!safe_to_reduce(GROUPED_PROFILE, &unstable));
 
-    assert!(!safe_to_reduce(&[]));
+    assert!(!safe_to_reduce(GROUPED_PROFILE, &[]));
 }
 
 #[tokio::test]
@@ -2765,6 +2772,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .to_string(),
     );
     let config = crate::agent::loop_stream::LoopConfig {
+        replay: crate::agent::loop_stream::LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -2921,7 +2929,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .await
         .unwrap();
     let durable_before = history.clone();
-    let (provider_history, _) = provider_view(history);
+    let (provider_history, _) = provider_view(GROUPED_PROFILE, history);
     let result = compactor
         .reduce(
             provider_history,
@@ -2944,9 +2952,10 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .enumerate()
         .map(|(index, message)| ((index + 1) as u32, message))
         .collect::<Vec<_>>();
-    let compacted_through_sequence = session_cursor_for_reduction(&sequence_rows, 0, reduction)
-        .unwrap()
-        .expect("exact reduction must resolve to a durable cursor");
+    let compacted_through_sequence =
+        session_cursor_for_reduction(GROUPED_PROFILE, &sequence_rows, 0, reduction)
+            .unwrap()
+            .expect("exact reduction must resolve to a durable cursor");
     session::save_compaction_entry(
         &node,
         "session-1",
@@ -2985,7 +2994,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
     // Read side: rebuild the same provider view and drop the same count. This
     // is the write/read correspondence — the count was measured against
     // `provider_view` above, so it must be applied to `provider_view` here.
-    let (resumed_history, _) = provider_view(resumed_history);
+    let (resumed_history, _) = provider_view(GROUPED_PROFILE, resumed_history);
     let compacted_count = entries
         .iter()
         .map(|entry| entry.messages_compacted as usize)
@@ -3008,11 +3017,18 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         .map(|entry| entry.summary.clone())
         .collect::<Vec<_>>();
     let built = prompt_builder
-        .build(&resumed_history, &summaries)
+        .build(
+            &resumed_history
+                .iter()
+                .cloned()
+                .map(crate::agent::loop_stream::TaggedMessage::unassociated)
+                .collect::<Vec<_>>(),
+            &summaries,
+        )
         .await
         .unwrap();
 
-    if let Message::User { content } = &built.messages[0] {
+    if let Message::User { content } = &built.messages[0].message {
         if let UserContent::Text(text) = first_content(content) {
             assert!(text.text.contains("inspected the source files"));
             assert!(text
@@ -3025,7 +3041,13 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         panic!("expected summary reminder");
     }
 
-    assert_eq!(built.messages[1..], resumed_history[..]);
+    assert_eq!(
+        built.messages[1..]
+            .iter()
+            .map(|row| &row.message)
+            .collect::<Vec<_>>(),
+        resumed_history.iter().collect::<Vec<_>>()
+    );
 
     let _ = std::fs::remove_dir_all(&data_path);
 }
@@ -3090,14 +3112,17 @@ fn count_calls_and_results(messages: &[Message]) -> (usize, usize) {
 /// a single result while `drop_unpaired_tool_calls` kept both calls.
 #[test]
 fn duplicate_call_keys_in_one_turn_do_not_leave_a_dangling_call() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1"), scoped_call("c1")],
-        },
-        scoped_result("c1"),
-        scoped_result("c1"),
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1"), scoped_call("c1")],
+            },
+            scoped_result("c1"),
+            scoped_result("c1"),
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (1, 1),
@@ -3122,7 +3147,7 @@ fn call_key_reuse_across_turns_survives() {
         scoped_result("c1"),
     ];
     assert_eq!(
-        super::sanitize_history_for_provider(history.clone()),
+        super::sanitize_history_for_provider(GROUPED_PROFILE, history.clone()),
         history,
         "per-turn key reuse must be preserved"
     );
@@ -3134,17 +3159,20 @@ fn call_key_reuse_across_turns_survives() {
 /// provider input.
 #[test]
 fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        scoped_result("c1"),
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+            scoped_result("c1"),
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (1, 1),
@@ -3157,14 +3185,17 @@ fn incomplete_second_turn_reusing_a_key_is_not_resolved_by_the_first() {
 /// A valid call/result pair separated by one must survive intact.
 #[test]
 fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        Message::User { content: vec![] },
-        scoped_result("c1"),
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+            Message::User { content: vec![] },
+            scoped_result("c1"),
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (1, 1),
@@ -3181,14 +3212,17 @@ fn empty_message_between_a_call_and_its_result_does_not_break_the_pair() {
 /// it is orphaned and both it and its now-unpaired call go.
 #[test]
 fn plain_message_between_a_call_and_its_result_ends_the_turn() {
-    let out = super::sanitize_history_for_provider(vec![
-        Message::Assistant {
-            id: None,
-            content: vec![scoped_call("c1")],
-        },
-        text_msg("user", "moved on"),
-        scoped_result("c1"),
-    ]);
+    let out = super::sanitize_history_for_provider(
+        GROUPED_PROFILE,
+        vec![
+            Message::Assistant {
+                id: None,
+                content: vec![scoped_call("c1")],
+            },
+            text_msg("user", "moved on"),
+            scoped_result("c1"),
+        ],
+    );
     assert_eq!(
         count_calls_and_results(&out),
         (0, 0),
@@ -3299,11 +3333,15 @@ fn canonical_cursor_projects_the_same_sparse_active_suffix() {
         (50, tool_result_msg("call-1", "result")),
         (90, text_msg("assistant", "active")),
     ];
-    let cursor = compacted_through_sequence(&rows, 1).expect("proven raw cursor");
+    let cursor = compacted_through_sequence(GROUPED_PROFILE, &rows, 1).expect("proven raw cursor");
     assert_eq!(cursor, 20, "the orphan and first real turn are skipped");
 
-    let (full_view, _) = provider_view(rows.iter().map(|(_, message)| message.clone()).collect());
+    let (full_view, _) = provider_view(
+        GROUPED_PROFILE,
+        rows.iter().map(|(_, message)| message.clone()).collect(),
+    );
     let (filtered_view, _) = provider_view(
+        GROUPED_PROFILE,
         rows.iter()
             .filter(|(sequence, _)| *sequence > cursor)
             .map(|(_, message)| message.clone())
@@ -3319,9 +3357,15 @@ fn canonical_cursor_rejects_a_split_inside_a_tool_pair() {
         (2, tool_call_msg("read_file", r#"{"path":"/tmp/a"}"#)),
         (3, tool_result_msg("call-1", "result")),
     ];
-    assert_eq!(compacted_through_sequence(&rows, 1), Some(1));
-    assert_eq!(compacted_through_sequence(&rows, 2), None);
-    assert_eq!(compacted_through_sequence(&rows, 3), Some(3));
+    assert_eq!(
+        compacted_through_sequence(GROUPED_PROFILE, &rows, 1),
+        Some(1)
+    );
+    assert_eq!(compacted_through_sequence(GROUPED_PROFILE, &rows, 2), None);
+    assert_eq!(
+        compacted_through_sequence(GROUPED_PROFILE, &rows, 3),
+        Some(3)
+    );
 }
 
 #[test]

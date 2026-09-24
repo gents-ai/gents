@@ -8,6 +8,19 @@ inductive FailureClass
   | permanent
   deriving DecidableEq, Repr
 
+/-- Typed origin at the provider-input boundary. Local request construction is
+deterministic; a retry cannot change the same malformed native body. This does
+not classify arbitrary provider-reported failures, whose status/payload need
+their existing separate interpretation. -/
+inductive FailureOrigin
+  | localRequestBuild
+  | retryableTransport
+  deriving DecidableEq, Repr
+
+def FailureOrigin.class : FailureOrigin → FailureClass
+  | .localRequestBuild => .permanent
+  | .retryableTransport => .transport
+
 structure Budget where
   transportRetries : Nat
   resampleRetries : Nat

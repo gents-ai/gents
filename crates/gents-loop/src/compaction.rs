@@ -6,6 +6,8 @@ use gents_protocol::message::Message;
 use rig::completion::CompletionModel;
 use serde::{Deserialize, Serialize};
 
+use crate::provider_input::ProviderInputProfile;
+
 /// Output budget for the internal compaction summary completion — independent
 /// of the user turn's `max_output_tokens` (#1017).
 pub const DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS: usize = 32_768;
@@ -490,7 +492,7 @@ impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M
             // Narrow once to the canonical provider view. Every downstream split,
             // checkpoint, durable count, and returned suffix is expressed in this
             // one coordinate system; callers never reconstruct it from a scalar.
-            let (stripped_messages, stripped_activity) = provider_view(messages);
+            let (stripped_messages, stripped_activity) = provider_view(counter.profile(), messages);
 
             let stripped_token_estimate = counter
                 .estimate_message_request(&stripped_messages)
@@ -547,6 +549,10 @@ impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M
             summary_config.context_message = None;
             summary_config.tool_choice = None;
             summary_config.turn_compactor = None;
+            // The summary is a documentless auxiliary request. It carries
+            // historical provider content but no current request's physical
+            // replay authority or provider-turn coordinate.
+            summary_config.replay = crate::loop_stream::LoopReplayInput::default();
             summary_config.max_turns = 0;
             // The summary completion has its own output budget, deliberately
             // independent of the user turn's max_output_tokens (#1017): a large
@@ -935,30 +941,45 @@ pub fn strip_tool_results(messages: Vec<Message>) -> (Vec<Message>, FileActivity
     history::strip_tool_results(messages)
 }
 
-pub fn sanitize_history_for_provider(messages: Vec<Message>) -> Vec<Message> {
-    history::normalize_assistant_content_order(history::drop_unpaired_tool_calls(
-        history::drop_orphaned_tool_results(messages),
-    ))
+pub fn sanitize_history_for_provider(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> Vec<Message> {
+    history::normalize_assistant_content_order(
+        profile,
+        history::drop_unpaired_tool_calls(history::drop_orphaned_tool_results(messages)),
+    )
 }
 
 /// The single canonical narrowing from the durable transcript to the provider
 /// view: stub tool-result payloads, then drop unpaired calls and orphaned
-/// results and normalize assistant content order.
+/// results and select the provider's assistant content order.
 ///
 /// Both sides of compaction's prefix accounting index *this* list. The
 /// compaction writer records `messages_compacted` against it and the request
 /// reader drops that many rows from it; measuring in one space and dropping in
 /// another was defect 3 of #993.
 ///
-/// Modelled as `Compaction.providerView`, proven idempotent by
-/// `Compaction.providerView_idempotent` — which is what lets [`ReductionEngine::reduce`]
-/// re-normalize its own input for free.
-pub fn provider_view(messages: Vec<Message>) -> (Vec<Message>, FileActivity) {
+/// `Compaction.providerView_idempotent` models the grouped provider view.
+/// Claude's native-preserved order stage and its composed call/result
+/// sanitation are modeled by `PromptAssembly.Content.normalizeFor` and
+/// `PromptAssembly.Provider.sanitizeForProviderGlobalFor_idempotent` under that
+/// owner's explicit coherence/unique-call premises. The latter does not prove
+/// the separate tool-result stubbing stage or arbitrary repeated call IDs.
+pub fn provider_view(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> (Vec<Message>, FileActivity) {
     let (stripped, activity) = strip_tool_results(messages);
-    (sanitize_history_for_provider(stripped), activity)
+    (sanitize_history_for_provider(profile, stripped), activity)
 }
 
-fn provider_view_with_sources(
+/// The same provider projection as [`provider_view`], retaining the exact input
+/// row index through every stripping, pairing, and order-selection stage.
+/// Consumers may attach sidecars by this emitted index; they must not recover
+/// row provenance by comparing provider IDs or normalized message bytes.
+pub fn provider_view_with_sources(
+    profile: ProviderInputProfile,
     messages: Vec<Message>,
 ) -> (Vec<history::SourcedMessage>, FileActivity) {
     let sourced = messages
@@ -970,12 +991,37 @@ fn provider_view_with_sources(
         })
         .collect();
     let (stripped, activity) = history::strip_tool_results_sourced(sourced);
-    let sanitized = history::normalize_assistant_content_order_sourced(
-        history::drop_unpaired_tool_calls_sourced(history::drop_orphaned_tool_results_sourced(
-            stripped,
-        )),
-    );
+    let sanitized = sanitize_sourced(profile, stripped);
     (sanitized, activity)
+}
+
+/// The entry/repair sanitizer without tool-result stubbing, retaining the
+/// original row coordinate for an independently carried replay source.
+pub fn sanitize_history_with_sources(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> Vec<history::SourcedMessage> {
+    let sourced = messages
+        .into_iter()
+        .enumerate()
+        .map(|(source_index, message)| history::SourcedMessage {
+            source_index,
+            message,
+        })
+        .collect();
+    sanitize_sourced(profile, sourced)
+}
+
+fn sanitize_sourced(
+    profile: ProviderInputProfile,
+    sourced: Vec<history::SourcedMessage>,
+) -> Vec<history::SourcedMessage> {
+    history::normalize_assistant_content_order_sourced(
+        profile,
+        history::drop_unpaired_tool_calls_sourced(history::drop_orphaned_tool_results_sourced(
+            sourced,
+        )),
+    )
 }
 
 /// Find the inclusive canonical message cursor that denotes a provider-view
@@ -987,6 +1033,7 @@ fn provider_view_with_sources(
 /// runtime witness for `Compaction.CursorDenotes`. The work is linear in the
 /// transcript rather than re-projecting every possible split.
 pub fn compacted_through_sequence(
+    profile: ProviderInputProfile,
     rows: &[(u32, Message)],
     provider_prefix_len: usize,
 ) -> Option<u32> {
@@ -997,7 +1044,7 @@ pub fn compacted_through_sequence(
         .iter()
         .map(|(_, message)| message.clone())
         .collect::<Vec<_>>();
-    let (sourced_view, _) = provider_view_with_sources(messages.clone());
+    let (sourced_view, _) = provider_view_with_sources(profile, messages.clone());
     if provider_prefix_len > sourced_view.len() {
         return None;
     }
@@ -1008,11 +1055,11 @@ pub fn compacted_through_sequence(
     if split == 0 {
         return None;
     }
-    let (prefix_view, _) = provider_view(messages[..split].to_vec());
+    let (prefix_view, _) = provider_view(profile, messages[..split].to_vec());
     if prefix_view.len() != provider_prefix_len {
         return None;
     }
-    let (suffix_view, _) = provider_view(messages[split..].to_vec());
+    let (suffix_view, _) = provider_view(profile, messages[split..].to_vec());
     let full_view = sourced_view
         .iter()
         .map(|item| &item.message)
@@ -1028,6 +1075,7 @@ pub fn compacted_through_sequence(
 /// Persistence-specific prefix offsets are contained here; request assembly
 /// and the shared reducer deal only in canonical provider views.
 pub fn session_cursor_for_reduction(
+    profile: ProviderInputProfile,
     rows: &[(u32, Message)],
     prior_provider_prefix: usize,
     reduction: ExactReduction<'_>,
@@ -1036,12 +1084,13 @@ pub fn session_cursor_for_reduction(
         .iter()
         .map(|(_, message)| message.clone())
         .collect::<Vec<_>>();
-    let mut full_provider_view = provider_view(durable_messages).0;
+    let mut full_provider_view = provider_view(profile, durable_messages).0;
     anyhow::ensure!(
         prior_provider_prefix <= full_provider_view.len(),
         "session compaction prefix exceeds the canonical provider history"
     );
-    let active = sanitize_history_for_provider(full_provider_view.split_off(prior_provider_prefix));
+    let active =
+        sanitize_history_for_provider(profile, full_provider_view.split_off(prior_provider_prefix));
     anyhow::ensure!(
         reduction
             .compacted_prefix
@@ -1054,14 +1103,14 @@ pub fn session_cursor_for_reduction(
     let cumulative_prefix = prior_provider_prefix
         .checked_add(reduction.compacted_prefix.len())
         .context("session compaction provider-prefix count overflow")?;
-    let candidate = compacted_through_sequence(rows, cumulative_prefix);
+    let candidate = compacted_through_sequence(profile, rows, cumulative_prefix);
     Ok(candidate.filter(|cursor| {
         let suffix = rows
             .iter()
             .filter(|(sequence, _)| sequence > cursor)
             .map(|(_, message)| message.clone())
             .collect::<Vec<_>>();
-        provider_view(suffix).0 == reduction.retained_suffix
+        provider_view(profile, suffix).0 == reduction.retained_suffix
     }))
 }
 
@@ -1094,11 +1143,12 @@ pub fn split_for_summary(
 /// Runtime counterpart of Lean `PromptView.safeToReduce`. Canonical loading
 /// has already reconstructed the selected immutable headers and payloads, so
 /// reduction requires an ordinary turn boundary and a provider-view fixpoint.
-pub fn safe_to_reduce(messages: &[Message]) -> bool {
+pub fn safe_to_reduce(profile: ProviderInputProfile, messages: &[Message]) -> bool {
     let Some(last) = messages.last() else {
         return false;
     };
-    is_ordinary_message(last) && sanitize_history_for_provider(messages.to_vec()) == messages
+    is_ordinary_message(last)
+        && sanitize_history_for_provider(profile, messages.to_vec()) == messages
 }
 
 fn is_ordinary_message(message: &Message) -> bool {
