@@ -580,6 +580,11 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.mailbox_reply_cases,
         ),
         (
+            "mailbox_handoff_cases",
+            "MailboxHandoffCases",
+            &snapshot.mailbox_handoff_cases,
+        ),
+        (
             "invalid_tool_progress_cases",
             "InvalidToolProgressCases",
             &snapshot.invalid_tool_progress_cases,
@@ -859,6 +864,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ClientBehaviorReadinessCases".to_string(),
         ));
     }
+    if !snapshot.readiness_publication_cases.is_empty() {
+        emitted.insert((
+            "readiness_publication_cases".to_string(),
+            "ReadinessPublicationCases".to_string(),
+        ));
+    }
     if !snapshot.live_overlay_cases.is_empty() {
         emitted.insert((
             "live_overlay_cases".to_string(),
@@ -875,6 +886,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "recovery_sweep_cases".to_string(),
             "RecoverySweepCases".to_string(),
+        ));
+    }
+    if !snapshot.reserved_child_materialization_cases.is_empty() {
+        emitted.insert((
+            "reserved_child_materialization_cases".to_string(),
+            "ReservedChildMaterializationCases".to_string(),
         ));
     }
     if !lean_restart_disposition_cases().is_empty() {
@@ -1001,6 +1018,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "rendered_capture_cases".to_string(),
             "RenderedCaptureCases".to_string(),
+        ));
+    }
+    if !snapshot.rendered_capture_storage_cases.is_empty() {
+        emitted.insert((
+            "rendered_capture_storage_cases".to_string(),
+            "RenderedCaptureStorageCases".to_string(),
         ));
     }
     if !snapshot.durable_reduction_cases.is_empty() {
@@ -1319,6 +1342,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "session_hydration_cases".to_string(),
             "SessionHydrationDecisionCases".to_string(),
+        ));
+    }
+    if !snapshot.session_hydration_closure_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_closure_cases".to_string(),
+            "SessionHydrationClosureCases".to_string(),
         ));
     }
     if !snapshot.session_hydration_apply_cases.is_empty() {

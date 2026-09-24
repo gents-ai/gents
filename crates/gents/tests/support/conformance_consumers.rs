@@ -182,6 +182,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_behavior_readiness_cases_drive_the_production_projector",
         },
         ConformanceConsumer::RustTest {
+            id: "behavior_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes",
+            package: "gents",
+            source_path: "crates/gents/src/behavior_readiness_publisher/tests.rs",
+            module_path: "behavior_readiness_publisher::tests",
+            function: "generated_readiness_publication_traces_write_only_semantic_changes",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::generated_slot_accounting_cases_pin_inference_and_fleet_contracts",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",
@@ -264,6 +271,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/mailbox/reply_tests.rs",
             module_path: "mailbox::reply_tests",
             function: "generated_reply_cases_drive_claim_validation",
+        },
+        ConformanceConsumer::RustTest {
+            id: "mailbox::reply_tests::modeled_handoff_positive_sequence_maps_to_native_owners",
+            package: "gents",
+            source_path: "crates/gents/src/mailbox/reply_tests.rs",
+            module_path: "mailbox::reply_tests",
+            function: "modeled_handoff_positive_sequence_maps_to_native_owners",
         },
         ConformanceConsumer::RustTest {
             id: "agent::output_obligation::logical_tests::generated_logical_output_obligation_cases_drive_signed_requests_and_durable_writes",
@@ -502,6 +516,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/src/agent/p2p_reconcile/session_hydration_closure.rs",
             module_path: "agent::p2p_reconcile::session_hydration_closure::tests",
             function: "generated_modeled_closure_input_selects_exact_native_manifest",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::admission_fixture::tests::generated_reserved_child_cases_drive_actual_transaction_owner",
+            package: "gents",
+            source_path: "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
+            module_path: "tool_call_lifecycle::admission_fixture::tests",
+            function: "generated_reserved_child_cases_drive_actual_transaction_owner",
+        },
+        ConformanceConsumer::RustTest {
+            id: "rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec",
+            package: "gents",
+            source_path: "crates/gents/src/rendered_request/encoding.rs",
+            module_path: "rendered_request::encoding::tests",
+            function: "generated_storage_cases_drive_the_lossless_codec",
         },
         ConformanceConsumer::RustTest {
             id: "conformance::session_hydration::generated_session_hydration_apply_cases_match_terminal_delivery_core",

@@ -600,6 +600,12 @@ def caseCoverage : List CoverageEntry :=
       "agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
       "The native closure builder is exercised, but the adapter filters access observations itself and derives authorized_reference_closure from its result. Bind independent ACP observations through the production authorization owner before claiming end-to-end selection coverage.")
       "session-hydration" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "session_hydration_closure_cases"
+      "SessionHydrationClosureCases"
+      "agent::p2p_reconcile::session_hydration_closure::tests::generated_modeled_closure_input_selects_exact_native_manifest"
+      "The native consumer checks closure construction and selection against modeled rows, but supplies access and denial observations as fixture input. It does not verify live ACP decisions or end-to-end peer hydration.")
+      "session-hydration" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "session_hydration_apply_cases"
       "SessionHydrationApplyCases"
@@ -701,6 +707,12 @@ def caseCoverage : List CoverageEntry :=
       "StartupReadinessCases"
       "conformance::generated_startup_readiness_cases_pin_bounded_barrier_release")
       "runtime-reconcile" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "readiness_publication_cases"
+      "ReadinessPublicationCases"
+      "behavior_readiness_publisher::tests::generated_readiness_publication_traces_write_only_semantic_changes"
+      "The native consumer drives semantic state changes and idle time through a controlled writer. Durable DefraDB publication and host/process failure behavior are not exercised by this writer fixture.")
+      "runtime-reconcile" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "apply_reconcile_cases"
       "ApplyReconcileCases"
@@ -759,6 +771,12 @@ def caseCoverage : List CoverageEntry :=
       "mailbox::reply_tests::generated_reply_cases_drive_claim_validation"
       "Decision cases cover reply matching and terminal-state eligibility. Signed-row loading, atomic request/item claim, and concurrent dismissal require transaction-owner integration tests.")
       "mailbox" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "mailbox_handoff_cases"
+      "MailboxHandoffCases"
+      "mailbox::reply_tests::modeled_handoff_positive_sequence_maps_to_native_owners"
+      "Only the fresh-linked positive case drives the stamped mailbox write, signed producer terminal owner, and linked reply admission in native storage. The other eleven generated handoff cases remain model-only; this consumer does not exercise AgentToolCall result publication, the owned completion loop, or atomic crash recovery across the separate mailbox and request transactions.")
+      "mailbox" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (consumerCoverage
       "logical_output_obligation_cases"
       "LogicalOutputObligationCases"
@@ -1039,6 +1057,12 @@ def caseCoverage : List CoverageEntry :=
       "RestartDispositionCases"
       "tool_call_lifecycle::recovery_conformance::generated_native_restart_dispositions_use_canonical_admission_owner")
       "recovery" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "reserved_child_materialization_cases"
+      "ReservedChildMaterializationCases"
+      "tool_call_lifecycle::admission_fixture::tests::generated_reserved_child_cases_drive_actual_transaction_owner"
+      "The native consumer drives reserved-child create, replay and conflict through the transaction owner and checks physical rows. It does not prove arbitrary parent authorization or host-independent child execution.")
+      "subagent" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
@@ -1444,6 +1468,12 @@ def caseCoverage : List CoverageEntry :=
       "rendered_capture_cases"
       "RenderedCaptureCases"
       "agent::loop_stream::tests::generated_rendered_capture_cases_hold_against_the_real_defra_sink")
+      "rendered-capture" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "rendered_capture_storage_cases"
+      "RenderedCaptureStorageCases"
+      "rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec"
+      "The native consumer checks full and delta codec reconstruction with an injected base and witness. It does not exercise DefraDB base lookup, authorization, or provider-send ordering.")
       "rendered-capture" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "durable_reduction_cases"
