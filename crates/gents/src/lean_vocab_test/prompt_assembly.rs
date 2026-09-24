@@ -159,6 +159,93 @@ pub(crate) struct LeanPromptAssemblyClaudeStreamCase {
     pub(crate) calls: Vec<String>,
 }
 
+/// Model-only Claude thinking SSE witness; both previews and sealed content
+/// come from `ClaudeMap.runContentTrace`, not from a native parser oracle.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyClaudeThinkingStreamCase {
+    pub(crate) name: String,
+    pub(crate) surface: Vec<String>,
+    pub(crate) events: Vec<LeanClaudeStreamEvent>,
+    pub(crate) outcome: String,
+    pub(crate) steps: Vec<LeanClaudeContentStep>,
+    pub(crate) content: Vec<LeanClaudeStreamBlock>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeStreamEvent {
+    pub(crate) kind: String,
+    pub(crate) value: Option<String>,
+    pub(crate) id: Option<u64>,
+    pub(crate) name: Option<String>,
+    pub(crate) input: Option<String>,
+    pub(crate) index: Option<u64>,
+    pub(crate) fragment: Option<String>,
+    pub(crate) data: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeReasoningPart {
+    pub(crate) kind: String,
+    pub(crate) payload: String,
+    pub(crate) signature: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeStreamBlock {
+    pub(crate) kind: String,
+    pub(crate) value: Option<String>,
+    pub(crate) parts: Option<Vec<LeanClaudeReasoningPart>>,
+    pub(crate) id: Option<u64>,
+    pub(crate) name: Option<String>,
+    pub(crate) arguments: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeContentStep {
+    pub(crate) provisional_thinking: Option<String>,
+    pub(crate) sealed: Vec<LeanClaudeStreamBlock>,
+}
+
+/// Model-only continuation replay witness from reconstructed canonical native blocks.
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanPromptAssemblyClaudeReplayCase {
+    pub(crate) name: String,
+    pub(crate) blocks: Vec<LeanClaudeReplayInputBlock>,
+    pub(crate) outcome: String,
+    pub(crate) replay: Vec<LeanClaudeReplayBlock>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeReplayInputBlock {
+    pub(crate) kind: String,
+    pub(crate) payload: Option<Vec<u8>>,
+    pub(crate) parts: Option<Vec<LeanClaudeReplayInputPart>>,
+    pub(crate) id: Option<String>,
+    pub(crate) doc_id: Option<u64>,
+    pub(crate) call_id: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) arguments: Option<Vec<u8>>,
+    pub(crate) signature: Option<String>,
+    pub(crate) additional_params: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeReplayInputPart {
+    pub(crate) kind: String,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) signature: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+pub(crate) struct LeanClaudeReplayBlock {
+    pub(crate) kind: String,
+    pub(crate) payload: Option<Vec<u8>>,
+    pub(crate) signature: Option<String>,
+    pub(crate) call_id: Option<String>,
+    pub(crate) name: Option<String>,
+    pub(crate) arguments: Option<Vec<u8>>,
+}
+
 /// A request-wide token-ledger witness computed by
 /// `PromptAssembly.AggregateBudget`.
 #[derive(Debug, Deserialize, Clone)]

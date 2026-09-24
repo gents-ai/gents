@@ -785,6 +785,11 @@ private def streamEventTag : PromptAssembly.ClaudeMap.StreamEvent → String
   | .start id name input => s!"start:{id}:{name}:{input.getD ""}"
   | .delta fragment => "delta:" ++ fragment
   | .stop => "stop"
+  | .thinkingStart index => s!"thinking-start:{index}"
+  | .thinkingDelta index fragment => s!"thinking-delta:{index}:{fragment}"
+  | .signatureDelta index fragment => s!"signature-delta:{index}:{fragment}"
+  | .redactedStart index data => s!"redacted-start:{index}:{data}"
+  | .contentStop index => s!"content-stop:{index}"
 
 private def claudeStreamCase (name : String) (surface : List String)
     (events : List PromptAssembly.ClaudeMap.StreamEvent) : PromptAssemblyClaudeStreamCase :=
@@ -812,6 +817,93 @@ def promptAssemblyClaudeStreamCases : List PromptAssemblyClaudeStreamCase :=
   , claudeStreamCase "unterminated-flushes" ["echo"] [.start 1 "echo" none, .delta "{}"]
   , claudeStreamCase "two-blocks-in-order" ["echo", "list_files"]
       [.start 1 "echo" none, .delta "{}", .stop, .text "then", .start 2 "list_files" none, .delta "{\"path\":\".\"}", .stop]
+  ]
+
+/-! The two follow-up groups below retain the typed modeled inputs and derive
+their expectations through ClaudeMap's existing stream fold and replay owner.
+The legacy tool-call group above deliberately keeps its current native consumer. -/
+
+structure PromptAssemblyClaudeThinkingStreamCase where
+  name : String
+  surface : List String
+  events : List PromptAssembly.ClaudeMap.StreamEvent
+  outcome : String
+  steps : List PromptAssembly.ClaudeMap.ContentStep
+  content : List PromptAssembly.ClaudeMap.StreamBlock
+  deriving Repr
+
+private def claudeThinkingStreamCase (name : String) (surface : List String)
+    (events : List PromptAssembly.ClaudeMap.StreamEvent) :
+    PromptAssemblyClaudeThinkingStreamCase :=
+  match PromptAssembly.ClaudeMap.runContentTrace (surfaceOf surface) events with
+  | .ok (steps, content) => { name, surface, events, outcome := "ok", steps, content }
+  | .error error =>
+      { name, surface, events, outcome := PromptAssembly.ClaudeMap.errorName error,
+        steps := [], content := [] }
+
+def promptAssemblyClaudeThinkingStreamCases : List PromptAssemblyClaudeThinkingStreamCase :=
+  [ claudeThinkingStreamCase "unicode-fragmented-signature" []
+      [.thinkingStart 0, .thinkingDelta 0 "考", .thinkingDelta 0 "慮",
+       .signatureDelta 0 "署", .signatureDelta 0 "名", .contentStop 0]
+  , claudeThinkingStreamCase "empty-text-signed" []
+      [.thinkingStart 0, .signatureDelta 0 "signature", .contentStop 0]
+  , claudeThinkingStreamCase "redacted-before-tool" ["echo"]
+      [.redactedStart 0 "opaque", .contentStop 0,
+       .start 1 "echo" none, .delta "{}", .stop]
+  , claudeThinkingStreamCase "missing-signature" []
+      [.thinkingStart 0, .thinkingDelta 0 "thinking", .contentStop 0]
+  , claudeThinkingStreamCase "wrong-index" []
+      [.thinkingStart 0, .signatureDelta 1 "sig"]
+  , claudeThinkingStreamCase "reused-block-index" []
+      [.thinkingStart 0, .signatureDelta 0 "sig", .contentStop 0,
+       .redactedStart 0 "opaque"]
+  , claudeThinkingStreamCase "interleaved-text" []
+      [.thinkingStart 0, .text "not-this-block"]
+  , claudeThinkingStreamCase "text-during-tool" ["echo"]
+      [.start 1 "echo" none, .text "not-this-block"]
+  , claudeThinkingStreamCase "thinking-after-signature" []
+      [.thinkingStart 0, .signatureDelta 0 "sig", .thinkingDelta 0 "late"]
+  , claudeThinkingStreamCase "unterminated-thinking" []
+      [.thinkingStart 0, .signatureDelta 0 "sig"]
+  ]
+
+structure PromptAssemblyClaudeReplayCase where
+  name : String
+  blocks : List (CanonicalOutput.MessageBlock (List UInt8))
+  outcome : String
+  replay : List PromptAssembly.ClaudeMap.ReplayBlock
+  deriving Repr
+
+private def claudeReplayCase (name : String)
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    PromptAssemblyClaudeReplayCase :=
+  match PromptAssembly.ClaudeMap.replayBlocks blocks with
+  | .ok replay => { name, blocks, outcome := "ok", replay }
+  | .error error =>
+      { name, blocks, outcome := PromptAssembly.ClaudeMap.errorName error, replay := [] }
+
+private def utf8Bytes (value : String) : List UInt8 := value.toUTF8.data.toList
+
+def promptAssemblyClaudeReplayCases : List PromptAssemblyClaudeReplayCase :=
+  [ claudeReplayCase "ordered-signed-redacted-tool"
+      [.reasoning none [.text (utf8Bytes "考慮") (some "署名"),
+                        .redacted (utf8Bytes "opaque")],
+       .toolCall 1 "tool" (some "call-1") "echo" (utf8Bytes "{}") none none]
+  , claudeReplayCase "empty-text-with-signature"
+      [.reasoning none [.text [] (some "signature")]]
+  , claudeReplayCase "two-signed-parts-in-order"
+      [.reasoning none [.text (utf8Bytes "first") (some "sig-1"),
+                        .text (utf8Bytes "second") (some "sig-2")]]
+  , claudeReplayCase "unsigned-rejected"
+      [.reasoning none [.text (utf8Bytes "thinking") none]]
+  , claudeReplayCase "empty-signature-rejected"
+      [.reasoning none [.text [] (some "")]]
+  , claudeReplayCase "empty-redacted-rejected"
+      [.reasoning none [.redacted []]]
+  , claudeReplayCase "encrypted-is-not-redacted"
+      [.reasoning none [.encrypted (utf8Bytes "opaque")]]
+  , claudeReplayCase "summary-is-not-signed"
+      [.reasoning none [.summary (utf8Bytes "summary")]]
   ]
 
 end Conformance.ContractCases

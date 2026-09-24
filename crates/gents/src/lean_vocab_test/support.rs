@@ -197,6 +197,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_map_cases: Vec<LeanPromptAssemblyClaudeMapCase>,
     pub(crate) prompt_assembly_claude_body_cases: Vec<LeanPromptAssemblyClaudeBodyCase>,
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
+    pub(crate) prompt_assembly_claude_thinking_stream_cases:
+        Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
+    pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -1672,6 +1675,16 @@ pub(crate) fn lean_prompt_assembly_claude_body_cases() -> &'static [LeanPromptAs
 pub(crate) fn lean_prompt_assembly_claude_stream_cases(
 ) -> &'static [LeanPromptAssemblyClaudeStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_stream_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_thinking_stream_cases(
+) -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_replay_cases(
+) -> &'static [LeanPromptAssemblyClaudeReplayCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_replay_cases
 }
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {

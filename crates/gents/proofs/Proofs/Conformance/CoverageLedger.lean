@@ -1364,6 +1364,16 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeStreamCases"
       "conformance::prompt_assembly::generated_claude_stream_cases_drive_the_messages_parser")
       "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeThinkingStreamCases"
+      "Modeled signed/redacted thinking events, provisional text, and sealed content are exported but not yet bound to the native Claude Messages SSE parser/accumulator.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeReplayCases"
+      "Modeled reconstructed native signed/redacted reasoning replay is exported but not yet bound to the native Claude Messages request serializer.")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "rendered_capture_cases"
       "RenderedCaptureCases"
