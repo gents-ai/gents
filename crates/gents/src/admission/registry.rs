@@ -8,7 +8,7 @@ use super::client::current_context;
 #[cfg(test)]
 use super::client::{scope_request, AdmissionCallContext, CallKind};
 use super::config::BackendAdmissionConfig;
-use super::controller::{BackendAdmissionController, InferenceCallRecord};
+use super::controller::{BackendAdmissionController, CapacityPool, InferenceCallRecord};
 use super::permit::AdmissionPermit;
 use super::persistence::persist_terminal_call;
 
@@ -16,28 +16,27 @@ use super::persistence::persist_terminal_call;
 #[path = "registry_contract_tests.rs"]
 mod contract_tests;
 
+/// The slot connection test callers attribute their calls to.
+#[cfg(test)]
+pub(super) const TEST_SLOT_CONNECTION: &str = "test-slot-connection";
+
 #[derive(Clone)]
 pub(crate) struct AdmissionRegistry {
     inner: Arc<AdmissionRegistryInner>,
 }
 
-pub(super) struct AdmissionRegistryInner {
+struct AdmissionRegistryInner {
     node: Arc<EmbeddedNode>,
     runtime_instance_id: String,
-    state: Mutex<RegistryState>,
+    backends: Mutex<HashMap<String, BackendAdmission>>,
 }
 
-#[derive(Default)]
-struct RegistryState {
-    active: HashMap<String, Arc<BackendAdmissionController>>,
-    draining: HashMap<String, Vec<Arc<BackendAdmissionController>>>,
-    pending: HashMap<String, PendingControllerConfig>,
-}
-
-#[derive(Clone)]
-struct PendingControllerConfig {
-    generation: u64,
-    config: BackendAdmissionConfig,
+/// A backend's capacity pool outlives its admitting incarnations and its
+/// outages while any permit it issued is held. Replaced incarnations are
+/// owned only by their outstanding permits and queued waiters.
+struct BackendAdmission {
+    pool: Arc<CapacityPool>,
+    admitting: Option<Arc<BackendAdmissionController>>,
 }
 
 impl AdmissionRegistry {
@@ -46,67 +45,76 @@ impl AdmissionRegistry {
             inner: Arc::new(AdmissionRegistryInner {
                 node,
                 runtime_instance_id: uuid::Uuid::new_v4().to_string(),
-                state: Mutex::new(RegistryState::default()),
+                backends: Mutex::new(HashMap::new()),
             }),
         }
     }
 
+    fn backends(&self) -> std::sync::MutexGuard<'_, HashMap<String, BackendAdmission>> {
+        self.inner
+            .backends
+            .lock()
+            .expect("AdmissionRegistry state lock poisoned")
+    }
+
+    /// Installs the admitting controller for every available backend in this
+    /// complete snapshot, in the same step and on the backend's existing
+    /// pool, so new calls never observe a gap. Removed and unavailable
+    /// backends close admission; their held permits keep counting if the
+    /// backend returns.
     pub(crate) fn reconcile(
         &self,
         generation: u64,
         configs: &HashMap<String, BackendAdmissionConfig>,
     ) {
-        let mut state = self
-            .inner
-            .state
-            .lock()
-            .expect("AdmissionRegistry state lock poisoned");
-        state.prune_drained();
-
-        // Rebuild pending work from this complete desired snapshot while the
-        // registry mutex excludes drain callbacks. Only the install helper
-        // below consumes it and constructs replacement controllers.
-        state.pending.clear();
-
-        let active_ids = state.active.keys().cloned().collect::<Vec<_>>();
-        for backend_id in active_ids {
-            let desired = configs
-                .get(&backend_id)
-                .filter(|config| config.is_available());
-            match (state.active.remove(&backend_id), desired) {
-                (Some(active), Some(config)) if active.matches(config) => {
-                    state.active.insert(backend_id, active);
-                }
-                (Some(active), _) => {
-                    active.close();
-                    if !active.is_drained() {
-                        state
-                            .draining
-                            .entry(backend_id.clone())
-                            .or_default()
-                            .push(active);
-                    }
-                }
-                (None, _) => {}
-            }
-        }
-
+        let mut backends = self.backends();
         for (backend_id, config) in configs {
-            if config.is_available() && !state.active.contains_key(backend_id) {
-                state.pending.insert(
-                    backend_id.clone(),
-                    PendingControllerConfig {
-                        generation,
-                        config: config.clone(),
-                    },
-                );
+            if !config.is_available() {
+                continue;
+            }
+            let entry = backends
+                .entry(backend_id.clone())
+                .or_insert_with(|| BackendAdmission {
+                    pool: CapacityPool::open(config.max_concurrent),
+                    admitting: None,
+                });
+            if entry
+                .admitting
+                .as_ref()
+                .is_some_and(|current| current.matches(config))
+            {
+                continue;
+            }
+            entry.pool.configure(config.max_concurrent);
+            tracing::info!(
+                backend_id = %backend_id,
+                from_generation = entry.admitting.as_ref().map(|current| current.generation),
+                to_generation = generation,
+                max_concurrent = config.max_concurrent,
+                "installed backend admission controller"
+            );
+            entry.admitting = Some(BackendAdmissionController::new(
+                generation,
+                config.clone(),
+                entry.pool.clone(),
+            ));
+        }
+        for (backend_id, entry) in backends.iter_mut() {
+            let available = configs
+                .get(backend_id)
+                .is_some_and(BackendAdmissionConfig::is_available);
+            if !available {
+                if let Some(retired) = entry.admitting.take() {
+                    tracing::info!(
+                        backend_id = %backend_id,
+                        generation = retired.generation,
+                        "closed backend admission"
+                    );
+                    entry.pool.close();
+                }
             }
         }
-
-        let pending_ids = state.pending.keys().cloned().collect::<Vec<_>>();
-        for backend_id in pending_ids {
-            state.install_pending_if_ready(&self.inner, &backend_id);
-        }
+        backends.retain(|_, entry| entry.admitting.is_some() || !entry.pool.is_retired());
     }
 
     #[cfg(test)]
@@ -118,6 +126,28 @@ impl AdmissionRegistry {
         behavior_id: impl Into<String>,
         agent_did: impl Into<String>,
         call_kind: CallKind,
+    ) -> Result<AdmissionPermit, CompletionError> {
+        let backend_id = backend_id.into();
+        self.acquire_with_connection_for_test(
+            request_id,
+            backend_id,
+            behavior_id,
+            agent_did,
+            call_kind,
+            TEST_SLOT_CONNECTION,
+        )
+        .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn acquire_with_connection_for_test(
+        &self,
+        request_id: impl Into<String>,
+        backend_id: impl Into<String>,
+        behavior_id: impl Into<String>,
+        agent_did: impl Into<String>,
+        call_kind: CallKind,
+        connection: &str,
     ) -> Result<AdmissionPermit, CompletionError> {
         use std::sync::atomic::AtomicU64;
         let context = AdmissionCallContext {
@@ -134,10 +164,44 @@ impl AdmissionRegistry {
             inference_token: None,
             terminal_failure_reason: None,
         };
-        scope_request(context, async { self.acquire_current_call().await }).await
+        scope_request(context, async {
+            self.acquire_current_call(connection).await
+        })
+        .await
     }
 
-    pub(super) async fn acquire_current_call(&self) -> Result<AdmissionPermit, CompletionError> {
+    /// Acquires in the ambient request scope as a test slot.
+    #[cfg(test)]
+    pub(crate) async fn acquire_current_call_for_test(
+        &self,
+    ) -> Result<AdmissionPermit, CompletionError> {
+        self.acquire_current_call(TEST_SLOT_CONNECTION).await
+    }
+
+    #[cfg(test)]
+    pub(super) fn active_for_test(
+        &self,
+        backend_id: &str,
+    ) -> Option<Arc<BackendAdmissionController>> {
+        self.backends()
+            .get(backend_id)
+            .and_then(|entry| entry.admitting.clone())
+    }
+
+    #[cfg(test)]
+    pub(super) fn pool_for_test(&self, backend_id: &str) -> Option<Arc<CapacityPool>> {
+        self.backends()
+            .get(backend_id)
+            .map(|entry| entry.pool.clone())
+    }
+
+    /// Admits one provider call issued through a client built for
+    /// `connection` (see `backend_connection_fingerprint`), which attributes
+    /// the call.
+    pub(super) async fn acquire_current_call(
+        &self,
+        connection: &str,
+    ) -> Result<AdmissionPermit, CompletionError> {
         let context = current_context()?;
         let cancel_observer = context.inference_token.clone();
         let terminal_failure_observer = context.terminal_failure_reason.clone();
@@ -149,14 +213,10 @@ impl AdmissionRegistry {
             )));
         }
 
-        let controller = {
-            let state = self
-                .inner
-                .state
-                .lock()
-                .expect("AdmissionRegistry state lock poisoned");
-            state.active.get(&pending.backend_id).cloned()
-        };
+        let controller = self
+            .backends()
+            .get(&pending.backend_id)
+            .and_then(|entry| entry.admitting.clone());
 
         match controller {
             Some(controller) => {
@@ -164,12 +224,14 @@ impl AdmissionRegistry {
                     .acquire(
                         self.inner.node.clone(),
                         pending,
+                        connection,
                         cancel_observer,
                         terminal_failure_observer,
                     )
                     .await
             }
             None => {
+                let backend_id = pending.backend_id.clone();
                 let call = InferenceCallRecord::without_controller(pending);
                 if let Err(error) = persist_terminal_call(
                     self.inner.node.clone(),
@@ -182,60 +244,10 @@ impl AdmissionRegistry {
                 {
                     tracing::warn!(error = %error, "failed to persist backend-gone inference call");
                 }
-                Err(CompletionError::ProviderError(
-                    "BackendGone: backend admission controller is not active".into(),
-                ))
+                Err(CompletionError::ProviderError(format!(
+                    "BackendGone: backend admission controller is not active for backend {backend_id}; it is not configured or not available"
+                )))
             }
-        }
-    }
-}
-
-impl AdmissionRegistryInner {
-    pub(super) fn controller_drained(self: Arc<Self>, backend_id: String) {
-        let mut state = self
-            .state
-            .lock()
-            .expect("AdmissionRegistry state lock poisoned");
-        state.install_pending_if_ready(&self, &backend_id);
-    }
-}
-
-impl RegistryState {
-    fn prune_drained(&mut self) {
-        self.draining.retain(|_, controllers| {
-            controllers.retain(|controller| !controller.is_drained());
-            !controllers.is_empty()
-        });
-    }
-
-    fn has_draining(&mut self, backend_id: &str) -> bool {
-        self.prune_drained();
-        self.draining
-            .get(backend_id)
-            .is_some_and(|controllers| !controllers.is_empty())
-    }
-
-    fn install_pending_if_ready(
-        &mut self,
-        registry: &Arc<AdmissionRegistryInner>,
-        backend_id: &str,
-    ) {
-        self.prune_drained();
-        if self.active.contains_key(backend_id) || self.has_draining(backend_id) {
-            return;
-        }
-        let Some(pending) = self.pending.remove(backend_id) else {
-            return;
-        };
-        if pending.config.is_available() {
-            self.active.insert(
-                backend_id.to_string(),
-                BackendAdmissionController::new(
-                    pending.generation,
-                    pending.config,
-                    Arc::downgrade(registry),
-                ),
-            );
         }
     }
 }

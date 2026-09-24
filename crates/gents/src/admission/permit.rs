@@ -3,17 +3,15 @@ use std::sync::{Arc, Mutex};
 use defra_node::EmbeddedNode;
 use futures::future::BoxFuture;
 use rig::completion::{CompletionError, Usage};
-use tokio::sync::OwnedSemaphorePermit;
 use tokio_util::sync::CancellationToken;
 
-use super::controller::{BackendAdmissionController, InferenceCallRecord};
+use super::controller::{InferenceCallRecord, PoolPermit};
 use super::persistence::{persist_existing_call_terminal, spawn_persistence};
 use super::stream_guard::StreamGuardLifecycle;
 
 pub(crate) struct AdmissionPermit {
     node: Arc<EmbeddedNode>,
-    controller: Arc<BackendAdmissionController>,
-    permit: Option<OwnedSemaphorePermit>,
+    permit: Option<PoolPermit>,
     call: InferenceCallRecord,
     _doc_id: String,
     terminal: Option<PermitTerminal>,
@@ -32,8 +30,7 @@ struct PermitTerminal {
 impl AdmissionPermit {
     pub(super) fn new(
         node: Arc<EmbeddedNode>,
-        controller: Arc<BackendAdmissionController>,
-        permit: OwnedSemaphorePermit,
+        permit: PoolPermit,
         call: InferenceCallRecord,
         doc_id: String,
         cancel_observer: Option<CancellationToken>,
@@ -41,7 +38,6 @@ impl AdmissionPermit {
     ) -> Self {
         Self {
             node,
-            controller,
             permit: Some(permit),
             call,
             _doc_id: doc_id,
@@ -50,6 +46,16 @@ impl AdmissionPermit {
             cancel_observer,
             terminal_failure_observer,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn controller_generation_for_test(&self) -> u64 {
+        self.call.controller_generation
+    }
+
+    #[cfg(test)]
+    pub(super) fn attribution_for_test(&self) -> &str {
+        &self.call.backend_config_fingerprint
     }
 
     pub(crate) async fn finish_success(
@@ -156,14 +162,9 @@ impl StreamGuardLifecycle for AdmissionPermit {
 
 impl Drop for AdmissionPermit {
     fn drop(&mut self) {
-        // Return the semaphore permit before the in-flight release: the
-        // release can synchronously install a replacement controller, and a
-        // drained controller must hold no outstanding permits (#1001; Lean
-        // `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`).
-        // Field drop runs only after this body — including the observer lock
-        // below — so the permit must be taken explicitly here.
+        // Field drop runs only after this body, which can block on the
+        // observer lock below; return capacity first.
         drop(self.permit.take());
-        self.controller.release_in_flight();
         if self.finished {
             return;
         }

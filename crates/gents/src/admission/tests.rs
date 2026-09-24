@@ -545,7 +545,7 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         AdmissionCallContext::for_request(&request("req-fleet-waiting"), "default", &backend_id);
 
     scope_request(running_context, async {
-        let mut running_permit = registry.acquire_current_call().await.unwrap();
+        let mut running_permit = registry.acquire_current_call_for_test().await.unwrap();
         let running_row = wait_for_request_call_state(
             node.as_ref(),
             "req-fleet-running",
@@ -558,7 +558,10 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         let queued_registry = registry.clone();
         let queued = tokio::spawn(async move {
             scope_request(queued_context, async move {
-                let mut queued_permit = queued_registry.acquire_current_call().await.unwrap();
+                let mut queued_permit = queued_registry
+                    .acquire_current_call_for_test()
+                    .await
+                    .unwrap();
                 queued_permit.finish_success(None).await.unwrap();
             })
             .await;
@@ -595,7 +598,10 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
         &backend_id,
     );
     scope_request(completed_context, async {
-        let mut permit = bounded_registry.acquire_current_call().await.unwrap();
+        let mut permit = bounded_registry
+            .acquire_current_call_for_test()
+            .await
+            .unwrap();
         permit.finish_success(None).await.unwrap();
         drop(permit);
     })
@@ -618,17 +624,26 @@ async fn generated_slot_accounting_fleet_cases_match_admission_runtime_boundary(
     );
 
     let mut first = scope_request(first_context, async {
-        bounded_registry.acquire_current_call().await.unwrap()
+        bounded_registry
+            .acquire_current_call_for_test()
+            .await
+            .unwrap()
     })
     .await;
     let mut second = scope_request(second_context, async {
-        bounded_registry.acquire_current_call().await.unwrap()
+        bounded_registry
+            .acquire_current_call_for_test()
+            .await
+            .unwrap()
     })
     .await;
     let queued_registry = bounded_registry.clone();
     let queued = tokio::spawn(async move {
         scope_request(queued_context, async move {
-            let mut permit = queued_registry.acquire_current_call().await.unwrap();
+            let mut permit = queued_registry
+                .acquire_current_call_for_test()
+                .await
+                .unwrap();
             permit.finish_success(None).await.unwrap();
         })
         .await;
@@ -667,7 +682,7 @@ async fn missing_backend_persists_backend_gone_cancelled_terminal() {
         AdmissionCallContext::for_request(&request("req-backend-gone"), "default", "missing");
 
     scope_request(context, async {
-        let error = match registry.acquire_current_call().await {
+        let error = match registry.acquire_current_call_for_test().await {
             Ok(_) => panic!("missing backend should reject without a permit"),
             Err(error) => error,
         };
@@ -701,8 +716,8 @@ async fn max_queue_depth_zero_allows_immediate_permit_and_rejects_saturated_back
     let context = AdmissionCallContext::for_request(&request("req-zero"), "default", "backend-a");
 
     scope_request(context, async {
-        let mut first = registry.acquire_current_call().await.unwrap();
-        let error = match registry.acquire_current_call().await {
+        let mut first = registry.acquire_current_call_for_test().await.unwrap();
+        let error = match registry.acquire_current_call_for_test().await {
             Ok(_) => panic!("saturated backend should reject without queue capacity"),
             Err(error) => error,
         };
@@ -758,7 +773,7 @@ async fn reconstructed_running_rows_never_exceed_max_concurrent_under_contention
 
         handles.push(tokio::spawn(async move {
             scope_request(context, async move {
-                let mut permit = task_registry.acquire_current_call().await.unwrap();
+                let mut permit = task_registry.acquire_current_call_for_test().await.unwrap();
                 task_acquired_tx
                     .send(idx)
                     .expect("test acquired receiver must stay open");
@@ -831,11 +846,11 @@ async fn queued_calls_start_in_tokio_registration_order_after_permit_release() {
     let second_context = first_context.clone();
 
     scope_request(first_context, async {
-        let mut first = registry.acquire_current_call().await.unwrap();
+        let mut first = registry.acquire_current_call_for_test().await.unwrap();
         let second_registry = registry.clone();
         let second = tokio::spawn(async move {
             scope_request(second_context, async move {
-                let mut permit = second_registry.acquire_current_call().await.unwrap();
+                let mut permit = second_registry.acquire_current_call_for_test().await.unwrap();
                 permit.finish_success(None).await.unwrap();
             })
             .await;
@@ -885,11 +900,14 @@ async fn cancelling_queued_call_terminalizes_without_holding_slot() {
         AdmissionCallContext::for_request(&request("req-queued-cancel"), "default", "backend-a");
 
     scope_request(running_context, async {
-        let mut first = registry.acquire_current_call().await.unwrap();
+        let mut first = registry.acquire_current_call_for_test().await.unwrap();
         let queued_registry = registry.clone();
         let queued = tokio::spawn(async move {
             scope_request(queued_context, async move {
-                let _permit = queued_registry.acquire_current_call().await.unwrap();
+                let _permit = queued_registry
+                    .acquire_current_call_for_test()
+                    .await
+                    .unwrap();
             })
             .await;
         });
@@ -929,7 +947,7 @@ async fn explicit_failure_releases_reconstructed_slot() {
         AdmissionCallContext::for_request(&request("req-explicit-failure"), "default", "backend-a");
 
     scope_request(context, async {
-        let mut permit = registry.acquire_current_call().await.unwrap();
+        let mut permit = registry.acquire_current_call_for_test().await.unwrap();
         let rows = call_rows(node.as_ref()).await;
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
         permit.finish_failure("provider failed").await.unwrap();
@@ -957,17 +975,17 @@ async fn repeated_inference_scope_calls_persist_per_attempt_rows() {
 
     scope_request(context, async {
         scope_call(CallKind::Inference, 1, async {
-            let mut permit = registry.acquire_current_call().await.unwrap();
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
             permit.finish_failure("transient one").await.unwrap();
         })
         .await;
         scope_call(CallKind::Inference, 1, async {
-            let mut permit = registry.acquire_current_call().await.unwrap();
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
             permit.finish_failure("transient two").await.unwrap();
         })
         .await;
         scope_call(CallKind::Inference, 1, async {
-            let mut permit = registry.acquire_current_call().await.unwrap();
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
             permit.finish_success(None).await.unwrap();
         })
         .await;
@@ -1010,7 +1028,7 @@ async fn scoped_scheduled_calls_are_persisted_with_scheduled_kind() {
 
     scope_request(context, async {
         scope_call(CallKind::Scheduled, 1, async {
-            let mut permit = registry.acquire_current_call().await.unwrap();
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
             permit.finish_success(None).await.unwrap();
         })
         .await;
@@ -1038,12 +1056,15 @@ async fn compaction_calls_share_backend_capacity_with_inference_calls() {
     let compaction_context = inference_context.clone();
 
     scope_request(inference_context, async {
-        let mut inference = registry.acquire_current_call().await.unwrap();
+        let mut inference = registry.acquire_current_call_for_test().await.unwrap();
         let compaction_registry = registry.clone();
         let compaction = tokio::spawn(async move {
             scope_request(compaction_context, async move {
                 scope_call(CallKind::Compaction, 1, async {
-                    let mut permit = compaction_registry.acquire_current_call().await.unwrap();
+                    let mut permit = compaction_registry
+                        .acquire_current_call_for_test()
+                        .await
+                        .unwrap();
                     permit.finish_success(None).await.unwrap();
                 })
                 .await;
@@ -1087,7 +1108,7 @@ async fn scoped_oneoff_calls_are_persisted_with_oneoff_kind() {
 
     scope_request(context, async {
         scope_call(CallKind::OneOff, 1, async {
-            let mut permit = registry.acquire_current_call().await.unwrap();
+            let mut permit = registry.acquire_current_call_for_test().await.unwrap();
             permit.finish_success(None).await.unwrap();
         })
         .await;
@@ -1124,7 +1145,7 @@ async fn dropped_permit_with_cancelled_token_persists_cancelled_terminal() {
 
     scope_request(context, async {
         scope_call_with_token(CallKind::Inference, 1, token, async {
-            let permit = registry.acquire_current_call().await.unwrap();
+            let permit = registry.acquire_current_call_for_test().await.unwrap();
             let rows = call_rows(node.as_ref()).await;
             assert_reconstructed_slot_count(&rows, "backend-a", 1);
             // Drop without calling finish_success/finish_failure — simulates
@@ -1167,7 +1188,7 @@ async fn dropped_permit_with_terminal_failure_reason_persists_failed_reason() {
             token,
             observer_for_scope,
             async {
-                let permit = registry.acquire_current_call().await.unwrap();
+                let permit = registry.acquire_current_call_for_test().await.unwrap();
                 let rows = call_rows(node.as_ref()).await;
                 assert_reconstructed_slot_count(&rows, "backend-a", 1);
                 set_terminal_failure_reason(
@@ -1209,7 +1230,7 @@ async fn dropped_permit_without_cancelled_token_persists_failed_terminal() {
         AdmissionCallContext::for_request(&request("req-default-drop"), "default", "backend-a");
 
     scope_request(context, async {
-        let permit = registry.acquire_current_call().await.unwrap();
+        let permit = registry.acquire_current_call_for_test().await.unwrap();
         let rows = call_rows(node.as_ref()).await;
         assert_reconstructed_slot_count(&rows, "backend-a", 1);
         drop(permit);
@@ -1264,7 +1285,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
     let controller = super::controller::BackendAdmissionController::new(
         1,
         config("backend-queue-leak", 1, 1),
-        std::sync::Weak::new(),
+        super::controller::CapacityPool::open(1),
     );
 
     let held = controller
@@ -1272,6 +1293,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         .acquire(
             node.clone(),
             pending_call("req-leak-a", "backend-queue-leak"),
+            "backend-queue-leak:connection",
             None,
             None,
         )
@@ -1283,6 +1305,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         .acquire(
             schemaless,
             pending_call("req-leak-b", "backend-queue-leak"),
+            "backend-queue-leak:connection",
             None,
             None,
         )
@@ -1298,7 +1321,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         "unexpected error: {error}"
     );
     assert_eq!(
-        controller.queue_waiters_for_test(),
+        controller.pool.queue_waiters_for_test(),
         0,
         "persist failure leaked a queue-waiter unit (#1001)"
     );
@@ -1308,6 +1331,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
     let queued = tokio::spawn(controller.clone().acquire(
         node.clone(),
         pending_call("req-leak-c", "backend-queue-leak"),
+        "backend-queue-leak:connection",
         None,
         None,
     ));
@@ -1321,148 +1345,834 @@ async fn queued_persist_failure_releases_queue_capacity() {
     drop(permit);
 }
 
-/// Issue #1001 defect 3. A permit assigned to a parked waiter whose task has
-/// not resumed must stay visible to drain detection; pre-fix, the in-flight
-/// count was incremented only after the acquire resumed, so
-/// `AdmissionRegistry::reconcile` could observe a closed controller as
-/// drained and install a fresh full-capacity controller while the old permit
-/// was live, briefly exceeding `max_concurrent`. Lean:
-/// `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`.
-#[tokio::test]
-async fn assigned_permit_is_visible_to_drain_detection() {
-    use std::future::Future;
-
-    let node = test_node().await;
-    let controller = super::controller::BackendAdmissionController::new(
-        1,
-        config("backend-drain-race", 1, 4),
-        std::sync::Weak::new(),
-    );
-
-    let held = controller
-        .clone()
-        .acquire(
-            node.clone(),
-            pending_call("req-drain-a", "backend-drain-race"),
-            None,
-            None,
+async fn acquire_on(
+    registry: &AdmissionRegistry,
+    request_id: &str,
+    backend_id: &str,
+) -> Result<super::permit::AdmissionPermit, rig::completion::CompletionError> {
+    registry
+        .acquire_for_test(
+            request_id,
+            backend_id,
+            "default",
+            "did:test:test",
+            CallKind::Inference,
         )
         .await
-        .expect("first admission fills the only slot");
+}
 
-    // Park a second acquire in the queue, driving it manually with a no-op
-    // waker so the runtime never resumes it: the semaphore can then hand it
-    // the released permit while its task is unpolled — the acquire→count
-    // window from #1001.
-    let mut queued = Box::pin(controller.clone().acquire(
-        node.clone(),
-        pending_call("req-drain-b", "backend-drain-race"),
-        None,
-        None,
-    ));
-    let waker = futures::task::noop_waker();
-    let mut cx = std::task::Context::from_waker(&waker);
-    let parked_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(
-            queued.as_mut().poll(&mut cx).is_pending(),
-            "queued acquire cannot complete while the permit is held"
-        );
-        let rows = call_rows(node.as_ref()).await;
-        if call_state_for_request(&rows, "req-drain-b").as_deref() == Some("queued") {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < parked_deadline,
-            "queued InferenceCall row never became durable"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    // The durable write is the last await before the semaphore park; a few
-    // more polls carry the future onto the semaphore waiter list so the
-    // released permit below is assigned rather than returned to the pool.
-    // The assertions do not depend on this heuristic landing: in-flight is
-    // counted from acquisition intent, so `is_drained()` stays false either
-    // way — and pre-#1001 it reported drained either way.
-    for _ in 0..20 {
-        assert!(queued.as_mut().poll(&mut cx).is_pending());
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+fn rewritten_connection(
+    backend_id: &str,
+    max_concurrent: usize,
+    max_queue_depth: usize,
+) -> BackendAdmissionConfig {
+    let mut rewritten = config(backend_id, max_concurrent, max_queue_depth);
+    rewritten.config_fingerprint =
+        format!("{backend_id}:rotated:{max_concurrent}:{max_queue_depth}");
+    rewritten
+}
 
-    // Releasing the held permit assigns it to the parked waiter without the
-    // waiter's task running.
-    drop(held);
-
-    assert!(
-        !controller.is_drained(),
-        "controller with an assigned-but-unresumed permit reported drained (#1001)"
+/// #1366: rewriting a backend while a call is in flight hands new calls to
+/// the replacement controller at once. The in-flight call keeps its old
+/// controller attribution and its permit still counts against the backend's
+/// capacity until it completes. Lean:
+/// `InferenceCall.Registry.available_desired_admits_without_gap`.
+#[tokio::test]
+async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-rewrite";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
     );
-
-    let permit = tokio::time::timeout(Duration::from_secs(30), queued)
+    let mut in_flight = acquire_on(&registry, "req-rewrite-old", backend)
         .await
-        .expect("queued acquire resumes once the permit is assigned")
-        .expect("the parked waiter holds a real permit");
-    assert!(!controller.is_drained());
-    drop(permit);
-    assert!(
-        controller.is_drained(),
-        "released admission must drain the controller"
+        .unwrap();
+    assert_eq!(in_flight.controller_generation_for_test(), 1);
+
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+    );
+    let mut admitted = acquire_on(&registry, "req-rewrite-new", backend)
+        .await
+        .expect("a rewritten backend must admit new calls while old calls drain");
+    assert_eq!(admitted.controller_generation_for_test(), 2);
+
+    // The draining call still occupies one of the two slots.
+    let error = match acquire_on(&registry, "req-rewrite-over", backend).await {
+        Ok(_) => panic!("capacity must count the in-flight call admitted before the rewrite"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("QueueFull"), "{error}");
+
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let mut after_drain = acquire_on(&registry, "req-rewrite-after", backend)
+        .await
+        .unwrap();
+    assert_eq!(after_drain.controller_generation_for_test(), 2);
+    admitted.finish_success(None).await.unwrap();
+    after_drain.finish_success(None).await.unwrap();
+
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(
+        call_state_for_request(&rows, "req-rewrite-old").as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        call_state_for_request(&rows, "req-rewrite-new").as_deref(),
+        Some("completed")
     );
 }
 
-/// Issue #1001 review follow-up: the drained signal must imply the semaphore
-/// permit is already returned. `release_in_flight` can synchronously install
-/// a replacement controller (`controller_drained` → `install_pending_if_ready`),
-/// so if the permit outlived the release, a fresh full-capacity controller
-/// could coexist with an outstanding old permit — and the window is unbounded
-/// because `AdmissionPermit::drop` locks the terminal-failure observer after
-/// the release. Holding that lock from the test stalls the drop mid-body
-/// deterministically. Lean:
-/// `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`.
+/// A call queued before a capacity-only rewrite keeps waiting on the shared
+/// pool and is admitted when capacity frees, instead of failing. Lean:
+/// `InferenceCall.Registry.available_rewrite_rejects_nothing`.
 #[tokio::test]
-async fn drained_signal_implies_permit_returned() {
+async fn queued_call_survives_capacity_only_rewrite() {
     let node = test_node().await;
-    let controller = super::controller::BackendAdmissionController::new(
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-rewrite-queued";
+    registry.reconcile(
         1,
-        config("backend-drain-order", 1, 4),
-        std::sync::Weak::new(),
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
     );
-    let observer: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
-
-    let permit = controller
-        .clone()
-        .acquire(
-            node.clone(),
-            pending_call("req-drain-order-a", "backend-drain-order"),
-            None,
-            Some(observer.clone()),
-        )
+    let mut in_flight = acquire_on(&registry, "req-queued-holder", backend)
         .await
-        .expect("admission fills the only slot");
-    controller.close();
-
-    // Stall the drop after its in-flight release point: the drop body locks
-    // the observer before it finishes, and the permit field cannot be
-    // destroyed until the body returns.
-    let stall = observer.lock().unwrap();
-    let dropper = std::thread::spawn(move || drop(permit));
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while !controller.is_drained() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "permit drop never released the in-flight unit"
+        .unwrap();
+    let queued_registry = registry.clone();
+    let queued =
+        tokio::spawn(
+            async move { acquire_on(&queued_registry, "req-queued-waiter", backend).await },
         );
-        std::thread::yield_now();
+    wait_for_request_call_state(node.as_ref(), "req-queued-waiter", "queued").await;
+
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+    );
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let mut waiter = tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .expect("queued call must be admitted after the rewrite")
+        .unwrap()
+        .expect("queued call must survive a capacity-only rewrite");
+    assert_eq!(waiter.controller_generation_for_test(), 1);
+    waiter.finish_success(None).await.unwrap();
+}
+
+/// A shrinking rewrite with a queued call: the excess held permit is paid
+/// before the queued call is admitted, so capacity is never exceeded.
+#[tokio::test]
+async fn shrinking_rewrite_admits_queued_call_after_excess_releases() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-shrink-queued";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 2))]),
+    );
+    let mut first = acquire_on(&registry, "req-shrink-1", backend)
+        .await
+        .unwrap();
+    let mut second = acquire_on(&registry, "req-shrink-2", backend)
+        .await
+        .unwrap();
+    let queued_registry = registry.clone();
+    let queued =
+        tokio::spawn(
+            async move { acquire_on(&queued_registry, "req-shrink-waiter", backend).await },
+        );
+    wait_for_request_call_state(node.as_ref(), "req-shrink-waiter", "queued").await;
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+    );
+    let pool = registry.pool_for_test(backend).unwrap();
+    assert_eq!((pool.held_for_test(), pool.owed_for_test()), (2, 1));
+
+    first.finish_success(None).await.unwrap();
+    drop(first);
+    assert_eq!((pool.held_for_test(), pool.owed_for_test()), (1, 0));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(
+        !queued.is_finished(),
+        "the queued call must wait for the excess"
+    );
+
+    second.finish_success(None).await.unwrap();
+    drop(second);
+    let mut waiter = tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("queued call is admitted once capacity frees");
+    assert_eq!(pool.held_for_test(), 1);
+    waiter.finish_success(None).await.unwrap();
+    drop(waiter);
+    assert_eq!(pool.held_for_test(), 0);
+    assert_eq!(pool.available_permits_for_test(), 1);
+}
+
+/// Growing capacity while permits are owed repays the debt before adding
+/// admissible permits (Lean `InferenceCall.Registry.Ledger.resize`).
+#[tokio::test]
+async fn growing_capacity_repays_owed_permits_first() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-grow-owed";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 3, 0))]),
+    );
+    let mut held = Vec::new();
+    for index in 0..3 {
+        held.push(
+            acquire_on(&registry, &format!("req-grow-{index}"), backend)
+                .await
+                .unwrap(),
+        );
+    }
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
+    );
+    let pool = registry.pool_for_test(backend).unwrap();
+    assert_eq!((pool.held_for_test(), pool.owed_for_test()), (3, 2));
+
+    registry.reconcile(
+        3,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+    );
+    assert_eq!(
+        (
+            pool.held_for_test(),
+            pool.owed_for_test(),
+            pool.available_permits_for_test()
+        ),
+        (3, 1, 0),
+        "growth pays owed permits before admitting"
+    );
+    registry.reconcile(
+        4,
+        &HashMap::from([(backend.to_string(), config(backend, 5, 0))]),
+    );
+    assert_eq!(
+        (
+            pool.held_for_test(),
+            pool.owed_for_test(),
+            pool.available_permits_for_test()
+        ),
+        (3, 0, 2)
+    );
+    for mut permit in held {
+        permit.finish_success(None).await.unwrap();
+    }
+    assert_eq!(pool.available_permits_for_test(), 5);
+}
+
+/// F1: Tokio returns a permit it already assigned to a waiter straight to the
+/// semaphore when the waiting call is dropped, bypassing the ledger. A shrink
+/// between the assignment and the drop leaves a permit available while debt
+/// is outstanding; registration must pay the debt instead of admitting.
+/// Lean: `InferenceCall.Registry.Ledger.abandon_can_expose_permit_under_debt`,
+/// `register_admits_within_capacity`.
+#[tokio::test]
+async fn abandoned_assigned_waiter_cannot_admit_over_capacity() {
+    use std::future::Future;
+
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-abandoned-waiter";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 2))]),
+    );
+    let mut first = acquire_on(&registry, "req-abandon-1", backend)
+        .await
+        .unwrap();
+    let mut second = acquire_on(&registry, "req-abandon-2", backend)
+        .await
+        .unwrap();
+    let pool = registry.pool_for_test(backend).unwrap();
+
+    // Park a waiter and never let its task resume, so a released permit is
+    // assigned to it without being registered.
+    let parked_registry = registry.clone();
+    let mut parked =
+        Box::pin(async move { acquire_on(&parked_registry, "req-abandon-parked", backend).await });
+    let waker = futures::task::noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(parked.as_mut().poll(&mut cx).is_pending());
+        let rows = call_rows(node.as_ref()).await;
+        if call_state_for_request(&rows, "req-abandon-parked").as_deref() == Some("queued") {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    for _ in 0..20 {
+        assert!(parked.as_mut().poll(&mut cx).is_pending());
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    first.finish_success(None).await.unwrap();
+    drop(first);
+    assert_eq!(
+        pool.in_transit_for_test(),
+        1,
+        "the permit is assigned, not registered"
+    );
+
+    // Shrink to one while that permit is in transit: one held, one in
+    // transit, capacity one, so one permit is owed.
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+    );
+    assert_eq!(pool.owed_for_test(), 1);
+    drop(parked);
+    assert_eq!(
+        pool.available_permits_for_test(),
+        1,
+        "Tokio returned the abandoned permit around the ledger"
+    );
+
+    // The next caller takes that permit but must pay the debt with it, then
+    // wait for real capacity.
+    let over_registry = registry.clone();
+    let over =
+        tokio::spawn(async move { acquire_on(&over_registry, "req-abandon-over", backend).await });
+    wait_for_request_call_state(node.as_ref(), "req-abandon-over", "queued").await;
+    assert_eq!(
+        (
+            pool.held_for_test(),
+            pool.owed_for_test(),
+            pool.available_permits_for_test()
+        ),
+        (1, 0, 0),
+        "a permit taken under debt must not admit a call over capacity"
+    );
+
+    second.finish_success(None).await.unwrap();
+    drop(second);
+    let mut next = tokio::time::timeout(Duration::from_secs(30), over)
+        .await
+        .unwrap()
+        .unwrap()
+        .expect("the queued call is admitted once capacity frees");
+    assert_eq!(pool.held_for_test(), 1);
+    next.finish_success(None).await.unwrap();
+}
+
+/// Deleting a backend closes admission: queued and new calls fail with
+/// `BackendGone`, while an already admitted call still completes.
+#[tokio::test]
+async fn backend_removal_fails_queued_and_new_calls_clearly() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-removed";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+    );
+    let mut in_flight = acquire_on(&registry, "req-removed-holder", backend)
+        .await
+        .unwrap();
+    let queued_registry = registry.clone();
+    let queued =
+        tokio::spawn(
+            async move { acquire_on(&queued_registry, "req-removed-waiter", backend).await },
+        );
+    wait_for_request_call_state(node.as_ref(), "req-removed-waiter", "queued").await;
+
+    registry.reconcile(2, &HashMap::new());
+    let queued_error = match tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .expect("closing the pool must wake queued calls")
+        .unwrap()
+    {
+        Ok(_) => panic!("a removed backend must not admit its queued calls"),
+        Err(error) => error,
+    };
+    assert!(
+        queued_error.to_string().contains("BackendGone"),
+        "{queued_error}"
+    );
+    let new_error = match acquire_on(&registry, "req-removed-new", backend).await {
+        Ok(_) => panic!("a removed backend must not admit new calls"),
+        Err(error) => error,
+    };
+    assert!(
+        new_error.to_string().contains(&format!(
+            "BackendGone: backend admission controller is not active for backend {backend}"
+        )),
+        "{new_error}"
+    );
+
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(
+        call_state_for_request(&rows, "req-removed-holder").as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        call_state_for_request(&rows, "req-removed-waiter").as_deref(),
+        Some("cancelled")
+    );
+    assert_eq!(
+        call_state_for_request(&rows, "req-removed-new").as_deref(),
+        Some("cancelled")
+    );
+}
+
+/// #897 and B1: a backend that recovers from an outage admits at once, up to
+/// the capacity its still-running pre-outage calls leave free; those calls
+/// are not forgotten. Lean: `InferenceCall.Registry.outage_carries_held`.
+#[tokio::test]
+async fn recovered_backend_admits_within_capacity_left_by_pre_outage_calls() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-recovered";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+    );
+    let mut pre_outage = acquire_on(&registry, "req-recovered-before", backend)
+        .await
+        .unwrap();
+    let mut unavailable = config(backend, 2, 0);
+    unavailable.measured_unhealthy = true;
+    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+    assert!(acquire_on(&registry, "req-recovered-down", backend)
+        .await
+        .is_err());
+
+    registry.reconcile(
+        3,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+    );
+    let mut recovered = acquire_on(&registry, "req-recovered-up", backend)
+        .await
+        .expect("recovery admits without waiting for pre-outage calls");
+    assert_eq!(recovered.controller_generation_for_test(), 3);
+    let error = match acquire_on(&registry, "req-recovered-over", backend).await {
+        Ok(_) => panic!("the pre-outage call must still count against capacity"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("QueueFull"), "{error}");
+
+    pre_outage.finish_success(None).await.unwrap();
+    drop(pre_outage);
+    let mut after = acquire_on(&registry, "req-recovered-after", backend)
+        .await
+        .unwrap();
+    let pool = registry.pool_for_test(backend).unwrap();
+    assert_eq!((pool.held_for_test(), pool.owed_for_test()), (2, 0));
+    recovered.finish_success(None).await.unwrap();
+    after.finish_success(None).await.unwrap();
+}
+
+/// F5: the reconcile rollback path re-adds a backend it just removed; calls
+/// admitted before the removal still count against the re-added pool.
+#[tokio::test]
+async fn rollback_re_adding_removed_backend_carries_held_permits() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-rollback-readd";
+    let prior = HashMap::from([(backend.to_string(), config(backend, 1, 0))]);
+    registry.reconcile(1, &prior);
+    let mut in_flight = acquire_on(&registry, "req-readd-held", backend)
+        .await
+        .unwrap();
+    registry.reconcile(2, &HashMap::new());
+    registry.reconcile(1, &prior);
+    let error = match acquire_on(&registry, "req-readd-over", backend).await {
+        Ok(_) => panic!("the call admitted before removal must still count"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("QueueFull"), "{error}");
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let mut next = acquire_on(&registry, "req-readd-next", backend)
+        .await
+        .unwrap();
+    next.finish_success(None).await.unwrap();
+}
+
+#[derive(Clone)]
+struct CountingProvider {
+    calls: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[allow(refining_impl_trait)]
+impl rig::completion::CompletionModel for CountingProvider {
+    type Response = ();
+    type StreamingResponse = ();
+    type Client = ();
+
+    fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+        Self {
+            calls: Arc::default(),
+        }
     }
 
-    assert_eq!(
-        controller.available_permits_for_test(),
-        1,
-        "drained controller must hold no outstanding semaphore permits (#1001)"
-    );
+    async fn completion(
+        &self,
+        _request: rig::completion::CompletionRequest,
+    ) -> Result<rig::completion::CompletionResponse<()>, rig::completion::CompletionError> {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(rig::completion::CompletionError::ProviderError(
+            "provider reached".into(),
+        ))
+    }
 
-    drop(stall);
-    dropper.join().expect("permit drop thread");
-    assert_eq!(controller.available_permits_for_test(), 1);
-    assert!(controller.is_drained());
+    async fn stream(
+        &self,
+        _request: rig::completion::CompletionRequest,
+    ) -> Result<rig::streaming::StreamingCompletionResponse<()>, rig::completion::CompletionError>
+    {
+        self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(rig::completion::CompletionError::ProviderError(
+            "provider reached".into(),
+        ))
+    }
+}
+
+fn ping() -> rig::completion::CompletionRequest {
+    rig::completion::CompletionRequest {
+        model: None,
+        preamble: None,
+        chat_history: rig::OneOrMany::one(rig::message::Message::user("ping")),
+        documents: Vec::new(),
+        tools: Vec::new(),
+        temperature: None,
+        max_tokens: None,
+        tool_choice: None,
+        additional_params: None,
+        output_schema: None,
+    }
+}
+
+async fn attribution_of(node: &EmbeddedNode, request_id: &str) -> Option<String> {
+    let response = node
+        .execute(&format!(
+            r#"{{ InferenceCall(filter: {{request_id: {{_eq: "{}"}}}}) {{ backend_config_fingerprint }} }}"#,
+            crate::graphql::escape_graphql_string(request_id)
+        ))
+        .await;
+    crate::graphql::rows::<Value>(&response, "InferenceCall")
+        .ok()?
+        .first()?
+        .get("backend_config_fingerprint")?
+        .as_str()
+        .map(ToOwned::to_owned)
+}
+
+/// Snapshot semantics (#1725 product decision): after a key rotation, a call
+/// queued through a slot built for the old connection is still admitted
+/// against the shared pool, dispatches through its own client and is
+/// attributed to that slot's connection; a slot built for the new
+/// connection uses the new client. Lean:
+/// `InferenceCall.Registry.available_rewrite_rejects_nothing`,
+/// `serve_attributes_fifo`; generated case `key_rotation_shares_the_pool`.
+#[tokio::test]
+async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
+    use rig::completion::CompletionModel;
+
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-connection-change";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+    );
+    let old_connection = format!("{backend}:connection");
+    let new_connection = format!("{backend}:rotated-connection");
+    let mut holder = acquire_on(&registry, "req-connection-holder", backend)
+        .await
+        .unwrap();
+
+    let old_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let old_model = super::client::AdmittedCompletionModel::for_test(
+        CountingProvider {
+            calls: old_calls.clone(),
+        },
+        registry.clone(),
+        &old_connection,
+    );
+    let old_call = tokio::spawn(scope_request(
+        AdmissionCallContext::for_request(&request("req-connection-old"), "default", backend),
+        async move { old_model.completion(ping()).await.map(|_| ()) },
+    ));
+    wait_for_request_call_state(node.as_ref(), "req-connection-old", "queued").await;
+
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), rewritten_connection(backend, 1, 2))]),
+    );
+    let new_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let new_model = super::client::AdmittedCompletionModel::for_test(
+        CountingProvider {
+            calls: new_calls.clone(),
+        },
+        registry.clone(),
+        &new_connection,
+    );
+    let new_call = tokio::spawn(scope_request(
+        AdmissionCallContext::for_request(&request("req-connection-new"), "default", backend),
+        async move { new_model.completion(ping()).await.map(|_| ()) },
+    ));
+    wait_for_request_call_state(node.as_ref(), "req-connection-new", "queued").await;
+
+    holder.finish_success(None).await.unwrap();
+    drop(holder);
+    for call in [old_call, new_call] {
+        let result = tokio::time::timeout(Duration::from_secs(30), call)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.unwrap_err().to_string().contains("provider reached"));
+    }
+    assert_eq!(old_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(new_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        attribution_of(&node, "req-connection-old").await,
+        Some(old_connection)
+    );
+    assert_eq!(
+        attribution_of(&node, "req-connection-new").await,
+        Some(new_connection)
+    );
+    assert_eq!(registry.pool_for_test(backend).unwrap().held_for_test(), 0);
+}
+
+type ParkedCall = std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<super::permit::AdmissionPermit, rig::completion::CompletionError>,
+            > + Send,
+    >,
+>;
+
+/// Parks a queued call whose task is never woken, then releases `holder` so
+/// Tokio assigns the permit to it without the call registering it.
+async fn park_with_assigned_permit(
+    node: &EmbeddedNode,
+    registry: &AdmissionRegistry,
+    backend: &'static str,
+    request_id: &'static str,
+    mut holder: super::permit::AdmissionPermit,
+) -> ParkedCall {
+    let parked_registry = registry.clone();
+    let mut parked: ParkedCall =
+        Box::pin(async move { acquire_on(&parked_registry, request_id, backend).await });
+    let waker = futures::task::noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        assert!(parked.as_mut().poll(&mut cx).is_pending());
+        let rows = call_rows(node).await;
+        if call_state_for_request(&rows, request_id).as_deref() == Some("queued") {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    for _ in 0..20 {
+        assert!(parked.as_mut().poll(&mut cx).is_pending());
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    holder.finish_success(None).await.unwrap();
+    drop(holder);
+    let pool = registry.pool_for_test(backend).unwrap();
+    assert_eq!(
+        pool.in_transit_for_test(),
+        1,
+        "the permit is assigned, not registered"
+    );
+    parked
+}
+
+/// (a) A permit assigned before admission closes and registered after it,
+/// with no reopen, admits nothing. Lean: `Ledger.register_closed_admits_nothing`,
+/// `Registry.unavailable_closes_admission`.
+#[tokio::test]
+async fn permit_assigned_before_close_is_rejected_after_close() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-close-transit";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+    );
+    let pool = registry.pool_for_test(backend).unwrap();
+    let holder = acquire_on(&registry, "req-close-holder", backend)
+        .await
+        .unwrap();
+    let parked =
+        park_with_assigned_permit(&node, &registry, backend, "req-close-parked", holder).await;
+    let mut unavailable = config(backend, 1, 1);
+    unavailable.measured_unhealthy = true;
+    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+
+    let error = match tokio::time::timeout(Duration::from_secs(30), parked)
+        .await
+        .unwrap()
+    {
+        Ok(_) => panic!("a closed backend must not admit a permit assigned before close"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("BackendGone"), "{error}");
+    assert_eq!(pool.held_for_test(), 0);
+}
+
+/// (b) A waiter whose permit was assigned before an outage fails with the
+/// outage: Tokio does not complete an acquisition on a closed semaphore, so
+/// the call is never admitted into the reopened pool.
+#[tokio::test]
+async fn permit_assigned_before_outage_is_not_admitted_after_reopen() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-retired-transit";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+    );
+    let holder = acquire_on(&registry, "req-retired-holder", backend)
+        .await
+        .unwrap();
+    let parked =
+        park_with_assigned_permit(&node, &registry, backend, "req-retired-parked", holder).await;
+    let mut unavailable = config(backend, 1, 1);
+    unavailable.measured_unhealthy = true;
+    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+    registry.reconcile(
+        3,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+    );
+    let pool = registry.pool_for_test(backend).unwrap();
+    let mut current = acquire_on(&registry, "req-retired-current", backend)
+        .await
+        .unwrap();
+
+    let error = match tokio::time::timeout(Duration::from_secs(30), parked)
+        .await
+        .unwrap()
+    {
+        Ok(_) => panic!("a pre-outage waiter must not be admitted over capacity"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("BackendGone"), "{error}");
+    assert_eq!((pool.held_for_test(), pool.owed_for_test()), (1, 0));
+    current.finish_success(None).await.unwrap();
+}
+
+/// (a), (b) and (c) at the single admission point, for a waiter Tokio woke
+/// with a permit before the change that reaches the ledger lock after it:
+/// closed admission rejects it; a permit of a semaphore an outage retired
+/// grants no current slot; a pruned pool never admits. Lean:
+/// `Ledger.register_closed_admits_nothing`,
+/// `Ledger.register_admits_within_capacity`.
+#[tokio::test]
+async fn registration_rechecks_open_pool_and_current_semaphore() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-register-linearization";
+    let available = HashMap::from([(backend.to_string(), config(backend, 1, 1))]);
+    let mut down = config(backend, 1, 1);
+    down.measured_unhealthy = true;
+    let unavailable = HashMap::from([(backend.to_string(), down)]);
+
+    // (a) Closed without reopening.
+    registry.reconcile(1, &available);
+    let pool = registry.pool_for_test(backend).unwrap();
+    let taken = pool.take_unregistered_for_test();
+    registry.reconcile(2, &unavailable);
+    assert!(pool.register_for_test(taken).is_err());
+    assert_eq!(pool.held_for_test(), 0);
+
+    // (b) Taken before an outage while another call keeps the pool alive,
+    // reopened with one free slot that a new call takes before the old
+    // registration resumes.
+    let available_two = HashMap::from([(backend.to_string(), config(backend, 2, 1))]);
+    registry.reconcile(3, &available_two);
+    let pool = registry.pool_for_test(backend).unwrap();
+    let mut survivor = acquire_on(&registry, "req-register-survivor", backend)
+        .await
+        .unwrap();
+    let taken = pool.take_unregistered_for_test();
+    registry.reconcile(4, &unavailable);
+    registry.reconcile(5, &available_two);
+    assert!(Arc::ptr_eq(
+        &pool,
+        &registry.pool_for_test(backend).unwrap()
+    ));
+    let mut current = acquire_on(&registry, "req-register-current", backend)
+        .await
+        .unwrap();
+    assert_eq!(pool.held_for_test(), 2);
+    assert!(
+        matches!(pool.register_for_test(taken), Ok(None)),
+        "a retired permit must acquire a current slot again"
+    );
+    assert_eq!((pool.held_for_test(), pool.owed_for_test()), (2, 0));
+    survivor.finish_success(None).await.unwrap();
+    drop(survivor);
+    current.finish_success(None).await.unwrap();
+    drop(current);
+
+    // (c) Pruned with the permit in transit, then re-added.
+    let taken = pool.take_unregistered_for_test();
+    registry.reconcile(6, &HashMap::new());
+    assert!(registry.pool_for_test(backend).is_none());
+    registry.reconcile(7, &available);
+    let fresh_pool = registry.pool_for_test(backend).unwrap();
+    assert!(pool.register_for_test(taken).is_err());
+    assert_eq!((pool.held_for_test(), fresh_pool.held_for_test()), (0, 0));
+}
+
+/// (c) A pool pruned while a permit is still in transit stays closed: the
+/// late registration fails and the re-added backend's pool is unaffected.
+#[tokio::test]
+async fn transit_permit_of_pruned_pool_cannot_admit() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-pruned-transit";
+    let available = HashMap::from([(backend.to_string(), config(backend, 1, 1))]);
+    registry.reconcile(1, &available);
+    let old_pool = registry.pool_for_test(backend).unwrap();
+    let holder = acquire_on(&registry, "req-pruned-holder", backend)
+        .await
+        .unwrap();
+    let parked =
+        park_with_assigned_permit(&node, &registry, backend, "req-pruned-parked", holder).await;
+    registry.reconcile(2, &HashMap::new());
+    assert!(
+        registry.pool_for_test(backend).is_none(),
+        "a closed pool with no held permits is pruned"
+    );
+    registry.reconcile(3, &available);
+    let new_pool = registry.pool_for_test(backend).unwrap();
+    assert!(!Arc::ptr_eq(&old_pool, &new_pool));
+
+    let error = match tokio::time::timeout(Duration::from_secs(30), parked)
+        .await
+        .unwrap()
+    {
+        Ok(_) => panic!("a pruned pool must not admit its transit permit"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("BackendGone"), "{error}");
+    assert_eq!((old_pool.held_for_test(), new_pool.held_for_test()), (0, 0));
+    let mut fresh = acquire_on(&registry, "req-pruned-fresh", backend)
+        .await
+        .unwrap();
+    assert_eq!(new_pool.held_for_test(), 1);
+    fresh.finish_success(None).await.unwrap();
 }

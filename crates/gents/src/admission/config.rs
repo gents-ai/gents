@@ -4,10 +4,11 @@ use anyhow::Result;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
-use crate::backend_registry::{InferenceBackend, HEALTHY_PROBE_STATUS};
+use crate::backend_registry::{BackendFields, InferenceBackend, HEALTHY_PROBE_STATUS};
 
 /// Domain and version of the canonical resource identity encoding.
 const BACKEND_CONFIG_FINGERPRINT_TAG: &str = "gents-backend-admission-config-v1";
+const BACKEND_CONNECTION_FINGERPRINT_TAG: &str = "gents-backend-connection-v1";
 const PUBLIC_FINGERPRINT_PREFIX: &str = "hmac-sha256:process-v1:";
 
 // Equality is needed only within a live registry. Never persist this key: a
@@ -23,6 +24,30 @@ fn keyed_fingerprint(encoded: &[u8], key: &[u8; 32]) -> String {
         "{PUBLIC_FINGERPRINT_PREFIX}{:x}",
         mac.finalize().into_bytes()
     )
+}
+
+fn process_keyed_fingerprint(encoded: &[u8]) -> String {
+    keyed_fingerprint(
+        encoded,
+        FINGERPRINT_KEY.get_or_init(rand::random::<[u8; 32]>),
+    )
+}
+
+/// The identity a provider client is built from: the backend's endpoint,
+/// credentials and provider/wire protocol, excluding capacity. Admission
+/// compares a behavior slot's value with the admitting controller's (Lean
+/// `InferenceCall.Registry.Config.connection`).
+pub(crate) fn backend_connection_fingerprint(fields: &BackendFields) -> String {
+    let encoded = serde_json::to_vec(&(
+        BACKEND_CONNECTION_FINGERPRINT_TAG,
+        &fields.backend_id,
+        &fields.backend_provider_kind,
+        &fields.openai_wire_api,
+        &fields.backend_endpoint,
+        &fields.backend_auth,
+    ))
+    .expect("backend connection fields serialize");
+    process_keyed_fingerprint(&encoded)
 }
 
 /// Only the current non-secret attribution format may leave the timeline.
@@ -80,10 +105,7 @@ impl BackendAdmissionConfig {
             max_queue_depth,
         );
         let encoded = serde_json::to_vec(&fingerprint_inputs)?;
-        let config_fingerprint = keyed_fingerprint(
-            &encoded,
-            FINGERPRINT_KEY.get_or_init(rand::random::<[u8; 32]>),
-        );
+        let config_fingerprint = process_keyed_fingerprint(&encoded);
         Ok(Self {
             backend_id: backend.backend_id.clone(),
             max_concurrent,
@@ -201,6 +223,7 @@ mod tests {
             implicit
         );
         assert!(!implicit.config_fingerprint.contains("fixture-only-secret"));
+        let implicit_connection = backend_connection_fingerprint(&backend.backend_fields());
 
         backend.auth = crate::document_config::BackendAuth::ApiKey {
             key: "rotated-fixture-only-secret".into(),
@@ -209,12 +232,23 @@ mod tests {
         assert_ne!(implicit.config_fingerprint, rotated.config_fingerprint);
         assert!(!rotated.config_fingerprint.contains("fixture-only-secret"));
 
-        // Lean Registry.Config.key includes queue capacity. Its separately
-        // modeled capacity is the semaphore, not the entire resource identity.
+        let rotated_connection = backend_connection_fingerprint(&backend.backend_fields());
+        assert_ne!(
+            implicit_connection, rotated_connection,
+            "a key rotation changes connection identity"
+        );
+        assert!(!rotated_connection.contains("fixture-only-secret"));
+
+        // Capacity and queue depth are admission resources, not connection
+        // identity (Lean `Registry.Config`).
         backend.max_queue_depth = Some(3);
-        let resized_queue = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
-        assert_ne!(rotated.config_fingerprint, resized_queue.config_fingerprint);
-        assert_eq!(rotated.max_concurrent, resized_queue.max_concurrent);
+        backend.max_concurrent = Some(5);
+        let resized = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
+        assert_ne!(rotated.config_fingerprint, resized.config_fingerprint);
+        assert_eq!(
+            rotated_connection,
+            backend_connection_fingerprint(&backend.backend_fields())
+        );
     }
 
     fn config(

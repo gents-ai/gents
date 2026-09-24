@@ -13,8 +13,8 @@ pub(crate) use client::{
     scope_call_with_token_and_failure_reason, scope_request, set_terminal_failure_reason,
     terminal_failure_reason_observer, AdmissionCallContext, AdmittedCompletionClient, CallKind,
 };
-pub(crate) use config::exportable_backend_fingerprint;
 pub(crate) use config::BackendAvailability;
+pub(crate) use config::{backend_connection_fingerprint, exportable_backend_fingerprint};
 pub use config::{document_configured_from_fields, BackendAdmissionConfig};
 pub use recovery::{InferenceCall, InferenceCallRecoveryReport};
 pub(crate) use registry::AdmissionRegistry;

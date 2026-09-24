@@ -611,7 +611,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and serial registry handoff |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and the shared-pool registry handoff |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -1490,26 +1490,41 @@ per-document writer has not been migrated; it is not an alternative formal contr
 
 ### Backend Controller Handoff
 
-`Proofs/InferenceCall/Registry.lean` refines one backend's serial controller
-handoff. Metadata-only reconciliation retains the current controller; a
-resource change retires it until its real owners release. Final release
-installs only the latest available desired configuration. Removed or
-unavailable pending configurations cannot be resurrected by a drain callback.
+`Proofs/InferenceCall/Registry.lean` refines one backend's admission capacity
+pool (#897, #1366). Metadata-only reconciliation retains the admitting
+controller; a resource change replaces it in the same step, on the same pool,
+so an available backend always admits (`available_desired_admits_without_gap`).
+Permits held by calls admitted before a rewrite, a removal or an outage keep
+counting until they release, and new admissions never exceed the current
+capacity (`acquire_admits_within_capacity`, `serve_within_capacity`,
+`over_capacity_blocks_admission`, `outage_carries_held`). Removal or
+unavailability fails queued calls and rejects new ones
+(`unavailable_closes_admission`, `removed_backend_cannot_be_resurrected`).
 
-The model separates actual permits from in-flight ownership, which also
-includes queued admissions. It composes the existing ControllerBookkeeping
-drain invariant and proves capacity preservation and release stuttering on
-epoch mismatch. Rust releases through the originating controller `Arc`;
-rollback can reuse an epoch, and isolation between those distinct controller
-incarnations is fenced by a real permit test outside this numeric model.
-Its finite release trace is conditional progress, not scheduler
-fairness or a wall-clock bound. Already-issued permits during downsizing
-remain bounded by their original controller's capacity until retirement.
+Each caller carries the connection its provider client was built from. By
+the #1725 product decision (snapshot semantics), a connection change such as
+key rotation or an endpoint move never rejects in-progress or queued calls:
+they finish on their slot's connection, sharing the pool
+(`available_rewrite_rejects_nothing`), and every admission is attributed to
+its own slot's connection in FIFO order (`serve_attributes_fifo`,
+`acquire_attributes_slot`). New slots are built for the new connection;
+behavior slot identity includes the keyed connection fingerprint because
+`ResolvedBehavior`'s Debug redacts credentials.
 
-Eight generated traces contain 55 step observations for the real registry
-and actual AdmissionPermits. Queued-waiter reachability remains covered by
-the existing controller bookkeeping tests. This registry refinement does
-not establish durable request waiting through backend outages.
+`Registry.Ledger` refines the Tokio realization: tokens are conserved across
+take, register, abandon, release, resize and reopen. Registration is the single
+admission point: it admits only while open (`register_closed_admits_nothing`)
+and only without debt, so every admission leaves held permits within capacity
+(`register_admits_within_capacity`), because Tokio returns a permit assigned
+to a dropped waiter around the ledger (`abandon_can_expose_permit_under_debt`).
+A permit taken from a semaphore retired by an outage never registers; its
+waiter acquires again from the current semaphore.
+
+Eleven generated traces, with expectations derived by `replay`, drive the real
+registry and actual AdmissionPermits, including queued callers. Epoch reuse on
+rollback creates a distinct incarnation on the same pool, fenced by a real
+permit test. This refinement does not establish durable request waiting
+through backend outages.
 
 ### Interrupted Inference Calls
 
