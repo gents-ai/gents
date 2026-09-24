@@ -7,6 +7,9 @@
 //! Pairing filters use DefraDB's predicate type directly. Local helpers only
 //! derive, combine, and inspect those predicates.
 
+use gents_protocol::peer_schema::{
+    compare_replicated_schema, ReplicatedCollectionIdentity, ReplicatedSchema, ReplicatedSchemaSkew,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
@@ -602,17 +605,30 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
     (!requested.is_empty() && !overlaps_protocol_catalog).then_some(requested)
 }
 
-/// Fingerprint of the schemas an enrolled client and its runtime replicate.
-///
-/// Both ends of the `client` route compute this from their own bundled SDLs;
-/// equal values are required for client-authored rows to merge.
-pub fn client_replicated_schema_fingerprint() -> String {
-    gents_protocol::peer_schema::replicated_schema_fingerprint(CLIENT_COLLECTIONS.iter().map(
-        |name| {
-            let sdl = gents_protocol::schemas::sdl_for(name).unwrap_or_default();
-            (*name, sdl)
-        },
-    ))
+/// Read this node's active identity for every `client` route collection.
+/// Collections the node does not hold are omitted, so comparison fails closed.
+pub async fn read_client_replicated_schema(
+    access: &crate::config_client::ConfigAccess,
+) -> anyhow::Result<ReplicatedSchema> {
+    let mut schema = ReplicatedSchema::new();
+    for name in CLIENT_COLLECTIONS {
+        let version = access.collection_version(name).await?;
+        if let Some(identity) = version
+            .as_ref()
+            .and_then(ReplicatedCollectionIdentity::from_collection_version)
+        {
+            schema.insert((*name).to_string(), identity);
+        }
+    }
+    Ok(schema)
+}
+
+/// Compare two nodes' `client` route collections; see [`compare_replicated_schema`].
+pub fn compare_client_replicated_schema(
+    local: &ReplicatedSchema,
+    remote: Option<&ReplicatedSchema>,
+) -> Result<(), ReplicatedSchemaSkew> {
+    compare_replicated_schema(CLIENT_COLLECTIONS, local, remote)
 }
 
 /// Look up a template by id.  Returns `None` for unknown ids.
@@ -700,27 +716,37 @@ mod tests {
     }
 
     #[test]
-    fn client_schema_fingerprint_covers_every_client_route_collection() {
-        let client = resolve_template(CLIENT_TEMPLATE).unwrap();
-        let mut sdls = Vec::new();
-        for name in client.collections {
-            let sdl = gents_protocol::schemas::sdl_for(name)
-                .unwrap_or_else(|| panic!("client route collection {name} has no bundled SDL"));
-            sdls.push((*name, sdl));
-        }
+    fn client_schema_comparison_covers_every_client_route_collection() {
+        let identity = |version: &str| ReplicatedCollectionIdentity {
+            version_id: version.to_string(),
+            branchable: true,
+            policy_resource: None,
+        };
+        let local: ReplicatedSchema = CLIENT_COLLECTIONS
+            .iter()
+            .map(|name| ((*name).to_string(), identity(name)))
+            .collect();
         assert_eq!(
-            client_replicated_schema_fingerprint(),
-            gents_protocol::peer_schema::replicated_schema_fingerprint(sdls.iter().copied())
+            compare_client_replicated_schema(&local, Some(&local)),
+            Ok(())
         );
 
-        let session = sdls
-            .iter_mut()
-            .find(|(name, _)| *name == "AgentSession")
-            .expect("client route replicates AgentSession");
-        session.1 = "type AgentSession { skewed: String }";
-        assert_ne!(
-            client_replicated_schema_fingerprint(),
-            gents_protocol::peer_schema::replicated_schema_fingerprint(sdls.iter().copied())
+        let mut skewed = local.clone();
+        skewed.insert("AgentSession".into(), identity("bafy-other-release"));
+        assert_eq!(
+            compare_client_replicated_schema(&local, Some(&skewed))
+                .unwrap_err()
+                .collections,
+            vec!["AgentSession".to_string()]
+        );
+
+        let mut missing = local.clone();
+        missing.remove("Task");
+        assert_eq!(
+            compare_client_replicated_schema(&local, Some(&missing))
+                .unwrap_err()
+                .collections,
+            vec!["Task".to_string()]
         );
     }
 

@@ -220,15 +220,6 @@ pub const ALL_COLLECTION_NAMES: &[&str] = &[
 
 pub const BRANCHABLE_COLLECTION_NAMES: &[&str] = BRANCHABLE_AGENT_COLLECTION_NAMES;
 
-/// The SDL this build registers for `name`.
-pub fn sdl_for(name: &str) -> Option<&'static str> {
-    ALL_COLLECTION_NAMES
-        .iter()
-        .zip(ALL)
-        .chain(RUNTIME_COLLECTION_NAMES.iter().zip(RUNTIME_ALL))
-        .find_map(|(candidate, sdl)| (*candidate == name).then_some(*sdl))
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -278,13 +269,6 @@ mod tests {
                 sdl.lines().next().unwrap_or("")
             );
         }
-    }
-
-    #[test]
-    fn sdl_lookup_covers_deployment_and_runtime_catalogs() {
-        assert_eq!(sdl_for(AGENT_SESSION_NAME), Some(AGENT_SESSION));
-        assert_eq!(sdl_for(INFERENCE_BACKEND_NAME), Some(INFERENCE_BACKEND));
-        assert_eq!(sdl_for("NotACollection"), None);
     }
 
     #[test]

@@ -52,7 +52,7 @@ pub fn project_sync_health(sync: &ClientSyncStateSnapshot) -> Option<SyncHealth>
     let transport = &sync.transport;
     let database = sync.database_sync.as_ref();
     let database_error = sync.database_sync_error.as_ref();
-    let schema_skew = sync.runtime_schema_skew.values().next();
+    let schema_skew = sync.peer_schema_skew.values().next();
     let connected_peer_count = sync.peers.iter().filter(|peer| peer.dial_succeeded).count();
     let offline = is_offline(
         transport.status,
@@ -172,7 +172,7 @@ mod tests {
             transport,
             database_sync,
             database_sync_error: None,
-            runtime_schema_skew: Default::default(),
+            peer_schema_skew: Default::default(),
             directory: Vec::new(),
             peers,
         })
@@ -192,7 +192,7 @@ mod tests {
             transport: transport(P2PHealthStatus::Healthy),
             database_sync: None,
             database_sync_error: Some("incompatible sync status".into()),
-            runtime_schema_skew: Default::default(),
+            peer_schema_skew: Default::default(),
             directory: Vec::new(),
             peers: Vec::new(),
         })
@@ -206,12 +206,11 @@ mod tests {
     }
 
     #[test]
-    fn runtime_schema_skew_projects_incompatible_over_every_other_fact() {
-        let skew = gents_protocol::peer_schema::check_replicated_schema(
-            "sha256:app",
-            Some("sha256:runtime"),
-        )
-        .unwrap_err();
+    fn peer_schema_skew_projects_incompatible_over_every_other_fact() {
+        let skew = gents_protocol::peer_schema::ReplicatedSchemaSkew {
+            collections: vec!["AgentSession".to_string()],
+            advertised: true,
+        };
         let health = project_sync_health(&ClientSyncStateSnapshot {
             transport: transport(P2PHealthStatus::Wedged),
             database_sync: Some(P2pSyncStatusSnapshot {
@@ -219,7 +218,7 @@ mod tests {
                 ..P2pSyncStatusSnapshot::default()
             }),
             database_sync_error: Some("decode failure".into()),
-            runtime_schema_skew: [("did:test:agent".to_string(), skew.clone())].into(),
+            peer_schema_skew: [("peer-1".to_string(), skew.clone())].into(),
             directory: Vec::new(),
             peers: vec![peer(false)],
         })
@@ -237,7 +236,7 @@ mod tests {
             transport: transport(P2PHealthStatus::Healthy),
             database_sync: None,
             database_sync_error: None,
-            runtime_schema_skew: [("did:test:agent".to_string(), skew)].into(),
+            peer_schema_skew: [("peer-1".to_string(), skew)].into(),
             directory: Vec::new(),
             peers: Vec::new(),
         })

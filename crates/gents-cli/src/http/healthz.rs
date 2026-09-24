@@ -210,6 +210,7 @@ mod tests {
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
             activation_observation,
+            replicated_schema: Default::default(),
         }
     }
 

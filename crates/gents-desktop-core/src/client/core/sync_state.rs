@@ -3,8 +3,13 @@ use std::sync::{Arc, RwLock as StdRwLock};
 use tokio::sync::watch;
 use tokio::sync::RwLock;
 
+use gents::agent::p2p_reconcile::{
+    compare_client_replicated_schema, read_client_replicated_schema,
+};
+use gents::config_client::ConfigAccess;
 use gents::P2pSyncStatusSnapshot;
-use gents_protocol::peer_schema::{check_replicated_schema, ReplicatedSchemaSkew};
+use gents_protocol::peer_schema::{ReplicatedSchema, STATUS_REPLICATED_SCHEMA_FIELD};
+use serde_json::Value;
 
 use super::{p2p_health_materially_changed, ClientPeerStatus, ClientSyncStateSnapshot, P2PHealth};
 #[cfg(test)]
@@ -20,11 +25,21 @@ type LastErrorPatch = (Option<String>, Option<String>);
 /// Status-changing mutations publish a coherent snapshot. The watch channel
 /// coalesces raw clock updates while still waking the bridge for product state,
 /// route, pairing retry, or configured-peer changes.
+///
+/// Replicated-schema compatibility is a live observation between two running
+/// nodes, owned here, and deliberately not part of the signed enrollment
+/// schema fingerprint: signed offers are re-verified against the current
+/// fingerprint on every projection, so folding replicated versions into it
+/// would invalidate every membership on any schema-changing release even
+/// when both sides upgrade together.
 #[derive(Clone)]
 pub(in crate::client) struct ClientSyncStateOwner {
     tx: watch::Sender<ClientSyncStateSnapshot>,
     directory: Arc<RwLock<PeerDirectory>>,
     advertised_enrollment_labels: Arc<StdRwLock<BTreeMap<String, String>>>,
+    /// Collection versions only change when this process registers schemas
+    /// at startup, so the first successful read is reused.
+    local_replicated_schema: Arc<tokio::sync::OnceCell<ReplicatedSchema>>,
 }
 
 impl ClientSyncStateOwner {
@@ -70,7 +85,7 @@ impl ClientSyncStateOwner {
             transport,
             database_sync: None,
             database_sync_error: None,
-            runtime_schema_skew: BTreeMap::new(),
+            peer_schema_skew: BTreeMap::new(),
             directory: records,
             peers,
         });
@@ -78,6 +93,7 @@ impl ClientSyncStateOwner {
             tx,
             directory,
             advertised_enrollment_labels: Arc::new(StdRwLock::new(BTreeMap::new())),
+            local_replicated_schema: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
@@ -308,26 +324,76 @@ impl ClientSyncStateOwner {
         });
     }
 
-    /// Record the replicated schema a runtime advertises. Only a compatible
-    /// advertisement from the same runtime clears an earlier skew.
-    pub(super) fn observe_runtime_schema(
+    /// Compare the `/status` payload of runtime `runtime_did` with this
+    /// node's replicated collection versions, and record the result on every
+    /// configured peer for that runtime. The same comparison gates enrollment
+    /// and drives sync health.
+    pub(super) async fn observe_runtime_schema(
+        &self,
+        local: &ConfigAccess,
+        runtime_did: &str,
+        status: &Value,
+    ) -> anyhow::Result<()> {
+        let expected = self
+            .records()
+            .into_iter()
+            .filter(|record| record.agent_did == runtime_did)
+            .collect::<Vec<_>>();
+        let local = self
+            .local_replicated_schema
+            .get_or_try_init(|| read_client_replicated_schema(local))
+            .await?;
+        self.record_runtime_schema(runtime_did, &expected, local, status)
+    }
+
+    /// Record a comparison only on peers still in the generation captured
+    /// before the local read, so a delayed observation cannot overwrite a
+    /// replaced route's state.
+    fn record_runtime_schema(
         &self,
         runtime_did: &str,
-        advertised: Option<&str>,
-    ) -> Result<(), ReplicatedSchemaSkew> {
-        let local = gents::agent::p2p_reconcile::client_replicated_schema_fingerprint();
-        let observed = check_replicated_schema(&local, advertised);
-        self.tx.send_if_modified(|state| match &observed {
-            Ok(()) => state.runtime_schema_skew.remove(runtime_did).is_some(),
-            Err(skew) => {
-                state
-                    .runtime_schema_skew
-                    .insert(runtime_did.to_string(), skew.clone())
-                    .as_ref()
-                    != Some(skew)
+        expected: &[PeerRecord],
+        local: &ReplicatedSchema,
+        status: &Value,
+    ) -> anyhow::Result<()> {
+        let status_did = status.get("agent_did").and_then(Value::as_str);
+        anyhow::ensure!(
+            status_did == Some(runtime_did),
+            "runtime status belongs to {}, not {runtime_did}",
+            status_did.unwrap_or("an unidentified runtime")
+        );
+        let remote = match status.get(STATUS_REPLICATED_SCHEMA_FIELD) {
+            Some(Value::Null) => {
+                anyhow::bail!("runtime {runtime_did} has not published its replicated schema yet")
             }
+            Some(schema) => serde_json::from_value::<ReplicatedSchema>(schema.clone()).ok(),
+            None => None,
+        };
+        let observed = compare_client_replicated_schema(local, remote.as_ref());
+        self.tx.send_if_modified(|state| {
+            let mut changed = false;
+            for expected in expected {
+                let current = state.directory.iter().any(|record| {
+                    record.peer_id == expected.peer_id
+                        && observation_generation_matches(expected, record)
+                });
+                if !current {
+                    continue;
+                }
+                changed |= match &observed {
+                    Ok(()) => state.peer_schema_skew.remove(&expected.peer_id).is_some(),
+                    Err(skew) => {
+                        state
+                            .peer_schema_skew
+                            .insert(expected.peer_id.clone(), skew.clone())
+                            .as_ref()
+                            != Some(skew)
+                    }
+                };
+            }
+            changed
         });
-        observed
+        observed.map_err(anyhow::Error::from)
     }
 
     /// Patch one diagnostic only while both the durable peer generation and
@@ -428,8 +494,20 @@ impl ClientSyncStateOwner {
                     status
                 })
                 .collect();
+            let skew_before = state.peer_schema_skew.len();
+            state.peer_schema_skew.retain(|peer_id, _| {
+                let previous = previous_directory
+                    .iter()
+                    .find(|record| &record.peer_id == peer_id);
+                let next = records.iter().find(|record| &record.peer_id == peer_id);
+                previous
+                    .zip(next)
+                    .is_some_and(|(previous, next)| observation_generation_matches(previous, next))
+            });
             state.directory.clone_from(records);
-            state.directory != previous_directory || state.peers != previous_peers
+            state.directory != previous_directory
+                || state.peers != previous_peers
+                || state.peer_schema_skew.len() != skew_before
         });
     }
 
@@ -567,27 +645,67 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn runtime_schema_skew_is_published_until_that_runtime_matches() {
-        let (_tempdir, owner) = ClientSyncStateOwner::for_test(Vec::new(), Vec::new()).await;
-        let mut updates = owner.subscribe();
-        let local = gents::agent::p2p_reconcile::client_replicated_schema_fingerprint();
+    fn replicated_schema(session_version: &str) -> ReplicatedSchema {
+        gents::agent::p2p_reconcile::CLIENT_COLLECTIONS
+            .iter()
+            .map(|name| {
+                let version = if *name == "AgentSession" {
+                    session_version.to_string()
+                } else {
+                    format!("bafy-{name}")
+                };
+                (
+                    (*name).to_string(),
+                    gents_protocol::peer_schema::ReplicatedCollectionIdentity {
+                        version_id: version,
+                        branchable: true,
+                        policy_resource: None,
+                    },
+                )
+            })
+            .collect()
+    }
 
-        let skew = owner
-            .observe_runtime_schema("did:key:runtime", Some("sha256:other"))
+    fn status(agent_did: &str, schema: &ReplicatedSchema) -> Value {
+        serde_json::json!({ "agent_did": agent_did, STATUS_REPLICATED_SCHEMA_FIELD: schema })
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_skew_is_recorded_per_peer_until_that_runtime_matches() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+        let mut updates = owner.subscribe();
+        let expected = [runtime.clone()];
+
+        let error = owner
+            .record_runtime_schema(
+                &runtime.agent_did,
+                &expected,
+                &local,
+                &status(&runtime.agent_did, &replicated_schema("bafy-next-release")),
+            )
             .unwrap_err();
-        assert_eq!(skew.remote.as_deref(), Some("sha256:other"));
+        assert!(format!("{error:#}").contains("AgentSession"), "{error:#}");
         assert!(updates.has_changed().unwrap());
+        let skew = updates
+            .borrow_and_update()
+            .peer_schema_skew
+            .get("a")
+            .cloned();
         assert_eq!(
-            updates
-                .borrow_and_update()
-                .runtime_schema_skew
-                .get("did:key:runtime"),
-            Some(&skew)
+            skew.map(|skew| skew.collections),
+            Some(vec!["AgentSession".to_string()])
         );
 
         owner
-            .observe_runtime_schema("did:key:runtime", Some("sha256:other"))
+            .record_runtime_schema(
+                &runtime.agent_did,
+                &expected,
+                &local,
+                &status(&runtime.agent_did, &replicated_schema("bafy-next-release")),
+            )
             .unwrap_err();
         assert!(
             !updates.has_changed().unwrap(),
@@ -595,17 +713,92 @@ mod tests {
         );
 
         owner
-            .observe_runtime_schema("did:key:other-runtime", Some(&local))
+            .record_runtime_schema(
+                &runtime.agent_did,
+                &expected,
+                &local,
+                &status(&runtime.agent_did, &local),
+            )
             .unwrap();
-        assert!(owner
-            .snapshot()
-            .runtime_schema_skew
-            .contains_key("did:key:runtime"));
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_observation_is_bound_to_the_runtime_identity() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+
+        let error = owner
+            .record_runtime_schema(
+                &runtime.agent_did,
+                &[runtime.clone()],
+                &local,
+                &status("did:key:port-reuse", &replicated_schema("bafy-other")),
+            )
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("did:key:port-reuse"));
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+
+        let unpublished = serde_json::json!({
+            "agent_did": runtime.agent_did,
+            STATUS_REPLICATED_SCHEMA_FIELD: null,
+        });
+        owner
+            .record_runtime_schema(&runtime.agent_did, &[runtime.clone()], &local, &unpublished)
+            .unwrap_err();
+        assert!(owner.snapshot().peer_schema_skew.is_empty());
+
+        let old_build = serde_json::json!({ "agent_did": runtime.agent_did });
+        owner
+            .record_runtime_schema(&runtime.agent_did, &[runtime.clone()], &local, &old_build)
+            .unwrap_err();
+        assert!(!owner.snapshot().peer_schema_skew["a"].advertised);
+    }
+
+    #[tokio::test]
+    async fn runtime_schema_skew_follows_peer_generation() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        let local = replicated_schema("bafy-session");
+        let skewed = status(&runtime.agent_did, &replicated_schema("bafy-other"));
 
         owner
-            .observe_runtime_schema("did:key:runtime", Some(&local))
-            .unwrap();
-        assert!(owner.snapshot().runtime_schema_skew.is_empty());
+            .record_runtime_schema(&runtime.agent_did, &[runtime.clone()], &local, &skewed)
+            .unwrap_err();
+        let mut replaced = runtime.clone();
+        replaced.addr = "endpoint:a-replaced".to_string();
+        owner.upsert_for_test(replaced.clone()).await.unwrap();
+        assert!(
+            owner.snapshot().peer_schema_skew.is_empty(),
+            "a replaced route generation starts unobserved"
+        );
+
+        owner
+            .record_runtime_schema(&runtime.agent_did, &[runtime.clone()], &local, &skewed)
+            .unwrap_err();
+        assert!(
+            owner.snapshot().peer_schema_skew.is_empty(),
+            "a delayed observation of the old generation is fenced"
+        );
+
+        owner
+            .record_runtime_schema(&runtime.agent_did, &[replaced.clone()], &local, &skewed)
+            .unwrap_err();
+        assert!(owner.snapshot().peer_schema_skew.contains_key("a"));
+        let current = owner
+            .records()
+            .into_iter()
+            .find(|record| record.peer_id == "a")
+            .expect("replaced peer is configured");
+        let removed = owner.queue_removal(&current).await.unwrap();
+        assert!(removed.is_some());
+        assert!(
+            owner.snapshot().peer_schema_skew.is_empty(),
+            "a removed peer no longer reports skew"
+        );
     }
 
     #[tokio::test]

@@ -56,6 +56,9 @@ pub(crate) struct RuntimeHttpState {
     pub(crate) enrollment_decisions: EnrollmentDecisionServiceHandle,
     pub(crate) activation_runtime: Arc<OnceCell<gents::Gents>>,
     pub(crate) activation_observation: watch::Receiver<RuntimeActivationObservation>,
+    /// Collection versions only change across process restarts, so the first
+    /// successful read of this node's `client` route schema is reused.
+    pub(crate) replicated_schema: Arc<OnceCell<gents_protocol::peer_schema::ReplicatedSchema>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -134,6 +137,7 @@ pub(crate) fn runtime_contract_router(
         enrollment_decisions,
         activation_runtime,
         activation_observation,
+        replicated_schema: Arc::new(OnceCell::new()),
     };
 
     let mut router = Router::new()
@@ -564,9 +568,25 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             },
         };
         map.insert("enrollment".to_string(), json!(enrollment));
+        let access = gents::config_client::ConfigAccess::Graphql(state.graphql.clone());
+        let replicated_schema = tokio::time::timeout(
+            STATUS_PROBE_BUDGET,
+            state.replicated_schema.get_or_try_init(|| {
+                gents::agent::p2p_reconcile::read_client_replicated_schema(&access)
+            }),
+        )
+        .await;
+        let replicated_schema = match replicated_schema {
+            Ok(Ok(schema)) => json!(schema),
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "failed to read replicated collection versions");
+                Value::Null
+            }
+            Err(_) => Value::Null,
+        };
         map.insert(
-            gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FINGERPRINT_FIELD.to_string(),
-            json!(gents::agent::p2p_reconcile::client_replicated_schema_fingerprint()),
+            gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD.to_string(),
+            replicated_schema,
         );
         crate::commands::p2p::flatten_p2p_fields(map, &p2p);
     }
@@ -785,6 +805,7 @@ mod tests {
             enrollment_decisions: crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
             activation_observation,
+            replicated_schema: Default::default(),
         }
     }
 
