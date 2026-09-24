@@ -1234,6 +1234,15 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "SubagentDelegationGraphCases".to_string(),
         ));
     }
+    if !lean_contract_snapshot()
+        .delegated_child_resolution_cases
+        .is_empty()
+    {
+        emitted.insert((
+            "delegated_child_resolution_cases".to_string(),
+            "DelegatedChildResolutionCases".to_string(),
+        ));
+    }
     if !lean_descendant_graph_cases().is_empty() {
         emitted.insert((
             "descendant_graph_cases".to_string(),
