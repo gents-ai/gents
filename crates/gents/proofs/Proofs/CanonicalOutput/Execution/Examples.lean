@@ -353,10 +353,16 @@ def realSpawnProviderMessage : MessageEnvelope :=
     blocks := [.toolCall 600 "native-call" none "spawn_subagent"
       ⟨⟨500, 0⟩, .full⟩ none none] }
 
-def acceptedDelegatedCallAtDepth (depth : Nat) : Option DelegatedCall := do
-  let accepted ← (acceptAndPublish (routedDepthWorld depth) 7 realSpawnProviderTurn
-    realSpawnProviderMessage [remote] [remoteAdmission]).toOption
+def acceptedDelegatedCallAtDepthWithWorkspace (depth : Nat)
+    (workspace : DelegatedWorkspace) : Option DelegatedCall := do
+  let world := { routedDepthWorld depth with workspace := some workspace }
+  let admission := { remoteAdmission with delegatedWorkspace := some workspace }
+  let accepted ← (acceptAndPublish world 7 realSpawnProviderTurn
+    realSpawnProviderMessage [remote] [admission]).toOption
   accepted.delegatedCalls.find? (fun call => call.call == 600)
+
+def acceptedDelegatedCallAtDepth (depth : Nat) : Option DelegatedCall :=
+  acceptedDelegatedCallAtDepthWithWorkspace depth remoteWorkspace
 
 theorem accepted_depth_two_creates_child_at_bound :
     (acceptedDelegatedCallAtDepth 2).bind
@@ -385,14 +391,36 @@ theorem readonly_parent_inheritance_cannot_escalate :
 theorem provisioned_child_can_have_distinct_identity_without_escalation :
     (acceptedDelegatedCallAtDepth 2).bind (fun row =>
       receiveDelegatedChild 1 2 8 1 2 row
-        (.provision observedProvisionedWorkspace true)) =
+        (.provision observedParentWorkspace true (some observedProvisionedWorkspace))) =
       some (3, some ⟨71, 2, none, .readOnly⟩) := by
   native_decide
 
 theorem unverified_provision_is_not_a_child_workspace :
     (acceptedDelegatedCallAtDepth 2).bind (fun row =>
       receiveDelegatedChild 1 2 8 1 2 row
-        (.provision { observedProvisionedWorkspace with available := false } true)) = none := by
+        (.provision observedParentWorkspace true
+          (some { observedProvisionedWorkspace with available := false }))) = none := by
+  native_decide
+
+theorem failed_provision_cannot_stamp_child :
+    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
+      receiveDelegatedChild 1 2 8 1 2 row
+        (.provision observedParentWorkspace true none)) = none := by
+  native_decide
+
+theorem changed_parent_seal_blocks_provision :
+    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
+      receiveDelegatedChild 1 2 8 1 2 row
+        (.provision { observedParentWorkspace with sealHash := some 99 } true
+          (some observedProvisionedWorkspace))) = none := by
+  native_decide
+
+theorem absent_to_present_parent_seal_blocks_provision :
+    (acceptedDelegatedCallAtDepthWithWorkspace 2
+      { remoteWorkspace with sealHash := none }).bind (fun row =>
+      receiveDelegatedChild 1 2 8 1 2 row
+        (.provision observedParentWorkspace true
+          (some observedProvisionedWorkspace))) = none := by
   native_decide
 
 theorem accepted_depth_replay_rejects_changed_source :

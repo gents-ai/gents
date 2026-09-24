@@ -124,8 +124,9 @@ pub(crate) enum LeanDelegatedChildChoice {
         requested_authority: Option<String>,
     },
     Provision {
-        workspace: LeanObservedChildWorkspace,
+        observed_parent: LeanObservedChildWorkspace,
         parent_path_exact: bool,
+        created_child: Option<LeanObservedChildWorkspace>,
     },
 }
 
