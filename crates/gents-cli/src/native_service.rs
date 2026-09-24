@@ -658,10 +658,9 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         }
     }
 
-    /// Why a loaded job is not running: the supervisor's record of the last
-    /// failed exit while it waits to restart the process. `None` while the
-    /// process runs, has never exited, or last exited successfully.
-    pub fn exit_failure(&self) -> Result<Option<ServiceExit>> {
+    /// Why a loaded job is not running: the supervisor's record of its last
+    /// exit. `None` while the process runs or has never exited.
+    pub fn last_exit(&self) -> Result<Option<ServiceExit>> {
         if !self.config.definition_path(self.platform).is_file() {
             return Ok(None);
         }
@@ -1120,12 +1119,13 @@ fn launchd_is_running(output: &str) -> bool {
     state_running && has_pid
 }
 
-/// A failed exit the supervisor recorded, with how many times it has
-/// restarted the job since it was loaded.
+/// An exit the supervisor recorded, with how many times it has restarted the
+/// job since it was loaded. A clean exit is not restarted.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ServiceExit {
     pub reason: String,
     pub restarts: u64,
+    pub clean: bool,
 }
 
 fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
@@ -1143,16 +1143,24 @@ fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
         .and_then(|runs| runs.parse::<u64>().ok())
         .unwrap_or_default()
         .saturating_sub(1);
-    let reason = if let Some(signal) = field("last terminating signal = ") {
-        format!("terminated by signal {signal}")
+    let (reason, clean) = if let Some(signal) = field("last terminating signal = ") {
+        (format!("terminated by signal {signal}"), false)
     } else {
         let code = field("last exit code = ")?;
-        if code.starts_with('(') || code.split(':').next().map(str::trim) == Some("0") {
+        if code.starts_with('(') {
             return None;
         }
-        format!("exited with code {code}")
+        if code.split(':').next().map(str::trim) == Some("0") {
+            ("exited normally".to_string(), true)
+        } else {
+            (format!("exited with code {code}"), false)
+        }
     };
-    Some(ServiceExit { reason, restarts })
+    Some(ServiceExit {
+        reason,
+        restarts,
+        clean,
+    })
 }
 
 fn systemd_exit_failure(output: &str) -> Option<ServiceExit> {
@@ -1172,6 +1180,7 @@ fn systemd_exit_failure(output: &str) -> Option<ServiceExit> {
     Some(ServiceExit {
         reason: format!("{result} (exit status {})", field("ExecMainStatus")),
         restarts: field("NRestarts").parse().unwrap_or_default(),
+        clean: false,
     })
 }
 
@@ -1700,6 +1709,7 @@ mod tests {
             Some(ServiceExit {
                 reason: "exited with code 78: Function not implemented".into(),
                 restarts: 2,
+                clean: false,
             })
         );
         assert_eq!(
@@ -1709,13 +1719,21 @@ mod tests {
             Some(ServiceExit {
                 reason: "terminated by signal Killed: 9".into(),
                 restarts: 0,
+                clean: false,
             })
         );
         assert!(
             launchd_exit_failure("state = not running\nlast exit code = (never exited)\n")
                 .is_none()
         );
-        assert!(launchd_exit_failure("state = not running\nlast exit code = 0\n").is_none());
+        assert_eq!(
+            launchd_exit_failure("state = not running\nruns = 1\nlast exit code = 0\n"),
+            Some(ServiceExit {
+                reason: "exited normally".into(),
+                restarts: 0,
+                clean: true,
+            })
+        );
         assert!(launchd_exit_failure("state = running\npid = 42\nlast exit code = 1\n").is_none());
 
         assert_eq!(
@@ -1725,6 +1743,7 @@ mod tests {
             Some(ServiceExit {
                 reason: "exit-code (exit status 1)".into(),
                 restarts: 4,
+                clean: false,
             })
         );
         assert!(systemd_exit_failure(
