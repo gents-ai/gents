@@ -83,12 +83,13 @@ pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
 }
 
 pub(crate) async fn publish(args: PackPublishArgs) -> Result<()> {
-    let token = resolve_registry_token(args.token.as_deref())
-        .context("a registry token is required; pass --token or set GENTS_REGISTRY_TOKEN")?;
+    let registry = resolve_registry_url(args.registry.as_deref());
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let token = super::account::resolve_publish_token(args.token.as_deref(), &registry, &home)?;
     let bytes =
         std::fs::read(&args.file).with_context(|| format!("reading {}", args.file.display()))?;
     anyhow::ensure!(!bytes.is_empty(), "{} is empty", args.file.display());
-    let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
+    let client = RegistryClient::new(registry);
     let result = client.publish(&token, bytes).await?;
     crate::print_json(&result)
 }
@@ -186,6 +187,28 @@ mod tests {
             resolve_registry_token(Some("gcpat_flag")).as_deref(),
             Some("gcpat_flag")
         );
+    }
+
+    /// A write resolves its token from the flag, then the environment, then
+    /// the login `gents pack login` saved for that registry.
+    #[test]
+    fn a_saved_login_is_the_last_token_source() {
+        let guard = EnvVarGuard::clear(&[REGISTRY_TOKEN_ENV_VAR]);
+        let home = tempfile::tempdir().unwrap();
+        let registry = "https://registry.example";
+        let resolve = |explicit| {
+            super::super::account::resolve_publish_token(explicit, registry, home.path())
+        };
+        let error = resolve(None).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("gents pack login"),
+            "{error:#}"
+        );
+        gents::pack_registry::credentials::set(home.path(), registry, "gcpat_saved").unwrap();
+        assert_eq!(resolve(None).unwrap(), "gcpat_saved");
+        guard.set(REGISTRY_TOKEN_ENV_VAR, "gcpat_env");
+        assert_eq!(resolve(None).unwrap(), "gcpat_env");
+        assert_eq!(resolve(Some("gcpat_flag")).unwrap(), "gcpat_flag");
     }
 
     // --- a tiny fake registry, just the routes `gents pack` needs ---

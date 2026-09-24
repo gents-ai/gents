@@ -14,7 +14,8 @@ pub use inference::{
     preview_pack_inference_bindings, PackInferenceBindingPreview, PackInferenceProfileOption,
 };
 pub use installation::{
-    remove_pack, DriftPolicy, InstallReport, InstalledPackPlugin, PackIdentity,
+    list_installed_packs, remove_pack, DriftPolicy, InstallReport, InstalledPack,
+    InstalledPackPlugin, PackIdentity,
 };
 pub use loader::{decode_pack_config, load_pack_config};
 pub(crate) use provenance::{pack_artifact_document_digest, prepare_pack_plan_in_txn};

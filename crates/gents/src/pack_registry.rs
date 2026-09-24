@@ -80,6 +80,11 @@ impl RegistryClient {
         )
     }
 
+    /// An endpoint that is the same for packs and plugins.
+    fn base_api(&self, path: &str) -> String {
+        format!("{}/api/v1{path}", self.base_url)
+    }
+
     fn api(&self, path: &str) -> String {
         format!("{}/api/v1{path}", self.base_url)
     }
@@ -176,6 +181,61 @@ impl RegistryClient {
             bytes.extend_from_slice(&chunk);
         }
         Ok(bytes)
+    }
+
+    /// Exchanges a username and password for an API token.
+    pub async fn login(&self, username: &str, password: &str) -> Result<String> {
+        let url = self.base_api("/login");
+        let response = self
+            .http
+            .post(&url)
+            .json(&serde_json::json!({"username": username, "password": password}))
+            .send()
+            .await
+            .with_context(|| self.unreachable())?;
+        Self::json_or_error(response, &url)
+            .await?
+            .get("token")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .context("the registry answered a sign-in without a token")
+    }
+
+    /// Who `token` signs in as.
+    pub async fn me(&self, token: &str) -> Result<Value> {
+        let url = self.base_api("/me");
+        let response = self
+            .http
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .with_context(|| self.unreachable())?;
+        Self::json_or_error(response, &url).await
+    }
+
+    /// Yanks a version, or restores it with `undo`.
+    pub async fn yank(
+        &self,
+        token: &str,
+        namespace: &str,
+        name: &str,
+        version: &str,
+        undo: bool,
+    ) -> Result<Value> {
+        let url = self.api(&format!(
+            "/{}/{namespace}/{name}/{version}/yank",
+            self.kind.path()
+        ));
+        let response = self
+            .http
+            .post(&url)
+            .query(&[("undo", undo)])
+            .bearer_auth(token)
+            .send()
+            .await
+            .with_context(|| self.unreachable())?;
+        Self::json_or_error(response, &url).await
     }
 
     pub async fn publish(&self, token: &str, bytes: Vec<u8>) -> Result<Value> {
@@ -366,6 +426,72 @@ pub async fn fetch_pack(
     })
 }
 
+/// Registry tokens saved by `gents pack login`, one per registry URL, in
+/// `{home}/registry/credentials.json`, readable only by its owner.
+pub mod credentials {
+    use std::collections::BTreeMap;
+    use std::path::{Path, PathBuf};
+
+    use anyhow::{Context, Result};
+
+    fn path(home: &Path) -> PathBuf {
+        home.join("registry").join("credentials.json")
+    }
+
+    fn read_all(home: &Path) -> Result<BTreeMap<String, String>> {
+        match std::fs::read(path(home)) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .with_context(|| format!("{} is not valid JSON", path(home).display())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(error) => Err(error).with_context(|| format!("reading {}", path(home).display())),
+        }
+    }
+
+    fn write_all(home: &Path, tokens: &BTreeMap<String, String>) -> Result<()> {
+        let file = path(home);
+        let dir = file.parent().context("credentials path has no parent")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        let mut staged = tempfile::NamedTempFile::new_in(dir)
+            .with_context(|| format!("staging credentials in {}", dir.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            staged
+                .as_file()
+                .set_permissions(std::fs::Permissions::from_mode(0o600))
+                .context("restricting the credentials file")?;
+        }
+        std::io::Write::write_all(&mut staged, &serde_json::to_vec_pretty(tokens)?)
+            .context("writing credentials")?;
+        staged
+            .persist(&file)
+            .map_err(|error| error.error)
+            .with_context(|| format!("saving {}", file.display()))?;
+        Ok(())
+    }
+
+    /// The token saved for `registry`, if any.
+    pub fn get(home: &Path, registry: &str) -> Result<Option<String>> {
+        Ok(read_all(home)?.remove(registry.trim_end_matches('/')))
+    }
+
+    pub fn set(home: &Path, registry: &str, token: &str) -> Result<()> {
+        let mut tokens = read_all(home)?;
+        tokens.insert(registry.trim_end_matches('/').to_owned(), token.to_owned());
+        write_all(home, &tokens)
+    }
+
+    /// Forgets the token for `registry`; returns whether there was one.
+    pub fn remove(home: &Path, registry: &str) -> Result<bool> {
+        let mut tokens = read_all(home)?;
+        let removed = tokens.remove(registry.trim_end_matches('/')).is_some();
+        if removed {
+            write_all(home, &tokens)?;
+        }
+        Ok(removed)
+    }
+}
+
 pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     let mut staged = tempfile::NamedTempFile::new_in(dir)
@@ -401,5 +527,39 @@ mod tests {
             assert!(message.contains("--registry"), "{message}");
             assert!(!message.contains("curl"), "{message}");
         }
+    }
+
+    #[test]
+    fn credentials_are_saved_per_registry_privately_and_forgotten() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(
+            credentials::get(home.path(), "https://a.example").unwrap(),
+            None
+        );
+        credentials::set(home.path(), "https://a.example/", "gcpat_a").unwrap();
+        credentials::set(home.path(), "https://b.example", "gcpat_b").unwrap();
+        assert_eq!(
+            credentials::get(home.path(), "https://a.example")
+                .unwrap()
+                .as_deref(),
+            Some("gcpat_a")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(home.path().join("registry/credentials.json"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(credentials::remove(home.path(), "https://a.example").unwrap());
+        assert!(!credentials::remove(home.path(), "https://a.example").unwrap());
+        assert_eq!(
+            credentials::get(home.path(), "https://b.example")
+                .unwrap()
+                .as_deref(),
+            Some("gcpat_b")
+        );
     }
 }

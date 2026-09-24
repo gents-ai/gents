@@ -89,6 +89,14 @@ async fn install_then_remove_leaves_no_pack_documents_and_keeps_adopted_ones() {
     assert_eq!(report.created, vec!["Tools/alpha"]);
     assert_eq!(report.adopted, vec!["Tools/shared"]);
 
+    assert_eq!(
+        list_installed_packs(&access, OWNER).await.unwrap(),
+        vec![InstalledPack {
+            coordinate: "acme/demo".into(),
+            version: "1".into(),
+            digest: identity("1").digest,
+        }]
+    );
     let removed = remove_pack(&access, OWNER, "acme/demo", DriftPolicy::Refuse)
         .await
         .unwrap();

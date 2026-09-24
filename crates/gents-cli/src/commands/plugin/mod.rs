@@ -76,11 +76,14 @@ async fn publish(args: PluginPublishArgs) -> Result<()> {
     let afb = afterburner_cloud::Afb::from_bytes(&bytes)
         .with_context(|| format!("{} is not a readable plugin .afb", args.file.display()))?;
 
-    let token = crate::commands::pack::registry::resolve_registry_token(args.token.as_deref())
-        .context("a registry token is required; pass --token or set GENTS_REGISTRY_TOKEN")?;
-    let client = crate::commands::pack::registry::RegistryClient::for_plugins(
-        crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref()),
-    );
+    let registry = crate::commands::pack::registry::resolve_registry_url(args.registry.as_deref());
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let token = crate::commands::pack::account::resolve_publish_token(
+        args.token.as_deref(),
+        &registry,
+        &home,
+    )?;
+    let client = crate::commands::pack::registry::RegistryClient::for_plugins(registry);
     let response = client.publish(&token, bytes).await?;
 
     crate::print_json(&json!({

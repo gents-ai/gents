@@ -383,6 +383,37 @@ pub async fn remove_pack(
         .await
 }
 
+/// One installed pack, as its record states it.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct InstalledPack {
+    pub coordinate: String,
+    pub version: String,
+    pub digest: String,
+}
+
+/// Every pack installed for `owner`, by coordinate.
+pub async fn list_installed_packs(
+    access: &ConfigAccess,
+    owner: &str,
+) -> Result<Vec<InstalledPack>> {
+    let response = access
+        .execute(&format!(
+            r#"{{ {RECORD}(filter: {{ agent_did: {{ _eq: "{}" }} }}, order: {{ coordinate: ASC }}) {{ coordinate version digest }} }}"#,
+            escape_graphql_string(owner)
+        ))
+        .await?;
+    Ok(response["data"][RECORD]
+        .as_array()
+        .context("reading the pack installation records")?
+        .iter()
+        .map(|row| InstalledPack {
+            coordinate: row["coordinate"].as_str().unwrap_or_default().to_owned(),
+            version: row["version"].as_str().unwrap_or_default().to_owned(),
+            digest: row["digest"].as_str().unwrap_or_default().to_owned(),
+        })
+        .collect())
+}
+
 /// The documents of `config` an install writes: all but the principal,
 /// which is shared identity, never pack-owned.
 pub(crate) fn installable_documents(config: &PackConfig) -> Result<Vec<DesiredStateApplyDocument>> {

@@ -558,6 +558,10 @@ pub(crate) enum PackCommand {
     Install(PackInstallArgs),
     /// Remove what a pack install created, and its record.
     Remove(PackRemoveArgs),
+    /// List installed packs with a newer version in the registry.
+    Outdated(PackOutdatedArgs),
+    /// Install the latest version of outdated packs.
+    Update(PackUpdateArgs),
     /// Remove superseded generated asset-cache versions without run history.
     Prune(PackPruneArgs),
     /// Run, initialize or seed a pack's experiment.json scenario.
@@ -567,6 +571,16 @@ pub(crate) enum PackCommand {
     Build(PackBuildArgs),
     /// Search the pack registry.
     Search(PackSearchArgs),
+    /// Show a package's registry page: versions, digests and owner.
+    Info(PackInfoArgs),
+    /// Sign in to the registry and save the token in the gents home.
+    Login(PackLoginArgs),
+    /// Forget the saved registry login.
+    Logout(PackAccountArgs),
+    /// Show who the saved registry login is.
+    Whoami(PackAccountArgs),
+    /// Yank a published version so new installs skip it, or restore it.
+    Yank(PackYankArgs),
     /// Publish a built `.pack` to the pack registry.
     Publish(PackPublishArgs),
     /// Download a pack's `.pack` from the registry without installing it.
@@ -640,9 +654,104 @@ pub(crate) struct PackPublishArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackLoginArgs {
+    #[arg(long, help = "Account name; the password is read from standard input")]
+    pub(crate) username: Option<String>,
+    #[arg(
+        long,
+        requires = "username",
+        help = "Read the password from standard input"
+    )]
+    pub(crate) password_stdin: bool,
+    #[arg(
+        long,
+        conflicts_with = "username",
+        help = "A token from your registry dashboard"
+    )]
+    pub(crate) token: Option<String>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home to save the login in")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackAccountArgs {
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackInfoArgs {
+    #[arg(help = "The package, as name or namespace/name")]
+    pub(crate) package: String,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackYankArgs {
+    #[arg(help = "The version, as namespace/name@version")]
+    pub(crate) package: String,
+    #[arg(long, help = "Restore a yanked version")]
+    pub(crate) undo: bool,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+    )]
+    pub(crate) token: Option<String>,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackOutdatedArgs {
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackUpdateArgs {
+    #[arg(help = "The installed pack to update; every outdated pack when omitted")]
+    pub(crate) package: Option<String>,
+    #[command(flatten)]
+    pub(crate) scope: GraphScopeArgs,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[command(flatten)]
+    pub(crate) drift: PackDriftArgs,
 }
 
 #[derive(clap::Args)]
@@ -887,9 +996,11 @@ pub(crate) struct PluginPublishArgs {
     pub(crate) registry: Option<String>,
     #[arg(
         long,
-        help = "Bearer token for the registry. Defaults to GENTS_REGISTRY_TOKEN"
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
     )]
     pub(crate) token: Option<String>,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

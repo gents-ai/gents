@@ -1,4 +1,5 @@
 //! One package-facing CLI; install writes stay with their existing owners.
+pub(crate) mod account;
 mod build;
 mod check;
 mod cli_process;
@@ -11,6 +12,7 @@ mod scenario;
 mod secscan;
 mod server;
 mod test;
+mod update;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, PackManifest, ResolvedPack};
@@ -65,12 +67,19 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,
         PackCommand::Remove(args) => remove(args).await,
+        PackCommand::Outdated(args) => update::outdated(args).await,
+        PackCommand::Update(args) => update::update(args).await,
         PackCommand::Prune(args) => prune(args),
         PackCommand::Scenario(PackScenarioCommand::Run(args)) => scenario::run(args).await,
         PackCommand::Scenario(PackScenarioCommand::Init(args)) => scenario::init_pack(args).await,
         PackCommand::Scenario(PackScenarioCommand::Seed(args)) => scenario::seed(args).await,
         PackCommand::Build(args) => build::dispatch(args),
         PackCommand::Search(args) => registry::search(args).await,
+        PackCommand::Info(args) => account::info(args).await,
+        PackCommand::Login(args) => account::login(args).await,
+        PackCommand::Logout(args) => account::logout(args),
+        PackCommand::Whoami(args) => account::whoami(args).await,
+        PackCommand::Yank(args) => account::yank(args).await,
         PackCommand::Publish(args) => registry::publish(args).await,
         PackCommand::Fetch(args) => registry::fetch(args).await,
     }
@@ -376,27 +385,34 @@ pub(crate) fn install_pack_plugins<'a>(
         .collect()
 }
 
-/// `gents pack remove`: deletes what the pack's install created, keeping
-/// documents it adopted, and forgets the install.
-async fn remove(args: PackRemoveArgs) -> Result<()> {
-    let (namespace, name) = split_namespace(&args.package);
+/// The node and the owner a pack command acts for.
+pub(crate) async fn resolve_scope_owner(
+    scope: &GraphScopeArgs,
+) -> Result<(gents::config_client::ConfigAccess, String)> {
     let (access, _) =
-        crate::resolve_config_access(args.scope.home.as_deref(), args.scope.graphql.as_deref())
-            .await?;
+        crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
     let owner = super::config::binding::resolve_target_agent_did(
-        args.scope.agent_did.as_deref(),
-        if args.scope.agent_did.is_some() {
+        scope.agent_did.as_deref(),
+        if scope.agent_did.is_some() {
             None
-        } else if args.scope.graphql.is_some() {
+        } else if scope.graphql.is_some() {
             Some(ManifestAgentDidBindingArg::Live)
         } else {
             Some(ManifestAgentDidBindingArg::Home)
         },
-        args.scope.home.as_deref(),
-        args.scope.graphql.as_deref(),
+        scope.home.as_deref(),
+        scope.graphql.as_deref(),
         Some(&access),
     )
     .await?;
+    Ok((access, owner))
+}
+
+/// `gents pack remove`: deletes what the pack's install created, keeping
+/// documents it adopted, and forgets the install.
+async fn remove(args: PackRemoveArgs) -> Result<()> {
+    let (namespace, name) = split_namespace(&args.package);
+    let (access, owner) = resolve_scope_owner(&args.scope).await?;
     let report = gents::pack::remove_pack(
         &access,
         &owner,
