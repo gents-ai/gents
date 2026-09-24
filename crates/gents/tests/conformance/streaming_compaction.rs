@@ -288,7 +288,11 @@ fn is_subsequence(needle: &[String], haystack: &[String]) -> bool {
 }
 
 fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCase) -> Vec<Message> {
-    match case.pre_message_count {
+    compaction_messages_for_count(case.pre_message_count)
+}
+
+pub(super) fn compaction_messages_for_count(count: usize) -> Vec<Message> {
+    match count {
         0 => Vec::new(),
         1 => vec![compaction_tool_result_message(
             "call-1",
@@ -309,10 +313,7 @@ fn compaction_messages_for_case(case: &lean_vocab_test::LeanCompactionReducerCas
             compaction_tool_result_message("call-1", "large tool payload"),
             compaction_text_message("assistant", "reply"),
         ],
-        other => panic!(
-            "unsupported compaction pre_message_count {other} for {}",
-            case.name
-        ),
+        other => panic!("unsupported compaction message_count {other}"),
     }
 }
 

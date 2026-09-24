@@ -6,16 +6,35 @@ use defra_node::EmbeddedNode;
 use gents_loop::claude_messages_body::reasoning_witness;
 use gents_loop::loop_stream::{LoopReplayInput, TaggedMessage};
 
+/// The accepted Claude assistant rows whose signed reasoning must survive a
+/// subsequent tool continuation. This is evaluated on canonical native input,
+/// before any provider-view projection can drop a tool call.
+pub(crate) fn requires_claude_tool_continuation(
+    message: &gents_protocol::message::Message,
+) -> bool {
+    let gents_protocol::message::Message::Assistant { content, .. } = message else {
+        return false;
+    };
+    !reasoning_witness(content).is_empty()
+        && content.iter().any(|block| {
+            matches!(
+                block,
+                gents_protocol::message::AssistantContent::ToolCall(_)
+            )
+        })
+}
+
 /// Resolve live and restored continuation evidence through physical canonical
 /// facts. The configured backend and opaque signature bytes confer no origin.
 pub(crate) fn owned_replay_input(
     node: Arc<EmbeddedNode>,
     request: crate::watcher::AgentRequest,
     request_commit_cid: String,
+    expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 ) -> LoopReplayInput {
     LoopReplayInput {
         request_doc_id: Some(request.doc_id.clone()),
-        resolve: Some(Arc::new(move |tag| {
+        resolve: Some(Arc::new(move |tags| {
             let node = node.clone();
             let request = request.clone();
             let request_commit_cid = request_commit_cid.clone();
@@ -23,11 +42,13 @@ pub(crate) fn owned_replay_input(
                 let boundary = crate::provider_context_reduction::capture_source_boundary(
                     &node,
                     &request.session_id,
+                    &request.agent_did,
+                    request.requester_did.as_deref(),
                     &request.doc_id,
                     &request_commit_cid,
                 )
                 .await?;
-                crate::session::resolve_current_replay_tag(
+                let resolved = crate::session::resolve_current_replay_tags(
                     &node,
                     crate::session::CanonicalReplayScope {
                         agent_did: &request.agent_did,
@@ -36,11 +57,23 @@ pub(crate) fn owned_replay_input(
                         request_id: &request.request_id,
                         request_doc_id: &request.doc_id,
                         request_commit_cid: &request_commit_cid,
+                        expected_scope_kind,
                     },
                     &boundary,
-                    &tag,
+                    &tags,
                 )
-                .await
+                .await?;
+                Ok(resolved
+                    .into_iter()
+                    .flat_map(|(tag, evidence)| {
+                        evidence.into_iter().map(move |evidence| {
+                            gents_loop::loop_stream::ReplayEvidenceRow {
+                                tag: tag.clone(),
+                                evidence,
+                            }
+                        })
+                    })
+                    .collect())
             })
         })),
         ..LoopReplayInput::default()
@@ -59,17 +92,9 @@ pub(crate) fn tag_canonical_history(
             let source = row.provider_source.clone().filter(|tag| {
                 replay.request_doc_id.as_deref() == Some(tag.request_doc_id.as_str())
             });
-            if let (Some(tag), gents_protocol::message::Message::Assistant { content, .. }) =
-                (&source, &row.message)
-            {
+            if let Some(tag) = &source {
                 if profile == super::ProviderInputProfile::ClaudeMessages
-                    && !reasoning_witness(content).is_empty()
-                    && content.iter().any(|block| {
-                        matches!(
-                            block,
-                            gents_protocol::message::AssistantContent::ToolCall(_)
-                        )
-                    })
+                    && requires_claude_tool_continuation(&row.message)
                     && !replay.required.contains(tag)
                 {
                     replay.required.push(tag.clone());

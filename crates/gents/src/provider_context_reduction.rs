@@ -212,13 +212,16 @@ pub fn reduction_key(
 pub async fn capture_source_boundary(
     node: &EmbeddedNode,
     session_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
     request_doc_id: &str,
     request_commit_cid: &str,
 ) -> Result<SourceBoundary> {
+    let session_scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let query = format!(
         r#"{{
             AgentMessage(
-                filter: {{ session_id: {{ _eq: "{}" }} }},
+                filter: {{ {session_scope} }},
                 order: {{ sequence: DESC }},
                 limit: 1
             ) {{
@@ -226,7 +229,6 @@ pub async fn capture_source_boundary(
                 sequence
             }}
         }}"#,
-        escape_graphql_string(session_id)
     );
     let response = node.execute(&query).await;
     if response.has_errors() {
@@ -1499,6 +1501,8 @@ mod tests {
             let mutation = format!(
                 r#"mutation {{ create_AgentMessage(input: {{
                     message_key: "session-boundary:{sequence}"
+                    agent_did: "did:test:boundary-owner"
+                    requester_did: null
                     session_id: "session-boundary"
                     sequence: {sequence}
                     role: "user"
@@ -1513,10 +1517,35 @@ mod tests {
                 response.errors
             );
         }
-        let boundary =
-            capture_source_boundary(&node, "session-boundary", "request-doc", "request-cid")
-                .await
-                .unwrap();
+        let other_principal = node
+            .execute(
+                r#"mutation { create_AgentMessage(input: {
+                message_key: "other-boundary:3"
+                agent_did: "did:test:other-owner"
+                requester_did: null
+                session_id: "session-boundary"
+                sequence: 3
+                role: "user"
+                content: "unrelated"
+                timestamp: "2026-08-14T00:00:03Z"
+            }) { _docID } }"#,
+            )
+            .await;
+        assert!(
+            !other_principal.has_errors(),
+            "{:?}",
+            other_principal.errors
+        );
+        let boundary = capture_source_boundary(
+            &node,
+            "session-boundary",
+            "did:test:boundary-owner",
+            None,
+            "request-doc",
+            "request-cid",
+        )
+        .await
+        .unwrap();
         let high_water = boundary.canonical_through.expect("canonical high-water");
         assert_eq!(high_water.sequence, 2);
         assert!(!high_water.doc_id.is_empty());

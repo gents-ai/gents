@@ -1,6 +1,7 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.ContractCases.PromptAssembly
+import Proofs.Compaction.Executable
 
 namespace Conformance.Contracts
 
@@ -384,5 +385,19 @@ def promptAssemblyClaudeCheckpointCaseJson
 
 def promptAssemblyClaudeCheckpointCasesJson : String :=
   jsonArray (promptAssemblyClaudeCheckpointCases.map promptAssemblyClaudeCheckpointCaseJson)
+
+def protectedReplayCompactionCaseJson
+    (witness : Compaction.ProtectedReplayCompactionCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"message_count\":" ++ toString witness.messageCount ++
+    ",\"raw_index\":" ++ toString witness.rawIndex ++
+    ",\"max_prefix\":" ++ toString witness.maxPrefix ++
+    ",\"required\":" ++ jsonArray (witness.required.map claudeReplayTagJson) ++
+    ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
+    ",\"selected_split\":" ++ jsonOptionalNat witness.selectedSplit ++
+    ",\"outcome\":" ++ jsonString witness.outcome ++ "}"
+
+def protectedReplayCompactionCasesJson : String :=
+  jsonArray (Compaction.protectedReplayCompactionCases.map protectedReplayCompactionCaseJson)
 
 end Conformance.Contracts

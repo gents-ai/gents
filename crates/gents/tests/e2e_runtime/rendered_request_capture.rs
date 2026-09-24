@@ -1312,6 +1312,8 @@ async fn model_backed_compaction_is_captured_like_every_other_provider_call() {
     let boundary = gents::provider_context_reduction::capture_source_boundary(
         db.node.as_ref(),
         session_id,
+        &agent.agent_did,
+        None,
         &seed_doc,
         &seed_commit.cid,
     )

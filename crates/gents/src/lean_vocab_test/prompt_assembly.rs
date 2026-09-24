@@ -304,6 +304,21 @@ pub(crate) struct LeanPromptAssemblyClaudeCheckpointCase {
     pub(crate) replay: Vec<Vec<LeanClaudeReplayBlock>>,
 }
 
+/// Pair-safe protected prefix selected by the existing compaction and Claude
+/// replay owners before any summary completion is attempted.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanProtectedReplayCompactionCase {
+    pub(crate) name: String,
+    pub(crate) message_count: usize,
+    pub(crate) raw_index: usize,
+    pub(crate) max_prefix: usize,
+    pub(crate) required: Vec<LeanCanonicalCoordinate>,
+    pub(crate) rows: Vec<LeanClaudeTaggedReplayRow>,
+    pub(crate) selected_split: Option<usize>,
+    pub(crate) outcome: String,
+}
+
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanClaudeTaggedReplayRow {

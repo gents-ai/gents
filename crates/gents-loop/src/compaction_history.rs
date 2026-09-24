@@ -354,7 +354,22 @@ pub fn split_messages_for_summary_with_counter(
     keep_recent_tokens: usize,
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
+    split_messages_for_summary_with_counter_bounded(messages, keep_recent_tokens, counter, None)
+}
+
+/// The bound is an index in this exact provider-view list. A required replay
+/// row at that index cannot be summarized, even when the token target would
+/// otherwise choose a later split.
+pub fn split_messages_for_summary_with_counter_bounded(
+    messages: Vec<Message>,
+    keep_recent_tokens: usize,
+    counter: &crate::provider_input::ProviderInputCounter,
+    max_compacted_prefix_messages: Option<usize>,
+) -> anyhow::Result<(Vec<Message>, Vec<Message>)> {
     if messages.len() <= 1 {
+        if max_compacted_prefix_messages.is_some() {
+            return Err(super::ReductionError::CannotFit.into());
+        }
         return Ok((Vec::new(), messages));
     }
 
@@ -396,6 +411,11 @@ pub fn split_messages_for_summary_with_counter(
     let raw_split_index = split_index;
     let mut split_index = pair_safe_boundary(&messages, raw_split_index);
 
+    if let Some(max_prefix) = max_compacted_prefix_messages {
+        split_index = protected_pair_safe_split_index(&messages, raw_split_index, max_prefix)
+            .ok_or(super::ReductionError::CannotFit)?;
+    }
+
     // The raw budget can land inside an assistant ToolCall / user ToolResult
     // pair. Retreating keeps the pair valid, but an exceptionally large
     // reasoning-bearing assistant turn can make that atomic tail exceed the
@@ -415,7 +435,8 @@ pub fn split_messages_for_summary_with_counter(
     // compact its history. The full-list check then refuses to end on a tool
     // call still awaiting its result.
     let retained_tokens = counter.estimate_message_request(&messages[split_index..])?;
-    if split_index < raw_split_index
+    if max_compacted_prefix_messages.is_none()
+        && split_index < raw_split_index
         && retained_tokens > keep_recent_tokens
         && pair_safe_boundary(&messages, messages.len()) == messages.len()
     {
@@ -429,6 +450,19 @@ pub fn split_messages_for_summary_with_counter(
     let old_messages = messages[..split_index].to_vec();
     let recent_messages = messages[split_index..].to_vec();
     Ok((old_messages, recent_messages))
+}
+
+/// Select a nonempty pair-closed prefix no later than the first required
+/// continuation row. The retention target selects `raw_split_index` but does
+/// not establish whether the retained suffix fits the full context window.
+pub fn protected_pair_safe_split_index(
+    messages: &[Message],
+    raw_split_index: usize,
+    max_prefix: usize,
+) -> Option<usize> {
+    let split =
+        pair_safe_boundary(messages, raw_split_index).min(pair_safe_boundary(messages, max_prefix));
+    (split > 0).then_some(split)
 }
 
 // Not `#[cfg(test)]`: gents' own compaction test suite calls this test-only

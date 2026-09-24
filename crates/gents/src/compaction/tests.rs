@@ -1602,6 +1602,52 @@ fn summary_worthy_messages() -> Vec<Message> {
         .collect()
 }
 
+#[test]
+fn protected_split_does_not_treat_retention_target_as_context_ceiling() {
+    let messages = summary_worthy_messages();
+    let counter = crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::OpenAiCompatible,
+        crate::OpenAiWireApi::ChatCompletions,
+        "test-model",
+    );
+    let (old, recent) =
+        gents_loop::compaction::history::split_messages_for_summary_with_counter_bounded(
+            messages,
+            0,
+            &counter,
+            Some(1),
+        )
+        .expect("nonempty protected historical prefix is still summarizable");
+    assert_eq!(old.len(), 1);
+    assert_eq!(recent.len(), 23);
+    assert!(counter.estimate_message_request(&recent).unwrap() > 0);
+}
+
+#[tokio::test]
+async fn protected_zero_prefix_rejects_before_summary_provider_call() {
+    let model = CountingFailModel::new();
+    let calls = model.calls();
+    let compactor = ProviderReductionEngine::new(Arc::new(model), scheduled_origin_config());
+    let error = compactor
+        .reduce(
+            summary_worthy_messages(),
+            6_000,
+            &ReductionOptions {
+                keep_recent_tokens: 50,
+                mode: ReductionMode::Summarize,
+                max_compacted_prefix_messages: Some(0),
+                ..Default::default()
+            },
+            test_reduction_admission(),
+        )
+        .await
+        .expect_err("required first row leaves no summarizable historical prefix");
+    assert!(error
+        .downcast_ref::<ReductionError>()
+        .is_some_and(|error| matches!(error, ReductionError::CannotFit)));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
 fn scheduled_origin_config() -> crate::agent::loop_stream::LoopConfig {
     crate::agent::loop_stream::LoopConfig {
         replay: crate::agent::loop_stream::LoopReplayInput::default(),
