@@ -34,6 +34,7 @@
     "schemas/maintenance_verdict.graphql",
     "schemas/maintenance_verification_summary.graphql",
     "schemas/maintenance_work_package.graphql",
+    "schemas/maintenance_report_owned_files.patch.json",
     "tasks/maintenance_execute_skip_task/prompt.md",
     "tasks/maintenance_execute_task/prompt.md",
     "tasks/maintenance_integrate_task/prompt.md",

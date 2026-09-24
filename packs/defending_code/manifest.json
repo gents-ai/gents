@@ -48,6 +48,7 @@
     "schemas/defense_triage_summary.graphql",
     "schemas/defense_verification_assignment.graphql",
     "schemas/defense_verification_completion.graphql",
+    "schemas/defense_patch_assignment_owned_files.patch.json",
     "tasks/defend_cluster_task/prompt.md",
     "tasks/defend_contract_review_task/prompt.md",
     "tasks/defend_patch_integrate_task/prompt.md",
