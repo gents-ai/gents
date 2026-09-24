@@ -1,4 +1,5 @@
 import Proofs.Transcript.State
+import Proofs.CanonicalOutput.Message
 
 /-!
 # Claude content-block map (Track B / B2)
@@ -57,6 +58,15 @@ inductive MapError where
   | unmappedName (name : String)
   | duplicateId (id : ToolCallId)
   | overlappingBlock (id : ToolCallId)
+  | wrongBlock
+  | wrongIndex (index : Nat)
+  | incompleteBlock
+  | signatureOrder
+  | missingSignature
+  | malformedRedacted
+  | unsupportedReasoning
+  | unsupportedReplayBlock
+  | missingCallId
   deriving DecidableEq, Repr
 
 def errorName : MapError → String
@@ -64,6 +74,15 @@ def errorName : MapError → String
   | .unmappedName name => "unmappedName:" ++ name
   | .duplicateId id => "duplicateId:" ++ toString id
   | .overlappingBlock id => "overlappingBlock:" ++ toString id
+  | .wrongBlock => "wrongBlock"
+  | .wrongIndex index => "wrongIndex:" ++ toString index
+  | .incompleteBlock => "incompleteBlock"
+  | .signatureOrder => "signatureOrder"
+  | .missingSignature => "missingSignature"
+  | .malformedRedacted => "malformedRedacted"
+  | .unsupportedReasoning => "unsupportedReasoning"
+  | .unsupportedReplayBlock => "unsupportedReplayBlock"
+  | .missingCallId => "missingCallId"
 
 def blockTag : Block → String
   | .text => "text"
@@ -262,6 +281,11 @@ inductive StreamEvent where
   | start (id : ToolCallId) (name : String) (input : Option String)
   | delta (fragment : String)
   | stop
+  | thinkingStart (index : Nat)
+  | thinkingDelta (index : Nat) (fragment : String)
+  | signatureDelta (index : Nat) (fragment : String)
+  | redactedStart (index : Nat) (data : String)
+  | contentStop (index : Nat)
   deriving DecidableEq, Repr
 
 def accumulate (start : Option String) (deltas : List String) : String :=
@@ -287,19 +311,44 @@ structure Pending where
   deltas : List String
   deriving Repr
 
-structure StreamState where
-  pending : Option Pending
-  seen : List ToolCallId
-  out : List (ToolCallId × String)
+/-- One ordered native-content observation from the same SSE fold that maps
+tool calls. Reasoning uses the canonical native part vocabulary. Omitted
+thinking text may be empty, but its opaque signature must still be retained.
+Anthropic streams signature deltas before block stop and requires unchanged
+thinking/redacted blocks on tool continuation. -/
+inductive StreamBlock where
+  | text (value : String)
+  | reasoning (parts : List (CanonicalOutput.ReasoningPart String))
+  | toolUse (id : ToolCallId) (name arguments : String)
+  deriving DecidableEq, Repr
+
+inductive PendingBlock where
+  | tool (pending : Pending)
+  | thinking (index : Nat) (textFragments signatureFragments : List String)
+      (signatureStarted : Bool)
+  | redacted (index : Nat) (data : String)
   deriving Repr
 
-def StreamState.init : StreamState := { pending := none, seen := [], out := [] }
+structure StreamState where
+  pending : Option PendingBlock
+  /-- Only reasoning events carry SSE indices in this bounded projection;
+  legacy text/tool events do not establish a global block-index sequence. -/
+  lastIndexedBlock : Option Nat
+  seen : List ToolCallId
+  out : List (ToolCallId × String)
+  content : List StreamBlock
+  deriving Repr
 
-/-- Flush the pending block: duplicate id, then surface map, then arguments. -/
+def StreamState.init : StreamState :=
+  { pending := none, lastIndexedBlock := none, seen := [], out := [], content := [] }
+
+/-- Legacy tool blocks may flush at EOF (duplicate id, surface, arguments).
+Thinking/redacted blocks must close explicitly before they become replayable. -/
 def flush (surface : Surface) (st : StreamState) : Except MapError StreamState :=
   match st.pending with
   | none => .ok st
-  | some p =>
+  | some (.thinking ..) | some (.redacted ..) => .error .incompleteBlock
+  | some (.tool p) =>
     if p.id ∈ st.seen then
       .error (.duplicateId p.id)
     else
@@ -307,25 +356,155 @@ def flush (surface : Surface) (st : StreamState) : Except MapError StreamState :
       | .error e => .error e
       | .ok _ =>
         .ok { pending := none
+            , lastIndexedBlock := st.lastIndexedBlock
             , seen := p.id :: st.seen
-            , out := st.out ++ [(p.id, accumulate p.start p.deltas.reverse)] }
+            , out := st.out ++ [(p.id, accumulate p.start p.deltas.reverse)]
+            , content := st.content ++ [.toolUse p.id p.name (accumulate p.start p.deltas.reverse)] }
+
+def finishContent (st : StreamState) (index : Nat) : Except MapError StreamState :=
+  match st.pending with
+  | some (.thinking current text signature _) =>
+      if current != index then .error (.wrongIndex index)
+      else
+        let signed := String.join signature.reverse
+        if signed == "" then .error .missingSignature
+        else
+          let cleared := { st with pending := none }
+          let indexed := { cleared with lastIndexedBlock := some index }
+          .ok { indexed with
+            content := st.content ++ [.reasoning [.text (String.join text.reverse) (some signed)]] }
+  | some (.redacted current data) =>
+      if current != index then .error (.wrongIndex index)
+      else if data == "" then .error .malformedRedacted
+      else
+        let cleared := { st with pending := none }
+        let indexed := { cleared with lastIndexedBlock := some index }
+        .ok { indexed with content := st.content ++ [.reasoning [.redacted data]] }
+  | _ => .error .wrongBlock
 
 def step (surface : Surface) (st : StreamState) : StreamEvent → Except MapError StreamState
-  | .text _ => .ok st
+  | .text value =>
+      match st.pending with
+      | some _ => .error .wrongBlock
+      | none => .ok { st with content := st.content ++ [.text value] }
   | .start id name input =>
     match st.pending with
     | some _ => .error (.overlappingBlock id)
-    | none => .ok { st with pending := some { id := id, name := name, start := input, deltas := [] } }
+    | none => .ok { st with pending := some (.tool { id := id, name := name, start := input, deltas := [] }) }
   | .delta fragment =>
     match st.pending with
     | none => .ok st
-    | some p => .ok { st with pending := some { p with deltas := fragment :: p.deltas } }
+    | some (.tool p) => .ok { st with pending := some (.tool { p with deltas := fragment :: p.deltas }) }
+    | _ => .error .wrongBlock
   | .stop => flush surface st
+  | .thinkingStart index =>
+      if st.pending.isSome then .error .wrongBlock
+      else if st.lastIndexedBlock.any (index ≤ ·) then .error (.wrongIndex index)
+      else .ok { st with pending := some (.thinking index [] [] false) }
+  | .thinkingDelta index fragment =>
+      match st.pending with
+      | some (.thinking current text signature started) =>
+          if current != index then .error (.wrongIndex index)
+          else if started then .error .signatureOrder
+          else .ok { st with pending := some (.thinking current (fragment :: text) signature false) }
+      | _ => .error .wrongBlock
+  | .signatureDelta index fragment =>
+      match st.pending with
+      | some (.thinking current text signature _) =>
+          if current != index then .error (.wrongIndex index)
+          else .ok { st with pending := some (.thinking current text (fragment :: signature) true) }
+      | _ => .error .wrongBlock
+  | .redactedStart index data =>
+      if st.pending.isSome then .error .wrongBlock
+      else if st.lastIndexedBlock.any (index ≤ ·) then .error (.wrongIndex index)
+      else .ok { st with pending := some (.redacted index data) }
+  | .contentStop index => finishContent st index
 
-/-- Left to right, first error wins; end of stream flushes an unterminated block. -/
+/-- Left to right, first error wins; EOF flushes only a legacy tool block. -/
 def runStream (surface : Surface) (events : List StreamEvent) :
     Except MapError (List (ToolCallId × String)) :=
   (events.foldlM (step surface) StreamState.init >>= flush surface) |>.map (·.out)
+
+/-- The ordered native-content projection uses the very same fold and flush as
+`runStream`; there is no second SSE acceptance policy. -/
+structure ContentStep where
+  provisionalThinking : Option String
+  sealed : List StreamBlock
+  deriving DecidableEq, Repr
+
+def contentStep (st : StreamState) : ContentStep :=
+  { provisionalThinking :=
+      match st.pending with
+      | some (.thinking _ fragments _ _) => some (String.join fragments.reverse)
+      | _ => none
+  , sealed := st.content }
+
+/-- One traversal through `step` yields both provisional thinking previews and
+the sealed native content. A signature changes the pending block, but does not
+append a second text part or replace previously streamed bytes. -/
+def runContentTrace (surface : Surface) (events : List StreamEvent) :
+    Except MapError (List ContentStep × List StreamBlock) := do
+  let (state, observations) ← events.foldlM (fun (state, observations) event => do
+    let next ← step surface state event
+    return (next, observations ++ [contentStep next])) (StreamState.init, [])
+  let finished ← flush surface state
+  return (observations, finished.content)
+
+def runContentStream (surface : Surface) (events : List StreamEvent) :
+    Except MapError (List StreamBlock) :=
+  (runContentTrace surface events).map (·.2)
+
+/-- Anthropic assistant continuation must replay each reconstructed signed or
+redacted reasoning part unchanged and in order. These are native payload bytes,
+not display text. Generic encrypted/summary parts are not Anthropic signatures
+and cannot be relabeled as such. A missing signature is not synthesized. -/
+inductive ReplayBlock where
+  | text (payload : List UInt8)
+  | signedThinking (payload : List UInt8) (signature : String)
+  | redactedThinking (payload : List UInt8)
+  | toolUse (callId name : String) (arguments : List UInt8)
+  deriving DecidableEq, Repr
+
+def replayPart : CanonicalOutput.ReasoningPart (List UInt8) →
+    Except MapError ReplayBlock
+  | .text payload (some signature) =>
+      if signature == "" then .error .missingSignature
+      else .ok (.signedThinking payload signature)
+  | .text _ none => .error .missingSignature
+  | .redacted payload =>
+      if payload.isEmpty then .error .malformedRedacted
+      else .ok (.redactedThinking payload)
+  | .encrypted _ | .summary _ => .error .unsupportedReasoning
+
+def replayBlock : CanonicalOutput.MessageBlock (List UInt8) →
+    Except MapError (List ReplayBlock)
+  | .text payload => .ok [.text payload]
+  | .reasoning _ parts => parts.mapM replayPart
+  | .toolCall _ _ (some callId) name arguments _ _ =>
+      .ok [.toolUse callId name arguments]
+  | .toolCall _ _ none _ _ _ _ => .error .missingCallId
+  | .toolResult .. | .media .. => .error .unsupportedReplayBlock
+
+def replayBlocks (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    Except MapError (List ReplayBlock) := do
+  return (← blocks.mapM replayBlock).flatten
+
+theorem replay_signed_bytes_and_signature (payload : List UInt8) (signature : String)
+    (nonempty : signature ≠ "") :
+    replayPart (.text payload (some signature)) =
+      .ok (.signedThinking payload signature) := by
+  simp [replayPart, nonempty]
+
+theorem replay_redacted_bytes (payload : List UInt8) (nonempty : payload ≠ []) :
+    replayPart (.redacted payload) = .ok (.redactedThinking payload) := by
+  cases payload with
+  | nil => contradiction
+  | cons _ _ => rfl
+
+theorem replay_reasoning_parts_in_order
+    (parts : List (CanonicalOutput.ReasoningPart (List UInt8))) :
+    replayBlocks [.reasoning none parts] = parts.mapM replayPart := by
+  simp [replayBlocks, replayBlock]
 
 /-- `Except` ships no `DecidableEq`; the `runStream` witnesses below decide
 equality on `Except MapError (List (ToolCallId × String))`. -/
@@ -365,6 +544,61 @@ theorem runStream_duplicate :
 
 theorem runStream_unterminated_flushes :
     runStream {("echo" : String)} [.start 1 "echo" none, .delta "{}"] = .ok [(1, "{}")] := by
+  native_decide
+
+theorem signed_thinking_fragments_seal_once :
+    runContentStream {} [.thinkingStart 0, .thinkingDelta 0 "考",
+      .thinkingDelta 0 "慮", .signatureDelta 0 "署", .signatureDelta 0 "名",
+      .contentStop 0] =
+      .ok [.reasoning [.text "考慮" (some "署名")]] := by
+  native_decide
+
+theorem provisional_thinking_keeps_previous_bytes :
+    (runContentTrace {} [.thinkingStart 0, .thinkingDelta 0 "考",
+      .thinkingDelta 0 "慮", .signatureDelta 0 "署", .signatureDelta 0 "名",
+      .contentStop 0]).map (fun result => result.1.map (·.provisionalThinking)) =
+      .ok [some "", some "考", some "考慮", some "考慮", some "考慮", none] := by
+  native_decide
+
+theorem empty_thinking_text_keeps_signature :
+    runContentStream {} [.thinkingStart 0, .signatureDelta 0 "sig", .contentStop 0] =
+      .ok [.reasoning [.text "" (some "sig")]] := by
+  native_decide
+
+theorem redacted_before_tool_keeps_order :
+    runContentStream {("echo" : String)}
+      [.redactedStart 0 "opaque", .contentStop 0,
+       .start 1 "echo" none, .delta "{}", .stop] =
+      .ok [.reasoning [.redacted "opaque"], .toolUse 1 "echo" "{}"] := by
+  native_decide
+
+theorem unsigned_thinking_does_not_seal :
+    runContentStream {} [.thinkingStart 0, .thinkingDelta 0 "text", .contentStop 0] =
+      .error .missingSignature := by
+  native_decide
+
+theorem thinking_eof_is_not_tool_eof_flush :
+    runContentStream {} [.thinkingStart 0, .signatureDelta 0 "sig"] =
+      .error .incompleteBlock := by
+  native_decide
+
+theorem replay_preserves_ordered_reasoning_parts :
+    replayBlocks [.reasoning none [.text [65] (some "sig"), .redacted [66]],
+      .toolCall 1 "tool" (some "call-1") "echo" [123, 125] none none] =
+      .ok [.signedThinking [65] "sig", .redactedThinking [66],
+           .toolUse "call-1" "echo" [123, 125]] := by
+  native_decide
+
+theorem replay_rejects_generic_encrypted :
+    replayBlocks [.reasoning none [.encrypted [65]]] = .error .unsupportedReasoning := by
+  native_decide
+
+theorem replay_rejects_empty_signature :
+    replayBlocks [.reasoning none [.text [] (some "")]] = .error .missingSignature := by
+  native_decide
+
+theorem replay_rejects_empty_redacted :
+    replayBlocks [.reasoning none [.redacted []]] = .error .malformedRedacted := by
   native_decide
 
 end PromptAssembly.ClaudeMap
