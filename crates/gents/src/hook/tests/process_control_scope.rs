@@ -114,12 +114,9 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
 
 #[tokio::test]
 async fn generated_wait_observer_interrupt_preserves_background_process() {
-    let case = crate::lean_vocab_test::lean_r6_backgrounding_cases()
-        .iter()
-        .find(|case| {
-            case.group == "wait_boundary" && case.reason.as_deref() == Some("caller_interrupted")
-        })
-        .expect("generated interrupted wait observation");
+    let case = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "caller_interrupt_observer_completes_wait_call_preserves_background_process",
+    );
     assert!(case.legal);
     let dir = tempfile::tempdir().unwrap();
     let identity =
@@ -192,14 +189,14 @@ async fn generated_wait_observer_interrupt_preserves_background_process() {
         panic!("wait observer must publish its structured result: {action:?}");
     };
     let result: serde_json::Value = serde_json::from_str(&reason).unwrap();
-    assert_eq!(result["status"], case.terminal_state);
+    assert_eq!(result["status"].as_str(), case.result.as_deref());
     assert_eq!(result["error"]["reason"].as_str(), case.reason.as_deref());
     assert_eq!(result["tool_call_id"], tool_call_id);
     let row = fetch_tool_call_row(&node, &session_id, tool_call_id).await;
-    assert_eq!(row["lifecycle_state"], case.terminal_state);
+    assert_eq!(row["lifecycle_state"].as_str(), case.result.as_deref());
     assert!(row["cancel_cause"].is_null());
     let wait_row = fetch_tool_call_row(&node, &session_id, wait_id).await;
-    assert_eq!(wait_row["lifecycle_state"], "completed");
+    assert_eq!(wait_row["lifecycle_state"], case.terminal_state);
     let persisted = crate::tool_call_lifecycle::query::load_tool_call_result(
         &crate::config_client::ConfigAccess::Local(node.clone()),
         wait_row["_docID"].as_str().expect("physical wait call"),

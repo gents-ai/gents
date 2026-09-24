@@ -1095,7 +1095,7 @@ def caseCoverage : List CoverageEntry :=
       "r6_background_cases"
       "R6BackgroundingCases"
       "hook::tests::process_control_scope::generated_wait_observer_interrupt_preserves_background_process"
-      "The generated caller-interrupted wait-boundary case binds the real observer's structured result, completed foreground wait call, and unchanged Running background row. This deterministic observer path does not decide the competing request-cancellation winner.")
+      "The generated caller-interrupt observer-completion case derives the completed foreground wait through the tool owner and the unchanged Running background process through the observation owner. The native consumer binds both states and the persisted structured result. This deterministic observer path does not decide the competing request-cancellation winner.")
       "background-tools" [Surface.agentFacing]
   , tagged (consumerWithFollowUp
       "r6_background_cases"

@@ -374,6 +374,36 @@ theorem r6_caller_interrupt_dispatch_uses_both_existing_owners :
     (true, "cancelled", some "running", some "caller_interrupted") := by
   rfl
 
+/-- The observer may complete its foreground wait before the caller's
+interruption sweep cancels that call. Completion belongs to the wait call;
+the observed background process remains running. This is the other possible
+owner ordering, not a rule selecting a winner. -/
+def r6CallerInterruptObserverCompletionCase : R6BackgroundingCase :=
+  let observation := Subagent.ProcessControl.observeBoundary
+    Subagent.ChildTerminal.running .callerInterrupted
+  let waitCall := r6NativeToolFixture .foreground
+  let base := r6Case
+    "caller_interrupt_observer_completes_wait_call_preserves_background_process"
+    "wait_dispatch_boundary" "wait_process"
+    false 1 "rejected" none (some observation.reason)
+  match ToolExecution.ToolCallContext.step? waitCall .complete with
+  | none => base
+  | some callerPost =>
+      { base with
+          legal := !observation.cancellationRequested
+          awaitMode := callerPost.awaitMode.toDefraDB
+          cancelPolicy := callerPost.cancelPolicy.toDefraDB
+          terminalState := callerPost.state.toDefraDB
+          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+
+theorem r6_caller_interrupt_observer_completion_uses_both_existing_owners :
+    (r6CallerInterruptObserverCompletionCase.legal,
+      r6CallerInterruptObserverCompletionCase.terminalState,
+      r6CallerInterruptObserverCompletionCase.result,
+      r6CallerInterruptObserverCompletionCase.reason) =
+    (true, "completed", some "running", some "caller_interrupted") := by
+  rfl
+
 def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6BudgetCase
       "background_tool_budget_count_7_admits_spawn"
@@ -506,6 +536,7 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       .callerDeadline
   , r6CallerDeadlineDispatchCase
   , r6CallerInterruptDispatchCase
+  , r6CallerInterruptObserverCompletionCase
   ]
 
 /-- Pin the concrete projections while keeping their construction executable:
@@ -608,6 +639,8 @@ theorem r6BackgroundingCases_pinned :
           "foreground", none, "timedOut", none, none)
       , ("caller_interrupt_cancels_wait_call_preserves_background_process", true,
           "foreground", none, "cancelled", none, none)
+      , ("caller_interrupt_observer_completes_wait_call_preserves_background_process", true,
+          "foreground", none, "completed", none, none)
       ] := by
   rfl
 

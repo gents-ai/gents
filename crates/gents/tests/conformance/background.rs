@@ -4,7 +4,7 @@ use super::*;
 
 pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
     let cases = lean_r6_backgrounding_cases();
-    assert_eq!(cases.len(), 42);
+    assert_eq!(cases.len(), 43);
 
     let names = cases
         .iter()
@@ -53,6 +53,7 @@ pub(super) async fn generated_r6_backgrounding_case_metadata_matches_export() {
             "wait_timeout_preserves_running_process",
             "caller_deadline_times_out_wait_call_preserves_background_process",
             "caller_interrupt_cancels_wait_call_preserves_background_process",
+            "caller_interrupt_observer_completes_wait_call_preserves_background_process",
             "caller_interrupt_preserves_running_process",
             "caller_deadline_preserves_running_process",
         ]
