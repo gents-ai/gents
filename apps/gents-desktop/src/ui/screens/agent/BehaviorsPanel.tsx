@@ -291,23 +291,16 @@ async function saveEnabled(
   );
 }
 
-async function saveDefault(
+/* One apply enables the behavior and names it the default: publication
+   rejects a disabled default, and it decides whether the behavior can run. */
+export async function saveDefault(
   shell: Shell,
   deployment: DeploymentView,
   behaviorId: string,
 ) {
-  const agent = deployment.agentPrincipal;
-  await shell.saveAgentConfig({
-    document: {
-      agent_did: agent.agentDid,
-      display_name: agent.displayName,
-      default_behavior_id: behaviorId,
-      enabled: agent.enabled,
-      created_at: agent.createdAt,
-      created_by: agent.createdBy,
-      tags: deployment.principalConfig?.tags ?? null,
-    },
-  });
+  await shell.applyConfig((api) =>
+    api.setDefaultBehavior({ agentDid: deployment.agentDid, behaviorId }),
+  );
 }
 
 /* what a saved behavior still needs before it can be enabled */
@@ -323,27 +316,8 @@ function missingToTurnOn(deployment: DeploymentView, b: BehaviorView) {
   ];
 }
 
-/* why a behavior cannot become the default: a default must be enabled, so one
-   that cannot be turned on cannot be chosen */
-export function defaultBlocker(deployment: DeploymentView, b: BehaviorView) {
-  const missing = b.enabled ? [] : missingToTurnOn(deployment, b);
-  return missing.length
-    ? `Needs ${missing.join(" and ")} before it can be enabled and made default`
-    : null;
-}
-
 export const DEFAULT_STAYS_ENABLED =
   "The default behavior stays enabled. Choose another default before turning it off.";
-
-/* Publication rejects a disabled default, so a behavior is turned on in its
-   own write before the principal names it. */
-export async function enableForDefault(
-  shell: Shell,
-  deployment: DeploymentView,
-  b: BehaviorView,
-) {
-  if (!b.enabled) await saveEnabled(shell, deployment, b, true);
-}
 
 /* the end of a behavior's row: its enable switch and a menu */
 function RowControls({
@@ -363,7 +337,6 @@ function RowControls({
   const blocked = !behavior.enabled && missing.length > 0;
   /* the current default is never turned off in place */
   const keptOn = behavior.enabled && behavior.isDefault;
-  const noDefault = defaultBlocker(deployment, behavior);
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
@@ -379,7 +352,6 @@ function RowControls({
   };
   const makeDefault = async () => {
     try {
-      await enableForDefault(shell, deployment, behavior);
       await saveDefault(shell, deployment, behavior.behaviorId);
       toast(
         behavior.enabled
@@ -432,7 +404,7 @@ function RowControls({
           <DropdownMenuGroup>
             <DropdownMenuItem
               className="whitespace-nowrap"
-              disabled={behavior.isDefault || noDefault !== null}
+              disabled={behavior.isDefault}
               onClick={() => void makeDefault()}
             >
               {behavior.isDefault ? (
@@ -440,9 +412,9 @@ function RowControls({
               ) : (
                 <span className="flex flex-col">
                   <span>Make default</span>
-                  {(noDefault || !behavior.enabled) && (
+                  {!behavior.enabled && (
                     <span className="text-xs text-muted-foreground">
-                      {noDefault ?? "Also enables it"}
+                      Also enables it
                     </span>
                   )}
                 </span>

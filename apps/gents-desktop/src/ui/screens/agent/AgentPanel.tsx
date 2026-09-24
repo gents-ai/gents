@@ -7,7 +7,7 @@ import { useDraft } from "./draft";
 import { Fact, Group, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
-import { defaultBlocker, enableForDefault } from "./BehaviorsPanel";
+import { saveDefault } from "./BehaviorsPanel";
 
 export function AgentPanel({
   shell,
@@ -17,16 +17,12 @@ export function AgentPanel({
   deployment: DeploymentView;
 }) {
   const agent = deployment.agentPrincipal;
-  const behaviors = deployment.behaviors.map((b) => {
-    const blocker = defaultBlocker(deployment, b);
-    return {
-      value: b.behaviorId,
-      label: b.enabled
-        ? b.displayName
-        : `${b.displayName} · ${blocker ?? "disabled, enabled when saved as default"}`,
-      disabled: blocker !== null,
-    };
-  });
+  const behaviors = deployment.behaviors.map((b) => ({
+    value: b.behaviorId,
+    label: b.enabled
+      ? b.displayName
+      : `${b.displayName} · disabled, enabled when saved as default`,
+  }));
   const d = useDraft(
     {
       displayName: agent.displayName ?? "",
@@ -37,14 +33,10 @@ export function AgentPanel({
     async (next) => {
       if (!next.displayName.trim()) throw new Error("Display name is required");
       if (!next.defaultBehaviorId) throw new Error("Default behavior is required");
-      const chosen = deployment.behaviors.find(
-        (b) => b.behaviorId === next.defaultBehaviorId,
-      );
-      if (chosen) {
-        const blocker = defaultBlocker(deployment, chosen);
-        if (blocker) throw new Error(`${chosen.displayName}: ${blocker}`);
-        await enableForDefault(shell, deployment, chosen);
-      }
+      /* a new default lands with its enablement first; the principal's other
+         fields then save against an already valid default */
+      if (next.defaultBehaviorId !== agent.defaultBehaviorId)
+        await saveDefault(shell, deployment, next.defaultBehaviorId);
       await shell.saveAgentConfig({
         document: {
           agent_did: agent.agentDid,

@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 
 import type {
   AgentConfigSaveRequest,
+  DefaultBehaviorSetRequest,
   BackendSaveRequest,
   ConfigComponentsPatchRequest,
   ConfigComponentsApplyRequest,
@@ -49,6 +50,19 @@ export function createDesktopShellConfigActions({
     try {
       const next = await mutateSnapshot(() => api.saveAgentConfig(request));
       return next;
+    } catch (err) {
+      setError(String(err));
+      throw err;
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  async function onSetDefaultBehavior(request: DefaultBehaviorSetRequest) {
+    setSavingConfig(true);
+    setError(null);
+    try {
+      return await mutateSnapshot(() => api.setDefaultBehavior(request));
     } catch (err) {
       setError(String(err));
       throw err;
@@ -382,6 +396,7 @@ export function createDesktopShellConfigActions({
 
   return {
     onSaveAgentConfig,
+    onSetDefaultBehavior,
     onSaveBackendConfig,
     onPatchConfigComponents,
     onApplyConfigComponents,

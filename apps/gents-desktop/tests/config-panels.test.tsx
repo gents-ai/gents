@@ -32,6 +32,7 @@ type MockApi = Record<string, ReturnType<typeof vi.fn>>;
 function harness() {
   const api: MockApi = {
     saveAgentConfig: vi.fn().mockResolvedValue({}),
+    setDefaultBehavior: vi.fn().mockResolvedValue({}),
     saveBehaviorConfig: vi.fn().mockResolvedValue({}),
     patchConfigComponents: vi.fn().mockResolvedValue({}),
     applyConfigComponents: vi.fn().mockResolvedValue({}),
@@ -711,13 +712,12 @@ describe("configuration panels", () => {
     );
     await user.click(await screen.findByRole("menuitem", { name: "Make default" }));
     await waitFor(() =>
-      expect(api.saveAgentConfig).toHaveBeenCalledWith({
-        document: expect.objectContaining({
-          agent_did: deployment.agentDid,
-          default_behavior_id: "ops",
-        }),
+      expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+        agentDid: deployment.agentDid,
+        behaviorId: "ops",
       }),
     );
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
   });
 
   describe("a default behavior is enabled", () => {
@@ -728,7 +728,7 @@ describe("configuration panels", () => {
       ),
     });
 
-    it("turns a disabled behavior on before making it the default", async () => {
+    it("makes a disabled behavior the default and enables it in one call", async () => {
       const { api, shell } = harness();
       render(<BehaviorsPanel shell={shell} deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
@@ -736,22 +736,17 @@ describe("configuration panels", () => {
       const item = await screen.findByRole("menuitem", { name: /^Make default/ });
       expect(item).toHaveTextContent("Also enables it");
       await user.click(item);
-      await waitFor(() => expect(api.saveAgentConfig).toHaveBeenCalled());
-      expect(api.patchConfigComponents).toHaveBeenCalledWith({
-        agentDid: deployment.agentDid,
-        patches: [
-          { collection: "AgentBehavior", id: "ops", changes: { enabled: true } },
-        ],
-      });
-      expect(api.saveAgentConfig).toHaveBeenCalledWith({
-        document: expect.objectContaining({ default_behavior_id: "ops" }),
-      });
-      expect(api.patchConfigComponents.mock.invocationCallOrder[0]).toBeLessThan(
-        api.saveAgentConfig.mock.invocationCallOrder[0]!,
+      await waitFor(() =>
+        expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+          agentDid: deployment.agentDid,
+          behaviorId: "ops",
+        }),
       );
+      expect(api.patchConfigComponents).not.toHaveBeenCalled();
+      expect(api.saveAgentConfig).not.toHaveBeenCalled();
     });
 
-    it("does not offer Default to a behavior that cannot be enabled, and says why", async () => {
+    it("offers Default to a disabled behavior with no instructions", async () => {
       const { api, shell } = harness();
       render(
         <BehaviorsPanel
@@ -762,13 +757,14 @@ describe("configuration panels", () => {
       const user = userEvent.setup();
       await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
       const item = await screen.findByRole("menuitem", { name: /^Make default/ });
-      expect(item).toHaveAttribute("aria-disabled", "true");
-      expect(item).toHaveTextContent(
-        "Needs instructions before it can be enabled and made default",
-      );
+      expect(item).not.toHaveAttribute("aria-disabled");
       await user.click(item);
-      expect(api.patchConfigComponents).not.toHaveBeenCalled();
-      expect(api.saveAgentConfig).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+          agentDid: deployment.agentDid,
+          behaviorId: "ops",
+        }),
+      );
     });
 
     it("refuses to turn off the current default and explains why", async () => {
@@ -788,7 +784,7 @@ describe("configuration panels", () => {
       ).toBeEnabled();
     });
 
-    it("enables a disabled behavior chosen as the agent's default when saved", async () => {
+    it("sets a new agent default in one call before saving the other fields", async () => {
       const { api, shell } = harness();
       render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
       const user = userEvent.setup();
@@ -796,32 +792,32 @@ describe("configuration panels", () => {
       await user.click(await screen.findByRole("option", { name: /^Ops/ }));
       await user.click(screen.getByRole("button", { name: "Save" }));
       await waitFor(() => expect(api.saveAgentConfig).toHaveBeenCalled());
-      expect(api.patchConfigComponents).toHaveBeenCalledWith({
+      expect(api.setDefaultBehavior).toHaveBeenCalledWith({
         agentDid: deployment.agentDid,
-        patches: [
-          { collection: "AgentBehavior", id: "ops", changes: { enabled: true } },
-        ],
+        behaviorId: "ops",
       });
-      expect(api.saveAgentConfig).toHaveBeenCalledWith({
-        document: expect.objectContaining({ default_behavior_id: "ops" }),
-      });
+      expect(api.setDefaultBehavior.mock.invocationCallOrder[0]).toBeLessThan(
+        api.saveAgentConfig.mock.invocationCallOrder[0]!,
+      );
+      expect(api.patchConfigComponents).not.toHaveBeenCalled();
     });
 
-    it("offers no default the agent could not enable", async () => {
-      const { shell } = harness();
-      render(
-        <AgentPanel
-          shell={shell}
-          deployment={withOps({ enabled: false, inferenceProfileId: null })}
-        />,
+    it("shows the publication refusal when a default cannot be set", async () => {
+      const { api, shell } = harness();
+      api.setDefaultBehavior.mockRejectedValue(
+        new Error(
+          'AgentBehavior ops field context_id references missing AgentContext "gone"',
+        ),
       );
-      await userEvent
-        .setup()
-        .click(screen.getByRole("combobox", { name: "Default behavior" }));
-      expect(await screen.findByRole("option", { name: /^Ops/ })).toHaveAttribute(
-        "aria-disabled",
-        "true",
+      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
+      await user.click(await screen.findByRole("option", { name: /^Ops/ }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "references missing AgentContext",
       );
+      expect(api.saveAgentConfig).not.toHaveBeenCalled();
     });
   });
 

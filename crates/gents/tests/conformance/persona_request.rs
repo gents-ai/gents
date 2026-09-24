@@ -510,6 +510,22 @@ fn admission_matrix_mirrors_lean_admits() {
         PersonaVerdict::Reject(_)
     ));
 
+    // Lean `default_disable_rejected`: the principal default is not disabled
+    // in place; publication would refuse the apply on every reconcile.
+    let mut default_catalog = cat.clone();
+    default_catalog
+        .behaviors
+        .get_mut("existing-enabled")
+        .expect("fixture behavior")
+        .is_default = true;
+    assert_eq!(
+        decide_persona_request(&happy_disable, &default_catalog),
+        PersonaVerdict::Reject(
+            r#"behavior_id "existing-enabled" is the principal default; make another behavior default first"#
+                .to_string()
+        )
+    );
+
     // Reject branch (Lean `admits` = false → no candidate resolution): one
     // row per failing conjunct.
     let mut rejects: Vec<PersonaRequestDoc> = Vec::new();

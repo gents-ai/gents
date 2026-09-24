@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-default-behavior-set"
+description = "Enables the desktop_default_behavior_set command without any pre-configured scope."
+commands.allow = ["desktop_default_behavior_set"]
+
+[[permission]]
+identifier = "deny-desktop-default-behavior-set"
+description = "Denies the desktop_default_behavior_set command without any pre-configured scope."
+commands.deny = ["desktop_default_behavior_set"]

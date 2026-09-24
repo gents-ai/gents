@@ -124,6 +124,55 @@ test.describe("half-screen window", () => {
     });
   }
 
+  /* half of 1728pt and 1920pt displays: the rail stays, panes overlay */
+  for (const viewport of [
+    { width: 864, height: 900 },
+    { width: 960, height: 900 },
+  ]) {
+    test(`sessions, a session with its side panel, and agents fit ${viewport.width}x${viewport.height}`, async ({
+      page,
+    }) => {
+      await page.setViewportSize(viewport);
+      await gotoHarness(page);
+      await expect(page.getByTestId("sessions-screen")).toBeVisible();
+      await expectInsideViewport(
+        page,
+        page.getByRole("button", { name: "New", exact: true }),
+      );
+      await expectNoPageHorizontalOverflow(page);
+
+      await page
+        .getByTestId("sessions-screen")
+        .getByRole("link", { name: /introduction-and-greetings/ })
+        .click();
+      await expectInsideViewport(page, composer(page));
+      await page
+        .getByRole("button", { name: "Open side panel" })
+        .filter({ visible: true })
+        .first()
+        .click();
+      /* the side panel opens as a sheet over the transcript, not a column */
+      const sheet = page.getByRole("dialog", { name: "Side panel" });
+      await expect(sheet).toBeVisible();
+      await sheet.evaluate((element) =>
+        element.getAnimations({ subtree: true }).forEach((a) => a.finish()),
+      );
+      await expectInsideViewport(page, sheet);
+      await expect(page.getByRole("separator", { name: "Resize trace" })).toHaveCount(
+        0,
+      );
+      await page.keyboard.press("Escape");
+      await expect(sheet).toHaveCount(0);
+      await expectInsideViewport(page, composer(page));
+      await expectNoPageHorizontalOverflow(page);
+
+      await page.getByLabel("breadcrumb").getByRole("link", { name: "Agents" }).click();
+      await expect(page.getByTestId("agents-screen")).toBeVisible();
+      await expectInsideViewport(page, page.getByRole("button", { name: "Add agent" }));
+      await expectNoPageHorizontalOverflow(page);
+    });
+  }
+
   test("a narrow window shows the rail in place of an expanded nav", async ({
     page,
   }) => {

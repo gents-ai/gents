@@ -46,6 +46,32 @@ private def contextBoundsJson : Json := toJson (contextBoundsCases.map fun (sele
     ("maximum", toJson maximum),
     ("allowed", toJson (ConfigDefaults.contextOverrideAllowed selected modelDefault maximum))])
 
+/-- One behavior `coding` stored under scope `alice`: its owner, enabled flag
+and context selection (`context` exists, `gone` does not), with the principal's
+default selection. -/
+private def defaultBehaviorCases :
+    List (String × String × Bool × Option String × Option String) := [
+  ("no_default", "alice", false, some "context", none),
+  ("enabled_default", "alice", true, some "context", some "coding"),
+  ("enabled_default_without_context", "alice", true, none, some "coding"),
+  ("enabled_default_dangling_context", "alice", true, some "gone", some "coding"),
+  ("disabled_default", "alice", false, some "context", some "coding"),
+  ("disabled_default_without_context", "alice", false, none, some "coding"),
+  ("missing_default", "alice", true, some "context", some "absent"),
+  ("foreign_default", "bob", true, some "context", some "coding")]
+
+private def defaultBehaviorJson : Json := toJson (defaultBehaviorCases.map
+  fun (name, owner, enabled, contextId, defaultId) =>
+    let reg : Registry := { registry with
+      behaviors := fun scope id => if scope = "alice" ∧ id = "coding"
+        then some ⟨owner, ⟨contextId, "profile", enabled⟩⟩ else none }
+    Json.mkObj [("name", toJson name), ("scope", toJson "alice"),
+      ("behavior_owner", toJson owner), ("behavior_id", toJson "coding"),
+      ("enabled", toJson enabled), ("context_id", toJson contextId),
+      ("default_behavior_id", toJson defaultId),
+      ("publishable", toJson (defaultBehaviorPublishable reg "alice" defaultId)),
+      ("context_resolves", toJson (resolveContext reg "alice" contextId).toBool)])
+
 /-- Export the actual shared-label input documents as well as computed results. -/
 def casesJson : String := (Json.mkObj
   [("documents", toJson (["alice", "bob"].map fun owner => Json.mkObj
@@ -55,7 +81,8 @@ def casesJson : String := (Json.mkObj
        ("instructions", toJson owner), ("model", toJson (owner ++ "-model")),
        ("enabled", toJson true)])),
    ("cases", toJson (["alice", "bob", "absent"].map caseJson)),
-   ("context_bounds", contextBoundsJson)]).compress
+   ("context_bounds", contextBoundsJson),
+   ("default_behavior", defaultBehaviorJson)]).compress
 
 /-- These scope fixtures advertise one model with unknown capabilities. Backend
 owner comes from the containing document, independently of credential scope. -/

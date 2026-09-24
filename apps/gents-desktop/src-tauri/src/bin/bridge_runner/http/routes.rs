@@ -23,7 +23,7 @@ use gents_desktop_bridge::commands::{
     save_backend_config, save_behavior_config, save_event_source_config,
     save_inference_profile_config, save_schedule_config, save_task_config,
     save_tool_service_config, save_tools_config, save_trigger_config, send_chat_message,
-    test_tool_service_config,
+    set_default_behavior, test_tool_service_config,
 };
 use gents_desktop_bridge::snapshot::build_session_live_delta;
 use gents_desktop_bridge::snapshot::operations_snapshot::{
@@ -34,14 +34,15 @@ use gents_desktop_bridge::tauri_commands::operations::{
 };
 use gents_desktop_bridge::types::{
     AgentConfigSaveRequest, BackendSaveRequest, BehaviorSaveRequest, ChatSendRequest,
-    DesktopInterruptRequest, DesktopListSubagentTreeRequest, DesktopOperationsSnapshot,
-    DesktopOperationsSnapshotRequest, DesktopPreviewInterruptCascadeRequest,
-    DesktopProbeMcpServiceRequest, EnrollmentRequestView, EnrollmentStatusRequest,
-    EventSourceDeleteRequest, EventSourceSaveRequest, InferenceProfileSaveRequest,
-    NativeExecutorStatusView, PeerStatusFetchRequest, RuntimeLivenessView, ScheduleDeleteRequest,
-    ScheduleRunRequest, ScheduleSaveRequest, SessionRenameRequest, SubagentTreeView,
-    TaskRunRequest, TaskSaveRequest, ToolServiceSaveRequest, ToolServiceTestRequest,
-    ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest, TriggerSaveRequest,
+    DefaultBehaviorSetRequest, DesktopInterruptRequest, DesktopListSubagentTreeRequest,
+    DesktopOperationsSnapshot, DesktopOperationsSnapshotRequest,
+    DesktopPreviewInterruptCascadeRequest, DesktopProbeMcpServiceRequest, EnrollmentRequestView,
+    EnrollmentStatusRequest, EventSourceDeleteRequest, EventSourceSaveRequest,
+    InferenceProfileSaveRequest, NativeExecutorStatusView, PeerStatusFetchRequest,
+    RuntimeLivenessView, ScheduleDeleteRequest, ScheduleRunRequest, ScheduleSaveRequest,
+    SessionRenameRequest, SubagentTreeView, TaskRunRequest, TaskSaveRequest,
+    ToolServiceSaveRequest, ToolServiceTestRequest, ToolsDeleteRequest, ToolsSaveRequest,
+    TriggerDeleteRequest, TriggerSaveRequest,
 };
 
 #[derive(Debug, Deserialize)]
@@ -395,6 +396,17 @@ pub(super) fn handle_request(
                 "decoding agent config save request",
             )?;
             runtime.block_on(save_agent_config(fixture.desktop_core().as_ref(), request))?;
+            Ok(snapshot_response(runtime, fixture)?)
+        }
+        ("POST", "/desktop/agent/default-behavior") => {
+            let request = decode::<DefaultBehaviorSetRequest>(
+                &request.body,
+                "decoding default behavior request",
+            )?;
+            runtime.block_on(set_default_behavior(
+                fixture.desktop_core().as_ref(),
+                request,
+            ))?;
             Ok(snapshot_response(runtime, fixture)?)
         }
         ("POST", "/desktop/behavior/save") => {

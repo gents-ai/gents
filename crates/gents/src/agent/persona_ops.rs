@@ -56,6 +56,10 @@ pub struct PersonaCatalogView {
 pub struct BehaviorRef {
     pub enabled: bool,
     pub protected: bool,
+    /// The principal's `default_behavior_id` names this behavior. Publication
+    /// rejects a disabled default, so admission refuses to disable it
+    /// (Lean `PersonaRequest.opOk`, `default_disable_rejected`).
+    pub is_default: bool,
     /// Canonical Tools.host.root currently stored for this behavior, when it
     /// has a Tools document. Omitted edit fields preserve and re-admit it.
     pub root: Option<String>,
@@ -549,6 +553,11 @@ pub fn decide_persona_request(
             if target.protected {
                 return PersonaVerdict::Reject(format!(
                     r#"behavior_id "{behavior_id}" is a protected configurator and cannot be disabled"#
+                ));
+            }
+            if target.is_default {
+                return PersonaVerdict::Reject(format!(
+                    r#"behavior_id "{behavior_id}" is the principal default; make another behavior default first"#
                 ));
             }
             PersonaVerdict::Admit

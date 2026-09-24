@@ -50,6 +50,7 @@ export function useShell(
       saveAgentConfig: d.onSaveAgentConfig,
       saveBackendConfig: d.onSaveBackendConfig,
       saveBehaviorConfig: d.onSaveBehaviorConfig,
+      setDefaultBehavior: d.onSetDefaultBehavior,
       saveEventSourceConfig: d.onSaveEventSourceConfig,
       saveInferenceProfileConfig: d.onSaveInferenceProfileConfig,
       saveScheduleConfig: d.onSaveScheduleConfig,

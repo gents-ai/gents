@@ -1553,7 +1553,11 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         aria-label="Resize trace"
         aria-hidden={!traceOpen || !wide}
         tabIndex={traceOpen && wide ? 0 : -1}
-        className="group flex w-3 cursor-col-resize items-center justify-center overflow-hidden outline-none focus-visible:bg-accent"
+        /* a closed panel's handle takes no width, or it overflows its 0px track */
+        className={cn(
+          "group flex cursor-col-resize items-center justify-center overflow-hidden outline-none focus-visible:bg-accent",
+          traceOpen && wide ? "w-3" : "w-0",
+        )}
       >
         <div className="h-10 w-0.5 rounded-full bg-border transition-colors group-hover:bg-muted-foreground group-focus-visible:bg-ring" />
       </div>

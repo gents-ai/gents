@@ -1210,6 +1210,18 @@ impl ClientCore {
         }
     }
 
+    pub async fn set_default_behavior(&self, agent_did: &str, behavior_id: &str) -> Result<()> {
+        let access = self.operator_access(agent_did)?;
+        match mutations::set_default_behavior_on(&access, agent_did, behavior_id).await {
+            Ok(()) => {
+                self.refresh_store().await?;
+                self.clear_mutation_error();
+                Ok(())
+            }
+            Err(error) => Err(self.record_mutation_error("set default behavior", error)),
+        }
+    }
+
     pub async fn save_backend(&self, row: &gents::InferenceBackend) -> Result<()> {
         let access = self.operator_access(&row.agent_did)?;
         match mutations::upsert_inference_backend_on(&access, row).await {

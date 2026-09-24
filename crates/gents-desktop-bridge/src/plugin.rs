@@ -74,6 +74,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::mailbox::desktop_mailbox_start_request,
             tauri_commands::mailbox::desktop_mailbox_dismiss,
             tauri_commands::config::desktop_agent_config_save,
+            tauri_commands::config::desktop_default_behavior_set,
             tauri_commands::config::desktop_config_components_apply,
             tauri_commands::config::desktop_config_components_patch,
             tauri_commands::config::desktop_behavior_save,

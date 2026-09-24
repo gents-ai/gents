@@ -30,7 +30,9 @@ mod tools;
 mod trigger;
 mod write_tool;
 
-pub use principal::{load_agent_principal, upsert_agent_principal, AgentPrincipal};
+#[cfg(test)]
+pub(crate) use principal::upsert_agent_principal;
+pub use principal::{load_agent_principal, AgentPrincipal};
 
 pub use callback::{
     BuiltInCallback, Callback, CallbackBinding, CallbackHandler, CallbackInvocationOrigin,

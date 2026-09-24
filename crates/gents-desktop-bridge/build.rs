@@ -38,6 +38,7 @@ const COMMANDS: &[&str] = &[
     "desktop_request_resend",
     "desktop_request_retry",
     "desktop_agent_config_save",
+    "desktop_default_behavior_set",
     "desktop_config_components_apply",
     "desktop_config_components_patch",
     "desktop_behavior_save",
