@@ -601,7 +601,9 @@ async fn boot_canonical_foreground_spawn_turn_inner(
                         serde_json::to_value(gents::document_config::InferenceExecution {
                             agent_did: did,
                             execution_id,
-                            stream_liveness_timeout_secs: Some(1),
+                            // The accepted turn holds its first provider
+                            // response until runtime startup completes.
+                            stream_liveness_timeout_secs: Some(deadline_secs - 1),
                             deadline_duration_secs: Some(deadline_secs),
                             ..Default::default()
                         })?;

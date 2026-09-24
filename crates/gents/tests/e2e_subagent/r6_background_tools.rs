@@ -108,7 +108,9 @@ async fn boot_background_turn_with_bounds(
                         serde_json::to_value(gents::document_config::InferenceExecution {
                             agent_did: agent_did.to_string(),
                             execution_id,
-                            stream_liveness_timeout_secs: Some(1),
+                            // The accepted turn holds its first provider
+                            // response until runtime startup completes.
+                            stream_liveness_timeout_secs: Some(deadline_duration_secs - 1),
                             deadline_duration_secs: Some(deadline_duration_secs),
                             ..Default::default()
                         })?;
@@ -1256,11 +1258,9 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         Some(15),
     )
     .await;
-    // Author the parent's follow-up before it is requested: this fixture's
-    // one-second stream_liveness_timeout fails a provider held silent.
-    finish_dynamic_turn(&turn);
     let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted background handle");
+    finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
     let prompt = "wait for process until caller deadline";
     turn.runtime.backend.enable_dynamic_followups(prompt);
