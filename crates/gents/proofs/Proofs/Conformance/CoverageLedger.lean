@@ -1153,7 +1153,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "delegated_child_resolution_cases"
       "DelegatedChildResolutionCases"
-      "Native publication rechecks signed parent workspace provenance in the same transaction. Generated depth-two inherit, depth-three rejection, and read-only bind cases invoke real workspace resolution and signed child materialization. The bind choice is supplied by the separate modeled child-resolution input, not decoded from published provider arguments. Provision and changed-seal cases remain model-only pending an explicit observed-parent input and further native bindings; the exported expected result is not blanket native coverage.")
+      "Native publication rechecks signed parent workspace provenance in the same transaction. Generated depth-two inherit, depth-three rejection, and read-only bind cases invoke real workspace resolution and signed child materialization; the bind choice is supplied by separate modeled child-resolution input, not decoded from published provider arguments. Two generated provision parent-seal drift cases invoke the real resolver with a modeled source stamp and physical observed workspace, but do not re-publish that source. Existing host provision tests cover real Git creation without binding generated success expectations. Other provision and changed-seal cases remain model-only; the exported expected result is not blanket native coverage.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"

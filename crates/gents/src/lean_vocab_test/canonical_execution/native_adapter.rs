@@ -3290,6 +3290,124 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
     }
 }
 
+// The native fixture supplies the physical IsolatedWorkspace observation; the
+// stamped parent comes from the generated source. This binds the modeled
+// negative choices to the real resolver, not to a test-local seal policy.
+#[tokio::test]
+async fn generated_provision_parent_seal_drift_reaches_real_resolver() {
+    let contracts = crate::lean_vocab_test::lean_contract_snapshot();
+    let native_case = contracts
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "real_spawn_depth_two_copies_parent_depth")
+        })
+        .expect("Lean exports a native workspace fixture");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { seed, .. } =
+        native_case
+    else {
+        unreachable!()
+    };
+    for name in [
+        "provision_rejects_changed_parent_seal",
+        "provision_rejects_absent_to_present_parent_seal",
+    ] {
+        let modeled = contracts
+            .delegated_child_resolution_cases
+            .iter()
+            .find(|case| case.name == name)
+            .expect("Lean exports the parent-seal drift case");
+        assert!(modeled.delegated_input.is_some());
+        assert!(modeled.expected.is_none());
+        let parent = modeled
+            .parent_workspace
+            .as_ref()
+            .expect("generated accepted source has a parent workspace");
+        let crate::lean_vocab_test::LeanDelegatedChildChoice::Provision {
+            observed_parent,
+            parent_path_exact,
+            created_child,
+        } = &modeled.choice
+        else {
+            panic!("{name} must be a provision choice");
+        };
+        assert!(*parent_path_exact);
+        assert!(created_child.is_some());
+        assert!(observed_parent.available);
+        assert_ne!(
+            parent.workspace_seal_hash,
+            observed_parent.workspace_seal_hash
+        );
+        assert_eq!(parent.workspace_id, observed_parent.workspace_id);
+        assert_eq!(
+            parent.workspace_owner_agent_did,
+            observed_parent.workspace_owner_agent_did
+        );
+        assert_eq!(seed.principal, modeled.parent_agent);
+
+        let mut adapter = NativeCanonicalExecutionAdapter;
+        let native = adapter.initialize(seed).await.unwrap();
+        let workspace_id = format!("lean-workspace-{}", parent.workspace_id);
+        let owner = modeled_principal_did(
+            parent.workspace_owner_agent_did,
+            seed.principal,
+            &native.principal,
+            &native.remote_dids,
+        );
+        let mut document =
+            crate::callback::load_isolated_workspace(&native.node, &workspace_id, &owner)
+                .await
+                .unwrap()
+                .expect("native fixture has an observed parent workspace");
+        document.seal_hash = observed_parent
+            .workspace_seal_hash
+            .map(|seal| format!("lean-seal-{seal}"));
+        let response = native
+            .node
+            .execute(&crate::workspace::isolated_workspace_upsert_mutation(
+                &document,
+            ))
+            .await;
+        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+        let stamped_seal = parent
+            .workspace_seal_hash
+            .map(|seal| format!("lean-seal-{seal}"));
+        let stamp =
+            crate::tool_call_lifecycle::subagent_workspace::ParentWorkspaceStamp::from_fields(
+                &native.principal,
+                Some(&workspace_id),
+                Some(&owner),
+                Some(&parent.workspace_authority),
+                stamped_seal.as_deref(),
+            );
+        let child_did = modeled_principal_did(
+            modeled.child_agent,
+            seed.principal,
+            &native.principal,
+            &native.remote_dids,
+        );
+        let error = crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(
+            &native.node,
+            &stamp,
+            Some(&crate::background_tools::SpawnWorkspaceArg::Provision { policy: None }),
+            None,
+            &child_did,
+            &format!("lean-provision-{name}"),
+            &format!("lean-provision-correlation-{name}"),
+            None,
+        )
+        .await
+        .expect_err("modeled seal drift must reject through the real resolver");
+        assert!(
+            error.message.contains("parent workspace seal drift"),
+            "{name}: {error}"
+        );
+        native.node.shutdown().await;
+    }
+}
+
 #[tokio::test]
 async fn terminal_request_without_tool_handoff_still_reports_in_flight() {
     let case = crate::lean_vocab_test::lean_contract_snapshot()
