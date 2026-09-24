@@ -138,6 +138,8 @@ def snapshotJson : String :=
       ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
+    ++ "\"terminal_diagnostic_presentation_cases\":"
+      ++ Conformance.TerminalDiagnosticContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"

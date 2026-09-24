@@ -84,7 +84,7 @@ pub fn default_read_only_command_policy() -> CommandExecutionPolicy {
 }
 
 const DEFAULT_MAX_FILE_CHARS: usize = 32_000;
-const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
+pub(crate) const DEFAULT_MAX_COMMAND_CHARS: usize = 16_000;
 const DEFAULT_MAX_LIST_ENTRIES: usize = 200;
 const DEFAULT_MAX_MATCHES: usize = 200;
 // Foreground default aligned with other agent frameworks (Claude Code and

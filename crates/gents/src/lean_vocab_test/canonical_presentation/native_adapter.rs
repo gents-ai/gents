@@ -22,7 +22,10 @@ use super::super::{
     LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
     LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningPart, LeanResultPart,
 };
-use super::{assert_native_payload_presentation_case, PayloadPresentationAdapter};
+use super::{
+    assert_native_payload_presentation_case, LeanTerminalDiagnosticPresentationExpected,
+    PayloadPresentationAdapter,
+};
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
 
@@ -66,30 +69,34 @@ fn full_reference(value: &LeanPayloadSpec) -> Result<PayloadRef> {
     reference(&value.reference)
 }
 
+fn native_presentation(value: &LeanPresentation) -> Result<PayloadPresentation> {
+    Ok(match value {
+        LeanPresentation::Full => PayloadPresentation::Full,
+        LeanPresentation::Composed { parts } => PayloadPresentation::Composed {
+            parts: parts
+                .iter()
+                .map(|part| -> Result<PresentationPart> {
+                    Ok(match part {
+                        LeanPresentationPart::Range { start, end } => {
+                            PresentationPart::OutputRange {
+                                start_byte: *start,
+                                end_byte: *end,
+                            }
+                        }
+                        LeanPresentationPart::Literal { bytes } => PresentationPart::Literal {
+                            text: String::from_utf8(bytes.clone())?,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        },
+    })
+}
+
 fn presentation(value: &LeanPayloadSpec) -> Result<PresentedPayload> {
     Ok(PresentedPayload {
         output: reference(&value.reference)?,
-        presentation: match &value.presentation {
-            LeanPresentation::Full => PayloadPresentation::Full,
-            LeanPresentation::Composed { parts } => PayloadPresentation::Composed {
-                parts: parts
-                    .iter()
-                    .map(|part| -> Result<PresentationPart> {
-                        Ok(match part {
-                            LeanPresentationPart::Range { start, end } => {
-                                PresentationPart::OutputRange {
-                                    start_byte: *start,
-                                    end_byte: *end,
-                                }
-                            }
-                            LeanPresentationPart::Literal { bytes } => PresentationPart::Literal {
-                                text: String::from_utf8(bytes.clone())?,
-                            },
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            },
-        },
+        presentation: native_presentation(&value.presentation)?,
     })
 }
 
@@ -549,6 +556,63 @@ async fn generated_payload_presentation_cases_use_native_reconstruction() {
         assert_native_payload_presentation_case(case, &mut adapter)
             .await
             .unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+#[test]
+fn generated_terminal_diagnostic_cases_bind_native_presentation() {
+    let cases = super::super::lean_terminal_diagnostic_presentation_cases();
+    assert_eq!(
+        cases.len(),
+        10,
+        "all generated terminal diagnostic boundaries must be bound"
+    );
+    for case in cases {
+        let raw = String::from_utf8(case.raw.clone());
+        let cause = String::from_utf8(case.cause.clone());
+        match &case.expected {
+            LeanTerminalDiagnosticPresentationExpected::InvalidUtf8 => {
+                assert!(
+                    raw.is_err() || cause.is_err(),
+                    "{}: model rejected valid native UTF-8 input",
+                    case.name
+                );
+            }
+            LeanTerminalDiagnosticPresentationExpected::UnexpectedError { error } => {
+                panic!(
+                    "{}: model produced unexpected presentation error: {error}",
+                    case.name
+                )
+            }
+            LeanTerminalDiagnosticPresentationExpected::Ok {
+                presentation,
+                rendered,
+            } => {
+                let raw = raw.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let cause = cause.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let budget = usize::try_from(case.tail_budget)
+                    .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let actual =
+                    crate::tool_call_lifecycle::delivery::terminal_diagnostic_presentation(
+                        &raw, &cause, budget,
+                    )
+                    .expect("valid native diagnostic input");
+                assert_eq!(
+                    actual,
+                    native_presentation(presentation).expect("modeled presentation translates"),
+                    "{}: native terminal diagnostic presentation diverged",
+                    case.name
+                );
+                assert_eq!(
+                    crate::tool_call_lifecycle::delivery::render_presentation(&raw, &actual)
+                        .expect("native presentation renders")
+                        .as_bytes(),
+                    rendered,
+                    "{}: native rendered diagnostic diverged",
+                    case.name
+                );
+            }
+        }
     }
 }
 

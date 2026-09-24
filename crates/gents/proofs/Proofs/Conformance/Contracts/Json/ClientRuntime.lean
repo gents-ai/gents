@@ -53,7 +53,7 @@ private def optionalNatJson : Option Nat → String
   | none => "null"
   | some value => toString value
 
-private def byteArrayJson (bytes : List UInt8) : String :=
+def byteArrayJson (bytes : List UInt8) : String :=
   jsonArray (bytes.map (fun byte => toString byte.toNat))
 
 private def sourceJson : CanonicalOutput.Source → String
@@ -85,7 +85,7 @@ private def optionalStringJson : Option String → String
 private def payloadRefJson (ref : CanonicalOutput.PayloadRef) : String :=
   "{\"close_id\":" ++ toString ref.closeId ++ ",\"stream\":" ++ toString ref.stream ++ "}"
 
-private def presentationJson : CanonicalOutput.Presentation → String
+def presentationJson : CanonicalOutput.Presentation → String
   | .full => tagged "full" ""
   | .composed parts => tagged "composed" (",\"parts\":" ++ jsonArray (parts.map fun part =>
       match part with
