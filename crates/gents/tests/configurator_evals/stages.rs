@@ -10,7 +10,8 @@ use anyhow::{ensure, Context, Result};
 use gents::defra_node::EmbeddedNode;
 use gents::eval::runner::embedded::{
     await_terminal_with, classify_request_outcome, collect_request_evidence, evidence_query,
-    inference_sample_query, request_evidence_from_query_data, ObservationHook, RequestEvidence,
+    inference_sample_query, request_evidence_from_query_data, request_evidence_from_sources,
+    ObservationHook, RequestEvidence,
 };
 use gents::graphql::escape_graphql_string;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
@@ -1287,7 +1288,8 @@ async fn load_request_evidence(
         RuntimeAccess::Embedded(node) => collect_request_evidence(node, request_id).await,
         control @ RuntimeAccess::ControlPlane(_) => {
             let data = control.query(&evidence_query(request_id)).await?;
-            Ok(request_evidence_from_query_data(&data))
+            let timeline = control.timeline(request_id).await?;
+            Ok(request_evidence_from_sources(&data, &timeline))
         }
     }
 }
