@@ -478,6 +478,32 @@ pub(crate) struct PackFmtArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackDiffArgs {
+    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
+    pub(crate) a: String,
+    #[arg(help = "The pack to compare it with, named the same ways")]
+    pub(crate) b: String,
+    #[arg(long, help = "Home whose pack store holds local packs")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackTestArgs {
+    #[arg(help = "Pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Also run the pack's experiment.json scenario; needs a model endpoint"
+    )]
+    pub(crate) scenario: bool,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackCheckArgs {
     #[arg(help = "Pack directories to check; defaults to the current directory")]
     pub(crate) dirs: Vec<PathBuf>,
@@ -520,6 +546,10 @@ pub(crate) enum PackCommand {
     RemovePart(PackRemovePartArgs),
     /// Rewrite manifest.json and pack_config.json in canonical form.
     Fmt(PackFmtArgs),
+    /// List the files and documents that differ between two packs.
+    Diff(PackDiffArgs),
+    /// Check and build a pack, then run every plugin's test cases.
+    Test(PackTestArgs),
     /// Run every validation an install would on pack directories; writes nothing.
     Check(PackCheckArgs),
     /// Print a graph pack's topology diagram, or write it into its README.

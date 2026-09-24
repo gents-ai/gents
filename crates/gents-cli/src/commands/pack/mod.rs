@@ -10,6 +10,7 @@ mod scaffold;
 mod scenario;
 mod secscan;
 mod server;
+mod test;
 use crate::cli::*;
 use anyhow::{Context, Result};
 use gents::pack::{pack_catalog, resolve_pack, PackKind, PackManifest, ResolvedPack};
@@ -58,6 +59,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Add(args) => edit::add(args),
         PackCommand::RemovePart(args) => edit::remove_part(args),
         PackCommand::Fmt(args) => edit::fmt(args),
+        PackCommand::Diff(args) => inspect::diff(args).await,
+        PackCommand::Test(args) => test::test(args).await,
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,

@@ -98,6 +98,28 @@ pub(crate) async fn prepare_pack_plan_in_txn(
     crate::config_client::DesiredStateApplyPlan::new(prepared)
 }
 
+/// Every document a pack configuration installs, as `(collection, logical
+/// id)` with its content digest: what two packs are compared by, and what an
+/// install record stores.
+pub fn pack_document_digests(
+    config: &crate::document_config::PackConfig,
+) -> Result<std::collections::BTreeMap<(String, String), String>> {
+    let plan = crate::config_client::DesiredStateApplyPlan::from_pack_config(config)?;
+    plan.documents()
+        .iter()
+        .map(|document| {
+            let id = document.add[document.collection.unique_field()]
+                .as_str()
+                .context("configuration logical ID missing")?
+                .to_owned();
+            Ok((
+                (document.collection.graphql_type().to_owned(), id),
+                pack_artifact_document_digest(&document.add)?,
+            ))
+        })
+        .collect()
+}
+
 /// Discovery tags are mutable labels, not immutable package identity.
 pub(crate) fn pack_artifact_document_digest(value: &serde_json::Value) -> Result<String> {
     let mut canonical = value.clone();

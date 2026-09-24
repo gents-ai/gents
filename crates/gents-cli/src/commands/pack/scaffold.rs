@@ -271,7 +271,13 @@ pub(crate) fn write_plugin_source(
         )
     })?;
     anyhow::ensure!(!source.exists(), "{} already exists", source.display());
-    let mut files = vec![(entry.to_owned(), echo_source(entry))];
+    let mut files = vec![
+        (entry.to_owned(), echo_source(entry)),
+        (
+            "tests/echo.json".to_owned(),
+            "{\"input\": {\"hello\": \"world\"}, \"expect\": {\"hello\": \"world\"}}\n".to_owned(),
+        ),
+    ];
     if entry == "source/main.rs" {
         files.push((
             "Cargo.toml".into(),
