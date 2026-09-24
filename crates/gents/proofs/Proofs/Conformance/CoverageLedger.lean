@@ -1091,6 +1091,18 @@ def caseCoverage : List CoverageEntry :=
       "tool_call_lifecycle::completion_owner_conformance::generated_r6_completion_owner_cases_use_accepted_native_output"
       "Binds all seven completion_continuation_owner cases through accepted native tool output, durable notification and redrive owners. Parent completion is an imported model observation; this consumer does not establish the parent terminalization transition or the separate continuation-publication family.")
       "background-tools" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "hook::tests::process_control_scope::generated_wait_observer_interrupt_preserves_background_process"
+      "The generated caller-interrupted wait-boundary case binds the real observer's structured result, completed foreground wait call, and unchanged Running background row. This deterministic observer path does not decide the competing request-cancellation winner.")
+      "background-tools" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "r6_background_cases"
+      "R6BackgroundingCases"
+      "e2e_subagent::r6_background_tools::wait_tool_caller_interrupt_returns_without_cancelling_background_row"
+      "The generated caller-interrupt dispatch case supplies the accepted Running foreground wait's cancelled state and unchanged background state; the native test separately asserts exact canonical cancellation text. The observer case supplies the only structured alternative. This finite race check does not establish a deterministic winner or scheduler fairness.")
+      "background-tools" [Surface.agentFacing]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"

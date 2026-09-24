@@ -343,6 +343,37 @@ def r6CallerDeadlineDispatchCase : R6BackgroundingCase :=
           terminalState := callerPost.state.toDefraDB
           result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
 
+/-- An observational wait does not cancel the background process. The caller's
+own accepted foreground wait can nevertheless lose the request-interruption
+race through the existing Running tool cancellation transition. This case
+describes that branch, not a required winner against observer completion. -/
+def r6CallerInterruptDispatchCase : R6BackgroundingCase :=
+  let observation := Subagent.ProcessControl.observeBoundary
+    Subagent.ChildTerminal.running .callerInterrupted
+  let waitCall := r6NativeToolFixture .foreground
+  let base := r6Case
+    "caller_interrupt_cancels_wait_call_preserves_background_process"
+    "wait_dispatch_boundary" "wait_process"
+    false 1 "rejected" none (some observation.reason)
+  match ToolExecution.ToolCallContext.step? waitCall
+      (.cancelDuringRun .interrupted) with
+  | none => base
+  | some callerPost =>
+      { base with
+          legal := !observation.cancellationRequested
+          awaitMode := callerPost.awaitMode.toDefraDB
+          cancelPolicy := callerPost.cancelPolicy.toDefraDB
+          terminalState := callerPost.state.toDefraDB
+          result := some (Subagent.ChildTerminal.toDefraDB observation.processState) }
+
+theorem r6_caller_interrupt_dispatch_uses_both_existing_owners :
+    (r6CallerInterruptDispatchCase.legal,
+      r6CallerInterruptDispatchCase.terminalState,
+      r6CallerInterruptDispatchCase.result,
+      r6CallerInterruptDispatchCase.reason) =
+    (true, "cancelled", some "running", some "caller_interrupted") := by
+  rfl
+
 def r6BackgroundingCases : List R6BackgroundingCase :=
   [ r6BudgetCase
       "background_tool_budget_count_7_admits_spawn"
@@ -474,6 +505,7 @@ def r6BackgroundingCases : List R6BackgroundingCase :=
       "caller_deadline_preserves_running_process"
       .callerDeadline
   , r6CallerDeadlineDispatchCase
+  , r6CallerInterruptDispatchCase
   ]
 
 /-- Pin the concrete projections while keeping their construction executable:
@@ -574,6 +606,8 @@ theorem r6BackgroundingCases_pinned :
           "background", none, "running", none, none)
       , ("caller_deadline_times_out_wait_call_preserves_background_process", true,
           "foreground", none, "timedOut", none, none)
+      , ("caller_interrupt_cancels_wait_call_preserves_background_process", true,
+          "foreground", none, "cancelled", none, none)
       ] := by
   rfl
 

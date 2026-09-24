@@ -1064,6 +1064,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_background_budget_uses_accepted_dispatch",
         },
         ConformanceConsumer::RustTest {
+            id: "hook::tests::process_control_scope::generated_wait_observer_interrupt_preserves_background_process",
+            package: "gents",
+            source_path: "crates/gents/src/hook/tests/process_control_scope.rs",
+            module_path: "hook::tests::process_control_scope",
+            function: "generated_wait_observer_interrupt_preserves_background_process",
+        },
+        ConformanceConsumer::RustTest {
+            id: "e2e_subagent::r6_background_tools::wait_tool_caller_interrupt_returns_without_cancelling_background_row",
+            package: "gents",
+            source_path: "crates/gents/tests/e2e_subagent/r6_background_tools.rs",
+            module_path: "e2e_subagent::r6_background_tools",
+            function: "wait_tool_caller_interrupt_returns_without_cancelling_background_row",
+        },
+        ConformanceConsumer::RustTest {
             id: "tool_call_lifecycle::cascade_source_conformance::canonical_source_cascade_interrupts_processing_child_trace",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/cascade_source_conformance.rs",

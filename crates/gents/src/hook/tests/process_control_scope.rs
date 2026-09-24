@@ -113,6 +113,130 @@ async fn finish_owned_request(hook: &DefraSessionHook, request_id: &str) {
 }
 
 #[tokio::test]
+async fn generated_wait_observer_interrupt_preserves_background_process() {
+    let case = crate::lean_vocab_test::lean_r6_backgrounding_cases()
+        .iter()
+        .find(|case| {
+            case.group == "wait_boundary" && case.reason.as_deref() == Some("caller_interrupted")
+        })
+        .expect("generated interrupted wait observation");
+    assert!(case.legal);
+    let dir = tempfile::tempdir().unwrap();
+    let identity =
+        crate::identity::KeyIdentity::load_or_create(dir.path().join("agent.key"), None).unwrap();
+    let node = Arc::new(
+        EmbeddedNode::builder()
+            .data_path(dir.path())
+            .with_node_identity_did(identity.did())
+            .build()
+            .await
+            .unwrap(),
+    );
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    crate::test_support::install_test_behavior(&node, identity.did(), "general").await;
+    let executions = BackgroundExecutionRegistry::default();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        identity.did(),
+        FailurePolicy::default(),
+    )
+    .with_background_tool_registry(BackgroundToolRegistry::from_tools(
+        vec![Box::new(PendingTool)],
+        &["slow_tool".into()],
+    ))
+    .with_background_execution_registry(executions.clone());
+    hook.on_completion_call(&user_text_message("observe background work"), &[])
+        .await;
+    let session_id = hook.session_id().await.unwrap();
+    let request_id = "wait-observer-interrupt";
+    let deadline = Utc::now() + chrono::Duration::minutes(5);
+    bind_interruptible_request(&node, &hook, request_id, &session_id, deadline).await;
+    let receipt = invoke(
+        &hook,
+        "observer-spawn",
+        "spawn_process",
+        r#"{"tool_name":"slow_tool","args":{}}"#,
+    )
+    .await;
+    let tool_call_id = receipt["tool_call_id"]
+        .as_str()
+        .expect("spawned process handle");
+    let args = json!({"tool_call_id": tool_call_id}).to_string();
+    let wait_id = "observer-wait";
+    accept_hook_tool_call(&hook, wait_id, "wait_process", &args, None).await;
+    let waiting_hook = hook.clone();
+    let wait = tokio::spawn(async move {
+        waiting_hook
+            .on_tool_call("wait_process", None, wait_id, &args)
+            .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while !hook.in_flight_lifecycles.lock().await.contains_key(wait_id) {
+            assert!(!wait.is_finished(), "wait must register before returning");
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("wait owner registered");
+    // No daemon interrupt subscriber runs in this fixture: the persisted
+    // interrupt is observed by the wait owner, not its competing caller sweep.
+    crate::interrupt::interrupt_request(&node, request_id)
+        .await
+        .unwrap();
+    let action = tokio::time::timeout(std::time::Duration::from_secs(10), wait)
+        .await
+        .expect("observer returns on interrupt")
+        .unwrap();
+    let ToolCallHookAction::Skip { reason } = action else {
+        panic!("wait observer must publish its structured result: {action:?}");
+    };
+    let result: serde_json::Value = serde_json::from_str(&reason).unwrap();
+    assert_eq!(result["status"], case.terminal_state);
+    assert_eq!(result["error"]["reason"].as_str(), case.reason.as_deref());
+    assert_eq!(result["tool_call_id"], tool_call_id);
+    let row = fetch_tool_call_row(&node, &session_id, tool_call_id).await;
+    assert_eq!(row["lifecycle_state"], case.terminal_state);
+    assert!(row["cancel_cause"].is_null());
+    let wait_row = fetch_tool_call_row(&node, &session_id, wait_id).await;
+    assert_eq!(wait_row["lifecycle_state"], "completed");
+    let persisted = crate::tool_call_lifecycle::query::load_tool_call_result(
+        &crate::config_client::ConfigAccess::Local(node.clone()),
+        wait_row["_docID"].as_str().expect("physical wait call"),
+        &hook.agent_did,
+        &session_id,
+        hook.active_requester_did().await.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        crate::tool_call_lifecycle::query::render_tool_result(&persisted).unwrap(),
+        reason
+    );
+    crate::tool_control::cancel_session_background_process(
+        node.clone(),
+        &executions,
+        identity.did(),
+        hook.active_requester_did().await.as_deref(),
+        &session_id,
+        tool_call_id,
+    )
+    .await
+    .unwrap();
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        executions.wait_for_completion(tool_call_id),
+    )
+    .await
+    .expect("test background task cleaned up");
+    hook_execution_fixtures()
+        .lock()
+        .await
+        .remove(&hook_execution_fixture_key(&hook, request_id));
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn accepted_cross_agent_process_controls_preserve_the_owners_running_job() {
     run_process_control_scope(None).await;
     run_process_control_scope(Some("did:key:shared-process-requester")).await;

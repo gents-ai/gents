@@ -1,6 +1,7 @@
 use gents::defra_node::{EmbeddedNode, EventName};
 use gents::graphql::escape_graphql_string;
 use gents::llm::message::{AssistantContent, Message, Text, ToolResultContent, UserContent};
+use gents::tool_call_lifecycle::{CancelCause, ToolCallState};
 use gents::{interrupt_request, AgentIdentity, BackgroundExecutionRegistry};
 use serde::Deserialize;
 use serde_json::Value;
@@ -430,6 +431,57 @@ async fn canonical_tool_payload_json_for(
     panic!(
         "canonical tool-result payload missing for {provider_call_id}; history={last_history:#?}"
     )
+}
+
+async fn canonical_tool_result_text(
+    db: &crate::support::TestDb,
+    session_id: &str,
+    provider_call_id: &str,
+) -> String {
+    let mut last_history = Vec::new();
+    for _ in 0..200 {
+        let history = gents::load_history(
+            db.node.as_ref(),
+            session_id,
+            db.node_identity.did(),
+            Some(db.node_identity.did()),
+        )
+        .await
+        .expect("load canonical history");
+        let results = history
+            .iter()
+            .flat_map(|message| match message {
+                Message::User { content } => content.as_slice(),
+                _ => &[],
+            })
+            .filter_map(|content| match content {
+                UserContent::ToolResult(result)
+                    if result.id == provider_call_id
+                        || result.call_id.as_deref() == Some(provider_call_id) =>
+                {
+                    Some(result)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !results.is_empty() {
+            assert_eq!(
+                results.len(),
+                1,
+                "one canonical reply for {provider_call_id}"
+            );
+            let [ToolResultContent::Text(Text { text })] = results[0].content.as_slice() else {
+                panic!(
+                    "expected one text part for {provider_call_id}: {:?}",
+                    results[0]
+                );
+            };
+            return text.clone();
+        }
+        last_history = history;
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("canonical tool result missing for {provider_call_id}; history={last_history:#?}")
 }
 
 async fn canonical_latest_tool_payload_json(
@@ -1315,6 +1367,13 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
 
 #[tokio::test]
 async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() {
+    let interrupt_case = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "caller_interrupt_cancels_wait_call_preserves_background_process",
+    );
+    let observer_case = crate::lean_vocab_test::lean_r6_backgrounding_case(
+        "caller_interrupt_preserves_running_process",
+    );
+    assert!(interrupt_case.legal && observer_case.legal);
     let turn = boot_background_turn(
         "r6-background-wait-interrupt",
         vec![StreamChunk::tool_call(
@@ -1354,19 +1413,63 @@ async fn wait_tool_caller_interrupt_returns_without_cancelling_background_row() 
         prompt,
     )
     .await;
-    turn.runtime.backend.wait_for_chunks(prompt, 1).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let wait_row =
+        wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
+    assert_eq!(wait_row.tool_name.as_deref(), Some("wait_process"));
+    assert_eq!(wait_row.await_mode.as_deref(), Some("foreground"));
+    let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
+    wait_for_running_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
     interrupt_request(turn.db.node.as_ref(), request_id)
         .await
         .expect("interrupt caller request");
 
-    let waited =
-        canonical_tool_payload_json(&turn.db, &turn.session_id, "meta-wait-interrupt").await;
-    assert_eq!(waited["status"], "running");
-    assert_eq!(waited["error"]["reason"], "caller_interrupted");
+    let result_text =
+        canonical_tool_result_text(&turn.db, &turn.session_id, "meta-wait-interrupt").await;
+    let wait_row =
+        load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;
+    let wait_state = wait_row
+        .lifecycle_state
+        .as_deref()
+        .and_then(ToolCallState::from_persisted)
+        .expect("known wait lifecycle state");
+    match result_text.as_str() {
+        "tool call cancelled" => {
+            assert_eq!(wait_state, ToolCallState::Cancelled);
+            assert_eq!(
+                wait_row.lifecycle_state.as_deref(),
+                Some(interrupt_case.terminal_state.as_str())
+            );
+            assert_eq!(
+                wait_row
+                    .cancel_cause
+                    .as_deref()
+                    .and_then(CancelCause::from_persisted),
+                Some(CancelCause::Interrupted)
+            );
+        }
+        _ => {
+            let waited: Value = serde_json::from_str(&result_text)
+                .unwrap_or_else(|error| panic!("unexpected wait result {result_text:?}: {error}"));
+            assert_eq!(wait_state, ToolCallState::Completed);
+            assert_eq!(wait_row.cancel_cause.as_deref(), None);
+            assert_eq!(waited["tool_call_id"], tool_call_id);
+            assert_eq!(waited["status"], observer_case.terminal_state);
+            assert_eq!(
+                waited["error"]["reason"].as_str(),
+                observer_case.reason.as_deref()
+            );
+        }
+    }
 
     let row = load_tool_call(turn.db.node.as_ref(), &turn.session_id, &tool_call_id).await;
-    assert_eq!(row.lifecycle_state.as_deref(), Some("running"));
+    assert_eq!(
+        row.lifecycle_state.as_deref(),
+        interrupt_case.result.as_deref()
+    );
+    assert_eq!(
+        row.lifecycle_state.as_deref(),
+        Some(observer_case.terminal_state.as_str())
+    );
     assert_eq!(row.cancel_cause.as_deref(), None);
     turn.runtime.shutdown().await;
 }
