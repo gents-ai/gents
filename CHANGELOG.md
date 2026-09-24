@@ -14,9 +14,10 @@ every runtime you pair with to 0.19.0 together.
 
 ### Breaking
 
-- Conversations use one canonical transcript: messages, tool calls and tool
-  output are immutable, append-only records with exact provider input (#1571).
-  Data from earlier versions is not migrated.
+- Conversations use one canonical transcript: messages and output segments
+  are immutable, append-only records with exact provider input, and tool calls
+  keep their lifecycle state separately (#1571). Data from earlier versions is
+  not migrated.
 - The desktop compares the collection versions it replicates with an agent
   runtime's. It refuses to enroll with a runtime whose replicated collections
   differ, and its sync status shows "Update required", naming the differing
