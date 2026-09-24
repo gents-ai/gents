@@ -907,6 +907,114 @@
           "markdownDescription": "Denies the desktop_p2p_repair command without any pre-configured scope."
         },
         {
+          "description": "Enables the desktop_pack_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-info",
+          "markdownDescription": "Enables the desktop_pack_info command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_info command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-info",
+          "markdownDescription": "Denies the desktop_pack_info command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-install",
+          "markdownDescription": "Enables the desktop_pack_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-install",
+          "markdownDescription": "Denies the desktop_pack_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_installed command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-installed",
+          "markdownDescription": "Enables the desktop_pack_installed command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_installed command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-installed",
+          "markdownDescription": "Denies the desktop_pack_installed command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-login",
+          "markdownDescription": "Enables the desktop_pack_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-login",
+          "markdownDescription": "Denies the desktop_pack_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_logout command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-logout",
+          "markdownDescription": "Enables the desktop_pack_logout command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_logout command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-logout",
+          "markdownDescription": "Denies the desktop_pack_logout command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-remove",
+          "markdownDescription": "Enables the desktop_pack_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_remove command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-remove",
+          "markdownDescription": "Denies the desktop_pack_remove command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-search",
+          "markdownDescription": "Enables the desktop_pack_search command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_search command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-search",
+          "markdownDescription": "Denies the desktop_pack_search command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-update",
+          "markdownDescription": "Enables the desktop_pack_update command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_update command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-update",
+          "markdownDescription": "Denies the desktop_pack_update command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the desktop_pack_whoami command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-desktop-pack-whoami",
+          "markdownDescription": "Enables the desktop_pack_whoami command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the desktop_pack_whoami command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-desktop-pack-whoami",
+          "markdownDescription": "Denies the desktop_pack_whoami command without any pre-configured scope."
+        },
+        {
           "description": "Enables the desktop_peer_enroll_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-desktop-peer-enroll-status",
@@ -1399,6 +1507,18 @@
           "markdownDescription": "Open a web link in the person's own browser\n#### This permission set includes:\n\n- `allow-desktop-open-external-url`"
         },
         {
+          "description": "Installed packs, registry search and package pages, and the signed-in account\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`",
+          "type": "string",
+          "const": "packs-read",
+          "markdownDescription": "Installed packs, registry search and package pages, and the signed-in account\n#### This permission set includes:\n\n- `allow-desktop-pack-installed`\n- `allow-desktop-pack-search`\n- `allow-desktop-pack-info`\n- `allow-desktop-pack-whoami`"
+        },
+        {
+          "description": "Install, update and remove packs, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`",
+          "type": "string",
+          "const": "packs-admin",
+          "markdownDescription": "Install, update and remove packs, and sign in to the registry\n#### This permission set includes:\n\n- `allow-desktop-pack-install`\n- `allow-desktop-pack-update`\n- `allow-desktop-pack-remove`\n- `allow-desktop-pack-login`\n- `allow-desktop-pack-logout`"
+        },
+        {
           "description": "Authenticated peer enrollment, removal/rename, and P2P repair\n#### This permission set includes:\n\n- `allow-desktop-peer-enroll-status`\n- `allow-desktop-peer-remove`\n- `allow-desktop-peer-rename`\n- `allow-desktop-p2p-repair`",
           "type": "string",
           "const": "fleet-admin",
@@ -1453,10 +1573,10 @@
           "markdownDescription": "Debug-only native E2E commands\n#### This permission set includes:\n\n- `allow-desktop-native-e2e-config`\n- `allow-desktop-native-e2e-status`"
         },
         {
-          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`",
+          "description": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`",
           "type": "string",
           "const": "full",
-          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`"
+          "markdownDescription": "Full Gents Desktop production surface (excludes native-e2e)\n#### This permission set includes:\n\n- `default`\n- `session-read`\n- `session-control`\n- `trace-read`\n- `tool-surface-read`\n- `chat-write`\n- `mailbox-read`\n- `mailbox-control`\n- `resend-control`\n- `fleet-read`\n- `workspace-read`\n- `fleet-admin`\n- `operations-read`\n- `interrupt-read`\n- `interrupt-control`\n- `config-write`\n- `provider-accounts-read`\n- `tasks`\n- `external-links`\n- `packs-read`\n- `packs-admin`"
         }
       ]
     }

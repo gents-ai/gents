@@ -7,7 +7,7 @@ use ts_rs::TS;
 use crate::error::BridgeErrorCode;
 
 /// Exact `MAJOR.MINOR` contract version. The client accepts no version range.
-pub const CONTRACT_VERSION: &str = "9.0";
+pub const CONTRACT_VERSION: &str = "9.1";
 
 /// Exact digest of the committed generated TypeScript wire tree. The client
 /// checks this in addition to semantic versioning, so a DTO shape change
@@ -90,6 +90,17 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_open_db_explorer", "runtime-admin"),
         // external-links
         ("desktop_open_external_url", "external-links"),
+        // packs-read
+        ("desktop_pack_installed", "packs-read"),
+        ("desktop_pack_search", "packs-read"),
+        ("desktop_pack_info", "packs-read"),
+        ("desktop_pack_whoami", "packs-read"),
+        // packs-admin
+        ("desktop_pack_install", "packs-admin"),
+        ("desktop_pack_update", "packs-admin"),
+        ("desktop_pack_remove", "packs-admin"),
+        ("desktop_pack_login", "packs-admin"),
+        ("desktop_pack_logout", "packs-admin"),
         // session-read
         ("desktop_session_snapshot", "session-read"),
         ("desktop_session_live_delta", "session-read"),
@@ -205,6 +216,8 @@ pub fn permission_set_inventory() -> Vec<PermissionSetContract> {
         ("fleet-read", "read"),
         ("workspace-read", "read"),
         ("external-links", "mutate"),
+        ("packs-read", "read"),
+        ("packs-admin", "mutate"),
         ("fleet-admin", "mutate"),
         ("operations-read", "read"),
         ("interrupt-read", "read"),
@@ -574,6 +587,15 @@ mod tests {
             ("desktop_managed_server_validate_root", "mutate"),
             ("desktop_open_db_explorer", "mutate"),
             ("desktop_open_external_url", "mutate"),
+            ("desktop_pack_installed", "read"),
+            ("desktop_pack_search", "read"),
+            ("desktop_pack_info", "read"),
+            ("desktop_pack_whoami", "read"),
+            ("desktop_pack_install", "mutate"),
+            ("desktop_pack_update", "mutate"),
+            ("desktop_pack_remove", "mutate"),
+            ("desktop_pack_login", "mutate"),
+            ("desktop_pack_logout", "mutate"),
             ("desktop_session_snapshot", "read"),
             ("desktop_session_live_delta", "read"),
             ("desktop_session_hydration_retry", "mutate"),

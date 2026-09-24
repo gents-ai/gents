@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-pack-update"
+description = "Enables the desktop_pack_update command without any pre-configured scope."
+commands.allow = ["desktop_pack_update"]
+
+[[permission]]
+identifier = "deny-desktop-pack-update"
+description = "Denies the desktop_pack_update command without any pre-configured scope."
+commands.deny = ["desktop_pack_update"]

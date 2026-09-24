@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-desktop-pack-install"
+description = "Enables the desktop_pack_install command without any pre-configured scope."
+commands.allow = ["desktop_pack_install"]
+
+[[permission]]
+identifier = "deny-desktop-pack-install"
+description = "Denies the desktop_pack_install command without any pre-configured scope."
+commands.deny = ["desktop_pack_install"]

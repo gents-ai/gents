@@ -1350,6 +1350,240 @@ Denies the desktop_p2p_repair command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-pack-info`
+
+</td>
+<td>
+
+Enables the desktop_pack_info command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-info`
+
+</td>
+<td>
+
+Denies the desktop_pack_info command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-install`
+
+</td>
+<td>
+
+Enables the desktop_pack_install command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-install`
+
+</td>
+<td>
+
+Denies the desktop_pack_install command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-installed`
+
+</td>
+<td>
+
+Enables the desktop_pack_installed command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-installed`
+
+</td>
+<td>
+
+Denies the desktop_pack_installed command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-login`
+
+</td>
+<td>
+
+Enables the desktop_pack_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-login`
+
+</td>
+<td>
+
+Denies the desktop_pack_login command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-logout`
+
+</td>
+<td>
+
+Enables the desktop_pack_logout command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-logout`
+
+</td>
+<td>
+
+Denies the desktop_pack_logout command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-remove`
+
+</td>
+<td>
+
+Enables the desktop_pack_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-remove`
+
+</td>
+<td>
+
+Denies the desktop_pack_remove command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-search`
+
+</td>
+<td>
+
+Enables the desktop_pack_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-search`
+
+</td>
+<td>
+
+Denies the desktop_pack_search command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-update`
+
+</td>
+<td>
+
+Enables the desktop_pack_update command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-update`
+
+</td>
+<td>
+
+Denies the desktop_pack_update command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:allow-desktop-pack-whoami`
+
+</td>
+<td>
+
+Enables the desktop_pack_whoami command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-pack-whoami`
+
+</td>
+<td>
+
+Denies the desktop_pack_whoami command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-peer-enroll-status`
 
 </td>
@@ -2396,6 +2630,32 @@ Workspace browser
 <td>
 
 Open a web link in the person's own browser
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:packs-read`
+
+</td>
+<td>
+
+Installed packs, registry search and package pages, and the signed-in account
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:packs-admin`
+
+</td>
+<td>
+
+Install, update and remove packs, and sign in to the registry
 
 </td>
 </tr>

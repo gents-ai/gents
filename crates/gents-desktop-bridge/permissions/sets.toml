@@ -94,6 +94,16 @@ description = "Open a web link in the person's own browser"
 permissions = ["allow-desktop-open-external-url"]
 
 [[set]]
+identifier = "packs-read"
+description = "Installed packs, registry search and package pages, and the signed-in account"
+permissions = ["allow-desktop-pack-installed", "allow-desktop-pack-search", "allow-desktop-pack-info", "allow-desktop-pack-whoami"]
+
+[[set]]
+identifier = "packs-admin"
+description = "Install, update and remove packs, and sign in to the registry"
+permissions = ["allow-desktop-pack-install", "allow-desktop-pack-update", "allow-desktop-pack-remove", "allow-desktop-pack-login", "allow-desktop-pack-logout"]
+
+[[set]]
 identifier = "fleet-admin"
 description = "Authenticated peer enrollment, removal/rename, and P2P repair"
 permissions = [
@@ -226,4 +236,6 @@ permissions = [
   "provider-accounts-read",
   "tasks",
   "external-links",
+  "packs-read",
+  "packs-admin",
 ]
