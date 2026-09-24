@@ -700,7 +700,18 @@ mod tests {
         let exclusive = cache_lock(root.parent().unwrap()).unwrap();
         assert!(exclusive.try_lock().is_err());
         drop(lease);
-        exclusive.try_lock().unwrap();
+        // A process another test forks inherits every open descriptor until it
+        // execs, so the shared lock can outlive `drop` for that window.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut backoff = std::time::Duration::from_millis(1);
+        while let Err(error) = exclusive.try_lock() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the exclusive lock stayed blocked after the lease was dropped: {error:?}"
+            );
+            std::thread::sleep(backoff);
+            backoff = (backoff * 2).min(std::time::Duration::from_millis(100));
+        }
     }
 
     #[test]
