@@ -416,6 +416,7 @@ mod tests {
             r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "request-context",
+                    purpose: "normal",
                     agent_did: "did:key:z-context",
                     session_id: "session-context",
                     lifecycle_state: "completed",

@@ -875,6 +875,7 @@ async fn create_pending_queue_row(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
+                purpose: "normal",
                 agent_did: "{escaped_agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",

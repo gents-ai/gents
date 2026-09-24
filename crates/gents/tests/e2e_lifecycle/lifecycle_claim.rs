@@ -219,6 +219,7 @@ async fn claim_rejects_a_behavior_change_without_mutating_the_session() {
             }}) {{ _docID }}
             request: create_AgentRequest(input: {{
                 request_id: "req-switch",
+                purpose: "normal",
                 agent_did: "{AGENT_DID}",
                 behavior_id: "code",
                 session_id: "session-pinned",
@@ -310,6 +311,7 @@ async fn claim_synthesizes_deadline_when_request_deadline_is_invalid() {
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{AGENT_DID}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",

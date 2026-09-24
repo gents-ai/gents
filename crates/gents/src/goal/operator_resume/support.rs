@@ -55,6 +55,7 @@ impl Fixture {
         .await
         .unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             PARENT,
             identity.did(),
             identity.did(),
@@ -128,6 +129,7 @@ impl Fixture {
     }
     pub async fn other_request(&self, id: &str, date: &str, state: &str) {
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             id,
             self.identity.did(),
             self.identity.did(),

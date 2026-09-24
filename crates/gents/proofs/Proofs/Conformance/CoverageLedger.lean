@@ -714,6 +714,16 @@ def caseCoverage : List CoverageEntry :=
       "AgentRequestAdmissionCases"
       "conformance::enrollment::generated_agent_request_admission_cases_match_shared_projector")
       "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "title_request_admission_cases"
+      "TitleRequestAdmissionCases"
+      "Model-derived signed title-purpose admission and pending-disposition inputs cover exact runtime-local-control parent-only provenance, forbidden request controls, unavailable observation retry, authoritative denial, and unchanged Pending on admit. Bind the generated rows to native signing, watcher admission, pending rejection and crash rediscovery owners before claiming native coverage.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "title_request_purpose_wire_cases"
+      "TitleRequestPurposeWireCases"
+      "Model-derived missing, unknown and explicit purpose wire inputs require a strict native decoder and signed-field selection. No native consumer is bound; absent purpose must never default to normal.")
+      "authenticated-enrollment" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "goal_decision_cases"
       "GoalDecisionCases"
@@ -873,6 +883,11 @@ def caseCoverage : List CoverageEntry :=
       "inference_registry_cases"
       "InferenceRegistryCases"
       "admission::registry::contract_tests::generated_inference_registry_cases_drive_real_permits")
+      "inference-call" [Surface.runtimeInternal]
+  , tagged (followUpCoverage
+      "title_usage_cases"
+      "TitleUsageCases"
+      "Model-derived physical-call and historical title-claim inputs cover normal-public versus parent-inclusive totals, late usage after parent terminal, duplicate-call idempotence, conflicting catalog rejection, missing facts, invalid self-binding, and valid foreign-parent exclusion. Native request-purpose, claim provenance and inference-row joins are not bound; no native accounting consumer is claimed.")
       "inference-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "backend_health_cases"
@@ -1426,6 +1441,11 @@ def caseCoverage : List CoverageEntry :=
       "CanonicalDispatchObservationCases"
       "Compose durable gate commits with caller acknowledgements. Lost receipts retain Running without permission to invoke; acknowledged Running replay is not a fresh election. Bind generated sequences to native call hooks under both persistence policies, physical row accounting, recovery, and an external-dispatch spy. A hook return check alone does not establish zero external effects or special-tool post-effect error safety.")
       "canonical-output" [Surface.runtimeInternal, Surface.agentFacing]
+  , tagged (followUpCoverage
+      "title_admission_join_cases"
+      "TitleAdmissionJoinCases"
+      "Model-derived row observation and independent title-world inputs exercise admitted direct own-lease claim, exact physical/logical row binding, active normal queue preservation, unavailable retry and invalid preclaim facts. The executable join calls the existing title activation/claim owner and checks non-vacuity, but its exported projections do not serialize a full application trace or bind native materialization, renewal, recovery or output capture.")
+      "canonical-output" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "canonical_payload_presentation_cases"
       "CanonicalPayloadPresentationCases"

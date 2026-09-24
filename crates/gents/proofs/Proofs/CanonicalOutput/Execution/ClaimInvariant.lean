@@ -3,32 +3,29 @@ import Proofs.CanonicalOutput.Execution.SessionComposition
 /-!
 # Claim, queue, and retry coherence
 
-The claim owner is the bridge between the physical request document and the
-logical session queue entry.  This invariant says that an idle composed world
-has no active queue entry, while a claimed world names exactly the physical
-request, session, logical active entry, and retry owner in that world.
+The claim owner binds the physical request document to its retry owner. Normal
+claims also own the active logical queue entry. Title claims use authenticated
+parent provenance instead and do not modify the session queue.
 -/
 namespace CanonicalOutput.Execution.SessionComposition
 
 def ClaimCoherent (state : World) : Prop :=
-  (state.claimed = none ∧ state.queue.active = none) ∨
+  (state.claimed = none ∧ (state.purpose = .normal → state.queue.active = none)) ∨
   ∃ binding,
     state.claimed = some binding ∧
-    binding.physicalRequest = state.requestId ∧
-    binding.session = state.sessionId ∧
-    state.queue.active = some binding.logicalRequest ∧
+    Handover.claimReady state binding = true ∧
     state.retry.request = binding.physicalRequest
 
 theorem claimCoherent_currentClaim {state : World} (h : ClaimCoherent state)
     (claimed : state.claimed.isSome = true) : currentClaim state = true := by
-  rcases h with hidle | ⟨binding, hbinding, hphysical, hsession, hactive, hretry⟩
+  rcases h with hidle | ⟨binding, hbinding, hready, hretry⟩
   · simp [hidle.1] at claimed
-  · simp [currentClaim, hbinding, hphysical, hsession, hactive, hretry]
+  · simp [currentClaim, hbinding, hready, hretry]
 
 theorem idleClaimCoherent (state : World)
     (hclaimed : state.claimed = none) (hactive : state.queue.active = none) :
     ClaimCoherent state :=
-  Or.inl ⟨hclaimed, hactive⟩
+  Or.inl ⟨hclaimed, fun _ => hactive⟩
 
 private theorem claimed_with_initialRetry_coherent
     (before claimed : World) (actor : Gate.Actor) (now : Time)
@@ -42,7 +39,8 @@ private theorem claimed_with_initialRetry_coherent
   repeat' first | contradiction | split at h
   all_goals cases h
   all_goals simp [ClaimCoherent, initialRetry, Handover.freshRequestWorld] at *
-  all_goals aesop
+  all_goals cases he : activation.evidence <;>
+    simp_all [Handover.claimReady, Handover.evidenceValid, he]
 
 theorem activation_preserves_claimCoherent
     (before after : World) (actor : Gate.Actor) (now : Time)
@@ -60,17 +58,39 @@ theorem activation_preserves_claimCoherent
       exact claimed_with_initialRetry_coherent before claimed actor now activation scope budget
         deadline hc
 
+theorem title_activation_preserves_claimCoherent
+    (before after : World) (actor : Gate.Actor) (now : Time)
+    (activation : Handover.TitleActivation) (scope : Nat)
+    (budget : CompletionRetry.Budget) (deadline : Option Time)
+    (h : activateTitle before actor now activation scope budget deadline = some after) :
+    ClaimCoherent after := by
+  unfold activateTitle at h
+  cases hc : Handover.claimTitle before actor now activation with
+  | none => simp [hc] at h
+  | some claimed =>
+      simp [hc] at h
+      cases h
+      unfold Handover.claimTitle at hc
+      dsimp only at hc
+      repeat' first | contradiction | split at hc
+      all_goals cases hc
+      all_goals simp [ClaimCoherent, initialRetry, Handover.claimReady, Gate.atTime] at *
+      all_goals aesop
+
 private theorem preserve_from_control
     {before after : World} (coherent : ClaimCoherent before)
     (hrequest : after.requestId = before.requestId)
     (hsession : after.sessionId = before.sessionId)
+    (hpurpose : after.purpose = before.purpose)
+    (hprincipal : after.principal = before.principal)
     (hclaimed : after.claimed = before.claimed)
     (hactive : after.queue.active = before.queue.active)
     (hretry : after.retry.request = before.retry.request) : ClaimCoherent after := by
-  rcases coherent with hi | ⟨binding, hb, hp, hs, ha, hr⟩
-  · exact Or.inl ⟨hclaimed.trans hi.1, hactive.trans hi.2⟩
-  · exact Or.inr ⟨binding, hclaimed.trans hb, hp.trans hrequest.symm,
-      hs.trans hsession.symm, hactive.trans ha, hretry.trans hr⟩
+  rcases coherent with hi | ⟨binding, hb, hready, hr⟩
+  · exact Or.inl ⟨hclaimed.trans hi.1, fun hp => hactive.trans (hi.2 (hpurpose.symm.trans hp))⟩
+  · refine Or.inr ⟨binding, hclaimed.trans hb, ?_, hretry.trans hr⟩
+    simpa [Handover.claimReady, hrequest, hsession, hpurpose, hprincipal, hactive]
+      using hready
 
 theorem finish_preserves_claimCoherent
     (before after : World) (actor : Gate.Actor)
@@ -82,7 +102,12 @@ theorem finish_preserves_claimCoherent
   | some result =>
       simp [hc] at h
       rcases h with ⟨rfl, rfl⟩
-      exact Or.inl (Handover.successful_finish_clears_claim_control before result actor hc)
+      have hf := Handover.successful_finish_clears_claim_control before result actor hc
+      exact Or.inl ⟨hf.1, by
+        intro hp
+        have hpurpose : result.state.purpose = before.purpose := by
+          rw [Handover.successful_finish_frame before result actor hc]
+        exact hf.2.1 (hpurpose.symm.trans hp)⟩
 
 private theorem completion_step_preserves_request
     (before after : CompletionRetry.State) (action : CompletionRetry.Action)
@@ -93,9 +118,9 @@ private theorem completion_step_preserves_request
   all_goals aesop
 
 private theorem canonical_policyStep_preserves_request
-    (before after : CompletionRetry.State)
+    (purpose : RequestPurpose) (before after : CompletionRetry.State)
     (operation : CompletionRetry.CanonicalGate.Operation)
-    (h : CompletionRetry.CanonicalGate.policyStep before operation = .ok after) :
+    (h : CompletionRetry.CanonicalGate.policyStep purpose before operation = .ok after) :
     after.request = before.request := by
   cases operation <;> simp only [CompletionRetry.CanonicalGate.policyStep] at h <;>
     repeat' split at h <;> try contradiction
@@ -120,7 +145,7 @@ private theorem provider_preserves_retry_request
   unfold commitProvider CompletionRetry.CanonicalGate.commit at h
   repeat' first | contradiction | split at h
   all_goals cases h
-  all_goals apply Eq.trans (canonical_policyStep_preserves_request _ _ operation (by assumption))
+  all_goals apply Eq.trans (canonical_policyStep_preserves_request before.purpose _ _ operation (by assumption))
   all_goals exact retry_atTime_preserves_request _ _ now (by assumption)
 
 private theorem policy_preserves_retry_request
@@ -145,6 +170,160 @@ private theorem policy_preserves_retry_request
           cases ht
           rfl
 
+private theorem fold_preserves_purpose_principal {α : Type}
+    (step : World → α → World)
+    (hstep : ∀ world item,
+      (step world item).purpose = world.purpose ∧
+      (step world item).principal = world.principal)
+    (items : List α) (world : World) :
+    (items.foldl step world).purpose = world.purpose ∧
+    (items.foldl step world).principal = world.principal := by
+  induction items generalizing world with
+  | nil => exact ⟨rfl, rfl⟩
+  | cons item rest ih =>
+      have hs := hstep world item
+      have hr := ih (step world item)
+      exact ⟨hr.1.trans hs.1, hr.2.trans hs.2⟩
+
+private theorem accountOwnedTools_preserves_purpose_principal
+    (world : World) (generation : Generation) (interruptRunning : Bool) :
+    (accountOwnedTools world generation interruptRunning).purpose = world.purpose ∧
+    (accountOwnedTools world generation interruptRunning).principal = world.principal := by
+  unfold accountOwnedTools
+  apply fold_preserves_purpose_principal
+  intro current original
+  exact ⟨rfl, rfl⟩
+
+private theorem accountMetadataOwnedTools_preserves_purpose_principal
+    (world : World) (generation : Generation) :
+    (accountMetadataOwnedTools world generation).purpose = world.purpose ∧
+    (accountMetadataOwnedTools world generation).principal = world.principal := by
+  unfold accountMetadataOwnedTools
+  apply fold_preserves_purpose_principal
+  intro current original
+  exact ⟨rfl, rfl⟩
+
+private theorem preparedRecoveryWorld_preserves_purpose_principal
+    (world : World) (prepared : RecoveryPrepared) (expected : Generation) :
+    (preparedRecoveryWorld world prepared expected).purpose = world.purpose ∧
+    (preparedRecoveryWorld world prepared expected).principal = world.principal := by
+  unfold preparedRecoveryWorld
+  exact accountOwnedTools_preserves_purpose_principal _ expected true
+
+private theorem evaluate_preserves_purpose_principal
+    (operation : Gate.Operation) (before after : World)
+    (h : Gate.evaluate operation before = .ok after) :
+    after.purpose = before.purpose ∧ after.principal = before.principal := by
+  have hc := Gate.evaluate_success_core operation before after h
+  cases operation <;> simp only [Gate.evaluateCore] at hc
+  all_goals first
+    | exact ToolDelivery.tool_write_preserves_purpose_principal
+        (mapError_success Gate.Error.delivery _ _ hc)
+    | skip
+  case compact cursor =>
+    cases hcompact : Compaction.advanceCursor? before cursor with
+    | none => simp [hcompact] at hc
+    | some post =>
+        simp [hcompact] at hc
+        subst after
+        unfold Compaction.advanceCursor? at hcompact
+        repeat' first | contradiction | (solve | cases hcompact; exact ⟨rfl, rfl⟩) | split at hcompact
+  case closeAuxiliary generation closing =>
+    rcases closeAuxiliary_success_effect before after generation closing
+      (mapError_success Gate.Error.execution _ _ hc) with rfl | ⟨_, rfl⟩ <;>
+      exact ⟨rfl, rfl⟩
+  case accept generation closing message targets admissions =>
+    have hcore := mapError_success Gate.Error.execution _ _ hc
+    replace hcore := checked_core_success _ _ _ hcore
+    rcases acceptAndPublishCore_success_effect before after generation closing message targets
+      admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+  case toolComplete document authority record message =>
+    have hcomposed := mapError_success Gate.Error.delivery _ _ hc
+    obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success
+      before after document authority record message hcomposed
+    have hfirst := ToolDelivery.tool_write_preserves_purpose_principal hclose
+    have hsecond := ToolDelivery.tool_write_preserves_purpose_principal hdeliver
+    exact ⟨hsecond.1.trans hfirst.1, hsecond.2.trans hfirst.2⟩
+  all_goals
+    have hcore := mapError_success Gate.Error.execution _ _ hc
+    try replace hcore := checked_core_success _ _ _ hcore
+    simp only [Execution.renew, renewCore, appendRaw, appendRawCore,
+      retractBeforeRetryCore, publishAuthoredCore, publishHeaderOnlyCore,
+      dispatchCore, admitSpawnedBackgroundCore, changeToolControlCore,
+      closePartialAndPublishCore, recoverExpiredBatchCore,
+      recoverExpiredTerminalCore, terminalizeCore, revokeCorruptCore] at hcore
+    try dsimp only at hcore
+    repeat' first
+      | contradiction
+      | (solve | cases hcore; exact ⟨rfl, rfl⟩)
+      | split at hcore
+  all_goals
+    cases hcore
+    first
+      | exact preparedRecoveryWorld_preserves_purpose_principal _ _ _
+      | exact accountMetadataOwnedTools_preserves_purpose_principal _ _
+      | exact accountOwnedTools_preserves_purpose_principal _ _ _
+
+private theorem commit_preserves_purpose_principal
+    (before after : World) (actor : Gate.Actor) (now : Time)
+    (operation : Gate.Operation)
+    (h : Gate.commit before actor now operation = some after) :
+    after.purpose = before.purpose ∧ after.principal = before.principal := by
+  obtain ⟨execution, he, rfl⟩ := Gate.commit_reads_current_world before after actor now operation h
+  exact evaluate_preserves_purpose_principal operation (Gate.atTime before now) execution he
+
+private theorem background_preserves_purpose_principal
+    (before after : World) (actor : Gate.Actor) (now : Time)
+    (document : DocId) (message : MessageEnvelope)
+    (wake : SessionQueue.QueueEntry) (binding : WakeDocumentBinding)
+    (h : BackgroundGate.commit before actor now document message wake binding = some after) :
+    after.purpose = before.purpose ∧ after.principal = before.principal := by
+  unfold BackgroundGate.commit at h
+  split at h <;> try contradiction
+  cases hp : BackgroundContinuation.publishAndEnqueue?
+      (Gate.atTime before now) document message wake binding before.queue with
+  | none => simp [hp] at h
+  | some result =>
+      simp [hp] at h
+      rcases h with ⟨⟨⟨⟨hbefore, _⟩, _⟩, _⟩, rfl⟩
+      have hf := ToolDelivery.wake_notification_preserves_purpose_principal
+        result.before result.execution result.document result.binding result.message result.published
+      exact ⟨by simpa [hbefore] using hf.1, by simpa [hbefore] using hf.2⟩
+
+private theorem goal_preserves_purpose_principal
+    (goal : GoalAutomation.OperatorResume.Snapshot) (before : World) (actor : Gate.Actor)
+    (now : Time) (request : GoalAutomation.OperatorResume.ClaimedRequest)
+    (binding : GoalContinuation.Binding) (entry : SessionQueue.QueueEntry)
+    (result : GoalContinuation.Result)
+    (h : GoalContinuation.publishGoalChild? goal before actor now request binding entry = some result) :
+    result.after.purpose = before.purpose ∧ result.after.principal = before.principal := by
+  unfold GoalContinuation.publishGoalChild? at h
+  dsimp only at h
+  repeat' first | contradiction |
+    (solve | cases h; simp_all [GoalContinuation.releaseGate,
+      SessionQueue.step?, GoalContinuation.actualSessionIdle]) |
+    split at h
+  cases h
+  exact ⟨rfl, rfl⟩
+
+private theorem restart_preserves_purpose_principal
+    (before after : World) (actor : Gate.Actor) (now : Time) (document : DocId)
+    (binding : RestartRecovery.RestartBinding) (closing : Segment)
+    (wake : SessionQueue.QueueEntry) (notificationBinding : WakeDocumentBinding)
+    (h : RestartRecovery.commit before actor now document binding closing wake notificationBinding = some after) :
+    after.purpose = before.purpose ∧ after.principal = before.principal := by
+  obtain ⟨result, _, hc, hn, he, hafter⟩ :=
+    RestartRecovery.successful_commit_effect _ _ _ _ _ _ _ _ _ h
+  subst after
+  have hpublished := RestartRecovery.successful_enqueue_is_actual_notification
+    result.closed document binding.notification wake notificationBinding before.queue
+      result.continuation hn
+  rw [he] at hpublished
+  have hclose := ToolDelivery.tool_write_preserves_purpose_principal hc
+  have hnotify := ToolDelivery.wake_notification_preserves_purpose_principal
+    result.closed result.execution document notificationBinding binding.notification hpublished
+  exact ⟨hnotify.1.trans hclose.1, hnotify.2.trans hclose.2⟩
+
 theorem Trace.claimCoherent {before after : World}
     (trace : Trace before after) (coherent : ClaimCoherent before) :
     ClaimCoherent after := by
@@ -155,7 +334,10 @@ theorem Trace.claimCoherent {before after : World}
       have hi := Gate.successful_commit_preserves_request_identity _ _ actor now
         (CompletionRetry.CanonicalGate.gateOperation operation)
         (provider_commit_is_actual_gate_commit _ _ actor now operation h)
-      exact preserve_from_control coherent hi.1 hi.2 hc.1
+      have hp := commit_preserves_purpose_principal _ _ actor now
+        (CompletionRetry.CanonicalGate.gateOperation operation)
+        (provider_commit_is_actual_gate_commit _ _ actor now operation h)
+      exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.1
         (congrArg SessionQueue.SessionQueueState.active hc.2)
         (provider_preserves_retry_request _ _ actor now operation h)
   | policy before view now operation claimed h =>
@@ -163,6 +345,8 @@ theorem Trace.claimCoherent {before after : World}
       exact preserve_from_control coherent
         (by simpa using congrArg World.requestId he)
         (by simpa using congrArg World.sessionId he)
+        (by simpa using congrArg World.purpose he)
+        (by simpa using congrArg World.principal he)
         (by simpa using congrArg World.claimed he)
         (by simpa using congrArg (fun w => w.queue.active) he)
         (policy_preserves_retry_request before view now operation h)
@@ -171,7 +355,8 @@ theorem Trace.claimCoherent {before after : World}
       split at h <;> try contradiction
       have hc := Gate.commit_preserves_composed_control before view actor now operation.val h
       have hi := Gate.successful_commit_preserves_request_identity before view actor now operation.val h
-      exact preserve_from_control coherent hi.1 hi.2 hc.2.1
+      have hp := commit_preserves_purpose_principal before view actor now operation.val h
+      exact preserve_from_control coherent hi.1 hi.2 hp.1 hp.2 hc.2.1
         (congrArg SessionQueue.SessionQueueState.active hc.1) (congrArg CompletionRetry.State.request hc.2.2)
   | acquire before view actor independent h =>
       rw [Gate.acquire_preserves_durable_world before view actor independent h]
@@ -181,6 +366,8 @@ theorem Trace.claimCoherent {before after : World}
       exact coherent
   | activate actor now activation scope budget deadline h =>
       exact activation_preserves_claimCoherent _ _ actor now activation scope budget deadline h
+  | activateTitle actor now activation scope budget deadline h =>
+      exact title_activation_preserves_claimCoherent _ _ actor now activation scope budget deadline h
   | finish actor acknowledged h => exact finish_preserves_claimCoherent _ _ actor acknowledged h
   | activateGoal actor now result published routes authenticated generation duration leaseDeadline scope budget deadline h =>
       rename_i prior next
@@ -200,17 +387,23 @@ theorem Trace.claimCoherent {before after : World}
   | wake before after actor now document message entry binding h =>
       have hf := BackgroundGate.successful_commit_preserves_claim_control
         before after actor now document message entry binding h
-      exact preserve_from_control coherent hf.1 hf.2.1 hf.2.2.1 hf.2.2.2.2
+      have hp := background_preserves_purpose_principal
+        before after actor now document message entry binding h
+      exact preserve_from_control coherent hf.1 hf.2.1 hp.1 hp.2 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)
   | goal before goal actor now request binding entry result h =>
       have hf := GoalContinuation.successful_publication_preserves_claim_control
         goal before actor now request binding entry result h
-      exact preserve_from_control coherent hf.1 hf.2.1 hf.2.2.1 hf.2.2.2.2
+      have hp := goal_preserves_purpose_principal
+        goal before actor now request binding entry result h
+      exact preserve_from_control coherent hf.1 hf.2.1 hp.1 hp.2 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)
   | restart before after actor now document binding closing wake notificationBinding h =>
       have hf := RestartRecovery.successful_commit_preserves_claim_control
         before after actor now document binding closing wake notificationBinding h
-      exact preserve_from_control coherent hf.1 hf.2.1 hf.2.2.1 hf.2.2.2.2
+      have hp := restart_preserves_purpose_principal
+        before after actor now document binding closing wake notificationBinding h
+      exact preserve_from_control coherent hf.1 hf.2.1 hp.1 hp.2 hf.2.2.1 hf.2.2.2.2
         (congrArg CompletionRetry.State.request hf.2.2.2.1)
   | trans left right ihleft ihrigh => exact ihrigh (ihleft coherent)
 

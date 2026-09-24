@@ -1097,6 +1097,7 @@ async fn create_interruptible_request_with_fields(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "general",
                 session_id: "{session_id}",

@@ -11,6 +11,7 @@ use gents_protocol::output::{
     SourceClose, TerminalOutput, TranscriptMessage,
 };
 use gents_protocol::rendered_request::CaptureOrderKey;
+use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
@@ -42,7 +43,7 @@ pub(crate) struct RecoverySelectionRejected;
 
 use crate::graphql::created_doc_id;
 
-async fn request_segments(
+pub(in crate::lifecycle) async fn request_segments(
     txn: &ConfigApplyTxn<'_>,
     request_doc_id: &str,
     agent: &str,
@@ -71,6 +72,13 @@ async fn validate_selection(
     row: &AgentRequestRow,
     selection: &TerminalOutput,
 ) -> Result<()> {
+    if row.purpose.context("recovery request purpose missing")? == RequestPurpose::TitleAudit {
+        anyhow::ensure!(
+            matches!(selection, TerminalOutput::NoMessage) && headers.is_empty(),
+            "title recovery requires NoMessage and no transcript headers"
+        );
+        return Ok(());
+    }
     let eligible = |header: &&TranscriptMessageRow| {
         header.message.role == MessageRole::Assistant
             && matches!(
@@ -118,6 +126,23 @@ async fn validate_selection(
             .await?;
         }
     }
+    Ok(())
+}
+
+async fn ensure_title_has_no_tools(txn: &ConfigApplyTxn<'_>, request_doc_id: &str) -> Result<()> {
+    let request = escape_graphql_string(request_doc_id);
+    let response = txn
+        .execute_local_response(&format!(
+            "{{ AgentToolCall(filter: {{ request_doc_id: {{ _eq: \"{request}\" }} }}, limit: 1) {{ _docID }} }}"
+        ))
+        .await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(serde_json::Value::as_array)
+        .context("title recovery tool query omitted rows")?;
+    anyhow::ensure!(rows.is_empty(), "title recovery found a tool lifecycle row");
     Ok(())
 }
 
@@ -197,11 +222,13 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let request_id = escape_graphql_string(&request_doc_id);
             let value = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{request_id}" }} }}, limit: 1) {{
-                _docID request_id agent_did requester_did session_id lifecycle_state interrupt_requested_at
+                _docID request_id purpose agent_did requester_did session_id lifecycle_state interrupt_requested_at
                 execution_generation execution_lease_expires_at terminal_output
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&value, "AgentRequest")?
                 .context("execution request disappeared")?;
+            let is_title = row.purpose.context("recovery request purpose missing")?
+                == RequestPurpose::TitleAudit;
             let state = row.lifecycle_state.context("missing request lifecycle")?;
             if state.is_terminal()
                 && row.execution_generation.as_deref() == Some(fresh_generation.as_str())
@@ -218,6 +245,30 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     &request_doc_id,
                 )
                 .await?;
+                if is_title {
+                    ensure_title_has_no_tools(txn, &request_doc_id).await?;
+                    let writer = OutputWriter::RequestExecution {
+                        execution_generation: expected_generation.to_owned(),
+                    };
+                    let segments = request_segments(
+                        txn,
+                        &request_doc_id,
+                        row.agent_did.as_deref().context("missing request agent")?,
+                        row.session_id.as_deref().context("missing request session")?,
+                        row.requester_did.as_deref(),
+                    )
+                    .await?;
+                    for record in segments.iter().filter(|record| record.segment.writer == writer) {
+                        crate::streaming::canonical::validate_source_purpose(
+                            RequestPurpose::TitleAudit,
+                            &record.segment.source,
+                        )?;
+                    }
+                    super::execution_lease::validate_title_sources_decided(
+                        &request_doc_id,
+                        &segments,
+                    )?;
+                }
                 let published = headers
                     .iter()
                     .filter(|header| matches!(
@@ -256,6 +307,10 @@ pub(crate) async fn recover_expired_generation_with_facts(
             let existing_headers = session::load_request_headers_in_txn(
                 txn, session_id, agent, row.requester_did.as_deref(), &request_doc_id,
             ).await?;
+            if is_title {
+                anyhow::ensure!(existing_headers.is_empty(), "title recovery found a transcript header");
+                ensure_title_has_no_tools(txn, &request_doc_id).await?;
+            }
             let referenced = existing_headers.iter().flat_map(|header| header.message.payload_references())
                 .map(|reference| reference.close_doc_id.as_str()).collect::<BTreeSet<_>>();
             let mut sources = BTreeMap::<CaptureOrderKey, OutputSource>::new();
@@ -270,12 +325,25 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     }
                 }
             }
-            let mut sequence = super::queue::next_append_sequence_in_transaction(
-                txn, agent, session_id,
-            ).await?;
+            let mut sequence = if is_title {
+                None
+            } else {
+                Some(super::queue::next_append_sequence_in_transaction(
+                    txn, agent, session_id,
+                ).await?)
+            };
             let timestamp = observed_now.to_rfc3339();
             let mut published = Vec::<TranscriptMessageRow>::new();
             for source in sources.into_values() {
+                if is_title {
+                    crate::streaming::canonical::validate_source_purpose(
+                        RequestPurpose::TitleAudit, &source,
+                    )?;
+                } else if crate::streaming::canonical::validate_source_purpose(
+                    RequestPurpose::Normal, &source,
+                ).is_err() {
+                    continue;
+                }
                 let closures = segments.iter().filter(|record| record.segment.source == source && record.segment.close.is_some()).collect::<Vec<_>>();
                 let observations = segments.iter().map(|record| ObservedSegment { doc_id: &record.doc_id, segment: &record.segment }).collect::<Vec<_>>();
                 let blocks = match closures.as_slice() {
@@ -294,6 +362,11 @@ pub(crate) async fn recover_expired_generation_with_facts(
                         segments.push(OutputSegmentRow { doc_id: id.clone(), segment: closing });
                         blocks
                     }
+                    [closing] if is_title => {
+                        anyhow::ensure!(closing.segment.writer == writer,
+                            "title recovery closure belongs to another generation");
+                        Vec::new()
+                    }
                     [closing] if closing.segment.writer == writer
                         && matches!(closing.segment.close, Some(SourceClose::Closed { outcome: OutputOutcome::Partial, .. }))
                         && !referenced.contains(closing.doc_id.as_str()) => {
@@ -304,18 +377,35 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     [_] => continue,
                     _ => continue,
                 };
+                if is_title {
+                    anyhow::ensure!(blocks.is_empty(), "title recovery planned a public header");
+                    continue;
+                }
                 if blocks.is_empty() { continue; }
+                let next_sequence = sequence.as_mut().context("normal recovery has no sequence")?;
                 let message = TranscriptMessage {
                     message_key: crate::streaming::canonical::partial_message_key(&request_doc_id, &source)?, session_id: session_id.to_owned(), agent_did: agent.to_owned(),
                     requester_did: row.requester_did.clone(), request_doc_id: Some(request_doc_id.clone()),
                     publication: MessagePublication::RequestRecovery { execution_generation: fresh_generation.clone() },
-                    outcome: OutputOutcome::Partial, sequence, role: MessageRole::Assistant, native_id: None,
+                    outcome: OutputOutcome::Partial, sequence: *next_sequence, role: MessageRole::Assistant, native_id: None,
                     blocks, created_at: timestamp.clone(),
                 };
-                sequence = sequence.checked_add(1).context("recovery transcript sequence overflow")?;
+                *next_sequence = next_sequence.checked_add(1).context("recovery transcript sequence overflow")?;
                 let response = txn.execute_with_variables(CREATE_AGENT_MESSAGE_MUTATION, &transcript_message_create_variables(&message)?).await?;
                 let doc_id = created_doc_id(&response, "AgentMessage")?;
                 published.push(TranscriptMessageRow { doc_id, message });
+            }
+            if is_title {
+                for record in segments.iter().filter(|record| record.segment.writer == writer) {
+                    crate::streaming::canonical::validate_source_purpose(
+                        RequestPurpose::TitleAudit,
+                        &record.segment.source,
+                    )?;
+                }
+                super::execution_lease::validate_title_sources_decided(
+                    &request_doc_id,
+                    &segments,
+                )?;
             }
             let mut headers = existing_headers;
             headers.extend(published.iter().cloned());
@@ -324,15 +414,17 @@ pub(crate) async fn recover_expired_generation_with_facts(
                     txn, &header.doc_id, agent, row.requester_did.as_deref(),
                 ).await?;
             }
-            super::terminal_tools::account_tools_in_txn(
-                txn,
-                &row,
-                &headers,
-                expected_generation,
-                false,
-                &timestamp,
-            )
-            .await?;
+            if !is_title {
+                super::terminal_tools::account_tools_in_txn(
+                    txn,
+                    &row,
+                    &headers,
+                    expected_generation,
+                    false,
+                    &timestamp,
+                )
+                .await?;
+            }
             let mut eligible = headers.iter().filter(|header| {
                 header.message.role == MessageRole::Assistant
                     && matches!(header.message.publication,
@@ -366,9 +458,18 @@ pub(crate) async fn recover_expired_generation_with_facts(
             } else {
                 TerminalOutput::NoMessage
             };
-            let selection = match &selection_choice {
-                None => selection,
-                Some(choice) => selection_from_choice(&headers, choice)?,
+            let selection = if is_title {
+                anyhow::ensure!(selection_choice.as_ref().is_none_or(|choice|
+                    matches!(choice, RecoverySelectionChoice::NoMessage)),
+                    "title recovery cannot select a transcript header");
+                anyhow::ensure!(matches!(selection, TerminalOutput::NoMessage),
+                    "title recovery selected a transcript header");
+                TerminalOutput::NoMessage
+            } else {
+                match &selection_choice {
+                    None => selection,
+                    Some(choice) => selection_from_choice(&headers, choice)?,
+                }
             };
             validate_selection(txn, &headers, &row, &selection).await?;
             let target = if row.interrupt_requested_at.as_deref().is_some_and(|v| !v.trim().is_empty()) {
@@ -392,7 +493,9 @@ pub(crate) async fn recover_expired_generation_with_facts(
             if !response.get("data").and_then(|data| data.get("update_AgentRequest")).is_some_and(response_has_documents) {
                 anyhow::bail!("expired-generation recovery lost request CAS");
             }
-            session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, &timestamp).await?;
+            if !is_title {
+                session::refresh_session_request_observation_in_txn(txn, agent, row.requester_did.as_deref(), session_id, &request_doc_id, &row.request_id, &timestamp).await?;
+            }
             Ok(RecoveryResult::Won { published: published.len() })
         })},
     ).await

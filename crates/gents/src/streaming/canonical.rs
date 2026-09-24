@@ -10,8 +10,8 @@ use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::ObservedSegment;
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSegment, OutputSource,
-    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, SourceClose, StreamPayload,
-    TranscriptMessage,
+    OutputWriter, PayloadPresentation, PayloadRef, PresentedPayload, ReconstructionError,
+    SourceClose, StreamPayload, TranscriptMessage,
 };
 use gents_protocol::row::AgentRequestRow;
 
@@ -50,6 +50,8 @@ pub(crate) enum ProviderAttemptClose {
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ProviderCloseRejection {
+    #[error("provider close requires its exact request writer")]
+    WriterMismatch,
     #[error("provider close candidate disagrees with committed extent")]
     InvalidExtent,
     #[error("provider close lost its live lease")]
@@ -158,6 +160,9 @@ pub(crate) async fn close_provider_attempt(
     close_provider_attempt_at(node, generation, prepared, close, None, Utc::now()).await
 }
 
+/// A changed request generation may acknowledge an already committed, exact
+/// auxiliary closure without authorizing another write. Ordinary provider
+/// closes and every fresh auxiliary close remain fenced to the writer generation.
 pub(crate) async fn close_provider_attempt_at(
     node: &EmbeddedNode,
     generation: &str,
@@ -166,12 +171,17 @@ pub(crate) async fn close_provider_attempt_at(
     candidate: Option<ProviderPartialCandidate>,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
-    anyhow::ensure!(
-        matches!(&prepared.source, OutputSource::ProviderTurn { .. })
-            && matches!(&prepared.writer, OutputWriter::RequestExecution { execution_generation }
-                if execution_generation == generation),
-        "provider close requires its exact request writer"
+    let writer_matches_generation = matches!(
+        &prepared.writer,
+        OutputWriter::RequestExecution { execution_generation }
+            if execution_generation == generation
     );
+    if !matches!(&prepared.source, OutputSource::ProviderTurn { .. })
+        || !matches!(&prepared.writer, OutputWriter::RequestExecution { .. })
+        || (!writer_matches_generation && !prepared.source.is_auxiliary_audit())
+    {
+        return Err(ProviderCloseRejection::WriterMismatch.into());
+    }
     anyhow::ensure!(
         !matches!(close, ProviderAttemptClose::AuxiliaryComplete)
             || prepared.source.is_auxiliary_audit(),
@@ -192,10 +202,26 @@ pub(crate) async fn close_provider_attempt_at(
         move |txn| {
             let candidate = candidate.clone();
             Box::pin(async move {
+            let request = load_request_in_txn(txn, prepared).await?;
             let records = load_source_in_txn(txn, prepared).await?;
             let closures = records.iter().filter(|row| row.segment.close.is_some()).collect::<Vec<_>>();
             if let [existing] = closures.as_slice() {
+                if existing.segment.writer != prepared.writer {
+                    return Err(ProviderCloseRejection::WriterMismatch.into());
+                }
                 validate_closing_shape(prepared, &existing.segment)?;
+                if !writer_matches_generation {
+                    let proposed = candidate.as_ref().map_or(prepared, |value| &value.closing);
+                    if proposed != &existing.segment {
+                        return Err(ProviderCloseRejection::InvalidExtent.into());
+                    }
+                    validate_closed_source_extent(
+                        &records,
+                        &prepared.request_doc_id,
+                        &prepared.source,
+                        existing,
+                    )?;
+                }
                 let matches = match (&existing.segment.close, close) {
                     (Some(SourceClose::Retracted), ProviderAttemptClose::Retracted) => true,
                     (Some(SourceClose::Closed { outcome: OutputOutcome::Partial, .. }), ProviderAttemptClose::Partial) => true,
@@ -207,9 +233,32 @@ pub(crate) async fn close_provider_attempt_at(
                     validate_closing_shape(prepared, &candidate.closing)?;
                     anyhow::ensure!(candidate.closing == existing.segment, "partial close replay changed its closure candidate");
                 }
+                if request.purpose == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit) {
+                    match existing.segment.close.as_ref() {
+                        Some(SourceClose::Closed { .. }) => validate_closed_source_extent(
+                            &records, &prepared.request_doc_id, &prepared.source, existing,
+                        )?,
+                        Some(SourceClose::Retracted) => validate_source_physical_identities(
+                            &records, &prepared.request_doc_id, &prepared.source,
+                        )?,
+                        None => unreachable!("closure row selected"),
+                    }
+                }
                 return partial_header_in_txn(txn, prepared, generation, existing, &records, close, candidate.as_ref().and_then(|value| value.header.as_ref()), now, true).await;
             }
+            if request.purpose == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+                && closures.len() > 1
+            {
+                return Err(ReconstructionError::ConflictingClosures {
+                    request_doc_id: prepared.request_doc_id.clone(),
+                    source: prepared.source.clone(),
+                }
+                .into());
+            }
             anyhow::ensure!(closures.is_empty(), "provider source has multiple closing records");
+            if !writer_matches_generation {
+                return Err(ProviderCloseRejection::WriterMismatch.into());
+            }
             let observations = records.iter().map(|row| ObservedSegment {
                 doc_id: &row.doc_id,
                 segment: &row.segment,
@@ -217,14 +266,16 @@ pub(crate) async fn close_provider_attempt_at(
             let extent = gents_protocol::output::extent::inspect_open_source(
                 &observations, &prepared.request_doc_id, &prepared.source, &prepared.writer,
             )?;
-            if let Some(last_created_at) = extent.last_created_at.as_deref() {
-                let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
-                let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
-                    .context("provider source has an invalid committed timestamp")?;
-                let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
-                    .context("provider closure has an invalid created_at")?;
-                if closing_created_at < last_created_at {
-                    return Err(ProviderCloseRejection::RegressedTimestamp.into());
+            if !matches!(close, ProviderAttemptClose::Retracted) {
+                if let Some(last_created_at) = extent.last_created_at.as_deref() {
+                    let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
+                    let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
+                        .context("provider source has an invalid committed timestamp")?;
+                    let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
+                        .context("provider closure has an invalid created_at")?;
+                    if closing_created_at < last_created_at {
+                        return Err(ProviderCloseRejection::RegressedTimestamp.into());
+                    }
                 }
             }
             let derived_close = match close {
@@ -251,7 +302,6 @@ pub(crate) async fn close_provider_attempt_at(
                 return Err(ProviderCloseRejection::InvalidExtent.into());
             }
             validate_closing_shape(prepared, &closure)?;
-            let request = load_request_in_txn(txn, prepared).await?;
             let owner = request.execution_generation.as_deref().context("request generation missing")?;
             let state = request.lifecycle_state.context("request lifecycle missing")?;
             let expiry = request.execution_lease_expires_at.as_deref().context("request expiry missing")?;
@@ -296,6 +346,99 @@ fn validate_closing_shape(prepared: &OutputSegment, closing: &OutputSegment) -> 
         closing.ordinal.is_none() && closing.runs.is_empty() && closing.payload.is_empty(),
         "provider close candidate must be terminal-only"
     );
+    Ok(())
+}
+
+fn invalid_source(detail: impl Into<String>) -> ReconstructionError {
+    ReconstructionError::InvalidStructure {
+        detail: detail.into(),
+    }
+}
+
+pub(crate) fn validate_source_physical_identities(
+    records: &[OutputSegmentRow],
+    request_doc_id: &str,
+    source: &OutputSource,
+) -> Result<(), ReconstructionError> {
+    let mut physical = std::collections::BTreeMap::new();
+    for record in records.iter().filter(|record| {
+        record.segment.request_doc_id == request_doc_id && record.segment.source == *source
+    }) {
+        if let Some(previous) = physical.insert(&record.doc_id, &record.segment) {
+            if previous != &record.segment {
+                return Err(invalid_source(
+                    "one source physical identity has conflicting facts",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validate only the extent committed by this Closed record. Later source data
+/// lies outside that immutable extent and does not change its reconstruction.
+pub(crate) fn validate_closed_source_extent(
+    records: &[OutputSegmentRow],
+    request_doc_id: &str,
+    source: &OutputSource,
+    closing: &OutputSegmentRow,
+) -> Result<(), ReconstructionError> {
+    let Some(SourceClose::Closed {
+        segments,
+        stream_bytes,
+        ..
+    }) = closing.segment.close.as_ref()
+    else {
+        return Err(invalid_source("source closure is not Closed"));
+    };
+    if closing.segment.request_doc_id != request_doc_id || closing.segment.source != *source {
+        return Err(invalid_source("Closed record has invalid source identity"));
+    }
+    let scoped = records
+        .iter()
+        .filter(|record| {
+            record.segment.request_doc_id == request_doc_id && record.segment.source == *source
+        })
+        .collect::<Vec<_>>();
+    let closures = scoped
+        .iter()
+        .filter(|record| record.segment.close.is_some())
+        .collect::<Vec<_>>();
+    if closures.len() != 1
+        || closures[0].doc_id != closing.doc_id
+        || closures[0].segment != closing.segment
+    {
+        return Err(invalid_source(
+            "Closed source has conflicting closure facts",
+        ));
+    }
+    let prefix = scoped
+        .into_iter()
+        .filter(|record| {
+            record.doc_id == closing.doc_id
+                || record
+                    .segment
+                    .ordinal
+                    .is_some_and(|ordinal| ordinal < *segments)
+        })
+        .map(|record| ObservedSegment {
+            doc_id: &record.doc_id,
+            segment: &record.segment,
+        })
+        .collect::<Vec<_>>();
+    let extent = gents_protocol::output::extent::inspect_open_source(
+        &prefix,
+        request_doc_id,
+        source,
+        &closing.segment.writer,
+    )?;
+    if extent.segments != *segments || extent.stream_bytes != *stream_bytes {
+        return Err(invalid_source(
+            "Closed source disagrees with its committed extent",
+        ));
+    }
+    DateTime::parse_from_rfc3339(&closing.segment.created_at)
+        .map_err(|_| invalid_source("Closed source has malformed closure timestamp"))?;
     Ok(())
 }
 
@@ -1070,7 +1213,7 @@ async fn load_request_in_txn(
         .execute_local_response(&format!(
             r#"{{ AgentRequest(
         filter: {{ _docID: {{ _eq: "{id}" }} }}) {{
-        _docID request_id agent_did requester_did session_id lifecycle_state
+        _docID request_id purpose agent_did requester_did session_id lifecycle_state
         execution_generation execution_lease_expires_at subagent_depth
         workspace_id workspace_owner_agent_did workspace_authority workspace_seal_hash
     }} }}"#
@@ -1089,7 +1232,24 @@ async fn load_request_in_txn(
             && row.session_id.as_deref() == Some(prepared.session_id.as_str()),
         "provider segment crossed its request owner or session"
     );
+    validate_source_purpose(
+        row.purpose.context("output request purpose missing")?,
+        &prepared.source,
+    )?;
     Ok(row)
+}
+
+pub(crate) fn validate_source_purpose(
+    purpose: gents_protocol::request_admission::RequestPurpose,
+    source: &OutputSource,
+) -> Result<()> {
+    let title = matches!(source, OutputSource::ProviderTurn { scope, .. }
+        if scope.kind == gents_protocol::rendered_request::CaptureScopeKind::Title);
+    anyhow::ensure!(
+        title == (purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit),
+        "output source does not match its request purpose"
+    );
+    Ok(())
 }
 
 /// Reconstruct the existing signed workspace-reference shape from the exact

@@ -24,7 +24,7 @@ async fn claimed_request(
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cascade fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "cascade fixture", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
     let row = node
         .execute(&format!(
@@ -126,7 +126,7 @@ async fn cascade_selects_reciprocal_physical_child_and_preserves_foreign_scope()
     // and children whose provenance selects between the physical bridges.
     let foreign_bridge_input = json!({"tool_call_id":"bridge","tool_call_key":"foreign-bridge-key","agent_did":foreign,"requester_did":null,"session_id":"session","request_id":"parent","request_doc_id":parent,"message_sequence":1,"tool_name":"spawn_agent","args":"{}","lifecycle_state":"running","started_at":"2026-09-01T00:00:00Z","deadline_at":"2030-09-01T00:00:00Z","await_mode":"background","cancel_policy":"cascade","child_request_id":"child","spawn_target_did":foreign});
     let foreign_bridge = create(&node, "AgentToolCall", foreign_bridge_input).await;
-    let child_input = json!({"request_id":"child","agent_did":owner,"requester_did":owner,"session_id":"child-session","behavior_id":"behavior","content":"child","created_at":"2026-09-01T00:00:00Z","lifecycle_state":"processing","caused_by_parent_request_id":"parent","caused_by_parent_request_doc_id":parent,"caused_by_parent_tool_call_id":"bridge","caused_by_parent_tool_call_doc_id":bridge});
+    let child_input = json!({"request_id":"child","purpose":"normal","agent_did":owner,"requester_did":owner,"session_id":"child-session","behavior_id":"behavior","content":"child","created_at":"2026-09-01T00:00:00Z","lifecycle_state":"processing","caused_by_parent_request_id":"parent","caused_by_parent_request_doc_id":parent,"caused_by_parent_tool_call_id":"bridge","caused_by_parent_tool_call_doc_id":bridge});
     let child = create(&node, "AgentRequest", child_input.clone()).await;
     let mut forged_child = child_input;
     forged_child["agent_did"] = json!(foreign);

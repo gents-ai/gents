@@ -400,7 +400,7 @@ async fn child_source_scope(node: &EmbeddedNode, session_id: &str) -> ChildSourc
     let session_id = escape_graphql_string(session_id);
     let response = node
         .execute(&format!(
-            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }} }}, limit: 2) {{ _docID agent_did requester_did execution_generation }} }}"#
+            r#"{{ AgentRequest(filter: {{ session_id: {{ _eq: "{session_id}" }}, purpose: {{ _eq: "normal" }} }}, limit: 2) {{ _docID agent_did requester_did execution_generation }} }}"#
         ))
         .await;
     assert!(

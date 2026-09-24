@@ -456,6 +456,7 @@ async fn submit_recovery_seed_request(
         };
     let request_id = format!("recovery-{session_id}-{latest_rank}-{role}");
     let mut create = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id.clone(),
         core.principal().did(),
         core.principal().did(),
@@ -1313,6 +1314,7 @@ async fn retry_request_preserves_exact_parent_lineage_without_claim_backend() ->
     };
     let request_id = Uuid::new_v4().to_string();
     let mut create = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         &request_id,
         core.principal().did(),
         core.principal().did(),

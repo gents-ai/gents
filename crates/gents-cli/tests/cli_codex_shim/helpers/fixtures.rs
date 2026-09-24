@@ -703,6 +703,7 @@ pub(super) async fn seed_authorized_subagent_link(
                 parent_tool_call_doc_id: Some(tool_call_doc_id.to_string()),
             }),
             ..gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     requester_did: None,
                     request_id: child_request_id.to_string(),
@@ -1247,6 +1248,7 @@ pub(super) async fn seed_background_completion_wake(
         }
     }))?;
     let mut source = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         &source_request_id,
         agent_did,
         agent_did,
@@ -1296,6 +1298,7 @@ pub(super) async fn seed_background_completion_wake(
             &source_request_id,
         );
     let mut wake = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         &request_id,
         agent_did,
         agent_did,

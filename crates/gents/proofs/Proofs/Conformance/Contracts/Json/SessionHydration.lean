@@ -94,7 +94,8 @@ def sourceJson : CanonicalOutput.Source → String
       "{\"kind\":\"auxiliary\",\"auxiliary_kind\":" ++
         jsonString (match kind with
           | .compaction => "compaction"
-          | .compactionFallback => "compaction_fallback") ++
+          | .compactionFallback => "compaction_fallback"
+          | .title => "title") ++
         ",\"scope\":" ++ toString scope ++
         ",\"turn\":" ++ toString turn ++ ",\"attempt\":" ++ toString attempt ++ "}"
   | .tool call => "{\"kind\":\"tool\",\"owner\":" ++ toString call ++ "}"

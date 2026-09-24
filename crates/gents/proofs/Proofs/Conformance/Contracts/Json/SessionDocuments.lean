@@ -8,7 +8,7 @@ open Lean Conformance.SessionDocuments
 def scopeJson (s : AgentSession.Scope) : Json := Json.mkObj
   [("agent", toJson s.agent), ("session", toJson s.session), ("requester", toJson s.requester)]
 def requestJson (r : AgentSession.RequestFact) : Json := Json.mkObj
-  [("scope", scopeJson r.scope), ("behavior", toJson r.behavior),
+  [("purpose", toJson r.purpose.toWire), ("scope", scopeJson r.scope), ("behavior", toJson r.behavior),
    ("created_at", toJson r.createdAt), ("doc_id", toJson r.observed.docId),
    ("request_id", toJson r.observed.requestId), ("state", toJson r.observed.state.toDefraDB)]
 private def provenanceJson (p : AgentSession.Provenance) : Json := Json.mkObj
@@ -128,6 +128,8 @@ def sessionDocumentsJson : String := (Json.mkObj
    ("projection", toJson [renameJson, clearTitleJson,
       advanceJson "stale_admission" old,
       advanceJson "current_admission" newerRequest,
+      advanceJson "title_does_not_advance_public_observation" titleRequest session
+        [old, newerRequest, titleRequest],
       advanceJson "foreign_requester_does_not_freeze_own_index" scopedSuccessor indexed
         [old, newerRequest, scopedSuccessor, foreignRequester],
       advanceJson "present_requester_does_not_freeze_absent_scope" absentScopeRequest absentScopeSession
@@ -144,6 +146,8 @@ def sessionDocumentsJson : String := (Json.mkObj
    ("selection", toJson [
       selectionJson "timestamp_tie_forward" [old, newerRequest] 1 10 none,
       selectionJson "timestamp_tie_reverse" [newerRequest, old] 1 10 none,
+      selectionJson "newer_title_preserves_normal_head" [titleRequest, old] 1 10 none,
+      selectionJson "title_only_has_no_public_head" [titleRequest] 1 10 none,
       selectionJson "absent_requester_exact" [old] 1 10 (some none),
       selectionJson "foreign_agent" [old] 9 10 none,
       selectionJson "foreign_session" [old] 1 9 none]),

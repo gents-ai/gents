@@ -5,6 +5,8 @@ use gents_protocol::row::AgentRequestRow;
 #[path = "canonical_recovery.rs"]
 mod canonical_recovery;
 
+pub(super) use canonical_recovery::request_segments;
+
 #[cfg(test)]
 pub(crate) use canonical_recovery::{
     recover_expired_generation_with_facts, RecoveryResult, RecoverySelectionChoice,

@@ -38,9 +38,11 @@ impl RequestTraceAttrs {
                 .as_deref()
                 .is_some_and(|value| !value.trim().is_empty()),
             subagent_depth: request.subagent_depth,
-            is_subagent: request.subagent_depth > 0
-                || request.caused_by_parent_request_id.is_some()
-                || request.caused_by_parent_tool_call_id.is_some(),
+            is_subagent: request.purpose
+                == gents_protocol::request_admission::RequestPurpose::Normal
+                && (request.subagent_depth > 0
+                    || request.caused_by_parent_request_id.is_some()
+                    || request.caused_by_parent_tool_call_id.is_some()),
             parent_request_id: clean_optional(request.caused_by_parent_request_id.as_deref()),
             parent_tool_call_id: clean_optional(request.caused_by_parent_tool_call_id.as_deref()),
             selected_skill_count: request.input.selected_skill_ids.len(),
@@ -93,6 +95,7 @@ mod tests {
 
     fn request(input: gents_protocol::request_input::RequestInput) -> AgentRequest {
         AgentRequest {
+            purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "req-1".to_string(),
             agent_did: "did:key:agent".to_string(),

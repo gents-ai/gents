@@ -1033,7 +1033,7 @@ async fn load_requests_filtered(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ {filter} }},
+                filter: {{ {filter}, purpose: {{ _eq: "normal" }} }},
                 order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
             ) {{
                 _docID

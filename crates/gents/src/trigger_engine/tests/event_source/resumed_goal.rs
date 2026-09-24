@@ -26,6 +26,7 @@ async fn resumed_goal_tool_output_reaches_correlation_keyed_event_trigger() {
     .await
     .unwrap();
     let mut parent = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "resumed-event-parent",
         identity.did(),
         identity.did(),

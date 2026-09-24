@@ -12,6 +12,7 @@
 # workspace_id / workspace_authority / workspace_seal_hash triple.
 type AgentRequest @branchable {
     request_id: String @index @immutable
+    purpose: String @index @immutable
     agent_did: String @index @immutable
     requester_did: String @index @immutable
     admission_kind: String @index @immutable

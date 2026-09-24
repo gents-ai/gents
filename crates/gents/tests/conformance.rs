@@ -240,7 +240,11 @@ fn generated_remote_spawn_contract_drives_native_cross_principal_seam() {
         .name("native-remote-spawn-conformance".into())
         .stack_size(16 * 1024 * 1024)
         .spawn(|| {
-            tokio::runtime::Builder::new_current_thread()
+            // Two live agents and P2P reconciliation must progress while a
+            // sibling performs blocking embedded-store work during shutdown.
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_stack_size(16 * 1024 * 1024)
                 .enable_all()
                 .build()
                 .expect("build native remote-spawn runtime")

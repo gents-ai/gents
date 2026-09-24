@@ -1907,7 +1907,7 @@ mod cross_deployment_timeout_tests {
             .unwrap();
         }
         let response = node.execute(r#"mutation {create_AgentRequest(input:{
-            request_id:"parent-request",agent_did:"did:key:parent-a",behavior_id:"parent",session_id:"session",
+            request_id:"parent-request",purpose:"normal",agent_did:"did:key:parent-a",behavior_id:"parent",session_id:"session",
             deadline:"2027-01-01T00:00:00Z",workspace_id:"workspace",workspace_authority:"readOnly",
             workspace_owner_agent_did:"did:key:workspace-owner",workspace_seal_hash:"seal"
         }){_docID}}"#).await;

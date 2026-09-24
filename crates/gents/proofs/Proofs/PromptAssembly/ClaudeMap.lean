@@ -448,6 +448,8 @@ def runStream (surface : Surface) (events : List StreamEvent) :
 `runStream`; there is no second SSE acceptance policy. -/
 structure ContentStep where
   provisionalThinking : Option String
+  provisionalSignature : Option String
+  provisionalRedacted : Option String
   sealed : List StreamBlock
   deriving DecidableEq, Repr
 
@@ -456,16 +458,35 @@ def contentStep (st : StreamState) : ContentStep :=
       match st.pending with
       | some (.thinking _ fragments _ _) => some (String.join fragments.reverse)
       | _ => none
+  , provisionalSignature :=
+      match st.pending with
+      | some (.thinking _ _ fragments true) => some (String.join fragments.reverse)
+      | _ => none
+  , provisionalRedacted :=
+      match st.pending with
+      | some (.redacted _ data) => some data
+      | _ => none
   , sealed := st.content }
 
-/-- One traversal through `step` yields both provisional thinking previews and
-the sealed native content. A signature changes the pending block, but does not
+private def foldContentTrace (surface : Surface) (events : List StreamEvent) :
+    Except MapError (StreamState × List ContentStep) :=
+  events.foldlM (fun (state, observations) event => do
+    let next ← step surface state event
+    return (next, observations ++ [contentStep next])) (StreamState.init, [])
+
+/-- Only fully decoded stream events enter this prefix. An abort does not
+invoke EOF sealing or turn incomplete transport JSON into a typed part. -/
+def runDecodedPrefixTrace (surface : Surface) (events : List StreamEvent) :
+    Except MapError (List ContentStep × List StreamBlock) := do
+  let (state, observations) ← foldContentTrace surface events
+  return (observations, state.content)
+
+/-- One traversal through `step` yields decoded provisional reasoning fields
+and sealed native content. A signature changes the pending block, but does not
 append a second text part or replace previously streamed bytes. -/
 def runContentTrace (surface : Surface) (events : List StreamEvent) :
     Except MapError (List ContentStep × List StreamBlock) := do
-  let (state, observations) ← events.foldlM (fun (state, observations) event => do
-    let next ← step surface state event
-    return (next, observations ++ [contentStep next])) (StreamState.init, [])
+  let (state, observations) ← foldContentTrace surface events
   let finished ← flush surface state
   return (observations, finished.content)
 
@@ -1129,6 +1150,22 @@ theorem initial_thinking_text_is_provisional :
       .signatureDelta 0 "sig", .contentStop 0]).map
       (fun result => result.1.map (·.provisionalThinking)) =
       .ok [some "初", some "初続", some "初続", none] := by
+  native_decide
+
+theorem decoded_signature_prefix_survives_abort_without_sealing :
+    (runDecodedPrefixTrace {} [.thinkingStart 0 "", .signatureDelta 0 "署",
+      .signatureDelta 0 "名"]).map (fun result =>
+        (result.1.map (·.provisionalSignature), result.2)) =
+      .ok ([none, some "署", some "署名"], []) ∧
+    runContentStream {} [.thinkingStart 0 "", .signatureDelta 0 "署",
+      .signatureDelta 0 "名"] = .error .incompleteBlock := by
+  native_decide
+
+theorem decoded_redacted_prefix_survives_abort_without_sealing :
+    (runDecodedPrefixTrace {} [.redactedStart 0 "opaque"]).map (fun result =>
+        (result.1.map (·.provisionalRedacted), result.2)) =
+      .ok ([some "opaque"], []) ∧
+    runContentStream {} [.redactedStart 0 "opaque"] = .error .incompleteBlock := by
   native_decide
 
 theorem redacted_before_tool_keeps_order :

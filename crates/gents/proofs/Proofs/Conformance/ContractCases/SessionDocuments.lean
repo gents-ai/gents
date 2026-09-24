@@ -19,9 +19,14 @@ def session : Document :=
         parentRequestDoc := some 6
         fork := some ⟨7, 2⟩ } }
 def request (id time : Nat) : RequestFact :=
-  { scope, behavior := 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
+  { purpose := .normal, scope, behavior := 3, createdAt := time, observed := ⟨id + 100, id, .failed⟩ }
 def old := request 1 2
 def newerRequest := request 2 2
+
+def titleRequest := { request 3 99 with purpose := .titleAudit }
+example : latest [old, titleRequest] scope.agent scope.session none = some old := by decide
+example : advance session [old, titleRequest] titleRequest "title" 100 = session := by decide
+example : observedRequest [titleRequest] titleRequest.observed = none := by decide
 
 def runtimeControl := { newerRequest with scope := { scope with requester := some 1 } }
 example : preserveControlSession session runtimeControl scope true = some session := by decide

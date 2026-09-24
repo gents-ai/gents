@@ -110,6 +110,7 @@ fn backend_admission_config(
 
 fn background_child_request(index: usize, behavior_id: &str) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: format!("child-doc-{index}"),
         request_id: format!("child-request-{index}"),
         agent_did: "did:test:background-fanout-test".to_string(),

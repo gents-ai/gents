@@ -87,6 +87,7 @@ async fn signed_conversation_pairing_replays_agent_config_over_p2p() {
                 r#"mutation {{
                     create_AgentRequest(input: {{
                         request_id: "{request_id}",
+                        purpose: "normal",
                         agent_did: "did:key:amy",
                         requester_did: "{requester_did}",
                         behavior_id: "amy-default",

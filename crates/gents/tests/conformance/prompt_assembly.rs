@@ -728,6 +728,82 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
 }
 
 #[test]
+fn generated_claude_decoded_abort_prefixes_emit_native_audit_events() {
+    use gents_loop::provider_audit::ClaudeAuditEvent;
+
+    let mut saw_signature = false;
+    let mut saw_redacted = false;
+    for case in lean_prompt_assembly_claude_thinking_stream_cases()
+        .iter()
+        .filter(|case| {
+            case.outcome == "incompleteBlock"
+                && case.steps.last().is_some_and(|step| {
+                    step.provisional_signature.is_some() || step.provisional_redacted.is_some()
+                })
+        })
+    {
+        assert_eq!(case.steps.len(), case.events.len(), "{}", case.name);
+        let surface = case.surface.iter().cloned().collect::<HashSet<_>>();
+        let mut state = gents::claude_messages::MessagesSseState::new(surface);
+        let mut signature = None::<String>;
+        let mut redacted = None::<String>;
+        for ((event, sse), step) in case
+            .events
+            .iter()
+            .zip(claude_thinking_sse_events(&case.events))
+            .zip(&case.steps)
+        {
+            for line in sse.lines() {
+                state
+                    .push_line_typed(line)
+                    .unwrap_or_else(|error| panic!("{}: event {}: {error}", case.name, event.kind));
+            }
+            for audit in state.take_audit_events() {
+                match audit {
+                    ClaudeAuditEvent::BlockStart { .. } => {
+                        signature = None;
+                        redacted = None;
+                    }
+                    ClaudeAuditEvent::Signature { fragment, .. } => {
+                        signature
+                            .get_or_insert_with(String::new)
+                            .push_str(&fragment);
+                    }
+                    ClaudeAuditEvent::RedactedData { data, .. } => {
+                        redacted.get_or_insert_with(String::new).push_str(&data);
+                    }
+                    ClaudeAuditEvent::BlockStop { .. } => {
+                        panic!("{}: decoded abort prefix unexpectedly sealed", case.name);
+                    }
+                    ClaudeAuditEvent::ThinkingText { .. } => {}
+                }
+            }
+            assert_eq!(
+                signature, step.provisional_signature,
+                "{}: event {} signature audit prefix",
+                case.name, event.kind
+            );
+            assert_eq!(
+                redacted, step.provisional_redacted,
+                "{}: event {} redacted audit prefix",
+                case.name, event.kind
+            );
+            assert!(
+                step.sealed.is_empty(),
+                "{}: decoded abort prefix sealed",
+                case.name
+            );
+        }
+        saw_signature |= signature.is_some();
+        saw_redacted |= redacted.is_some();
+    }
+    assert!(
+        saw_signature && saw_redacted,
+        "Lean emitted no decoded signature or redacted abort prefix"
+    );
+}
+
+#[test]
 fn generated_claude_initial_thinking_text_seals_in_native_accumulator() {
     use gents::llm::message::ReasoningContent;
     use gents_loop::provider_input::ProviderInputProfile;
@@ -1030,6 +1106,9 @@ fn native_replay_tag(
                     }
                     crate::lean_vocab_test::LeanAuxiliaryKind::CompactionFallback => {
                         gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
+                    }
+                    crate::lean_vocab_test::LeanAuxiliaryKind::Title => {
+                        gents_protocol::rendered_request::CaptureScopeKind::Title
                     }
                 },
                 seq: *scope,

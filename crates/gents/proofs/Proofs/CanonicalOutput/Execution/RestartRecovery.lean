@@ -194,7 +194,8 @@ def commit (state : World) (actor : Gate.Actor) (now : Time) (document : DocId)
     (binding : RestartBinding) (closing : Segment)
     (wake : SessionQueue.QueueEntry)
     (notificationBinding : WakeDocumentBinding) : Option World :=
-  if state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
+  if state.purpose != .normal || state.gateOwner != some actor ||
+      state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule || now < state.lease.now then none
   else
     let current := Gate.atTime state now

@@ -23,6 +23,7 @@ async fn write_parent_request(node: &EmbeddedNode, request_id: &str, agent_did: 
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "parent",
                 session_id: "session-{request_id}",

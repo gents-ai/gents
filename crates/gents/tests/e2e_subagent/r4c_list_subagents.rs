@@ -281,6 +281,7 @@ async fn create_superseded_child_edge(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{child_request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 requester_did: "{agent_did}",
                 behavior_id: "{behavior_id}",

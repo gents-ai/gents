@@ -672,7 +672,7 @@ pub(super) async fn owned_test_hook_with_policy(
     let now = chrono::Utc::now().to_rfc3339();
     let response = node
         .execute(&format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", subagent_depth: 0, retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "owned loop test", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", created_at: "{}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#,
             crate::graphql::escape_graphql_string(&request_id),
             crate::graphql::escape_graphql_string(&session_id),
             crate::graphql::escape_graphql_string(&request_id),

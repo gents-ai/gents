@@ -90,7 +90,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
     let prompt = "Call file_mailbox_item exactly once with title='Mailbox live verified', then answer MAILBOX_FILED. The tool owns notification identity and handling.";
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "{request_id}", agent_did: "{agent_did}",
+            request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}",
             requester_did: "{requester}", behavior_id: "{behavior_id}",
             session_id: "{session_id}", content: "{content}",
             caused_by_source_doc_id: "{source_id}",

@@ -11,6 +11,36 @@ use serde::{Deserialize, Serialize};
 
 const REQUEST_SIGNATURE_DOMAIN: &str = "gents-agent-request-admission-v1";
 
+/// Signed admission purpose. Missing or unknown values must not acquire normal
+/// request authority; detached title work owns an independent request lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RequestPurpose {
+    Normal,
+    TitleAudit,
+}
+
+impl RequestPurpose {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::TitleAudit => "title-audit",
+        }
+    }
+}
+
+impl TryFrom<&str> for RequestPurpose {
+    type Error = &'static str;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "normal" => Ok(Self::Normal),
+            "title-audit" => Ok(Self::TitleAudit),
+            _ => Err("unknown AgentRequest purpose"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum AgentRequestAdmissionKind {
@@ -197,6 +227,7 @@ pub fn project_agent_request_admission_disposition(
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRequestSigningFields<'a> {
     pub request_id: &'a str,
+    pub purpose: RequestPurpose,
     pub agent_did: &'a str,
     pub requester_did: Option<&'a str>,
     pub behavior_id: &'a str,
@@ -577,6 +608,7 @@ impl AgentRequestAdmissionRecord {
         let mut fields = Vec::new();
         push_text(&mut fields, REQUEST_SIGNATURE_DOMAIN);
         push_text(&mut fields, request.request_id);
+        push_text(&mut fields, request.purpose.as_str());
         push_text(&mut fields, request.agent_did);
         push_option(&mut fields, request.requester_did);
         push_text(&mut fields, request.behavior_id);
@@ -799,6 +831,7 @@ fn encode_length(length: usize, output: &mut Vec<u8>) {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentRequestCreate {
     pub request_id: String,
+    pub purpose: RequestPurpose,
     pub agent_did: String,
     pub requester_did: String,
     pub behavior_id: String,
@@ -842,6 +875,7 @@ impl AgentRequestCreate {
     // contract just to satisfy an argument-count heuristic.
     #[allow(clippy::too_many_arguments)]
     pub fn base(
+        purpose: RequestPurpose,
         request_id: impl Into<String>,
         agent_did: impl Into<String>,
         requester_did: impl Into<String>,
@@ -856,6 +890,7 @@ impl AgentRequestCreate {
         Self {
             retry_root_request: Some(request_id.clone()),
             request_id,
+            purpose,
             agent_did: agent_did.into(),
             requester_did: requester_did.into(),
             behavior_id: behavior_id.into(),
@@ -893,6 +928,7 @@ impl AgentRequestCreate {
     pub fn signing_fields(&self) -> AgentRequestSigningFields<'_> {
         AgentRequestSigningFields {
             request_id: &self.request_id,
+            purpose: self.purpose,
             agent_did: &self.agent_did,
             requester_did: Some(&self.requester_did),
             behavior_id: &self.behavior_id,
@@ -951,6 +987,7 @@ impl AgentRequestCreate {
             ));
         };
         text(&mut fields, "request_id", &self.request_id);
+        text(&mut fields, "purpose", self.purpose.as_str());
         text(&mut fields, "agent_did", &self.agent_did);
         text(&mut fields, "requester_did", &self.requester_did);
         text(&mut fields, "behavior_id", &self.behavior_id);
@@ -1121,9 +1158,19 @@ impl AgentRequestCreate {
     }
 
     pub fn graphql_mutation(&self) -> Result<String, &'static str> {
+        self.graphql_mutation_selecting("_docID")
+    }
+
+    /// Keep signed create input canonical while an owner requests additional
+    /// returned fields in the same mutation. `selection` must be trusted static
+    /// GraphQL field syntax, never user input.
+    pub fn graphql_mutation_selecting(
+        &self,
+        selection: &'static str,
+    ) -> Result<String, &'static str> {
         Ok(format!(
-            "mutation {{ create_AgentRequest(input: {{ {} }}) {{ _docID }} }}",
-            self.graphql_input_fields()?
+            "mutation {{ create_AgentRequest(input: {{ {} }}) {{ {selection} }} }}",
+            self.graphql_input_fields()?,
         ))
     }
 }
@@ -1151,6 +1198,7 @@ mod tests {
         let mut admission = AgentRequestAdmissionRecord::local_self("did:key:agent");
         admission.signature = vec![7; 64];
         AgentRequestCreate::base(
+            RequestPurpose::Normal,
             "request-1",
             "did:key:agent",
             "did:key:agent",
@@ -1161,6 +1209,34 @@ mod tests {
             "2026-08-30T00:00:00Z",
             admission,
         )
+    }
+
+    #[test]
+    fn signed_purpose_is_required_and_changes_the_request_payload() {
+        assert_eq!(
+            RequestPurpose::try_from("normal"),
+            Ok(RequestPurpose::Normal)
+        );
+        assert_eq!(
+            RequestPurpose::try_from("title-audit"),
+            Ok(RequestPurpose::TitleAudit)
+        );
+        assert!(RequestPurpose::try_from("").is_err());
+        assert!(RequestPurpose::try_from("titleAudit").is_err());
+        assert!(serde_json::from_str::<RequestPurpose>("null").is_err());
+
+        let normal = local_create();
+        let mut title = normal.clone();
+        title.purpose = RequestPurpose::TitleAudit;
+        assert_ne!(normal.signing_payload(), title.signing_payload());
+        assert!(normal
+            .graphql_input_fields()
+            .unwrap()
+            .contains("purpose: \"normal\""));
+        assert!(title
+            .graphql_input_fields()
+            .unwrap()
+            .contains("purpose: \"title-audit\""));
     }
 
     #[test]
@@ -1178,6 +1254,8 @@ mod tests {
         changed!("request_id", |v: &mut AgentRequestCreate| v
             .request_id
             .push('x'));
+        changed!("purpose", |v: &mut AgentRequestCreate| v.purpose =
+            RequestPurpose::TitleAudit);
         changed!("agent_did", |v: &mut AgentRequestCreate| v
             .agent_did
             .push('x'));

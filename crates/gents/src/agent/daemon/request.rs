@@ -88,7 +88,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             lifecycle.behavior_id(),
             lifecycle.backend_id(),
         );
-        let title_admission_context = admission_context.clone();
         // One capture scope for the whole request, installed here rather than
         // around `run_inference`.
         //
@@ -153,11 +152,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     is_subagent = trace_attrs.is_subagent,
                 ))
                 .await?;
-            self.spawn_conversation_title_generation(
-                &request,
-                title_admission_context,
-                capture_context,
-            );
+            self.spawn_conversation_title_generation(&request, shutdown.clone());
 
             let selected_skill_ids = &request.input.selected_skill_ids;
             let skill_reminders = self

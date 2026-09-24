@@ -56,6 +56,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("EditMatch", Module("conformance/edit_match.rs")),
         ("EthSubmission", Module("conformance/eth_submission.rs")),
         ("Enrollment", Module("conformance/enrollment.rs")),
+        ("TitleAdmission", Gap("#1603: joined signed-title admission/claim cases are generated and strictly decoded; native authenticated parent binding, independent claim and pending crash rediscovery still require implementation.")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
         ("Eval", Module("conformance/eval.rs")),
         ("Fleet", Module("conformance/fleet.rs")),

@@ -307,7 +307,11 @@ pub async fn build_signed_pending_agent_request_with_lineage_workspace_and_conve
         workspace: workspace_lineage.cloned(),
         input,
         retry_key: retry_key.map(str::to_owned),
-        ..RequestSpec::new(identity, admission)
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            identity,
+            admission,
+        )
     };
     build_signed_request(spec, RequestSigner::RegisteredTarget).await
 }
@@ -355,6 +359,7 @@ pub struct RetryLink {
 /// through; `build_signed_request` alone owns which of its fields become
 /// which stamped columns.
 pub struct RequestSpec {
+    pub purpose: gents_protocol::request_admission::RequestPurpose,
     pub identity: RequestIdentity,
     pub admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     pub initial_lifecycle_state: RequestLifecycleState,
@@ -380,12 +385,14 @@ impl RequestSpec {
     /// trigger-lineage-carrying, workspace-bound, subagent-linked, retried,
     /// request. Callers set only what they need
     /// via struct-update syntax:
-    /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(identity, admission) }`.
+    /// `RequestSpec { retry_key: Some(key), ..RequestSpec::new(RequestPurpose::Normal, identity, admission) }`.
     pub fn new(
+        purpose: gents_protocol::request_admission::RequestPurpose,
         identity: RequestIdentity,
         admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     ) -> Self {
         Self {
+            purpose,
             identity,
             admission,
             initial_lifecycle_state: RequestLifecycleState::Pending,
@@ -423,6 +430,7 @@ pub(crate) fn build_request(
     spec: RequestSpec,
 ) -> Result<gents_protocol::request_admission::AgentRequestCreate> {
     let RequestSpec {
+        purpose,
         identity,
         admission,
         initial_lifecycle_state,
@@ -440,6 +448,7 @@ pub(crate) fn build_request(
     let agent_did = identity.agent_did.clone();
 
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        purpose,
         identity.request_id,
         identity.agent_did,
         identity.requester_did.unwrap_or(agent_did),
@@ -483,11 +492,15 @@ pub(crate) fn build_request(
             .as_ref()
             .map_or_else(|| request_id.clone(), |link| link.root_request_id.clone()),
     );
-    create.max_retries = retry
-        .as_ref()
-        .map_or(i64::from(DEFAULT_REQUEST_MAX_RETRIES), |link| {
-            link.max_retries
-        });
+    create.max_retries = retry.as_ref().map_or(
+        match purpose {
+            gents_protocol::request_admission::RequestPurpose::Normal => {
+                i64::from(DEFAULT_REQUEST_MAX_RETRIES)
+            }
+            gents_protocol::request_admission::RequestPurpose::TitleAudit => 0,
+        },
+        |link| link.max_retries,
+    );
     create.retry_count = retry.as_ref().map_or(0, |link| link.retry_count);
     if let Some(link) = retry {
         create.retry_parent_request = link.parent_request_id;
@@ -526,6 +539,52 @@ pub async fn build_signed_request(
     let mut create = build_request(spec)?;
     sign_request(&mut create, signer).await?;
     Ok(create)
+}
+
+/// The parent link is provenance only. The persisted pending request is the
+/// crash-recoverable owner of title inference, including after its parent ends.
+pub(crate) async fn write_pending_title_request(
+    node: &EmbeddedNode,
+    parent: &AgentRequest,
+    content: String,
+) -> Result<AgentRequest> {
+    use gents_protocol::request_admission::{AgentRequestAdmissionRecord, RequestPurpose};
+    anyhow::ensure!(
+        parent.purpose == RequestPurpose::Normal,
+        "a title audit request cannot recursively create title work"
+    );
+    let identity = RequestIdentity {
+        request_id: uuid::Uuid::new_v4().to_string(),
+        agent_did: parent.agent_did.clone(),
+        requester_did: Some(parent.agent_did.clone()),
+        behavior_id: parent.behavior_id.clone(),
+        session_id: parent.session_id.clone(),
+        content,
+        execution_origin: ExecutionOrigin::Interactive,
+        created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    };
+    let admission =
+        AgentRequestAdmissionRecord::runtime_local_control(&parent.agent_did, &parent.request_id);
+    let spec = RequestSpec {
+        subagent: Some(ParentLink {
+            parent_request_id: parent.request_id.clone(),
+            parent_request_doc_id: parent.doc_id.clone(),
+            ..Default::default()
+        }),
+        ..RequestSpec::new(RequestPurpose::TitleAudit, identity, admission)
+    };
+    let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
+    let mutation = create
+        .graphql_mutation_selecting(crate::watcher::AGENT_REQUEST_FIELDS)
+        .map_err(anyhow::Error::msg)?;
+    let response = crate::config_client::ConfigAccess::write_local_response(
+        node,
+        "lifecycle.materialize_title_audit",
+        &mutation,
+    )
+    .await?;
+    crate::watcher::agent_request_from_mutation_response(&response, "create_AgentRequest")?
+        .context("title request creation omitted its exact durable request")
 }
 
 pub async fn activate_workspace_bound_request(
@@ -707,7 +766,11 @@ impl RequestLifecycle {
         };
         let spec = RequestSpec {
             trigger_lineage,
-            ..RequestSpec::new(request_identity, admission)
+            ..RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                request_identity,
+                admission,
+            )
         };
         let create = build_signed_request(spec, RequestSigner::Identity(identity.as_ref())).await?;
         let mutation = create.graphql_mutation().map_err(anyhow::Error::msg)?;
@@ -729,6 +792,7 @@ impl RequestLifecycle {
         )
         .await?;
         let queued_request = AgentRequest {
+            purpose: create.purpose,
             doc_id,
             request_id,
             agent_did: agent_did.clone(),
@@ -955,7 +1019,7 @@ mod pin_tests {
         let normalized = normalize_dynamic_fields(&create, &fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-materialize-pending-manual\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-manual\", retry_root_request: \"req-materialize-pending-manual\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"interactive\", caused_by_trigger_kind: \"manual\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", lifecycle_state: \"pending\", failure_reason: \"\""
+            "request_id: \"req-materialize-pending-manual\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-manual\", retry_root_request: \"req-materialize-pending-manual\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"interactive\", caused_by_trigger_kind: \"manual\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, admission_kind: \"local-self\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", lifecycle_state: \"pending\", failure_reason: \"\""
         );
     }
 
@@ -1000,7 +1064,7 @@ mod pin_tests {
         let normalized = normalize_dynamic_fields(&create, &fields);
         assert_eq!(
             normalized,
-            "request_id: \"req-materialize-pending-event\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
+            "request_id: \"req-materialize-pending-event\", purpose: \"normal\", agent_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", requester_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", behavior_id: \"behavior-1\", session_id: \"sess-materialize-pending-event\", retry_root_request: \"req-materialize-pending-event\", retry_key: \"retry-key-1\", content: \"hello agent\", input: { initial_title: { source: \"task\", text: \"My Conversation\" } }, execution_origin: \"scheduled\", caused_by_trigger_id: \"trigger-1\", caused_by_trigger_doc_id: \"trigger-doc-1\", caused_by_trigger_kind: \"event\", caused_by_correlation: \"corr-1\", caused_by_trigger_context: \"{\\\"k\\\":\\\"v\\\"}\", caused_by_source_doc_id: \"source-doc-1\", created_at: \"<CREATED_AT>\", retry_count: 0, max_retries: 3, subagent_depth: 0, workspace_id: \"ws-1\", workspace_owner_agent_did: \"did:key:workspace-owner\", workspace_authority: \"readWrite\", workspace_seal_hash: \"seal-1\", admission_kind: \"runtime-internal\", admission_signer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", admission_signature: \"<SIGNATURE>\", runtime_issuer_did: \"did:key:z6Mkmuzzq2Ea9TgVB5EnaeY655fERuo15hrBtsL2oT3arco7\", runtime_source_request_id: \"trigger-1\", runtime_source_kind: \"automated-trigger\", lifecycle_state: \"workspaceBindingPending\", failure_reason: \"\""
         );
     }
 }

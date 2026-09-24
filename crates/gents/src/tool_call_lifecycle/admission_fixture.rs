@@ -306,7 +306,7 @@ pub async fn claimed_request(
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let agent_did = crate::graphql::escape_graphql_string(agent_did);
-    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+    let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "spawn", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!created.has_errors(), "{:#?}", created.errors);
     let row = node
         .execute(&format!(
@@ -340,6 +340,7 @@ pub(crate) async fn claimed_signed_request(
         .unwrap_or_else(|| chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
     ensure_fixture_session(node, session_id, identity.did(), Some(identity.did()), &now).await;
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         identity.did(),
         identity.did(),
@@ -782,7 +783,7 @@ async fn insert_observed_parent(
         node,
         "test.local_depth_observed_parent",
         &format!(
-            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request}", agent_did: "{agent}", behavior_id: "general", session_id: "{session}", retry_parent_request: "", retry_root_request: "{request}", superseded_by_request: "", content: "observed parent", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created}", retry_count: 0, max_retries: 3{depth_field} }}) {{ _docID }} }}"#,
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request}", purpose: "normal", agent_did: "{agent}", behavior_id: "general", session_id: "{session}", retry_parent_request: "", retry_root_request: "{request}", superseded_by_request: "", content: "observed parent", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created}", retry_count: 0, max_retries: 3{depth_field} }}) {{ _docID }} }}"#,
         ),
     )
     .await
@@ -971,7 +972,11 @@ mod lifecycle_tests {
                 parent_tool_call_id: Some(parent_tool_call_id.to_owned()),
                 parent_tool_call_doc_id: Some(parent_tool_call_doc_id.to_owned()),
             }),
-            ..RequestSpec::new(identity, admission)
+            ..RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
+                identity,
+                admission,
+            )
         };
         let create = build_signed_request(spec, RequestSigner::RegisteredTarget)
             .await

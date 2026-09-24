@@ -48,7 +48,11 @@ pub(super) async fn session_request_create_mutation(
         }),
         input,
         retry_key: retry_key.map(ToOwned::to_owned),
-        ..RequestSpec::new(identity, admission)
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            identity,
+            admission,
+        )
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     create.graphql_mutation().map_err(anyhow::Error::msg)

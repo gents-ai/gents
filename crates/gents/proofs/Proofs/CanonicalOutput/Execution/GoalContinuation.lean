@@ -99,7 +99,8 @@ def publishGoalChild? (goal : Snapshot) (state : World)
     (request : ClaimedRequest) (binding : Binding)
     (entry : SessionQueue.QueueEntry) : Option Result :=
   let world := state
-  if !gateHeld state actor now || !bindingValid world goal request binding ||
+  if state.purpose != .normal || !gateHeld state actor now ||
+      !bindingValid world goal request binding ||
       state.queue.scope.agent != world.principal ||
       state.queue.sessionId != world.sessionId ||
       binding.childRequester != state.queue.scope.requester ||

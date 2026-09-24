@@ -1047,6 +1047,7 @@ mod tests {
         let did = identity.did().to_owned();
         let create = gents::build_signed_request(
             gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: "local-root".into(),
                     agent_did: did.clone(),

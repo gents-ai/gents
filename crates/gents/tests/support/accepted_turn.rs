@@ -60,6 +60,7 @@ pub async fn enqueue_local_accepted_request_until(
 ) {
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         db.node_identity.did(),
         db.node_identity.did(),
@@ -171,6 +172,7 @@ pub async fn prepare_accepted_turn_as(
 
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut request = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         spec.request_id,
         identity.did(),
         identity.did(),

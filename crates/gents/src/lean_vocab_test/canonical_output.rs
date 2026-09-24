@@ -90,6 +90,7 @@ pub(crate) enum LeanCanonicalSource {
 pub(crate) enum LeanAuxiliaryKind {
     Compaction,
     CompactionFallback,
+    Title,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

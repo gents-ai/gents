@@ -19,8 +19,8 @@ use crate::lean_vocab_test::{
     LeanCanonicalExecutionObservation, LeanCanonicalExecutionOperation, LeanCanonicalExecutionSeed,
     LeanCanonicalMessage, LeanCanonicalSegment, LeanCanonicalSource, LeanCanonicalToolAdmission,
     LeanCanonicalWriter, LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome,
-    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanResultPart,
-    LeanTerminalSelection,
+    LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanRequestPurpose,
+    LeanResultPart, LeanTerminalSelection,
 };
 
 const FIXTURE_EPOCH_SECONDS: i64 = 1_700_000_000;
@@ -43,6 +43,18 @@ fn symbolic_generation(value: u64) -> String {
 
 fn parse_generation(value: Option<&str>) -> Option<u64> {
     value?.strip_prefix("lean-generation-")?.parse().ok()
+}
+
+fn native_capture_seq(modeled: u64) -> Result<u64> {
+    modeled
+        .checked_add(1)
+        .context("modeled capture scope exceeds native allocation range")
+}
+
+fn modeled_capture_seq(native: u64) -> Result<u64> {
+    native
+        .checked_sub(1)
+        .context("native capture scope has no modeled allocation")
 }
 
 fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64> {
@@ -224,6 +236,7 @@ async fn seed_signed_ancestor_chain(
     let root_spec = crate::lifecycle::RequestSpec {
         workspace: seed_workspace_lineage(seed, &principal, remote_dids),
         ..crate::lifecycle::RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             crate::lifecycle::RequestIdentity {
                 requester_did: None,
                 request_id: root_id.clone(),
@@ -936,21 +949,28 @@ impl NativeCanonicalExecution {
             } => match scope.kind {
                 gents_protocol::rendered_request::CaptureScopeKind::Inference => {
                     LeanCanonicalSource::Provider {
-                        scope: scope.seq,
+                        scope: modeled_capture_seq(scope.seq)?,
                         turn: u64::from(*turn_index),
                         attempt: u64::from(*attempt),
                     }
                 }
                 gents_protocol::rendered_request::CaptureScopeKind::Compaction
-                | gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback => {
+                | gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
+                | gents_protocol::rendered_request::CaptureScopeKind::Title => {
                     LeanCanonicalSource::Auxiliary {
                         auxiliary_kind: match scope.kind {
                             gents_protocol::rendered_request::CaptureScopeKind::Compaction => {
                                 LeanAuxiliaryKind::Compaction
                             }
-                            _ => LeanAuxiliaryKind::CompactionFallback,
+                            gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback => {
+                                LeanAuxiliaryKind::CompactionFallback
+                            }
+                            gents_protocol::rendered_request::CaptureScopeKind::Title => {
+                                LeanAuxiliaryKind::Title
+                            }
+                            _ => anyhow::bail!("native provider scope is not modeled"),
                         },
-                        scope: scope.seq,
+                        scope: modeled_capture_seq(scope.seq)?,
                         turn: u64::from(*turn_index),
                         attempt: u64::from(*attempt),
                     }
@@ -1269,7 +1289,7 @@ impl NativeCanonicalExecution {
         let response = self
             .node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state }} }}"#,
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} lifecycle_state terminal_output }} }}"#,
                 crate::graphql::escape_graphql_string(&self.request_doc_id),
                 crate::watcher::AGENT_REQUEST_FIELDS,
             ))
@@ -1281,6 +1301,20 @@ impl NativeCanonicalExecution {
         );
         let row: AgentRequestRow = crate::graphql::first_row(&response, "AgentRequest")?
             .context("native request disappeared")?;
+        let terminal_selection = match row.terminal_output.as_ref() {
+            None => None,
+            Some(gents_protocol::output::TerminalOutput::NoMessage) => {
+                Some(LeanTerminalSelection::NoMessage)
+            }
+            Some(gents_protocol::output::TerminalOutput::Message { message_doc_id }) => {
+                Some(LeanTerminalSelection::Message {
+                    id: *self
+                        .message_ids
+                        .get(message_doc_id)
+                        .context("terminal output names an unmapped physical message")?,
+                })
+            }
+        };
         let state = row
             .lifecycle_state
             .context("native request omitted lifecycle")?;
@@ -1402,6 +1436,7 @@ impl NativeCanonicalExecution {
                 .then_some(persisted_generation)
                 .flatten(),
             request_state: state.as_str().to_owned(),
+            terminal_selection,
             tool_state: self.tool_state.clone(),
             tool_stuck_since,
             tool_cancel_intent_at,
@@ -1426,6 +1461,10 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
         seed: &'a LeanCanonicalExecutionSeed,
     ) -> ExecutionFuture<'a, Result<Self::Native>> {
         Box::pin(async move {
+            anyhow::ensure!(
+                seed.purpose == LeanRequestPurpose::Normal,
+                "native title-audit request initialization is not implemented"
+            );
             anyhow::ensure!(
                 seed.segments.is_empty() && seed.messages.is_empty(),
                 "seeded durable output is not implemented by the native adapter"
@@ -1508,6 +1547,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     crate::lifecycle::RequestSpec {
                         workspace: seed_workspace_lineage(seed, &principal, &remote_dids),
                         ..crate::lifecycle::RequestSpec::new(
+                            gents_protocol::request_admission::RequestPurpose::Normal,
                     crate::lifecycle::RequestIdentity {
                         requester_did: None,
                         request_id: request_id.clone(),
@@ -1706,6 +1746,9 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
         Box::pin(async move {
             native.query_document = query_document;
             match operation {
+                LeanCanonicalExecutionOperation::RetractBeforeRetry { .. } => {
+                    anyhow::bail!("native retract-before-retry operation is not implemented")
+                }
                 LeanCanonicalExecutionOperation::RenewLease {
                     now,
                     generation,
@@ -2833,6 +2876,9 @@ impl NativeCanonicalExecution {
                     LeanAuxiliaryKind::CompactionFallback => {
                         gents_protocol::rendered_request::CaptureScopeKind::CompactionFallback
                     }
+                    LeanAuxiliaryKind::Title => {
+                        gents_protocol::rendered_request::CaptureScopeKind::Title
+                    }
                 },
                 *scope,
                 *turn,
@@ -2840,7 +2886,6 @@ impl NativeCanonicalExecution {
             ),
             _ => anyhow::bail!("append output currently supports provider sources only"),
         };
-        anyhow::ensure!(scope > 0, "provider capture scope allocation is zero");
         anyhow::ensure!(record.coordinate.request > 0, "symbolic request is blank");
         anyhow::ensure!(
             matches!(&record.writer, LeanCanonicalWriter::Request { generation: writer } if *writer == generation),
@@ -2913,7 +2958,7 @@ impl NativeCanonicalExecution {
             source: gents_protocol::output::OutputSource::ProviderTurn {
                 scope: gents_protocol::rendered_request::CaptureScope {
                     kind: capture_kind,
-                    seq: scope,
+                    seq: native_capture_seq(scope)?,
                 },
                 turn_index: u32::try_from(turn)?,
                 attempt: u32::try_from(attempt)?,

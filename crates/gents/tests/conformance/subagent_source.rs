@@ -1633,6 +1633,7 @@ async fn create_remote_parent_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
+                purpose: "normal",
                 agent_did: "{escaped_agent_did}",
                 behavior_id: "remote-parent-behavior",
                 session_id: "{escaped_session_id}",
