@@ -7,7 +7,8 @@ use anyhow::{Context, Result};
 use gents::agent::persona_ops::setup_steward_self_config;
 use gents::config::{DEFAULT_CONTEXT_WINDOW, DEFAULT_MAX_OUTPUT_TOKENS};
 use gents::config_client::{
-    apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
+    apply_desired_state_plan, read_desired_state_record_in_txn, DesiredStateApplyDocument,
+    DesiredStateApplyPlan,
 };
 use gents::document_config::{
     AgentBehavior, AgentContext, BackendAuth, BashTools, BuiltInTools, DatastoreTools, FileTools,
@@ -16,8 +17,8 @@ use gents::document_config::{
 use gents::{
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior, load_agent_behavior,
     load_agent_principal, load_or_create_macos_keychain_identity,
-    load_or_create_macos_secure_enclave_identity, upsert_agent_principal, AgentIdentity, BashMode,
-    Collection, CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
+    load_or_create_macos_secure_enclave_identity, AgentIdentity, BashMode, Collection,
+    CommandExecutionMode, FileToolMode, InferenceProfile, KeyIdentity,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -682,14 +683,6 @@ async fn initialize_runtime_home(
         .as_ref()
         .map(|principal| principal.enabled)
         .unwrap_or(true);
-    upsert_agent_principal(
-        node,
-        agent_did,
-        Some(&principal_display_name),
-        Some(&default_behavior_id),
-        principal_enabled,
-    )
-    .await?;
     let tools_id = default_tools_id_for_behavior(&default_behavior_id);
     let tool_ceiling = tool_ceiling_for_package(tool_package);
     let tool_root = resolve_tool_root_for_package(tool_package, args.tool_root.as_deref())?;
@@ -807,20 +800,23 @@ async fn initialize_runtime_home(
     backend_doc.validate()?;
     inference_profile.validate()?;
     let wide_open_preset_id = wide_open_tools_id_for_agent(agent_did);
-    let plan = DesiredStateApplyPlan::new(vec![
+    let documents = vec![
         replacement(Collection::InferenceBackend, &backend_doc)?,
         replacement(Collection::Tools, &tools)?,
         replacement(Collection::AgentContext, &context)?,
         replacement(Collection::InferenceProfile, &inference_profile)?,
         replacement(Collection::AgentBehavior, &behavior)?,
         replacement(Collection::Tools, &wide_open_tools_document(agent_did))?,
-    ])?;
-    access
-        .transact("init.initialize_runtime_home", |txn| {
-            let plan = &plan;
-            Box::pin(async move { apply_desired_state_plan(txn, plan).await.map(|_| ()) })
-        })
-        .await?;
+    ];
+    publish_home_config(
+        access,
+        agent_did,
+        &principal_display_name,
+        &default_behavior_id,
+        principal_enabled,
+        documents,
+    )
+    .await?;
     // Health and discovery are runtime-owned observations, so the desired
     // config plan deliberately omits them. Preserve init's established
     // bootstrap contract by publishing the selected endpoint as initially
@@ -858,6 +854,51 @@ async fn initialize_runtime_home(
         created_principal: existing_principal.is_none(),
         created_default_behavior: existing_default_behavior.is_none(),
     })
+}
+
+/// Publish init's documents and the principal that names their default
+/// behavior as one validated plan: a failed init leaves no default pointing at
+/// a missing or disabled behavior.
+async fn publish_home_config(
+    access: &ConfigAccess,
+    agent_did: &str,
+    display_name: &str,
+    default_behavior_id: &str,
+    enabled: bool,
+    documents: Vec<DesiredStateApplyDocument>,
+) -> Result<()> {
+    access
+        .transact("init.initialize_runtime_home", |txn| {
+            let mut documents = documents.clone();
+            Box::pin(async move {
+                let mut principal = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    agent_did,
+                    agent_did,
+                )
+                .await?
+                .map(|(_, value)| value)
+                .unwrap_or_else(|| {
+                    json!({
+                        "agent_did": agent_did,
+                        "created_at": chrono::Utc::now().to_rfc3339(),
+                        "created_by": agent_did,
+                    })
+                });
+                principal["display_name"] = json!(display_name);
+                principal["default_behavior_id"] = json!(default_behavior_id);
+                principal["enabled"] = json!(enabled);
+                documents.push(DesiredStateApplyDocument {
+                    collection: Collection::AgentPrincipal,
+                    add: principal.clone(),
+                    update: principal,
+                });
+                let plan = DesiredStateApplyPlan::new(documents)?;
+                apply_desired_state_plan(txn, &plan).await.map(|_| ())
+            })
+        })
+        .await
 }
 
 /// Serialize a canonical config document into a complete-replacement plan
@@ -1268,6 +1309,72 @@ mod tests {
         );
         assert_eq!(tools.tools_id, "drift-tools");
         assert!(tools.validate().is_ok());
+    }
+
+    #[tokio::test]
+    async fn failed_init_publishes_no_default_behavior() {
+        let node = Arc::new(
+            gents::defra_node::EmbeddedNode::builder()
+                .build()
+                .await
+                .unwrap(),
+        );
+        gents::ensure_runtime_schemas(&node).await.unwrap();
+        let access = ConfigAccess::Local(node.clone());
+        let owner = "did:key:z-init-atomic";
+        let backend = json!({"agent_did":owner,"backend_id":"backend","name":"Local",
+            "provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1",
+            "auth":{"kind":"unauthenticated"}});
+        let profile = json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend",
+            "model_name":"model"});
+        let behavior = |enabled: bool| {
+            json!({"agent_did":owner,"behavior_id":"default",
+                "inference_profile_id":"profile","enabled":enabled})
+        };
+        let entry = |collection, value: serde_json::Value| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        };
+        let principal = || async { load_agent_principal(&node, owner).await.unwrap() };
+
+        // The named behavior is missing, then disabled: neither publishes a principal.
+        let missing = vec![
+            entry(Collection::InferenceBackend, backend.clone()),
+            entry(Collection::InferenceProfile, profile.clone()),
+        ];
+        assert!(
+            publish_home_config(&access, owner, "Agent", "default", true, missing)
+                .await
+                .is_err()
+        );
+        assert_eq!(principal().await, None);
+        let disabled = vec![
+            entry(Collection::InferenceBackend, backend.clone()),
+            entry(Collection::InferenceProfile, profile.clone()),
+            entry(Collection::AgentBehavior, behavior(false)),
+        ];
+        let error = publish_home_config(&access, owner, "Agent", "default", true, disabled)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("must be enabled"),
+            "{error:#}"
+        );
+        assert_eq!(principal().await, None);
+
+        let complete = vec![
+            entry(Collection::InferenceBackend, backend),
+            entry(Collection::InferenceProfile, profile),
+            entry(Collection::AgentBehavior, behavior(true)),
+        ];
+        publish_home_config(&access, owner, "Agent", "default", true, complete)
+            .await
+            .unwrap();
+        assert_eq!(
+            principal().await.unwrap().default_behavior_id.as_deref(),
+            Some("default")
+        );
     }
 
     fn init_summary(provider_kind: BackendProviderKind, endpoint: &str) -> InitSummary {

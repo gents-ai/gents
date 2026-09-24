@@ -213,6 +213,11 @@ and ownership are validated by resolution of the compiled candidate below. -/
 structure BehaviorCatalog where
   behaviors : Finset (String × Bool)
   protectedIds : Finset String
+  /-- The principal's `default_behavior_id`. Publication rejects a disabled
+  default (`Configuration.defaultBehaviorPublishable`), so a disable of the
+  current default is refused at admission rather than admitted and left to fail
+  at apply on every reconcile. -/
+  defaultId : Option String
   deriving DecidableEq
 
 -- These admission conjuncts are `abbrev` (reducible) so the `Decidable`
@@ -404,7 +409,8 @@ def opOk (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Prop :=
       behaviorPresent st r.target ∧ behaviorMutable st r.target ∧ editNameOk r ∧
         editRootOk cat r ∧ editProfileOk cat r ∧ editPromptOk r ∧ editPresetOk r
   | Op.disable =>
-      behaviorPresent st r.target ∧ behaviorMutable st r.target ∧ r.makeDefault = false
+      behaviorPresent st r.target ∧ behaviorMutable st r.target ∧ r.makeDefault = false ∧
+        some r.target ≠ st.defaultId
 
 instance (cat : Catalog) (st : BehaviorCatalog) (r : Request) : Decidable (opOk cat st r) := by
   unfold opOk
@@ -562,6 +568,15 @@ theorem protected_edit_or_disable_rejected (cat : Catalog) (st : BehaviorCatalog
   intro hadm
   have hopOk := hadm.2.2
   rcases hop with h | h <;> simp [opOk, behaviorMutable, h, hprotected] at hopOk
+
+/-- The principal's current default cannot be disabled through a persona
+request; another behavior must become the default first. -/
+theorem default_disable_rejected (cat : Catalog) (st : BehaviorCatalog) (r : Request)
+    (hop : r.op = .disable) (hdefault : st.defaultId = some r.target) :
+    ¬ admits cat st r := by
+  intro hadm
+  have hopOk := hadm.2.2
+  simp [opOk, hop, hdefault] at hopOk
 
 end PersonaRequest
 end PeerRegistryDiscovery

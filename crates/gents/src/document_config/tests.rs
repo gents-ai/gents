@@ -1676,6 +1676,52 @@ fn behavior_and_context_share_canonical_reference_closure() {
 }
 
 #[test]
+fn default_behavior_publication_matches_lean() {
+    use crate::Collection;
+    use serde_json::json;
+    let snapshot = crate::lean_vocab_test::lean_contract_snapshot();
+    let cases = snapshot.configuration_scope_cases["default_behavior"]
+        .as_array()
+        .unwrap();
+    assert_eq!(cases.len(), 8);
+    for case in cases {
+        let scope = case["scope"].as_str().unwrap();
+        let documents = vec![
+            (
+                Collection::InferenceBackend,
+                json!({"agent_did":scope,"backend_id":"backend","name":"Local","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}),
+            ),
+            (
+                Collection::InferenceProfile,
+                json!({"agent_did":scope,"profile_id":"profile","backend_id":"backend","model_name":"model"}),
+            ),
+            (
+                Collection::AgentContext,
+                json!({"agent_did":scope,"context_id":"context"}),
+            ),
+            (
+                Collection::AgentBehavior,
+                json!({"agent_did":case["behavior_owner"],"behavior_id":case["behavior_id"],
+                    "context_id":case["context_id"],"inference_profile_id":"profile",
+                    "enabled":case["enabled"]}),
+            ),
+            (
+                Collection::AgentPrincipal,
+                json!({"agent_did":scope,"default_behavior_id":case["default_behavior_id"]}),
+            ),
+        ];
+        let accepted = ConfigReferences::from_documents(scope, documents)
+            .and_then(|refs| refs.validate())
+            .is_ok();
+        assert_eq!(
+            accepted,
+            case["publishable"].as_bool().unwrap() && case["context_resolves"].as_bool().unwrap(),
+            "{case}"
+        );
+    }
+}
+
+#[test]
 fn unchanged_nested_links_are_validated_without_a_behavior_write() {
     for missing in [
         crate::Collection::Tools,

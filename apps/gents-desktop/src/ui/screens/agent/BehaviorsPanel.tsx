@@ -291,37 +291,20 @@ async function saveEnabled(
   );
 }
 
-async function saveDefault(
+/* One apply enables the behavior and names it the default: publication
+   rejects a disabled default, and it decides whether the behavior can run. */
+export async function saveDefault(
   shell: Shell,
   deployment: DeploymentView,
   behaviorId: string,
 ) {
-  const agent = deployment.agentPrincipal;
-  await shell.saveAgentConfig({
-    document: {
-      agent_did: agent.agentDid,
-      display_name: agent.displayName,
-      default_behavior_id: behaviorId,
-      enabled: agent.enabled,
-      created_at: agent.createdAt,
-      created_by: agent.createdBy,
-      tags: deployment.principalConfig?.tags ?? null,
-    },
-  });
+  await shell.applyConfig((api) =>
+    api.setDefaultBehavior({ agentDid: deployment.agentDid, behaviorId }),
+  );
 }
 
-/* what a saved behavior still needs before it can be enabled */
-function missingToTurnOn(deployment: DeploymentView, b: BehaviorView) {
-  return [
-    ...(!b.contextId || !deployment.contexts.some((c) => c.context_id === b.contextId)
-      ? ["instructions"]
-      : []),
-    ...(!b.inferenceProfileId ||
-    !deployment.inferenceProfiles.some((p) => p.profile_id === b.inferenceProfileId)
-      ? ["a model"]
-      : []),
-  ];
-}
+export const DEFAULT_STAYS_ENABLED =
+  "The default behavior stays enabled. Choose another default before turning it off.";
 
 /* the end of a behavior's row: its enable switch and a menu */
 function RowControls({
@@ -337,8 +320,8 @@ function RowControls({
   inEditor?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  const missing = missingToTurnOn(deployment, behavior);
-  const blocked = !behavior.enabled && missing.length > 0;
+  /* the current default is never turned off in place */
+  const keptOn = behavior.enabled && behavior.isDefault;
   const toggle = async (next: boolean) => {
     setBusy(true);
     try {
@@ -355,7 +338,11 @@ function RowControls({
   const makeDefault = async () => {
     try {
       await saveDefault(shell, deployment, behavior.behaviorId);
-      toast("Default behavior set");
+      toast(
+        behavior.enabled
+          ? "Default behavior set"
+          : `${behavior.displayName} is enabled and is now the default`,
+      );
     } catch (e) {
       toast(
         `Default behavior set failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -369,17 +356,14 @@ function RowControls({
     >
       <span
         className="flex items-center gap-2.5 px-1 text-sm"
-        title={
-          blocked
-            ? `Needs ${missing.join(" and ")} before it can be enabled`
-            : undefined
-        }
+        title={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
       >
         {inEditor && (behavior.enabled ? "Enabled" : "Disabled")}
         <Switch
           aria-label={`${behavior.displayName} is ${behavior.enabled ? "enabled" : "disabled"}`}
+          aria-description={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
           checked={behavior.enabled}
-          disabled={busy || blocked}
+          disabled={busy || keptOn}
           onCheckedChange={(v) => void toggle(v)}
         />
       </span>
@@ -402,7 +386,18 @@ function RowControls({
               disabled={behavior.isDefault}
               onClick={() => void makeDefault()}
             >
-              {behavior.isDefault ? "The default behavior" : "Make default"}
+              {behavior.isDefault ? (
+                "The default behavior"
+              ) : (
+                <span className="flex flex-col">
+                  <span>Make default</span>
+                  {!behavior.enabled && (
+                    <span className="text-xs text-muted-foreground">
+                      Also enables it
+                    </span>
+                  )}
+                </span>
+              )}
             </DropdownMenuItem>
             {!inEditor && (
               <DropdownMenuItem
@@ -831,19 +826,13 @@ export function BehaviorEditor({
     )
       ? context
       : null;
-  /* what keeps it from being enabled, as saved */
-  const blocked = missingToTurnOn(deployment, behavior);
   const readiness = behaviorReadiness(deployment, behavior.behaviorId);
   const env = deployment.behaviorEnvironments.find(
     (e) => e.behaviorId === behavior.behaviorId,
   );
   /* said under the summary only when something needs attention */
   const attention =
-    !behavior.enabled && blocked.length
-      ? `Needs ${blocked.join(" and ")} before it can be enabled.`
-      : behavior.enabled && !readiness.ready
-        ? `It can’t run: ${readiness.reason}.`
-        : null;
+    behavior.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
     <>
       <header

@@ -178,9 +178,9 @@ export function createDesktopApiAdapter(
         request,
       }),
     saveAgentConfig: (request) =>
-      invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", {
-        request,
-      }),
+      invokeDesktop<DesktopClientSnapshot>("desktop_agent_config_save", { request }),
+    setDefaultBehavior: (request) =>
+      invokeDesktop<DesktopClientSnapshot>("desktop_default_behavior_set", { request }),
     saveBehaviorConfig: (request) =>
       invokeDesktop<DesktopClientSnapshot>("desktop_behavior_save", {
         request,

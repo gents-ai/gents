@@ -99,6 +99,15 @@ pub struct AgentConfigSaveRequest {
     pub document: gents::document_config::AgentPrincipal,
 }
 
+/// Make a behavior the principal's default, enabling it in the same apply.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub struct DefaultBehaviorSetRequest {
+    pub agent_did: String,
+    pub behavior_id: String,
+}
+
 #[derive(Debug, Clone, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(deny_unknown_fields)]

@@ -39,6 +39,67 @@ pub async fn upsert_agent_principal(node: &EmbeddedNode, document: &AgentPrincip
     .await
 }
 
+/// Make `behavior_id` the principal's default and enable it in one apply.
+/// Publication rejects a disabled default, so the two changes cannot land
+/// separately; the same apply replaces a stored default that is disabled.
+pub async fn set_default_behavior_on(
+    access: &ConfigAccess,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<()> {
+    access
+        .transact("desktop.principal.default_behavior", |txn| {
+            Box::pin(async move { set_default_behavior_in_txn(txn, agent_did, behavior_id).await })
+        })
+        .await
+}
+
+#[cfg(test)]
+pub async fn set_default_behavior(
+    node: &EmbeddedNode,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<()> {
+    ConfigAccess::transact_local(node, None, "desktop.principal.default_behavior", |txn| {
+        Box::pin(async move { set_default_behavior_in_txn(txn, agent_did, behavior_id).await })
+    })
+    .await
+}
+
+async fn set_default_behavior_in_txn(
+    txn: &gents::config_client::ConfigApplyTxn<'_>,
+    agent_did: &str,
+    behavior_id: &str,
+) -> Result<()> {
+    use anyhow::Context;
+    use gents::config_client::read_desired_state_record_in_txn;
+    let (_, mut principal) =
+        read_desired_state_record_in_txn(txn, Collection::AgentPrincipal, agent_did, agent_did)
+            .await?
+            .context("default behavior requires an existing principal")?;
+    let (_, mut behavior) =
+        read_desired_state_record_in_txn(txn, Collection::AgentBehavior, agent_did, behavior_id)
+            .await?
+            .with_context(|| format!("AgentBehavior {behavior_id:?} does not exist"))?;
+    principal["default_behavior_id"] = behavior_id.into();
+    behavior["enabled"] = true.into();
+    let plan = DesiredStateApplyPlan::new(
+        [
+            (Collection::AgentBehavior, behavior),
+            (Collection::AgentPrincipal, principal),
+        ]
+        .into_iter()
+        .map(|(collection, value)| DesiredStateApplyDocument {
+            collection,
+            add: value.clone(),
+            update: value,
+        })
+        .collect(),
+    )?;
+    apply_desired_state_plan(txn, &plan).await?;
+    Ok(())
+}
+
 /// Apply supplied canonical components under an existing principal. The required
 /// PackConfig principal is scope-only: every field except agent_did must have its
 /// canonical default. Principal settings use upsert_agent_principal instead.
@@ -289,6 +350,71 @@ mod tests {
         .await?;
         Ok(())
     }
+    #[tokio::test]
+    async fn setting_the_default_enables_it_and_recovers_a_stored_disabled_default() -> Result<()> {
+        let node = EmbeddedNode::builder().build().await?;
+        gents::ensure_runtime_schemas(&node).await?;
+        let owner = "did:test:default";
+        let seed: gents::document_config::PackConfig = serde_json::from_value(json!({
+            "agent_principal":{"agent_did":owner,"default_behavior_id":"first","tags":["keep"]},
+            "inference_backends":[{"agent_did":owner,"backend_id":"backend","name":"Backend","provider_kind":"OpenAiCompatible","endpoint":"http://localhost:8000/v1","auth":{"kind":"unauthenticated"}}],
+            "inference_profiles":[{"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model"}],
+            "agent_behaviors":[
+                {"agent_did":owner,"behavior_id":"first","inference_profile_id":"profile"},
+                {"agent_did":owner,"behavior_id":"second","inference_profile_id":"profile","enabled":false}
+            ]
+        }))?;
+        let plan = DesiredStateApplyPlan::from_pack_config(&seed)?;
+        ConfigAccess::transact_local(&node, None, "desktop.default.seed", |txn| {
+            let plan = &plan;
+            Box::pin(async move {
+                apply_desired_state_plan(txn, plan).await?;
+                Ok(())
+            })
+        })
+        .await?;
+        // A default stored disabled before the rule: every validated apply
+        // over this principal now fails until the default changes.
+        ConfigAccess::write_local(
+            &node,
+            "test.default.stale",
+            r#"mutation { update_AgentBehavior(
+                filter: { agent_did: { _eq: "did:test:default" }, behavior_id: { _eq: "first" } },
+                input: { enabled: false }
+            ) { _docID } }"#,
+        )
+        .await?;
+
+        assert!(set_default_behavior(&node, owner, "missing").await.is_err());
+        set_default_behavior(&node, owner, "second").await?;
+        ConfigAccess::transact_local(&node, None, "desktop.default.verify", |txn| {
+            Box::pin(async move {
+                let (_, principal) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentPrincipal,
+                    "did:test:default",
+                    "did:test:default",
+                )
+                .await?
+                .unwrap();
+                assert_eq!(principal["default_behavior_id"], "second");
+                assert_eq!(principal["tags"], json!(["keep"]));
+                let (_, second) = read_desired_state_record_in_txn(
+                    txn,
+                    Collection::AgentBehavior,
+                    "did:test:default",
+                    "second",
+                )
+                .await?
+                .unwrap();
+                assert_eq!(second["enabled"], true);
+                Ok(())
+            })
+        })
+        .await?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn component_apply_is_partial_atomic_scoped_and_preserves_principal() -> Result<()> {
         let node = EmbeddedNode::builder().build().await?;

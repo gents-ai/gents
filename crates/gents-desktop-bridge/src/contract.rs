@@ -96,8 +96,9 @@ pub fn command_inventory() -> Vec<CommandContract> {
         // interrupt-read / interrupt-control
         ("desktop_preview_interrupt_cascade", "interrupt-read"),
         ("desktop_interrupt_request", "interrupt-control"),
-        // config-write (save/delete/test/auth — 20 commands)
+        // config-write (save/delete/test/auth)
         ("desktop_agent_config_save", "config-write"),
+        ("desktop_default_behavior_set", "config-write"),
         ("desktop_config_components_apply", "config-write"),
         ("desktop_config_components_patch", "config-write"),
         ("desktop_behavior_save", "config-write"),
@@ -464,6 +465,7 @@ mod tests {
             ("desktop_preview_interrupt_cascade", "read"),
             ("desktop_interrupt_request", "mutate"),
             ("desktop_agent_config_save", "mutate"),
+            ("desktop_default_behavior_set", "mutate"),
             ("desktop_config_components_apply", "mutate"),
             ("desktop_config_components_patch", "mutate"),
             ("desktop_behavior_save", "mutate"),

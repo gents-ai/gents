@@ -101,7 +101,8 @@ pub async fn delete_scoped_document_local(
 pub use behavior::{delete_agent_behavior_on, delete_agent_context_on, upsert_agent_behavior_on};
 pub use inference::{delete_inference_backend_on, upsert_inference_backend_on};
 pub use principal::{
-    apply_config_components_on, patch_config_components_on, upsert_agent_principal_on,
+    apply_config_components_on, patch_config_components_on, set_default_behavior_on,
+    upsert_agent_principal_on,
 };
 pub use profile::{delete_inference_profile_on, upsert_inference_profile_on};
 pub use skill::{delete_skill_on, upsert_skill_on};

@@ -32,6 +32,7 @@ type MockApi = Record<string, ReturnType<typeof vi.fn>>;
 function harness() {
   const api: MockApi = {
     saveAgentConfig: vi.fn().mockResolvedValue({}),
+    setDefaultBehavior: vi.fn().mockResolvedValue({}),
     saveBehaviorConfig: vi.fn().mockResolvedValue({}),
     patchConfigComponents: vi.fn().mockResolvedValue({}),
     applyConfigComponents: vi.fn().mockResolvedValue({}),
@@ -711,13 +712,113 @@ describe("configuration panels", () => {
     );
     await user.click(await screen.findByRole("menuitem", { name: "Make default" }));
     await waitFor(() =>
-      expect(api.saveAgentConfig).toHaveBeenCalledWith({
-        document: expect.objectContaining({
-          agent_did: deployment.agentDid,
-          default_behavior_id: "ops",
-        }),
+      expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+        agentDid: deployment.agentDid,
+        behaviorId: "ops",
       }),
     );
+    expect(api.saveAgentConfig).not.toHaveBeenCalled();
+  });
+
+  describe("a default behavior is enabled", () => {
+    const withOps = (changes: Partial<(typeof deployment.behaviors)[number]>) => ({
+      ...deployment,
+      behaviors: deployment.behaviors.map((b) =>
+        b.behaviorId === "ops" ? { ...b, ...changes } : b,
+      ),
+    });
+
+    it("makes a disabled behavior the default and enables it in one call", async () => {
+      const { api, shell } = harness();
+      render(<BehaviorsPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const user = userEvent.setup();
+      await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
+      const item = await screen.findByRole("menuitem", { name: /^Make default/ });
+      expect(item).toHaveTextContent("Also enables it");
+      await user.click(item);
+      await waitFor(() =>
+        expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+          agentDid: deployment.agentDid,
+          behaviorId: "ops",
+        }),
+      );
+      expect(api.patchConfigComponents).not.toHaveBeenCalled();
+      expect(api.saveAgentConfig).not.toHaveBeenCalled();
+    });
+
+    it("offers Default to a disabled behavior with no instructions", async () => {
+      const { api, shell } = harness();
+      render(
+        <BehaviorsPanel
+          shell={shell}
+          deployment={withOps({ enabled: false, contextId: null })}
+        />,
+      );
+      const user = userEvent.setup();
+      await user.click(screen.getAllByRole("button", { name: "More for Ops" })[0]!);
+      const item = await screen.findByRole("menuitem", { name: /^Make default/ });
+      expect(item).not.toHaveAttribute("aria-disabled");
+      await user.click(item);
+      await waitFor(() =>
+        expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+          agentDid: deployment.agentDid,
+          behaviorId: "ops",
+        }),
+      );
+    });
+
+    it("refuses to turn off the current default and explains why", async () => {
+      const { api, shell } = harness();
+      render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+      const toggle = screen.getAllByRole("switch", { name: "Default is enabled" })[0]!;
+      expect(toggle).toHaveAttribute("aria-disabled", "true");
+      expect(toggle).toHaveAttribute(
+        "aria-description",
+        "The default behavior stays enabled. Choose another default before turning it off.",
+      );
+      await userEvent.setup().click(toggle);
+      expect(api.patchConfigComponents).not.toHaveBeenCalled();
+      /* another behavior still turns off */
+      expect(
+        screen.getAllByRole("switch", { name: "Ops is enabled" })[0],
+      ).toBeEnabled();
+    });
+
+    it("sets a new agent default in one call before saving the other fields", async () => {
+      const { api, shell } = harness();
+      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
+      await user.click(await screen.findByRole("option", { name: /^Ops/ }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(api.saveAgentConfig).toHaveBeenCalled());
+      expect(api.setDefaultBehavior).toHaveBeenCalledWith({
+        agentDid: deployment.agentDid,
+        behaviorId: "ops",
+      });
+      expect(api.setDefaultBehavior.mock.invocationCallOrder[0]).toBeLessThan(
+        api.saveAgentConfig.mock.invocationCallOrder[0]!,
+      );
+      expect(api.patchConfigComponents).not.toHaveBeenCalled();
+    });
+
+    it("shows the publication refusal when a default cannot be set", async () => {
+      const { api, shell } = harness();
+      api.setDefaultBehavior.mockRejectedValue(
+        new Error(
+          'AgentBehavior ops field context_id references missing AgentContext "gone"',
+        ),
+      );
+      render(<AgentPanel shell={shell} deployment={withOps({ enabled: false })} />);
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("combobox", { name: "Default behavior" }));
+      await user.click(await screen.findByRole("option", { name: /^Ops/ }));
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "references missing AgentContext",
+      );
+      expect(api.saveAgentConfig).not.toHaveBeenCalled();
+    });
   });
 
   it("patches only the changed context field and the behavior in one call", async () => {

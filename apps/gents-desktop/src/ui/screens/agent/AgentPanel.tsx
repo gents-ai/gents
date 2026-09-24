@@ -7,6 +7,7 @@ import { useDraft } from "./draft";
 import { Fact, Group, Row } from "./rows";
 import { LocalServer } from "./LocalServer";
 import { AgentCard } from "./AgentCard";
+import { saveDefault } from "./BehaviorsPanel";
 
 export function AgentPanel({
   shell,
@@ -18,7 +19,9 @@ export function AgentPanel({
   const agent = deployment.agentPrincipal;
   const behaviors = deployment.behaviors.map((b) => ({
     value: b.behaviorId,
-    label: b.displayName,
+    label: b.enabled
+      ? b.displayName
+      : `${b.displayName} · disabled, enabled when saved as default`,
   }));
   const d = useDraft(
     {
@@ -30,6 +33,10 @@ export function AgentPanel({
     async (next) => {
       if (!next.displayName.trim()) throw new Error("Display name is required");
       if (!next.defaultBehaviorId) throw new Error("Default behavior is required");
+      /* a new default lands with its enablement first; the principal's other
+         fields then save against an already valid default */
+      if (next.defaultBehaviorId !== agent.defaultBehaviorId)
+        await saveDefault(shell, deployment, next.defaultBehaviorId);
       await shell.saveAgentConfig({
         document: {
           agent_did: agent.agentDid,

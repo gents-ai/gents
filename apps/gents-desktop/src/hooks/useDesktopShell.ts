@@ -252,6 +252,7 @@ export function useDesktopShell({
 
   const {
     onSaveAgentConfig,
+    onSetDefaultBehavior,
     onSaveBackendConfig,
     onPatchConfigComponents,
     onApplyConfigComponents,
@@ -418,6 +419,7 @@ export function useDesktopShell({
     onRetryMessage,
     onRenameSessionTitle,
     onSaveAgentConfig,
+    onSetDefaultBehavior,
     onSaveBehaviorConfig,
     onDeleteSkillConfig,
     onDeleteContextConfig,

@@ -1532,6 +1532,28 @@ export function createDesktopUiHarness(
       };
       return snapshot();
     },
+    async setDefaultBehavior(request) {
+      if (!deployment.behaviors.some((b) => b.behaviorId === request.behaviorId)) {
+        throw new Error(`AgentBehavior "${request.behaviorId}" does not exist`);
+      }
+      deployment = {
+        ...deployment,
+        behaviors: deployment.behaviors.map((b) => ({
+          ...b,
+          enabled: b.behaviorId === request.behaviorId ? true : b.enabled,
+          isDefault: b.behaviorId === request.behaviorId,
+        })),
+        agentPrincipal: {
+          ...deployment.agentPrincipal,
+          defaultBehaviorId: request.behaviorId,
+        },
+        principalConfig: deployment.principalConfig
+          ? { ...deployment.principalConfig, default_behavior_id: request.behaviorId }
+          : deployment.principalConfig,
+      };
+      notify("config");
+      return snapshot();
+    },
     async saveBehaviorConfig(request) {
       if (scenario === "save-error") {
         throw new Error("Harness rejected behavior save for sad-path coverage.");

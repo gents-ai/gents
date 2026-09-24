@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
-use super::serde_helpers::{
-    default_display_name_for_did, first_row_with_doc_id, normalize_optional_string,
-};
+use super::serde_helpers::first_row_with_doc_id;
 
 /// DefraDB DID identity for the runtime principal. One active instance is an
 /// operating convention; runtime enforcement is deferred to #1435. No host identity.
@@ -80,20 +78,26 @@ pub(crate) async fn load_agent_principal_record(
     Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentPrincipal"))
 }
 
-pub async fn upsert_agent_principal(
+/// Raw fixture writer for tests that stage a principal before its behaviors.
+/// Production principals publish through the desired-state plan, which
+/// validates the default behavior with the documents it names.
+#[cfg(test)]
+pub(crate) async fn upsert_agent_principal(
     node: &EmbeddedNode,
     agent_did: &str,
     display_name: Option<&str>,
     default_behavior_id: Option<&str>,
     enabled: bool,
 ) -> Result<()> {
+    use super::serde_helpers::{default_display_name_for_did, normalize_optional_string};
     let escaped_agent_did = escape_graphql_string(agent_did);
     let fallback_display_name = default_display_name_for_did(agent_did);
     let display_name =
         normalize_optional_string(display_name).unwrap_or(fallback_display_name.as_str());
     let escaped_display_name = escape_graphql_string(display_name);
-    let escaped_default_behavior_id =
-        escape_graphql_string(normalize_optional_string(default_behavior_id).unwrap_or_default());
+    let default_behavior_id = normalize_optional_string(default_behavior_id)
+        .map(|id| format!("\"{}\"", escape_graphql_string(id)))
+        .unwrap_or_else(|| "null".to_string());
     let escaped_created_by = escape_graphql_string(agent_did);
     let created_at = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
@@ -103,14 +107,14 @@ pub async fn upsert_agent_principal(
                 add: {{
                     agent_did: "{escaped_agent_did}",
                     display_name: "{escaped_display_name}",
-                    default_behavior_id: "{escaped_default_behavior_id}",
+                    default_behavior_id: {default_behavior_id},
                     enabled: {enabled},
                     created_at: "{created_at}",
                     created_by: "{escaped_created_by}"
                 }},
                 update: {{
                     display_name: "{escaped_display_name}",
-                    default_behavior_id: "{escaped_default_behavior_id}",
+                    default_behavior_id: {default_behavior_id},
                     enabled: {enabled}
                 }}
             ) {{ _docID }}

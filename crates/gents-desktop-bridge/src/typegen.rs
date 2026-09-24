@@ -190,6 +190,7 @@ fn export_all(dir: &Path) -> Result<(), String> {
         MailboxItemRequest,
         SessionRenameRequest,
         AgentConfigSaveRequest,
+        DefaultBehaviorSetRequest,
         ConfigComponentsApplyRequest,
         ConfigComponentsPatchRequest,
         ConfigComponentPatch,

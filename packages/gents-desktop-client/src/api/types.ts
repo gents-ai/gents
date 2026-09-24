@@ -15,6 +15,7 @@ import type { InferenceBackendRecommendationRequest } from "../generated/Inferen
 import type { InferenceModelRecommendation } from "../generated/InferenceModelRecommendation.js";
 import type {
   AgentConfigSaveRequest,
+  DefaultBehaviorSetRequest,
   BackendDeleteRequest,
   BackendSaveRequest,
   BehaviorDeleteRequest,
@@ -175,6 +176,9 @@ export type DesktopApiAdapter = {
   ) => Promise<DesktopClientSnapshot>;
   saveAgentConfig: (
     request: AgentConfigSaveRequest,
+  ) => Promise<DesktopClientSnapshot>;
+  setDefaultBehavior: (
+    request: DefaultBehaviorSetRequest,
   ) => Promise<DesktopClientSnapshot>;
   saveBehaviorConfig: (
     request: BehaviorSaveRequest,

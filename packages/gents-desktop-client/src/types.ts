@@ -47,6 +47,7 @@ export {
 } from "./types/display.js";
 export type {
   AgentConfigSaveRequest,
+  DefaultBehaviorSetRequest,
   BackendSaveRequest,
   ConfigComponentsApplyRequest,
   ConfigComponentsPatchRequest,

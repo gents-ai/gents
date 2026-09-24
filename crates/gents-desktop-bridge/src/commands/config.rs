@@ -3,14 +3,22 @@ use gents_desktop_core::client::ClientCore;
 
 use super::super::types::{
     AgentConfigSaveRequest, BackendDeleteRequest, BackendSaveRequest, BehaviorDeleteRequest,
-    BehaviorSaveRequest, ContextDeleteRequest, InferenceProfileDeleteRequest,
-    InferenceProfileSaveRequest, ScheduleDeleteRequest, SkillDeleteRequest, SkillSaveRequest,
-    TaskDeleteRequest, ToolServiceDeleteRequest, ToolsDeleteRequest, ToolsSaveRequest,
-    TriggerDeleteRequest,
+    BehaviorSaveRequest, ContextDeleteRequest, DefaultBehaviorSetRequest,
+    InferenceProfileDeleteRequest, InferenceProfileSaveRequest, ScheduleDeleteRequest,
+    SkillDeleteRequest, SkillSaveRequest, TaskDeleteRequest, ToolServiceDeleteRequest,
+    ToolsDeleteRequest, ToolsSaveRequest, TriggerDeleteRequest,
 };
 
 pub async fn save_agent_config(core: &ClientCore, request: AgentConfigSaveRequest) -> Result<()> {
     core.save_agent_principal(&request.document).await
+}
+
+pub async fn set_default_behavior(
+    core: &ClientCore,
+    request: DefaultBehaviorSetRequest,
+) -> Result<()> {
+    core.set_default_behavior(&request.agent_did, &request.behavior_id)
+        .await
 }
 
 pub async fn save_behavior_config(core: &ClientCore, request: BehaviorSaveRequest) -> Result<()> {

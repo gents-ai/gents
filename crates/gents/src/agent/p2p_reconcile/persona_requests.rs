@@ -619,6 +619,7 @@ async fn load_catalog_view_from_node(
             AgentPrincipal(filter: {{ agent_did: {{ _eq: "{escaped_agent_did}" }} }}) {{
                 agent_did
                 enabled
+                default_behavior_id
             }}
             WorkspaceRoot {{
                 root_path
@@ -645,15 +646,22 @@ async fn load_catalog_view_from_node(
     let response =
         graphql_with_transaction_retry(node, &query, "query persona catalog sources").await?;
 
-    let known_agent_dids: BTreeSet<String> =
-        rows::<AgentPrincipalCatalogRow>(&response, "AgentPrincipal")?
-            .into_iter()
-            .filter(|row| row.enabled.unwrap_or(true))
-            .filter_map(|row| {
-                let did = row.agent_did?.trim().to_string();
-                (!did.is_empty()).then_some(did)
-            })
-            .collect();
+    let principals = rows::<AgentPrincipalCatalogRow>(&response, "AgentPrincipal")?;
+    let default_behavior_id = principals
+        .iter()
+        .filter(|row| row.agent_did.as_deref() == Some(agent_did))
+        .find_map(|row| row.default_behavior_id.as_deref())
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned);
+    let known_agent_dids: BTreeSet<String> = principals
+        .into_iter()
+        .filter(|row| row.enabled.unwrap_or(true))
+        .filter_map(|row| {
+            let did = row.agent_did?.trim().to_string();
+            (!did.is_empty()).then_some(did)
+        })
+        .collect();
 
     // WorkspaceRoot is global operator-local policy by schema. Preserve row
     // presence (including disabled rows), because explicit revocation must
@@ -701,9 +709,10 @@ async fn load_catalog_view_from_node(
                     .transpose()
                     .with_context(|| format!("decode Tools for behavior {behavior_id}"))?;
                 Ok(Some((
-                    behavior_id,
+                    behavior_id.clone(),
                     BehaviorRef {
                         enabled: row.enabled.unwrap_or(true),
+                        is_default: default_behavior_id.as_deref() == Some(behavior_id.as_str()),
                         protected: row.tags.as_deref().unwrap_or_default().iter().any(|tag| {
                             tag == crate::agent::persona_ops::SETUP_STEWARD_BEHAVIOR_TAG
                         }),
@@ -904,6 +913,8 @@ struct AgentPrincipalCatalogRow {
     agent_did: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    default_behavior_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1051,6 +1062,73 @@ mod tests {
             .behaviors
             .get("setup")
             .is_some_and(|behavior| behavior.protected));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn catalog_marks_the_principal_default() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_apply_node(&tempdir).await;
+        ensure_no_errors(
+            &node
+                .execute(
+                    r#"mutation {
+                        a: create_AgentBehavior(input: {
+                            agent_did: "did:key:agent", behavior_id: "main",
+                            inference_profile_id: "profile-1", enabled: true
+                        }) { _docID }
+                        b: create_AgentBehavior(input: {
+                            agent_did: "did:key:agent", behavior_id: "other",
+                            inference_profile_id: "profile-1", enabled: true
+                        }) { _docID }
+                        c: update_AgentPrincipal(
+                            filter: { agent_did: { _eq: "did:key:agent" } },
+                            input: { default_behavior_id: "main" }
+                        ) { _docID }
+                    }"#,
+                )
+                .await,
+            "seed default behavior",
+        )?;
+        let catalog = load_catalog_view_from_node(&node, "did:key:agent", None).await?;
+        assert!(catalog.behaviors["main"].is_default);
+        assert!(!catalog.behaviors["other"].is_default);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disabling_the_default_is_rejected_not_left_pending() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let node = build_node(&tempdir).await;
+        let mut doc = pending_create_doc("req-disable-default", "did:key:agent");
+        doc.op_raw = "disable".to_string();
+        doc.op = Some(PersonaOp::Disable);
+        doc.behavior_id = Some("main".to_string());
+        let mut catalog = happy_catalog("did:key:agent");
+        catalog.behaviors.insert(
+            "main".to_string(),
+            BehaviorRef {
+                enabled: true,
+                is_default: true,
+                ..Default::default()
+            },
+        );
+        let store = FixtureStore {
+            all: vec![doc],
+            catalog_by_agent: BTreeMap::from([("did:key:agent".to_string(), catalog)]),
+            ..Default::default()
+        };
+
+        let outcome = reconcile_persona_tick(&store, &node).await?;
+        assert_eq!(
+            outcome.rejected,
+            BTreeSet::from(["req-disable-default".to_string()])
+        );
+        assert!(outcome.applied.is_empty());
+        assert_eq!(
+            store.rejected.lock().unwrap()[0].1,
+            r#"behavior_id "main" is the principal default; make another behavior default first"#
+        );
         Ok(())
     }
 

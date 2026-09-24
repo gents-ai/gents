@@ -16,7 +16,7 @@
         "tabbingIdentifier": "com.source-inc.gents.views",
         "width": 1480,
         "height": 920,
-        "minWidth": 1180,
+        "minWidth": 640,
         "minHeight": 720,
         "titleBarStyle": "Transparent",
         "hiddenTitle": true

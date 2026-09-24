@@ -465,6 +465,32 @@ Denies the desktop_context_delete command without any pre-configured scope.
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-default-behavior-set`
+
+</td>
+<td>
+
+Enables the desktop_default_behavior_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-default-behavior-set`
+
+</td>
+<td>
+
+Denies the desktop_default_behavior_set command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-event-source-delete`
 
 </td>

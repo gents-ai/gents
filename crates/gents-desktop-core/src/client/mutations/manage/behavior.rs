@@ -243,6 +243,21 @@ mod tests {
                 assert!(delete_agent_behavior(&node, "did:test:alpha", "review")
                     .await
                     .is_err());
+                let disable = super::super::principal::patch_config_components(
+                    &node,
+                    "did:test:alpha",
+                    &[(
+                        gents::config_client::patch::SelfConfigTarget::AgentBehavior,
+                        "review".into(),
+                        vec![("enabled".into(), Some(json!(false)))],
+                    )],
+                )
+                .await
+                .unwrap_err();
+                assert!(
+                    format!("{disable:#}").contains("must be enabled"),
+                    "{disable:#}"
+                );
             }
         }
         assert_eq!(

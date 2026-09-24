@@ -313,6 +313,8 @@ pub use descendant_graph::{
     DescendantGraphAccess, DescendantMaterializationState, DescendantPage, DescendantQuery,
     DescendantScope, MAX_DESCENDANT_PAGE_LIMIT,
 };
+#[cfg(test)]
+pub(crate) use document_config::upsert_agent_principal;
 pub use document_config::{
     chain_key_binding_by_id_query, create_chain_key_binding_mutation,
     default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
@@ -321,12 +323,11 @@ pub use document_config::{
     list_chain_key_bindings_query, list_datastore_tool_surfaces, list_eth_tools,
     list_inference_profile_records, load_agent_behavior, load_agent_principal,
     load_inference_profile, merge_datastore_tool_surfaces, upsert_agent_behavior,
-    upsert_agent_principal, upsert_chain_key_binding, upsert_chain_key_binding_mutation,
-    upsert_inference_profile, AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument,
-    ConfigReferences, DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile,
-    MergedSurfaceTools, QueryToolDecl, SubagentTargetDocument, SurfaceToolDecl, Tools,
-    WriteToolDecl, WriteToolField, WriteToolFieldFill, WriteToolOutputObligation,
-    WriteToolOutputObligationScope,
+    upsert_chain_key_binding, upsert_chain_key_binding_mutation, upsert_inference_profile,
+    AgentBehavior as AgentBehaviorDocument, ChainKeyBindingDocument, ConfigReferences,
+    DatastoreToolSurfaceDocument, EthToolDocument, InferenceProfile, MergedSurfaceTools,
+    QueryToolDecl, SubagentTargetDocument, SurfaceToolDecl, Tools, WriteToolDecl, WriteToolField,
+    WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
 };
 pub use external_adapter_capture::{
     import_external_adapter_capture_to_derived_view, ExternalAdapterCapture, ExternalAdapterImport,
