@@ -346,7 +346,8 @@ fn text_lines(value: &str) -> Vec<&str> {
 }
 
 fn applied_diff(body: &str) -> Vec<ToolDiffLineView> {
-    body.lines()
+    let mut lines: Vec<ToolDiffLineView> = body
+        .lines()
         .filter_map(|line| {
             let kind = match line.as_bytes().first()? {
                 b'+' => ToolDiffLineKind::Added,
@@ -361,7 +362,14 @@ fn applied_diff(body: &str) -> Vec<ToolDiffLineView> {
             }
             Some(diff_line(kind, text.strip_prefix(' ').unwrap_or(text)))
         })
-        .collect()
+        .collect();
+    while lines
+        .last()
+        .is_some_and(|line| line.kind == ToolDiffLineKind::Context && line.text.is_empty())
+    {
+        lines.pop();
+    }
+    lines
 }
 
 fn requested_diff(old: &str, new: &str, operation: Option<&str>) -> Vec<ToolDiffLineView> {
@@ -663,7 +671,6 @@ mod tests {
                 (ToolDiffLineKind::Added, "fn c2() {}".to_string()),
                 (ToolDiffLineKind::Added, "fn e() {}".to_string()),
                 (ToolDiffLineKind::Context, "fn d() {}".to_string()),
-                (ToolDiffLineKind::Context, "".to_string()),
             ]
         );
     }

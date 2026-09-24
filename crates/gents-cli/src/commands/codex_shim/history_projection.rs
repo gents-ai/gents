@@ -294,12 +294,8 @@ fn project_message_turns(messages: Vec<MessageRow>) -> Vec<codex::Turn> {
             if current_id.is_none() {
                 current_id = Some(format!("gents-message-turn-{}", message.doc_id));
             }
-            saw_assistant |= append_assistant_message_items(
-                &mut current_items,
-                message.sequence,
-                &message,
-                true,
-            );
+            append_assistant_message_items(&mut current_items, message.sequence, &message, true);
+            saw_assistant = true;
         }
     }
 
@@ -1223,6 +1219,41 @@ mod tests {
                 if text == "Hello from stored assistant JSON."
                     && *phase == Some(MessagePhase::FinalAnswer)
         )));
+    }
+
+    #[test]
+    fn an_answer_with_only_opaque_reasoning_still_completes_its_turn() {
+        let turns = project_message_turns(vec![
+            message_row(
+                "user-header",
+                None,
+                1,
+                gents_protocol::message::Message::user("Think quietly."),
+            ),
+            message_row(
+                "assistant-header",
+                None,
+                2,
+                gents_protocol::message::Message::Assistant {
+                    id: None,
+                    content: vec![gents_protocol::message::AssistantContent::Reasoning(
+                        gents_protocol::message::Reasoning {
+                            id: None,
+                            content: vec![gents_protocol::message::ReasoningContent::Encrypted(
+                                "ciphertext".into(),
+                            )],
+                        },
+                    )],
+                },
+            ),
+        ]);
+
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].status, codex::TurnStatus::Completed);
+        assert!(!turns[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, codex::ThreadItem::Reasoning { .. })));
     }
 
     #[test]
