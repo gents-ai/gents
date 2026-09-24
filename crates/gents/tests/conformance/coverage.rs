@@ -580,11 +580,6 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             &snapshot.mailbox_reply_cases,
         ),
         (
-            "mailbox_handoff_cases",
-            "MailboxHandoffCases",
-            &snapshot.mailbox_handoff_cases,
-        ),
-        (
             "invalid_tool_progress_cases",
             "InvalidToolProgressCases",
             &snapshot.invalid_tool_progress_cases,
@@ -886,6 +881,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "recovery_sweep_cases".to_string(),
             "RecoverySweepCases".to_string(),
+        ));
+    }
+    if !snapshot.mailbox_handoff_cases.is_empty() {
+        emitted.insert((
+            "mailbox_handoff_cases".to_string(),
+            "MailboxHandoffCases".to_string(),
         ));
     }
     if !snapshot.reserved_child_materialization_cases.is_empty() {
