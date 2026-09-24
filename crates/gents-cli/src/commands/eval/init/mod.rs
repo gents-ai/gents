@@ -13,3 +13,5 @@ mod dossier;
 mod draft;
 #[cfg_attr(not(test), allow(dead_code))]
 mod validate;
+#[cfg_attr(not(test), allow(dead_code))]
+mod write;

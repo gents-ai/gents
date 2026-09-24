@@ -271,7 +271,7 @@ pub(crate) fn render(pack_dir: &Path, behavior: Option<&str>) -> Result<Dossier>
 /// The directory pack's manifest and the bytes of every asset it declares:
 /// the manifest read as `resolve_subject_pack` reads a directory's, the
 /// assets those the pack's digest covers.
-fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
+pub(super) fn read_pack(pack_dir: &Path) -> Result<(PackManifest, BTreeMap<String, Vec<u8>>)> {
     let manifest_path = pack_dir.join("manifest.json");
     let manifest: PackManifest = serde_json::from_slice(
         &std::fs::read(&manifest_path)
