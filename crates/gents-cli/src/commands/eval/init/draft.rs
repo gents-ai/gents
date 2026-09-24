@@ -53,16 +53,17 @@ pub(crate) fn parse_reply(reply: &str) -> Result<Option<Draft>, String> {
     }))
 }
 
-/// The bodies of the reply's fenced `json` blocks: a line that is exactly
-/// ```` ```json ```` up to the next line that is exactly ```` ``` ````. An
-/// unterminated block runs to the end of the reply.
+/// The bodies of the reply's fenced `json` blocks: a line that is
+/// ```` ```json ```` (any case, spaces allowed around `json`) up to the next
+/// line that is exactly ```` ``` ````. An unterminated block runs to the end
+/// of the reply.
 fn json_blocks(reply: &str) -> Vec<String> {
     let mut blocks = Vec::new();
     let mut current: Option<Vec<&str>> = None;
     for line in reply.lines() {
         let fence = line.trim();
         match current.as_mut() {
-            None if fence == "```json" => current = Some(Vec::new()),
+            None if is_json_fence(fence) => current = Some(Vec::new()),
             None => {}
             Some(_) if fence == "```" => {
                 blocks.push(current.take().unwrap_or_default().join("\n"));
@@ -74,6 +75,14 @@ fn json_blocks(reply: &str) -> Vec<String> {
         blocks.push(lines.join("\n"));
     }
     blocks
+}
+
+/// ```` ```json ````, ```` ```JSON ```` or ```` ``` json ````: an opening
+/// fence whose info string is `json` in any case.
+fn is_json_fence(fence: &str) -> bool {
+    fence
+        .strip_prefix("```")
+        .is_some_and(|info| info.trim().eq_ignore_ascii_case("json"))
 }
 
 #[cfg(test)]
@@ -92,6 +101,22 @@ mod tests {
             parse_reply("What must the behavior never do?\n```\nnot json\n```"),
             Ok(None)
         );
+    }
+
+    #[test]
+    fn a_fence_is_json_in_any_case_and_after_a_space() {
+        let body = json!({"definition": {}, "cases": []}).to_string();
+        for fence in ["```JSON", "```Json", "``` json", "  ``` JSON  "] {
+            let reply = format!("The draft.\n{fence}\n{body}\n```\n");
+            let draft = parse_reply(&reply)
+                .unwrap_or_else(|error| panic!("{fence}: {error}"))
+                .unwrap_or_else(|| panic!("{fence} is a json fence"));
+            assert!(draft.cases.is_empty(), "{fence}");
+        }
+        for fence in ["```jsonc", "```js", "```", "``` yaml"] {
+            let reply = format!("{fence}\n{body}\n```\n");
+            assert_eq!(parse_reply(&reply), Ok(None), "{fence}");
+        }
     }
 
     #[test]

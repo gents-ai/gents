@@ -7,7 +7,7 @@ use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 use crate::eval::OutcomeKind;
 
-/// Params: `{ "name": "<capture name>", "min": <u64>, "max": <u64 | absent> }`.
+/// Params: `{ "name": "<capture name>", "min": <u64>, "max": <u64 | null | absent> }`.
 /// Passes when `min <= rows <= max`, with no upper bound when `max` is absent.
 ///
 /// The `reason_code` in `raw` is the contract on the pass path: `in_range`
@@ -45,7 +45,7 @@ impl Check for CapturedRowsCount {
                 "properties": {
                     "name": {"type": "string", "description": "the capture name"},
                     "min": {"type": "integer", "minimum": 0},
-                    "max": {"type": "integer", "minimum": 0}
+                    "max": {"type": ["integer", "null"], "minimum": 0}
                 },
                 "required": ["name", "min"],
                 "additionalProperties": false

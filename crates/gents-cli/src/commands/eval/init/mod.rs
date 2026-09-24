@@ -13,7 +13,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use gents::eval::checks::CheckRegistry;
 
 use self::contract::{first_turn, MAX_VALIDATION_ROUNDS, VALIDATION_PREFIX};
@@ -77,7 +77,7 @@ pub(crate) struct InitOutcome {
 /// failed (an error carrying the last messages; nothing written).
 pub(crate) async fn interview(
     turn: &mut dyn Turn,
-    lines: &mut dyn Iterator<Item = String>,
+    lines: &mut dyn Iterator<Item = std::io::Result<String>>,
     ctx: &InitContext<'_>,
     out: &mut dyn Write,
 ) -> Result<InitOutcome> {
@@ -96,7 +96,7 @@ pub(crate) async fn interview(
         }
         let parsed = parse_reply(&reply);
         if let Ok(None) = parsed {
-            let Some(line) = next_line(lines) else {
+            let Some(line) = next_line(lines).context("reading the operator's answer")? else {
                 return Ok(InitOutcome {
                     written: None,
                     assembled: None,
@@ -138,17 +138,37 @@ pub(crate) async fn interview(
 }
 
 /// The operator's next non-blank line, trimmed; `None` at the end of input
-/// or on `/quit` or `/exit`.
-fn next_line(lines: &mut dyn Iterator<Item = String>) -> Option<String> {
+/// or on `/quit` or `/exit`. A failed read is an error, not the end.
+fn next_line(
+    lines: &mut dyn Iterator<Item = std::io::Result<String>>,
+) -> std::io::Result<Option<String>> {
     for line in lines {
-        let line = line.trim();
-        match line {
+        let line = line?;
+        match line.trim() {
             "" => continue,
-            "/quit" | "/exit" => return None,
-            line => return Some(line.to_owned()),
+            "/quit" | "/exit" => return Ok(None),
+            line => return Ok(Some(line.to_owned())),
         }
     }
-    None
+    Ok(None)
+}
+
+/// The operator's answers, one `read_line` each after a `> ` prompt on
+/// stderr: the iterator ends at a clean end of input and yields a read's
+/// error, which the interview reports.
+fn operator_lines(
+    mut read_line: impl FnMut(&mut String) -> std::io::Result<usize>,
+) -> impl Iterator<Item = std::io::Result<String>> {
+    std::iter::from_fn(move || {
+        eprint!("> ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        match read_line(&mut line) {
+            Ok(0) => None,
+            Ok(_) => Some(Ok(line)),
+            Err(error) => Some(Err(error)),
+        }
+    })
 }
 
 /// Validation steps 1 to 7 over a reply that carries a draft: parsed,
@@ -320,15 +340,7 @@ pub(crate) async fn run(
         timeout_secs: args.timeout_secs,
         poll_secs: args.poll_secs,
     };
-    let mut lines = std::iter::from_fn(|| {
-        eprint!("> ");
-        let _ = std::io::stderr().flush();
-        let mut line = String::new();
-        match std::io::stdin().read_line(&mut line) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(line),
-        }
-    });
+    let mut lines = operator_lines(|line| std::io::stdin().read_line(line));
     let result = async {
         let outcome = interview(&mut turn, &mut lines, &init, out).await?;
         if outcome.written.is_none() {
@@ -396,7 +408,6 @@ async fn install_author(
     owner: &str,
     profile: &str,
 ) -> Result<gents::config_client::DesiredStateApplyCounts> {
-    use anyhow::Context as _;
     let pack = gents::pack::resolve_pack("eval_author")?;
     let config = gents::pack::load_pack_config(
         &pack.manifest,
@@ -464,10 +475,10 @@ mod tests {
         }
     }
 
-    fn lines(lines: &[&str]) -> std::vec::IntoIter<String> {
+    fn lines(lines: &[&str]) -> std::vec::IntoIter<std::io::Result<String>> {
         lines
             .iter()
-            .map(|line| (*line).to_owned())
+            .map(|line| Ok((*line).to_owned()))
             .collect::<Vec<_>>()
             .into_iter()
     }
@@ -673,6 +684,35 @@ mod tests {
         };
         let error = preflight(&args).await.unwrap_err().to_string();
         assert!(error.contains("--force"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn a_failed_read_of_the_operators_answer_is_an_error() {
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let ctx = context(&registry, root.path().join("out"));
+        let mut turn = ScriptedTurn::new(["What must it get right?"]);
+        // Not UTF-8: `read_line` fails rather than reaching the end.
+        let mut input = &b"\xff\xfe\n"[..];
+        let mut lines = operator_lines(|line| std::io::BufRead::read_line(&mut input, line));
+        let error = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
+            .await
+            .err()
+            .expect("a read error ends the interview with an error");
+        assert!(
+            format!("{error:#}").contains("reading the operator's answer"),
+            "{error:#}"
+        );
+        assert!(!ctx.out.exists());
+
+        // A clean end of input still ends the interview with nothing written.
+        let mut turn = ScriptedTurn::new(["What must it get right?"]);
+        let mut input = &b""[..];
+        let mut lines = operator_lines(|line| std::io::BufRead::read_line(&mut input, line));
+        let outcome = interview(&mut turn, &mut lines, &ctx, &mut Vec::new())
+            .await
+            .unwrap();
+        assert!(outcome.written.is_none());
     }
 
     #[tokio::test]

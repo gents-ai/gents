@@ -156,5 +156,10 @@ mod catalog_tests {
         assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1})));
         assert!(!validator.is_valid(&serde_json::json!({"name": "items"})));
         assert!(!validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "extra": 1})));
+        // `max` is optional, and `null` means absent, as the params type
+        // reads it.
+        assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "max": 3})));
+        assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "max": null})));
+        assert!(!validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "max": -1})));
     }
 }
