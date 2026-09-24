@@ -368,6 +368,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 let inference_token_for_start = inference_token.clone();
                 let terminal_failure_reason = admission::terminal_failure_reason_observer();
                 let hook_for_start_interrupt = persistence_hook.clone();
+                let provider_profile = loop_config.provider_input_counter.profile();
                 let mut stream = admission::scope_call_with_token_and_failure_reason(
                     CallKind::Inference,
                     attempt_index,
@@ -416,6 +417,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             stream_writer,
                             lifecycle,
                             doc_id,
+                            provider_profile,
                         );
                         let mut lease_poll = tokio::time::interval(Duration::from_secs(1));
                         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);

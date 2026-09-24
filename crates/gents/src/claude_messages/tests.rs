@@ -34,7 +34,7 @@ fn lean_effort_cases_drive_the_real_messages_request() {
             "thinking": {"type": "enabled", "budget_tokens": 999},
             "temperature": 0.5,
         }));
-        let body = build_messages_body("claude-sonnet-5", &request);
+        let body = build_messages_body("claude-sonnet-5", &request).unwrap();
         assert_eq!(
             body["output_config"]["effort"].as_str(),
             case.selected_effort.as_deref(),
@@ -105,7 +105,7 @@ fn request_with_system_rows() -> CompletionRequest {
 
 #[test]
 fn messages_body_includes_gents_tools_and_system() {
-    let body = build_messages_body("claude-sonnet-5", &echo_request());
+    let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
     assert_eq!(body["model"], "claude-sonnet-5");
     assert_eq!(body["stream"], true);
     assert_eq!(body["max_tokens"], 128);
@@ -120,7 +120,7 @@ fn messages_body_includes_gents_tools_and_system() {
 /// is a wire-level prefix, not a rewrite of what the loop assembled.
 #[test]
 fn messages_body_system_leads_with_claude_code_identity_then_preamble() {
-    let body = build_messages_body("claude-sonnet-5", &echo_request());
+    let body = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
     let system = body["system"].as_array().expect("system array");
     assert_eq!(system.len(), 2, "{body}");
     assert_eq!(system[0]["type"], "text");
@@ -134,7 +134,7 @@ fn messages_body_system_is_identity_only_without_preamble() {
     for preamble in [None, Some(String::new()), Some("   ".to_string())] {
         let mut request = echo_request();
         request.preamble = preamble;
-        let body = build_messages_body("claude-sonnet-5", &request);
+        let body = build_messages_body("claude-sonnet-5", &request).unwrap();
         let system = body["system"].as_array().expect("system array");
         assert_eq!(system.len(), 1, "{body}");
         assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
@@ -143,7 +143,7 @@ fn messages_body_system_is_identity_only_without_preamble() {
 
 #[test]
 fn messages_body_routes_system_rows_after_identity_and_preamble() {
-    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows());
+    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
     let system = body["system"].as_array().expect("system");
     assert_eq!(system.len(), 3, "{body}");
     assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
@@ -155,7 +155,7 @@ fn messages_body_routes_system_rows_after_identity_and_preamble() {
 
 #[test]
 fn messages_body_marks_two_cache_breakpoints() {
-    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows());
+    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
     let system = body["system"].as_array().expect("system");
     assert_eq!(system.last().unwrap()["cache_control"]["type"], "ephemeral");
     assert!(system[0].get("cache_control").is_none());
@@ -171,7 +171,7 @@ fn messages_body_marks_two_cache_breakpoints() {
 
 #[test]
 fn messages_body_never_carries_a_system_prefixed_user_block() {
-    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows());
+    let body = build_messages_body("claude-sonnet-5", &request_with_system_rows()).unwrap();
     let leaked = body["messages"].as_array().unwrap().iter().any(|m| {
         m["content"].as_array().unwrap().iter().any(|b| {
             b["text"]
@@ -195,7 +195,7 @@ fn messages_body_omits_sampling_even_when_request_sets_it() {
         "frequency_penalty": 0.1,
         "presence_penalty": 0.1,
     }));
-    let body = build_messages_body("claude-sonnet-5", &request);
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
     assert_messages_body_has_no_sampling(&body);
     assert_eq!(body["tools"][0]["name"], "echo");
 }
@@ -256,7 +256,7 @@ fn messages_body_threads_tool_result() {
         ],
         vec![echo_tool()],
     );
-    let body = build_messages_body("claude-sonnet-5", &request);
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
     assert_eq!(body["messages"][0]["content"][0]["type"], "tool_use");
     assert_eq!(body["messages"][1]["content"][0]["type"], "tool_result");
     assert_eq!(body["messages"][1]["content"][0]["content"], "ECHOED");
@@ -267,9 +267,9 @@ fn messages_body_threads_tool_result() {
 fn messages_body_omits_tools_key_when_surface_is_empty() {
     let mut request = echo_request();
     request.tools.clear();
-    let body = build_messages_body("claude-sonnet-5", &request);
+    let body = build_messages_body("claude-sonnet-5", &request).unwrap();
     assert!(body.get("tools").is_none(), "{body}");
-    let with_tools = build_messages_body("claude-sonnet-5", &echo_request());
+    let with_tools = build_messages_body("claude-sonnet-5", &echo_request()).unwrap();
     assert_eq!(with_tools["tools"][0]["name"], "echo");
     assert_eq!(with_tools["tools"].as_array().map(Vec::len), Some(1));
 }

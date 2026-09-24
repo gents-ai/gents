@@ -8,6 +8,7 @@ use crate::llm::message::{
     UserContent,
 };
 use crate::llm::{HookAction, ToolCallHookAction};
+use gents_loop::provider_input::ProviderInputProfile;
 use serde_json::json;
 
 use super::*;
@@ -1326,7 +1327,13 @@ async fn publish_claimed_authored_input(
     let HookExecutionFixture {
         lifecycle, writer, ..
     } = fixture;
-    let mut processor = StreamProcessor::new(hook, writer, lifecycle, &request_doc_id);
+    let mut processor = StreamProcessor::new(
+        hook,
+        writer,
+        lifecycle,
+        &request_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady { context, prompt }))
         .await

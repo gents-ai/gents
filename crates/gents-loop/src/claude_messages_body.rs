@@ -3,7 +3,9 @@
 //! the real transport (native, in `gents`) builds the identical body to send.
 //! The SSE response parser and the OAuth-bearing HTTP client stay native.
 
-use gents_protocol::message::{AssistantContent, Message, ToolResultContent, UserContent};
+use gents_protocol::message::{
+    AssistantContent, Message, ReasoningContent, ToolResultContent, UserContent,
+};
 use rig::completion::{CompletionRequest, ToolDefinition};
 use serde_json::{json, Value};
 
@@ -19,7 +21,7 @@ pub const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's officia
 /// Anthropic Messages JSON body from a rig `CompletionRequest`. The history
 /// crosses the converter seam once (`rig_compat::from_rig_message`) and the
 /// body is assembled over the native message family.
-pub fn build_messages_body(model: &str, request: &CompletionRequest) -> Value {
+pub fn build_messages_body(model: &str, request: &CompletionRequest) -> anyhow::Result<Value> {
     let history: Vec<Message> = request
         .chat_history
         .iter()
@@ -31,11 +33,11 @@ pub fn build_messages_body(model: &str, request: &CompletionRequest) -> Value {
         request.max_tokens,
         &history,
         &request.tools,
-    );
+    )?;
     if let Some(params) = &request.additional_params {
         apply_reasoning_parameters(model, params, &mut body);
     }
-    body
+    Ok(body)
 }
 
 /// Lean `ClaudeMap.selectedEffort`: permit one supported effort field, not a
@@ -70,7 +72,7 @@ pub fn build_messages_body_native(
     max_tokens: Option<u64>,
     history: &[Message],
     tools: &[ToolDefinition],
-) -> Value {
+) -> anyhow::Result<Value> {
     let mut system: Vec<Value> = vec![json!({ "type": "text", "text": CLAUDE_CODE_IDENTITY })];
     if let Some(preamble) = preamble.map(str::trim).filter(|value| !value.is_empty()) {
         system.push(json!({ "type": "text", "text": preamble }));
@@ -80,7 +82,7 @@ pub fn build_messages_body_native(
     }
     mark_ephemeral(system.last_mut());
 
-    let mut messages = anthropic_messages(history);
+    let mut messages = anthropic_messages(history)?;
     if let Some(last) = messages.last_mut() {
         if let Some(blocks) = last.get_mut("content").and_then(Value::as_array_mut) {
             mark_ephemeral(blocks.last_mut());
@@ -110,7 +112,7 @@ pub fn build_messages_body_native(
     }
     // No sampling keys: live claude-sonnet-5 400s on `temperature` / `top_p`
     // / `top_k`; `additional_params` carries those and is not merged.
-    body
+    Ok(body)
 }
 
 fn mark_ephemeral(block: Option<&mut Value>) {
@@ -130,7 +132,7 @@ fn system_rows(history: &[Message]) -> Vec<String> {
         .collect()
 }
 
-fn anthropic_messages(history: &[Message]) -> Vec<Value> {
+fn anthropic_messages(history: &[Message]) -> anyhow::Result<Vec<Value>> {
     let mut out = Vec::new();
     for message in history {
         match message {
@@ -171,6 +173,9 @@ fn anthropic_messages(history: &[Message]) -> Vec<Value> {
                         AssistantContent::Text(text) if !text.text.is_empty() => {
                             blocks.push(json!({"type": "text", "text": text.text}));
                         }
+                        AssistantContent::Image(_) => {
+                            anyhow::bail!("unsupported assistant image in Claude replay");
+                        }
                         AssistantContent::ToolCall(call) => {
                             blocks.push(json!({
                                 "type": "tool_use",
@@ -178,6 +183,44 @@ fn anthropic_messages(history: &[Message]) -> Vec<Value> {
                                 "name": call.function.name,
                                 "input": call.function.arguments,
                             }));
+                        }
+                        AssistantContent::Reasoning(reasoning) => {
+                            for part in &reasoning.content {
+                                match part {
+                                    ReasoningContent::Text { text, signature } => {
+                                        let signature = signature
+                                            .as_deref()
+                                            .filter(|signature| !signature.is_empty())
+                                            .ok_or_else(|| {
+                                                anyhow::anyhow!(
+                                                    "Claude thinking replay requires a nonempty signature"
+                                                )
+                                            })?;
+                                        blocks.push(json!({
+                                            "type": "thinking",
+                                            "thinking": text,
+                                            "signature": signature,
+                                        }));
+                                    }
+                                    ReasoningContent::Redacted { data } if !data.is_empty() => {
+                                        blocks.push(json!({
+                                            "type": "redacted_thinking",
+                                            "data": data,
+                                        }));
+                                    }
+                                    ReasoningContent::Redacted { .. } => {
+                                        anyhow::bail!(
+                                            "Claude redacted thinking replay has no data"
+                                        );
+                                    }
+                                    ReasoningContent::Encrypted(_)
+                                    | ReasoningContent::Summary(_) => {
+                                        anyhow::bail!(
+                                            "unsupported native reasoning kind in Claude replay"
+                                        );
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -190,5 +233,5 @@ fn anthropic_messages(history: &[Message]) -> Vec<Value> {
             Message::System { .. } => {}
         }
     }
-    out
+    Ok(out)
 }
