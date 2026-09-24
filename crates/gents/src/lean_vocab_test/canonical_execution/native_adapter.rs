@@ -2902,6 +2902,193 @@ async fn every_generated_native_execution_script_runs_to_completion() {
     );
 }
 
+/// Fixture-time gate experiment: this binds a generated lease-ordering trace to
+/// the real transaction owner, not to host clock jumps or OS suspension.
+#[tokio::test]
+async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
+    use crate::config_client::ConfigApplyTxn;
+    use crate::lifecycle::{RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "renewal_wins_before_terminal_recovery")
+        })
+        .expect("Lean exports the native renewal/recovery ordering case");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution {
+        seed,
+        query_document,
+        operations,
+        expected_observations,
+        ..
+    } = case
+    else {
+        unreachable!()
+    };
+    let [renewal, recovery] = operations.as_slice() else {
+        panic!("generated gate case must contain renewal then recovery");
+    };
+    let [expected_after_renewal, expected_after_recovery] = expected_observations.as_slice() else {
+        panic!("generated gate case must observe both operations");
+    };
+    let LeanCanonicalExecutionOperation::RenewLease {
+        now: renewal_now,
+        generation,
+        expected_deadline,
+        ..
+    } = renewal
+    else {
+        panic!("first generated gate operation must renew");
+    };
+    let LeanCanonicalExecutionOperation::RecoverExpiredTerminal {
+        now: recovery_now,
+        expected_generation,
+        fresh_generation,
+        outcome,
+        selection,
+        items,
+        ..
+    } = recovery
+    else {
+        panic!("second generated gate operation must recover");
+    };
+    assert_eq!(expected_generation, generation);
+    assert!(
+        items.is_empty(),
+        "this gate trace has no recovered output items"
+    );
+    let choice = match selection {
+        LeanTerminalSelection::NoMessage => RecoverySelectionChoice::NoMessage,
+        LeanTerminalSelection::Message { .. } => {
+            panic!("this gate trace requires a no-message recovery selection")
+        }
+    };
+    let target = match outcome.as_str() {
+        "failed" => RequestLifecycleState::Failed,
+        other => panic!("gate fixture requires failed recovery, got {other}"),
+    };
+
+    let mut adapter = NativeCanonicalExecutionAdapter;
+    let mut native = adapter.initialize(seed).await.unwrap();
+    native.query_document = *query_document;
+    let node = Arc::clone(&native.node);
+    let request_doc_id = native.request_doc_id.clone();
+    let request = crate::graphql::escape_graphql_string(&request_doc_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
+        crate::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let row = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "test.generated_renewal_gate_stale_request",
+    )
+    .await
+    .unwrap();
+    let stale: AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
+        .unwrap()
+        .expect("generated native request");
+    let stale_expiry = stale.execution_lease_expires_at.as_deref().unwrap();
+    let physical_generation = symbolic_generation(*generation);
+    let physical_recovery_generation = symbolic_generation(*expected_generation);
+    let physical_fresh_generation = symbolic_generation(*fresh_generation);
+    assert_eq!(
+        DateTime::parse_from_rfc3339(stale_expiry)
+            .unwrap()
+            .with_timezone(&Utc),
+        native.fixture_time(*expected_deadline).unwrap()
+    );
+    assert_eq!(
+        stale.execution_generation.as_deref(),
+        Some(physical_generation.as_str())
+    );
+
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut renewal = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
+        1,
+        Arc::clone(&reached),
+        Arc::clone(&release),
+        crate::lifecycle::renew_execution_lease_once_at(
+            &node,
+            &request_doc_id,
+            &physical_generation,
+            native.fixture_time(*expected_deadline).unwrap(),
+            native.fixture_time(*renewal_now).unwrap(),
+        ),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            biased;
+            completed = &mut renewal => panic!("renewal completed before its held mutation: {completed:?}"),
+            _ = reached.notified() => {}
+        }
+    })
+    .await
+    .expect("renewal must reach the held write gate");
+
+    let queued = Arc::new(Notify::new());
+    let acquired = Arc::new(AtomicBool::new(false));
+    let mut recovery = Box::pin(ConfigApplyTxn::with_write_gate_observation(
+        Arc::clone(&queued),
+        Arc::clone(&acquired),
+        crate::lifecycle::recover_expired_generation_with_facts(
+            &node,
+            &stale,
+            &physical_recovery_generation,
+            stale_expiry,
+            physical_fresh_generation,
+            native.fixture_time(*recovery_now).unwrap(),
+            Some(choice),
+            Some(target),
+        ),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            biased;
+            completed = &mut recovery => panic!("stale recovery completed before queuing: {completed:?}"),
+            _ = queued.notified() => {}
+        }
+    })
+    .await
+    .expect("stale recovery must queue at the held write gate");
+    assert!(
+        !acquired.load(Ordering::Acquire),
+        "stale recovery must not acquire the gate before renewal commits"
+    );
+
+    release.notify_one();
+    let (renewed, fired) = tokio::time::timeout(std::time::Duration::from_secs(10), renewal)
+        .await
+        .expect("held renewal must finish after release");
+    assert!(
+        fired,
+        "renewal must pause after its real successful mutation"
+    );
+    assert_eq!(renewed.unwrap(), RenewalAttemptOutcome::Committed);
+    assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
+
+    let recovered = tokio::time::timeout(std::time::Duration::from_secs(10), recovery)
+        .await
+        .expect("queued stale recovery must finish after renewal")
+        .unwrap();
+    assert!(
+        acquired.load(Ordering::Acquire),
+        "recovery must acquire the gate after renewal releases it"
+    );
+    assert_eq!(recovered, RecoveryResult::Lost);
+    assert_eq!(
+        native.observe(false).await.unwrap(),
+        *expected_after_recovery
+    );
+    native.node.shutdown().await;
+}
+
 #[tokio::test]
 async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejection() {
     let case = crate::lean_vocab_test::lean_contract_snapshot()
