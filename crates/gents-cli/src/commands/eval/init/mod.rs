@@ -9,3 +9,7 @@
 // The interview command wires these; until then only their tests use them.
 #[cfg_attr(not(test), allow(dead_code))]
 mod dossier;
+#[cfg_attr(not(test), allow(dead_code))]
+mod draft;
+#[cfg_attr(not(test), allow(dead_code))]
+mod validate;
