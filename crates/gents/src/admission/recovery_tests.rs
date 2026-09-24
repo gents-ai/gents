@@ -154,19 +154,32 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
             probe_status: "healthy".into(),
             measured_unhealthy: false,
             config_fingerprint: "recovery-cas".into(),
+            connection_fingerprint: "recovery-cas".into(),
         },
-        super::super::controller::CapacityPool::new(1),
+        super::super::controller::CapacityPool::open(1, "recovery-cas"),
     );
     let mut holder = controller
         .clone()
-        .acquire(node.clone(), pending_call("holder-call"), None, None)
+        .acquire(
+            node.clone(),
+            pending_call("holder-call"),
+            "recovery-cas",
+            None,
+            None,
+        )
         .await
         .unwrap();
     let waiting_controller = controller.clone();
     let waiting_node = node.clone();
     let waiting = tokio::spawn(async move {
         waiting_controller
-            .acquire(waiting_node, pending_call("waiting-call"), None, None)
+            .acquire(
+                waiting_node,
+                pending_call("waiting-call"),
+                "recovery-cas",
+                None,
+                None,
+            )
             .await
     });
     let queued = tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -263,14 +276,16 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
             probe_status: "healthy".into(),
             measured_unhealthy: false,
             config_fingerprint: "recovery-cas".into(),
+            connection_fingerprint: "recovery-cas".into(),
         },
-        super::super::controller::CapacityPool::new(1),
+        super::super::controller::CapacityPool::open(1, "recovery-cas"),
     );
     let permit = controller
         .clone()
         .acquire(
             node.clone(),
             pending_call("aborted-finalizer-call"),
+            "recovery-cas",
             None,
             None,
         )

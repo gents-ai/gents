@@ -32,7 +32,16 @@ where
     <C::CompletionModel as CompletionModel>::Response: 'static,
     <C::CompletionModel as CompletionModel>::StreamingResponse: 'static,
 {
-    AdmittedCompletionClient::new(client, admission).completion_model(&behavior.model_name)
+    let connection =
+        crate::admission::backend_connection_fingerprint(&crate::backend_registry::BackendFields {
+            backend_id: behavior.backend_id.clone(),
+            backend_provider_kind: behavior.backend_provider_kind,
+            openai_wire_api: behavior.openai_wire_api,
+            backend_endpoint: behavior.backend_endpoint.clone(),
+            backend_auth: behavior.backend_auth.clone(),
+        });
+    AdmittedCompletionClient::new(client, admission, connection)
+        .completion_model(&behavior.model_name)
 }
 
 /// Build a loop config for one completion loop.

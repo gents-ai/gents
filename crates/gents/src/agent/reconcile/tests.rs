@@ -105,6 +105,7 @@ fn backend_admission_config(
         probe_status: crate::backend_registry::HEALTHY_PROBE_STATUS.to_string(),
         measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
+        connection_fingerprint: format!("{backend_id}:connection"),
     }
 }
 

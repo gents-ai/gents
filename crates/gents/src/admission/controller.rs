@@ -1,9 +1,9 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use defra_node::EmbeddedNode;
 use rig::completion::CompletionError;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio_util::sync::CancellationToken;
 
 use super::client::CallKind;
@@ -13,64 +13,194 @@ use super::persistence::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
     persist_terminal_call, spawn_persistence,
 };
+
 /// One backend's admission capacity, shared by every controller incarnation
-/// installed while the backend stays available (Lean
-/// `InferenceCall.Registry`). Calls admitted or queued under a replaced
-/// incarnation keep their permits and waiter units here, so a rewrite never
-/// leaves the backend without an admitting controller and never admits past
-/// the current capacity.
+/// and every open period of the backend (Lean `InferenceCall.Registry`).
+/// Calls admitted before a rewrite or an outage keep counting against it
+/// until they release; queued calls survive capacity-only rewrites.
 pub(super) struct CapacityPool {
-    semaphore: Arc<Semaphore>,
     ledger: Mutex<CapacityLedger>,
     waiters: AtomicUsize,
 }
 
-/// Tokio semaphores cannot hold negative permits, so a decrease below the
-/// permits currently held is recorded as `owed` and paid by forgetting
-/// returned permits. Resizing and permit return share this lock: otherwise a
-/// permit returned between `forget_permits` and the `owed` update would be
-/// admissible while the pool is still over capacity.
+/// Lean `InferenceCall.Registry.Ledger`. Tokio permits cannot go negative,
+/// so held permits above capacity are `owed` and paid by forgetting permits.
+/// A permit taken from the semaphore counts as admitted only once registered
+/// here: Tokio returns a permit it assigned to a dropped waiter directly to
+/// the semaphore, bypassing this ledger, so registration pays outstanding
+/// debt before admitting.
 struct CapacityLedger {
+    /// Replaced on reopening after an outage. Permits of a retired semaphore
+    /// return to the current one through `held`.
+    semaphore: Arc<Semaphore>,
+    open: bool,
     capacity: usize,
     owed: usize,
+    held: usize,
+    connection: String,
+}
+
+pub(super) enum AdmitError {
+    Closed,
+    NoPermits,
+    ConnectionChanged,
+}
+
+enum Registration {
+    Admitted(PoolPermit),
+    PaidDebt,
+    Rejected(AdmitError),
 }
 
 impl CapacityPool {
-    pub(super) fn new(capacity: usize) -> Arc<Self> {
+    pub(super) fn open(capacity: usize, connection: &str) -> Arc<Self> {
         Arc::new(Self {
-            semaphore: Arc::new(Semaphore::new(capacity)),
-            ledger: Mutex::new(CapacityLedger { capacity, owed: 0 }),
+            ledger: Mutex::new(CapacityLedger {
+                semaphore: Arc::new(Semaphore::new(capacity)),
+                open: true,
+                capacity,
+                owed: 0,
+                held: 0,
+                connection: connection.to_owned(),
+            }),
             waiters: AtomicUsize::new(0),
         })
     }
 
-    pub(super) fn resize(&self, capacity: usize) {
-        let mut ledger = self.ledger.lock().unwrap_or_else(|e| e.into_inner());
-        if capacity >= ledger.capacity {
+    fn ledger(&self) -> MutexGuard<'_, CapacityLedger> {
+        self.ledger.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Applies an available configuration: reopens a closed pool on a fresh
+    /// semaphore charged with the permits still held, or resizes an open one.
+    pub(super) fn configure(&self, capacity: usize, connection: &str) {
+        let mut ledger = self.ledger();
+        if !ledger.open {
+            let charged = ledger.held.min(capacity);
+            ledger.semaphore = Arc::new(Semaphore::new(capacity - charged));
+            ledger.owed = ledger.held - charged;
+            ledger.open = true;
+        } else if capacity >= ledger.capacity {
             let grow = capacity - ledger.capacity;
             let repaid = grow.min(ledger.owed);
             ledger.owed -= repaid;
-            self.semaphore.add_permits(grow - repaid);
+            ledger.semaphore.add_permits(grow - repaid);
         } else {
             let shrink = ledger.capacity - capacity;
-            ledger.owed += shrink - self.semaphore.forget_permits(shrink);
+            let forgotten = ledger.semaphore.forget_permits(shrink);
+            ledger.owed += shrink - forgotten;
         }
         ledger.capacity = capacity;
+        ledger.connection = connection.to_owned();
     }
 
     /// Fails every queued waiter and every later acquisition with
-    /// `BackendGone`. Permits already held stay valid until they drop.
+    /// `BackendGone`. Held permits stay counted until they drop.
     pub(super) fn close(&self) {
-        self.semaphore.close();
+        let mut ledger = self.ledger();
+        ledger.open = false;
+        ledger.owed = 0;
+        ledger.semaphore.close();
     }
 
-    fn return_permit(&self, permit: OwnedSemaphorePermit) {
-        let mut ledger = self.ledger.lock().unwrap_or_else(|e| e.into_inner());
+    pub(super) fn is_retired(&self) -> bool {
+        let ledger = self.ledger();
+        !ledger.open && ledger.held == 0
+    }
+
+    fn try_admit(self: &Arc<Self>, connection: &str) -> Result<PoolPermit, AdmitError> {
+        loop {
+            let semaphore = self.ledger().semaphore.clone();
+            let permit = match semaphore.clone().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(TryAcquireError::Closed) => return Err(AdmitError::Closed),
+                Err(TryAcquireError::NoPermits) => return Err(AdmitError::NoPermits),
+            };
+            match self.register(semaphore, permit, connection) {
+                Registration::Admitted(permit) => return Ok(permit),
+                Registration::PaidDebt => continue,
+                Registration::Rejected(error) => return Err(error),
+            }
+        }
+    }
+
+    async fn admit_waiting(self: &Arc<Self>, connection: &str) -> Result<PoolPermit, AdmitError> {
+        loop {
+            let semaphore = self.ledger().semaphore.clone();
+            let permit = semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|_| AdmitError::Closed)?;
+            match self.register(semaphore, permit, connection) {
+                Registration::Admitted(permit) => return Ok(permit),
+                Registration::PaidDebt => continue,
+                Registration::Rejected(error) => return Err(error),
+            }
+        }
+    }
+
+    fn register(
+        self: &Arc<Self>,
+        semaphore: Arc<Semaphore>,
+        permit: OwnedSemaphorePermit,
+        connection: &str,
+    ) -> Registration {
+        let mut ledger = self.ledger();
+        if !Arc::ptr_eq(&semaphore, &ledger.semaphore) {
+            // Taken from a semaphore retired by an outage just before it
+            // closed; charge the current one instead.
+            permit.forget();
+            if !ledger.open {
+                return Registration::Rejected(AdmitError::Closed);
+            }
+            if ledger.connection != connection {
+                return Registration::Rejected(AdmitError::ConnectionChanged);
+            }
+            if ledger.semaphore.forget_permits(1) == 0 {
+                ledger.owed += 1;
+            }
+            ledger.held += 1;
+            return Registration::Admitted(PoolPermit {
+                pool: self.clone(),
+                permit: None,
+            });
+        }
+        if ledger.connection != connection {
+            ledger.return_current(permit);
+            return Registration::Rejected(AdmitError::ConnectionChanged);
+        }
         if ledger.owed > 0 {
             ledger.owed -= 1;
             permit.forget();
-        } else {
-            drop(permit);
+            return Registration::PaidDebt;
+        }
+        ledger.held += 1;
+        Registration::Admitted(PoolPermit {
+            pool: self.clone(),
+            permit: Some((semaphore, permit)),
+        })
+    }
+
+    fn release(&self, permit: Option<(Arc<Semaphore>, OwnedSemaphorePermit)>) {
+        let mut ledger = self.ledger();
+        ledger.held -= 1;
+        match permit {
+            Some((semaphore, permit)) if Arc::ptr_eq(&semaphore, &ledger.semaphore) => {
+                ledger.return_current(permit);
+            }
+            retired => {
+                if let Some((_, permit)) = retired {
+                    permit.forget();
+                }
+                if ledger.open {
+                    if ledger.owed > 0 {
+                        ledger.owed -= 1;
+                    } else {
+                        ledger.semaphore.add_permits(1);
+                    }
+                }
+            }
         }
     }
 
@@ -91,26 +221,27 @@ impl CapacityPool {
     }
 }
 
-/// A semaphore permit that returns through its pool's ledger on drop.
-pub(super) struct PoolPermit {
-    pool: Arc<CapacityPool>,
-    permit: Option<OwnedSemaphorePermit>,
-}
-
-impl PoolPermit {
-    fn new(pool: Arc<CapacityPool>, permit: OwnedSemaphorePermit) -> Self {
-        Self {
-            pool,
-            permit: Some(permit),
+impl CapacityLedger {
+    fn return_current(&mut self, permit: OwnedSemaphorePermit) {
+        if self.owed > 0 {
+            self.owed -= 1;
+            permit.forget();
+        } else {
+            drop(permit);
         }
     }
 }
 
+/// An admitted permit. It returns through its pool's ledger on drop, into
+/// whichever semaphore is current by then.
+pub(super) struct PoolPermit {
+    pool: Arc<CapacityPool>,
+    permit: Option<(Arc<Semaphore>, OwnedSemaphorePermit)>,
+}
+
 impl Drop for PoolPermit {
     fn drop(&mut self) {
-        if let Some(permit) = self.permit.take() {
-            self.pool.return_permit(permit);
-        }
+        self.pool.release(self.permit.take());
     }
 }
 
@@ -139,86 +270,73 @@ impl BackendAdmissionController {
         self.config == *config
     }
 
+    /// Admits a call issued through a provider client built for
+    /// `connection`. Every rejection persists a cancelled `BackendGone` row;
+    /// the returned error distinguishes a closed pool from a replaced
+    /// connection.
     pub(super) async fn acquire(
         self: Arc<Self>,
         node: Arc<EmbeddedNode>,
         pending: PendingCallMetadata,
+        connection: &str,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        match self.pool.semaphore.clone().try_acquire_owned() {
-            Ok(permit) => {
-                let call = self.call_record(pending, 0);
-                return self
-                    .start_permit(
+        let mut queue_depth = 0;
+        let immediate = if connection != self.config.connection_fingerprint {
+            Some(Err(AdmitError::ConnectionChanged))
+        } else {
+            match self.pool.try_admit(connection) {
+                Err(AdmitError::NoPermits) => {
+                    match self.pool.try_enter_queue(self.config.max_queue_depth) {
+                        Some(depth) => {
+                            queue_depth = depth;
+                            None
+                        }
+                        None => {
+                            queue_depth = self.pool.waiters.load(Ordering::SeqCst);
+                            Some(self.pool.try_admit(connection))
+                        }
+                    }
+                }
+                other => Some(other),
+            }
+        };
+        if let Some(outcome) = immediate {
+            let call = self.call_record(pending, queue_depth);
+            return match outcome {
+                Ok(permit) => {
+                    self.start_permit(
                         node,
                         permit,
                         call,
                         cancel_observer,
                         terminal_failure_observer,
                     )
-                    .await;
-            }
-            Err(tokio::sync::TryAcquireError::Closed) => {
-                let call = self.call_record(pending, 0);
-                if let Err(error) =
-                    persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None).await
-                {
-                    tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist closed-pool inference call");
+                    .await
                 }
-                return Err(self.backend_gone());
-            }
-            Err(tokio::sync::TryAcquireError::NoPermits) => {}
+                Err(AdmitError::NoPermits) => {
+                    if let Err(error) =
+                        persist_terminal_call(node, call, "failed", Some("QueueFull"), None).await
+                    {
+                        tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist queue-full inference call");
+                    }
+                    Err(CompletionError::ProviderError(format!(
+                        "QueueFull: backend {} admission queue is full",
+                        self.backend_id
+                    )))
+                }
+                Err(error) => {
+                    if let Err(persist_error) =
+                        persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None)
+                            .await
+                    {
+                        tracing::warn!(backend_id = %self.backend_id, error = %persist_error, "failed to persist rejected inference call");
+                    }
+                    Err(self.rejection(error))
+                }
+            };
         }
-
-        let queue_depth = match self.pool.try_enter_queue(self.config.max_queue_depth) {
-            Some(queue_depth) => queue_depth,
-            None => {
-                let queue_depth = self.pool.waiters.load(Ordering::SeqCst);
-                match self.pool.semaphore.clone().try_acquire_owned() {
-                    Ok(permit) => {
-                        let call = self.call_record(pending, queue_depth);
-                        return self
-                            .start_permit(
-                                node,
-                                permit,
-                                call,
-                                cancel_observer,
-                                terminal_failure_observer,
-                            )
-                            .await;
-                    }
-                    Err(tokio::sync::TryAcquireError::Closed) => {
-                        let call = self.call_record(pending, queue_depth);
-                        if let Err(error) = persist_terminal_call(
-                            node,
-                            call,
-                            "cancelled",
-                            Some("BackendGone"),
-                            None,
-                        )
-                        .await
-                        {
-                            tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist backend-gone inference call");
-                        }
-                        return Err(self.backend_gone());
-                    }
-                    Err(tokio::sync::TryAcquireError::NoPermits) => {
-                        let call = self.call_record(pending, queue_depth);
-                        if let Err(error) =
-                            persist_terminal_call(node, call, "failed", Some("QueueFull"), None)
-                                .await
-                        {
-                            tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist queue-full inference call");
-                        }
-                        return Err(CompletionError::ProviderError(format!(
-                            "QueueFull: backend {} admission queue is full",
-                            self.backend_id
-                        )));
-                    }
-                }
-            }
-        };
 
         let call = self.call_record(pending, queue_depth);
         // The guard exists before the fallible durable write: a persist error
@@ -242,11 +360,12 @@ impl BackendAdmissionController {
                 return Err(super::persistence::completion_persistence_error(error));
             }
         };
-        let permit = match self.pool.semaphore.clone().acquire_owned().await {
-            Ok(permit) => PoolPermit::new(self.pool.clone(), permit),
-            Err(_) => {
-                drop(queued_guard.disarm());
-                if let Err(error) = persist_existing_call_terminal(
+        let admitted = self.pool.admit_waiting(connection).await;
+        drop(queued_guard.disarm());
+        let permit = match admitted {
+            Ok(permit) => permit,
+            Err(error) => {
+                if let Err(persist_error) = persist_existing_call_terminal(
                     node,
                     &call,
                     "cancelled",
@@ -255,12 +374,11 @@ impl BackendAdmissionController {
                 )
                 .await
                 {
-                    tracing::warn!(backend_id = %self.backend_id, call_id = %call.call_id, error = %error, "failed to persist backend-gone queued inference call");
+                    tracing::warn!(backend_id = %self.backend_id, call_id = %call.call_id, error = %persist_error, "failed to persist rejected queued inference call");
                 }
-                return Err(self.backend_gone());
+                return Err(self.rejection(error));
             }
         };
-        drop(queued_guard.disarm());
         // Only the queued row can acquire this running state. If recovery has
         // already terminalized it, release the permit before provider dispatch.
         // Other persistence failures leave a queued row for ordered recovery.
@@ -281,12 +399,11 @@ impl BackendAdmissionController {
     async fn start_permit(
         self: Arc<Self>,
         node: Arc<EmbeddedNode>,
-        permit: OwnedSemaphorePermit,
+        permit: PoolPermit,
         call: InferenceCallRecord,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        let permit = PoolPermit::new(self.pool.clone(), permit);
         let doc_id = persist_call_started(node.clone(), &call).await?;
         Ok(AdmissionPermit::new(
             node,
@@ -302,11 +419,20 @@ impl BackendAdmissionController {
         self.pool.waiters.fetch_sub(1, Ordering::SeqCst);
     }
 
-    fn backend_gone(&self) -> CompletionError {
-        CompletionError::ProviderError(format!(
-            "BackendGone: backend {} was removed or became unavailable",
-            self.backend_id
-        ))
+    fn rejection(&self, error: AdmitError) -> CompletionError {
+        match error {
+            AdmitError::ConnectionChanged => CompletionError::ProviderError(format!(
+                "{}: backend {} connection changed after this behavior was built; resubmit the request",
+                crate::error::BACKEND_CONNECTION_CHANGED,
+                self.backend_id
+            )),
+            AdmitError::Closed | AdmitError::NoPermits => {
+                CompletionError::ProviderError(format!(
+                    "BackendGone: backend {} was removed or became unavailable",
+                    self.backend_id
+                ))
+            }
+        }
     }
 
     fn call_record(
@@ -334,14 +460,22 @@ impl BackendAdmissionController {
 
 #[cfg(test)]
 impl CapacityPool {
-    pub(super) fn capacity_for_test(&self) -> usize {
-        self.ledger.lock().unwrap().capacity
+    pub(super) fn held_for_test(&self) -> usize {
+        self.ledger().held
     }
 
-    /// Permits held by every incarnation sharing this pool.
-    pub(super) fn held_for_test(&self) -> usize {
-        let ledger = self.ledger.lock().unwrap();
-        ledger.capacity + ledger.owed - self.semaphore.available_permits()
+    pub(super) fn owed_for_test(&self) -> usize {
+        self.ledger().owed
+    }
+
+    /// Permits a Tokio waiter holds but the ledger has not registered.
+    pub(super) fn in_transit_for_test(&self) -> usize {
+        let ledger = self.ledger();
+        if !ledger.open {
+            return 0;
+        }
+        (ledger.capacity + ledger.owed)
+            .saturating_sub(ledger.held + ledger.semaphore.available_permits())
     }
 
     pub(super) fn queue_waiters_for_test(&self) -> usize {
@@ -349,7 +483,7 @@ impl CapacityPool {
     }
 
     pub(super) fn available_permits_for_test(&self) -> usize {
-        self.semaphore.available_permits()
+        self.ledger().semaphore.available_permits()
     }
 }
 

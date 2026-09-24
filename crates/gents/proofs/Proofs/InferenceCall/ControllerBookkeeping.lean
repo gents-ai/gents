@@ -18,6 +18,8 @@ assigns each phase its waiter / semaphore-permit contribution.
 state that every terminal outcome, including the queued-persist failure path,
 contributes zero to both. Every controller incarnation of a pool shares its
 permits (`InferenceCall.Registry`), so no controller-level drain count exists.
+`rejectClosed` and `queueRejectClosed` also stand for a connection-change
+rejection, which releases the same bookkeeping at the same points.
 
 No contract JSON is emitted for this module; the Rust fence is
 `crates/gents/src/admission/tests.rs`

@@ -1493,25 +1493,33 @@ per-document writer has not been migrated; it is not an alternative formal contr
 `Proofs/InferenceCall/Registry.lean` refines one backend's admission capacity
 pool (#897, #1366). Metadata-only reconciliation retains the admitting
 controller; a resource change replaces it in the same step, on the same pool,
-so an available backend always admits (`rewrite_replaces_admitting_without_gap`,
-`available_desired_admits`). Calls admitted or queued under a replaced
-incarnation finish under it while their permits still count against the
-pool, and new admissions never exceed the current capacity
-(`acquire_within_capacity`, `over_capacity_blocks_acquire`). Removal or
-unavailability closes the pool (`unavailable_blocks_acquire`,
-`removed_backend_cannot_be_resurrected`); a later available configuration
-opens a fresh pool that permits of the closed one cannot affect
-(`reopened_pool_ignores_prior_permits`).
+so an available backend always admits (`available_desired_admits_without_gap`).
+Permits held by calls admitted before a rewrite, a removal or an outage keep
+counting until they release, and new admissions never exceed the current
+capacity (`acquire_admits_within_capacity`, `serve_within_capacity`,
+`over_capacity_blocks_admission`, `outage_carries_held`). Removal or
+unavailability fails queued calls and rejects new ones
+(`unavailable_closes_admission`, `removed_backend_cannot_be_resurrected`).
 
-Rust refines the pool with a shared Tokio semaphore whose capacity decreases
-are recorded as owed permits and paid by forgetting returned ones. Epoch
-reuse on rollback creates a distinct incarnation on the same pool, fenced by
-a real permit test outside this numeric model.
+Each caller carries the connection its provider client was built from. A
+capacity-only rewrite keeps queued callers (`capacity_only_rewrite_keeps_queue`);
+after a connection change, callers built for the old connection are rejected
+at entry or when woken (`stale_connection_rejected`,
+`serve_never_admits_stale`). No retry owner on the completion path rebuilds
+the client, so Rust reports `BackendConnectionChanged`, which the loop
+classifies as permanent.
 
-Eight generated traces contain 57 step observations for the real registry
-and actual AdmissionPermits. Queued-waiter accounting remains covered by the
-controller bookkeeping tests. This registry refinement does not establish
-durable request waiting through backend outages.
+`Registry.Ledger` refines the Tokio realization: tokens are conserved across
+take, register, abandon, release, resize, reopen and retired-permit
+registration; registration pays owed permits before admitting
+(`register_admits_within_capacity`), because Tokio returns a permit assigned
+to a dropped waiter around the ledger (`abandon_can_expose_permit_under_debt`).
+
+Ten generated traces, with expectations derived by `replay`, drive the real
+registry and actual AdmissionPermits, including queued callers. Epoch reuse on
+rollback creates a distinct incarnation on the same pool, fenced by a real
+permit test. This refinement does not establish durable request waiting
+through backend outages.
 
 ### Interrupted Inference Calls
 
