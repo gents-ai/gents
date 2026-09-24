@@ -52,17 +52,26 @@ fn modeled_time_at(epoch_seconds: i64, value: &str) -> Result<u64> {
     u64::try_from(elapsed).context("native timestamp precedes fixture epoch")
 }
 
-fn modeled_principal_did(symbolic: u64, local: u64, physical_local: &str) -> String {
+fn modeled_principal_did(
+    symbolic: u64,
+    local: u64,
+    physical_local: &str,
+    remote_dids: &HashMap<u64, String>,
+) -> String {
     if symbolic == local {
         physical_local.to_owned()
     } else {
-        format!("did:test:lean:principal-{symbolic}")
+        remote_dids
+            .get(&symbolic)
+            .cloned()
+            .unwrap_or_else(|| format!("did:test:lean:principal-{symbolic}"))
     }
 }
 
 fn seed_workspace_lineage(
     seed: &LeanCanonicalExecutionSeed,
     physical_local: &str,
+    remote_dids: &HashMap<u64, String>,
 ) -> Option<crate::lifecycle::WorkspaceLineage> {
     seed.workspace
         .as_ref()
@@ -72,6 +81,7 @@ fn seed_workspace_lineage(
                 workspace.workspace_owner_agent_did,
                 seed.principal,
                 physical_local,
+                remote_dids,
             )),
             workspace_authority: Some(workspace.workspace_authority.clone()),
             workspace_seal_hash: workspace
@@ -83,8 +93,9 @@ fn seed_workspace_lineage(
 fn seed_delegated_workspace(
     seed: &LeanCanonicalExecutionSeed,
     physical_local: &str,
+    remote_dids: &HashMap<u64, String>,
 ) -> Option<gents_protocol::output::DelegatedWorkspace> {
-    let lineage = seed_workspace_lineage(seed, physical_local)?;
+    let lineage = seed_workspace_lineage(seed, physical_local, remote_dids)?;
     Some(gents_protocol::output::DelegatedWorkspace {
         workspace_id: lineage.workspace_id?,
         workspace_owner_agent_did: lineage.workspace_owner_agent_did?,
@@ -97,8 +108,9 @@ async fn seed_workspace_documents(
     node: &EmbeddedNode,
     seed: &LeanCanonicalExecutionSeed,
     principal: &str,
+    remote_dids: &HashMap<u64, String>,
 ) -> Result<Option<tempfile::TempDir>> {
-    let Some(lineage) = seed_workspace_lineage(seed, principal) else {
+    let Some(lineage) = seed_workspace_lineage(seed, principal, remote_dids) else {
         return Ok(None);
     };
     let workspace_id = lineage
@@ -198,6 +210,7 @@ async fn seed_signed_ancestor_chain(
     node: &Arc<EmbeddedNode>,
     identity: &Arc<dyn AgentIdentity>,
     seed: &LeanCanonicalExecutionSeed,
+    remote_dids: &HashMap<u64, String>,
 ) -> Result<(String, String)> {
     let target_depth = u32::try_from(seed.subagent_depth).context("modeled depth exceeds u32")?;
     anyhow::ensure!(
@@ -208,7 +221,7 @@ async fn seed_signed_ancestor_chain(
     let root_id = format!("lean-ancestor-{}-0", seed.request_id);
     let root_session_id = format!("lean-ancestor-session-{}", seed.request_id);
     let root_spec = crate::lifecycle::RequestSpec {
-        workspace: seed_workspace_lineage(seed, &principal),
+        workspace: seed_workspace_lineage(seed, &principal, remote_dids),
         ..crate::lifecycle::RequestSpec::new(
             crate::lifecycle::RequestIdentity {
                 requester_did: None,
@@ -297,7 +310,7 @@ async fn seed_signed_ancestor_chain(
                     child_request_id: child_id.clone(),
                     spawn_target_did: principal.clone(),
                     spawn_behavior_id: "general".to_owned(),
-                    delegated_workspace: seed_delegated_workspace(seed, &principal),
+                    delegated_workspace: seed_delegated_workspace(seed, &principal, remote_dids),
                     await_mode: crate::tool_call_lifecycle::AwaitMode::Background,
                 }),
                 crate::tool_call_lifecycle::AwaitMode::Background,
@@ -323,7 +336,7 @@ async fn seed_signed_ancestor_chain(
             "general".to_owned(),
             "work".to_owned(),
             None,
-            seed_workspace_lineage(seed, &principal),
+            seed_workspace_lineage(seed, &principal, remote_dids),
         )
         .await?;
         let child = node.execute(&format!(
@@ -390,6 +403,8 @@ pub(crate) struct NativeCanonicalExecutionAdapter;
 
 pub(crate) struct NativeCanonicalExecution {
     node: Arc<EmbeddedNode>,
+    _identity_guard: tempfile::TempDir,
+    remote_dids: HashMap<u64, String>,
     _workspace_guard: Option<tempfile::TempDir>,
     fixture_epoch_seconds: i64,
     request_doc_id: String,
@@ -1441,17 +1456,38 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                 None,
             )?);
             let principal = identity.did().to_owned();
+            let mut remote_dids = HashMap::new();
+            let mut remote_symbols = seed
+                .remote_routes
+                .iter()
+                .map(|route| route.target)
+                .collect::<Vec<_>>();
+            if let Some(workspace) = &seed.workspace {
+                remote_symbols.push(workspace.workspace_owner_agent_did);
+            }
+            remote_symbols.sort_unstable();
+            remote_symbols.dedup();
+            for symbolic in remote_symbols {
+                if symbolic != seed.principal {
+                    let remote = crate::KeyIdentity::load_or_create(
+                        key_dir.path().join(format!("agent-{symbolic}.key")),
+                        None,
+                    )?;
+                    remote_dids.insert(symbolic, remote.did().to_owned());
+                }
+            }
             let node = Arc::new(EmbeddedNode::builder().build().await?);
             crate::ensure_runtime_schemas(&node).await?;
             crate::test_support::install_test_behavior(&node, &principal, "general").await;
-            let workspace_guard = seed_workspace_documents(&node, seed, &principal).await?;
+            let workspace_guard =
+                seed_workspace_documents(&node, seed, &principal, &remote_dids).await?;
             if seed.subagent_depth > 0 {
                 install_signed_ancestor_target(&node, &principal).await?;
             }
             let (request_doc_id, session_id) = if seed.subagent_depth == 0 {
                 let create = crate::lifecycle::build_signed_request(
                     crate::lifecycle::RequestSpec {
-                        workspace: seed_workspace_lineage(seed, &principal),
+                        workspace: seed_workspace_lineage(seed, &principal, &remote_dids),
                         ..crate::lifecycle::RequestSpec::new(
                     crate::lifecycle::RequestIdentity {
                         requester_did: None,
@@ -1489,7 +1525,7 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                         .to_owned();
                 (request_doc_id, initial_session_id)
             } else {
-                seed_signed_ancestor_chain(&node, &identity, seed).await?
+                seed_signed_ancestor_chain(&node, &identity, seed, &remote_dids).await?
             };
             // The real child owner authors ancestors at wall time. Translate
             // only this fixture's modeled clock after those writes, so the
@@ -1614,6 +1650,8 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
             );
             Ok(NativeCanonicalExecution {
                 node,
+                _identity_guard: key_dir,
+                remote_dids,
                 _workspace_guard: workspace_guard,
                 fixture_epoch_seconds,
                 request_doc_id,
@@ -2317,6 +2355,7 @@ impl NativeCanonicalExecution {
                         route.target,
                         self.principal_id,
                         &self.principal,
+                        &self.remote_dids,
                     ),
                     spawn_behavior_id: format!("lean-behavior-{admitted_behavior}"),
                     delegated_workspace: admission.delegated_workspace.as_ref().map(|workspace| {
@@ -2326,6 +2365,7 @@ impl NativeCanonicalExecution {
                                 workspace.workspace_owner_agent_did,
                                 self.principal_id,
                                 &self.principal,
+                                &self.remote_dids,
                             ),
                             workspace_authority: workspace.workspace_authority.clone(),
                             workspace_seal_hash: workspace
@@ -2915,6 +2955,9 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
     native.node.shutdown().await;
 }
 
+// `choice` is exported separately from the accepted provider arguments: this
+// composes the real resolver and child-request owners, but does not claim the
+// trigger's workspace-argument decoder selected Bind from those arguments.
 #[tokio::test]
 async fn generated_remote_depth_crosses_publication_and_child_creation_boundaries() {
     let contracts = crate::lean_vocab_test::lean_contract_snapshot();
@@ -2926,6 +2969,10 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
         (
             "remote_depth_three_rejects_child",
             "real_spawn_depth_three_copies_parent_depth",
+        ),
+        (
+            "readonly_parent_bind_readwrite_attenuates",
+            "real_spawn_depth_two_copies_parent_depth",
         ),
     ] {
         let modeled = contracts
@@ -2956,6 +3003,23 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
             unreachable!()
         };
         assert_eq!(seed.subagent_depth, u64::from(modeled.parent_depth));
+        assert_eq!(seed.principal, modeled.parent_agent);
+        let crate::lean_vocab_test::LeanCanonicalExecutionOperation::AcceptRemote {
+            targets,
+            admissions,
+            ..
+        } = &operations[0]
+        else {
+            panic!("generated child boundary requires a remote publication");
+        };
+        let [target] = targets.as_slice() else {
+            panic!("generated child boundary requires one route");
+        };
+        let [admission] = admissions.as_slice() else {
+            panic!("generated child boundary requires one accepted call");
+        };
+        assert_eq!(target.target, modeled.child_agent);
+        assert_eq!(target.call, admission.document);
         let mut adapter = NativeCanonicalExecutionAdapter;
         let mut native = adapter.initialize(seed).await.unwrap();
         let observed = adapter
@@ -2966,12 +3030,14 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
         let tool_doc_id = native
             .tool_ids
             .iter()
-            .find_map(|(doc_id, modeled_id)| (*modeled_id == 600).then(|| doc_id.clone()))
+            .find_map(|(doc_id, modeled_id)| {
+                (*modeled_id == admission.document).then(|| doc_id.clone())
+            })
             .expect("accepted native spawn has a physical tool row");
         let response = native
             .node
             .execute(&format!(
-                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ delegated_input delegated_workspace }} }}"#,
+                r#"{{ AgentToolCall(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ delegated_input delegated_workspace child_request_id spawn_target_did spawn_behavior_id }} }}"#,
                 crate::graphql::escape_graphql_string(&tool_doc_id),
             ))
             .await;
@@ -2990,15 +3056,30 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
             native.segment_ids.get(&copied.source.close_doc_id),
             Some(&source.source_close_doc_id)
         );
-        let parent_stamp = seed
-            .workspace
+        let parent_stamp = modeled
+            .parent_workspace
             .as_ref()
             .expect("modeled boundary has a parent workspace stamp");
+        let seed_stamp = seed.workspace.as_ref().expect("native seed has workspace");
+        assert_eq!(parent_stamp.workspace_id, seed_stamp.workspace_id);
+        assert_eq!(
+            parent_stamp.workspace_owner_agent_did,
+            seed_stamp.workspace_owner_agent_did
+        );
+        assert_eq!(
+            parent_stamp.workspace_authority,
+            seed_stamp.workspace_authority
+        );
+        assert_eq!(
+            parent_stamp.workspace_seal_hash,
+            seed_stamp.workspace_seal_hash
+        );
         let expected_workspace_id = format!("lean-workspace-{}", parent_stamp.workspace_id);
         let expected_owner = modeled_principal_did(
             parent_stamp.workspace_owner_agent_did,
             seed.principal,
             &native.principal,
+            &native.remote_dids,
         );
         assert_eq!(
             rows[0]["delegated_workspace"]["workspace_id"].as_str(),
@@ -3012,19 +3093,53 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
             rows[0]["delegated_workspace"]["workspace_authority"].as_str(),
             Some(parent_stamp.workspace_authority.as_str())
         );
+        assert_eq!(
+            rows[0]["delegated_workspace"]["workspace_seal_hash"].as_str(),
+            parent_stamp
+                .workspace_seal_hash
+                .map(|seal| format!("lean-seal-{seal}"))
+                .as_deref()
+        );
+        let accepted = &native.accepted_spawns[&admission.document].0;
+        let child_id = rows[0]["child_request_id"]
+            .as_str()
+            .expect("accepted bridge retained child identity")
+            .to_owned();
+        let child_did = rows[0]["spawn_target_did"]
+            .as_str()
+            .expect("accepted bridge retained target DID")
+            .to_owned();
+        let behavior_id = rows[0]["spawn_behavior_id"]
+            .as_str()
+            .expect("accepted bridge retained behavior")
+            .to_owned();
+        assert_eq!(
+            child_did,
+            modeled_principal_did(
+                modeled.child_agent,
+                seed.principal,
+                &native.principal,
+                &native.remote_dids,
+            )
+        );
+        let prompt = serde_json::from_str::<serde_json::Value>(&source.arguments).unwrap()
+            ["prompt"]
+            .as_str()
+            .expect("modeled accepted arguments contain a prompt")
+            .to_owned();
         if modeled.expected.is_none() {
             let error =
                 crate::tool_call_lifecycle::create_subagent_request_with_trusted_parent_request_id(
                     &native.node,
-                    format!("lean-boundary-child-{modeled_name}"),
+                    child_id,
                     format!("lean-request-{}", seed.request_id),
                     native.request_doc_id.clone(),
-                    "native-call".to_owned(),
+                    accepted.id.clone(),
                     tool_doc_id,
                     copied.parent_subagent_depth,
-                    "did:test:lean:principal-2".to_owned(),
-                    "lean-behavior-8".to_owned(),
-                    "work".to_owned(),
+                    child_did,
+                    behavior_id,
+                    prompt,
                     None,
                     native.principal.clone(),
                 )
@@ -3034,6 +3149,143 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
                 error.downcast_ref::<crate::tool_call_lifecycle::IllegalToolCallTransition>(),
                 Some(crate::tool_call_lifecycle::IllegalToolCallTransition::SubagentDepthExceeded)
             ));
+        } else {
+            let stamp =
+                crate::tool_call_lifecycle::subagent_workspace::ParentWorkspaceStamp::from_fields(
+                    &native.principal,
+                    Some(&expected_workspace_id),
+                    Some(&expected_owner),
+                    Some(&parent_stamp.workspace_authority),
+                    parent_stamp
+                        .workspace_seal_hash
+                        .map(|seal| format!("lean-seal-{seal}"))
+                        .as_deref(),
+                );
+            let workspace_arg = match &modeled.choice {
+                crate::lean_vocab_test::LeanDelegatedChildChoice::Inherit { workspace } => {
+                    assert_eq!(workspace.workspace_id, parent_stamp.workspace_id);
+                    assert_eq!(
+                        workspace.workspace_owner_agent_did,
+                        parent_stamp.workspace_owner_agent_did
+                    );
+                    assert_eq!(
+                        workspace.workspace_seal_hash,
+                        parent_stamp.workspace_seal_hash
+                    );
+                    assert_eq!(workspace.state, "ready");
+                    assert!(workspace.available);
+                    crate::background_tools::SpawnWorkspaceArg::Inherit
+                }
+                crate::lean_vocab_test::LeanDelegatedChildChoice::Bind {
+                    workspace,
+                    requested_authority,
+                } => {
+                    assert_eq!(workspace.workspace_id, parent_stamp.workspace_id);
+                    assert_eq!(
+                        workspace.workspace_owner_agent_did,
+                        parent_stamp.workspace_owner_agent_did
+                    );
+                    assert_eq!(
+                        workspace.workspace_seal_hash,
+                        parent_stamp.workspace_seal_hash
+                    );
+                    assert_eq!(workspace.state, "ready");
+                    assert!(workspace.available);
+                    crate::background_tools::SpawnWorkspaceArg::Bind {
+                        id: format!("lean-workspace-{}", workspace.workspace_id),
+                        authority: requested_authority.clone(),
+                    }
+                }
+                _ => panic!("this native child binding only covers inherit and bind"),
+            };
+            let workspace =
+                crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(
+                    &native.node,
+                    &stamp,
+                    Some(&workspace_arg),
+                    None,
+                    &child_did,
+                    &format!("lean-child-invocation-{}", admission.document),
+                    &format!("lean-child-correlation-{}", admission.document),
+                    None,
+                )
+                .await
+                .expect("real workspace owner accepted generated choice");
+            crate::tool_call_lifecycle::subagent_request::create_subagent_request_with_trusted_parent_request_id_and_workspace(
+                &native.node,
+                child_id.clone(),
+                format!("lean-request-{}", seed.request_id),
+                native.request_doc_id.clone(),
+                accepted.id.clone(),
+                tool_doc_id,
+                copied.parent_subagent_depth,
+                child_did.clone(),
+                behavior_id,
+                prompt,
+                None,
+                native.principal.clone(),
+                workspace,
+            )
+            .await
+            .expect("real signed child owner accepted generated boundary");
+            let result = native.node.execute(&format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ {} admission_signer_did admission_signature }} }}"#,
+                crate::graphql::escape_graphql_string(&child_id),
+                crate::watcher::AGENT_REQUEST_FIELDS,
+            )).await;
+            assert!(!result.has_errors(), "{:?}", result.errors);
+            let child = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")
+                .unwrap()
+                .expect("signed child persisted");
+            let expected = modeled.expected.as_ref().unwrap();
+            assert_eq!(child.subagent_depth, Some(i64::from(expected.child_depth)));
+            assert_eq!(child.agent_did.as_deref(), Some(child_did.as_str()));
+            assert_eq!(
+                child.requester_did.as_deref(),
+                Some(native.principal.as_str())
+            );
+            assert_eq!(
+                child.admission_signer_did.as_deref(),
+                Some(child_did.as_str())
+            );
+            assert!(
+                child
+                    .admission_signature
+                    .as_deref()
+                    .is_some_and(|signature| !signature.is_empty()),
+                "registered target did not persist a signed child admission"
+            );
+            let expected_workspace = expected
+                .child_workspace
+                .as_ref()
+                .expect("modeled child inherits or binds workspace");
+            assert_eq!(
+                child.workspace_id.as_deref(),
+                Some(format!("lean-workspace-{}", expected_workspace.workspace_id).as_str())
+            );
+            assert_eq!(
+                child.workspace_owner_agent_did.as_deref(),
+                Some(
+                    modeled_principal_did(
+                        expected_workspace.workspace_owner_agent_did,
+                        seed.principal,
+                        &native.principal,
+                        &native.remote_dids
+                    )
+                    .as_str()
+                )
+            );
+            assert_eq!(
+                child.workspace_authority.as_deref(),
+                Some(expected_workspace.workspace_authority.as_str())
+            );
+            assert_eq!(
+                child.workspace_seal_hash.as_deref(),
+                expected_workspace
+                    .workspace_seal_hash
+                    .map(|seal| format!("lean-seal-{seal}"))
+                    .as_deref()
+            );
         }
     }
 }

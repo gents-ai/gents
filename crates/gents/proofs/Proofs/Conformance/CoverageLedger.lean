@@ -1130,7 +1130,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "delegated_child_resolution_cases"
       "DelegatedChildResolutionCases"
-      "Accepted canonical remote rows feed the Workspace child-resolution owner and existing subagent depth bound. Native binding still requires a same-transaction parent workspace provenance check and a generated-case consumer that invokes the real child materialization owners; the exported expected result is model execution, not native coverage.")
+      "Native publication rechecks signed parent workspace provenance in the same transaction. Generated depth-two inherit, depth-three rejection, and read-only bind cases invoke real workspace resolution and signed child materialization. The bind choice is supplied by the separate modeled child-resolution input, not decoded from published provider arguments. Provision and changed-seal cases remain model-only pending an explicit observed-parent input and further native bindings; the exported expected result is not blanket native coverage.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"

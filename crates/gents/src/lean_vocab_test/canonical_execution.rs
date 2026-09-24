@@ -108,8 +108,35 @@ pub(crate) struct LeanDelegatedChildResolutionCase {
     pub(crate) child_agent: u64,
     pub(crate) delegated_input: Option<LeanDelegatedChildInput>,
     pub(crate) parent_workspace: Option<LeanCanonicalDelegatedWorkspace>,
-    pub(crate) choice: serde_json::Value,
+    pub(crate) choice: LeanDelegatedChildChoice,
     pub(crate) expected: Option<LeanDelegatedChildResult>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanDelegatedChildChoice {
+    None,
+    Inherit {
+        workspace: LeanObservedChildWorkspace,
+    },
+    Bind {
+        workspace: LeanObservedChildWorkspace,
+        requested_authority: Option<String>,
+    },
+    Provision {
+        workspace: LeanObservedChildWorkspace,
+        parent_path_exact: bool,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanObservedChildWorkspace {
+    pub(crate) workspace_id: u64,
+    pub(crate) workspace_owner_agent_did: u64,
+    pub(crate) workspace_seal_hash: Option<u64>,
+    pub(crate) state: String,
+    pub(crate) available: bool,
 }
 
 #[derive(Debug, Deserialize)]

@@ -6,26 +6,10 @@ namespace CanonicalOutput
 
 abbrev DelegatedWorkspace := Workspace.ChildStamp
 
-def workspaceAuthorityRank := Workspace.authorityRank
-
-def workspaceAttenuates (source child : DelegatedWorkspace) : Bool :=
-  child.workspaceId == source.workspaceId && child.ownerAgent == source.ownerAgent &&
-    child.sealHash == source.sealHash &&
-    workspaceAuthorityRank child.authority <= workspaceAuthorityRank source.authority
-
 /-- The addressed bridge copies the accepted parent stamp exactly. A child
 workspace request is resolved later by `Workspace.resolveChild`. -/
 def receiveDelegatedWorkspace (source copied : Option DelegatedWorkspace) : Bool :=
   source == copied
-
-theorem delegated_workspace_cannot_escalate_readonly
-    (source child : DelegatedWorkspace)
-    (hsource : source.authority = .readOnly)
-    (h : workspaceAttenuates source child = true) :
-    child.authority = .readOnly := by
-  cases ha : child.authority <;>
-    simp [workspaceAttenuates, workspaceAuthorityRank, Workspace.authorityRank,
-      hsource, ha] at h ⊢
 
 structure DelegatedInput where
   source : PayloadRef
@@ -123,6 +107,43 @@ theorem materialized_child_depth_bounded (input : DelegatedInput) (child : Nat)
     · rfl
     · omega
   · contradiction
+
+theorem received_child_depth_and_authority_bounded
+    (coordinator host behavior parentAgent childAgent : Nat)
+    (row : DelegatedCall) (choice : Workspace.ChildChoice)
+    (parent child : DelegatedWorkspace) (depth : Nat)
+    (hp : row.workspace = some parent)
+    (h : receiveDelegatedChild coordinator host behavior parentAgent childAgent row choice =
+      some (depth, some child)) :
+    depth ≤ Subagent.maxSubagentDepth ∧
+      Workspace.authorityRank child.authority ≤ Workspace.authorityRank parent.authority := by
+  unfold receiveDelegatedChild at h
+  cases hi : receiveDelegatedInput coordinator host behavior row with
+  | none => simp [hi] at h
+  | some input =>
+      simp only [hi, Option.bind_some] at h
+      cases hd : materializeDelegatedChildDepth input with
+      | none => simp [hd] at h
+      | some actualDepth =>
+          cases hw : Workspace.resolveChild row.workspace parentAgent childAgent choice with
+          | none => simp [hw] at h
+          | some actualWorkspace =>
+              simp [hi, hd, hw] at h
+              rcases h with ⟨rfl, rfl⟩
+              exact ⟨(materialized_child_depth_bounded input _ hd).2,
+                Workspace.resolved_child_cannot_exceed_parent parent child
+                  parentAgent childAgent choice (by simpa [hp] using hw)⟩
+
+theorem received_readonly_parent_cannot_escalate
+    (coordinator host behavior parentAgent childAgent : Nat)
+    (row : DelegatedCall) (choice : Workspace.ChildChoice)
+    (parent child : DelegatedWorkspace) (depth : Nat)
+    (hp : row.workspace = some parent) (ha : parent.authority = .readOnly)
+    (h : receiveDelegatedChild coordinator host behavior parentAgent childAgent row choice =
+      some (depth, some child)) : child.authority = .readOnly := by
+  have bound := (received_child_depth_and_authority_bounded coordinator host behavior
+    parentAgent childAgent row choice parent child depth hp h).2
+  cases hc : child.authority <;> simp [Workspace.authorityRank, ha, hc] at bound ⊢
 
 /-- The coordinator binds the copied argument bytes to the one addressed remote
 call. Local calls retain no delegated projection. -/
