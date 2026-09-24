@@ -69,6 +69,42 @@
       "permissionSet": "external-links"
     },
     {
+      "name": "desktop_pack_installed",
+      "permissionSet": "packs-read"
+    },
+    {
+      "name": "desktop_pack_search",
+      "permissionSet": "packs-read"
+    },
+    {
+      "name": "desktop_pack_info",
+      "permissionSet": "packs-read"
+    },
+    {
+      "name": "desktop_pack_whoami",
+      "permissionSet": "packs-read"
+    },
+    {
+      "name": "desktop_pack_install",
+      "permissionSet": "packs-admin"
+    },
+    {
+      "name": "desktop_pack_update",
+      "permissionSet": "packs-admin"
+    },
+    {
+      "name": "desktop_pack_remove",
+      "permissionSet": "packs-admin"
+    },
+    {
+      "name": "desktop_pack_login",
+      "permissionSet": "packs-admin"
+    },
+    {
+      "name": "desktop_pack_logout",
+      "permissionSet": "packs-admin"
+    },
+    {
       "name": "desktop_session_snapshot",
       "permissionSet": "session-read"
     },
@@ -341,7 +377,7 @@
       "permissionSet": "native-e2e"
     }
   ],
-  "contractVersion": "9.0",
+  "contractVersion": "9.1",
   "errorCodes": [
     "clientNotRunning",
     "clientStartFailed",
@@ -433,6 +469,14 @@
     {
       "kind": "mutate",
       "name": "external-links"
+    },
+    {
+      "kind": "read",
+      "name": "packs-read"
+    },
+    {
+      "kind": "mutate",
+      "name": "packs-admin"
     },
     {
       "kind": "mutate",
