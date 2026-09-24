@@ -1,5 +1,6 @@
 import Proofs.CanonicalOutput.Execution.Examples
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.EventDelivery.SubagentSource
 
 namespace Conformance.DelegatedChildContracts
 
@@ -52,12 +53,39 @@ def cases : List Case :=
       (.inherit { observedParentWorkspace with sealHash := some 99 })
   ]
 
+def acceptedArguments : Workspace.ChildChoice → String
+  | .bind workspace requested =>
+      let authority := match requested with
+        | none => ""
+        | some value => ",\"authority\":" ++ jsonString value.toDefraDB
+      "{\"await_mode\":\"background\",\"name\":\"lean-behavior-8\",\"prompt\":\"work\",\"workspace\":{\"id\":\"lean-workspace-" ++
+        toString workspace.workspaceId ++ "\"" ++ authority ++ "}}"
+  | .provision _ _ _ =>
+      "{\"await_mode\":\"background\",\"name\":\"lean-behavior-8\",\"prompt\":\"work\",\"workspace\":\"provision\"}"
+  | _ => realSpawnArguments
+
 def accepted (value : Case) : Option DelegatedCall :=
-  acceptedDelegatedCallAtDepthWithWorkspace value.parentDepth value.sourceWorkspace
+  acceptedDelegatedCallFor 600 value.parentDepth
+    (some value.sourceWorkspace) (acceptedArguments value.choice)
 
 def expected (value : Case) : Option (Nat × Option DelegatedWorkspace) :=
-  (accepted value).bind fun row =>
-    receiveDelegatedChild 1 2 8 value.parentAgent value.childAgent row value.choice
+  (accepted value).bind fun row => do
+    let facts : EventDelivery.SubagentSource.HostChildFacts :=
+      { child := 50, parentRequest := 10, parentRequestDoc := 30,
+        parentTool := 600, admission := 7 }
+    let (decision, stored) := EventDelivery.SubagentSource.receiveAndReserveChild
+      [] 1 2 8 row facts
+      (fun arguments => if arguments == acceptedArguments value.choice then
+        some (5, value.choice) else none)
+    if decision != some .created then none else
+      let binding ← stored.find? (fun candidate => candidate.child == facts.child)
+      some (binding.depth, binding.workspace)
+
+theorem generated_cases_derive_from_composed_host_owner :
+    cases.all (fun value => expected value ==
+      ((accepted value).bind fun row =>
+        receiveDelegatedChild 1 2 8 value.parentAgent value.childAgent row value.choice)) = true := by
+  native_decide
 
 def stampJson (value : DelegatedWorkspace) : String :=
   "{\"workspace_id\":" ++ toString value.workspaceId ++

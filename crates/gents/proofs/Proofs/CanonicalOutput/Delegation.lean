@@ -108,6 +108,27 @@ theorem materialized_child_depth_bounded (input : DelegatedInput) (child : Nat)
     · omega
   · contradiction
 
+theorem received_child_depth_bounded
+    (coordinator host behavior parentAgent childAgent : Nat)
+    (row : DelegatedCall) (choice : Workspace.ChildChoice)
+    (depth : Nat) (workspace : Option DelegatedWorkspace)
+    (h : receiveDelegatedChild coordinator host behavior parentAgent childAgent row choice =
+      some (depth, workspace)) :
+    depth ≤ Subagent.maxSubagentDepth := by
+  unfold receiveDelegatedChild at h
+  cases hi : receiveDelegatedInput coordinator host behavior row with
+  | none => simp [hi] at h
+  | some input =>
+      cases hd : materializeDelegatedChildDepth input with
+      | none => simp [hi, hd] at h
+      | some actualDepth =>
+          cases hw : Workspace.resolveChild row.workspace parentAgent childAgent choice with
+          | none => simp [hi, hd, hw] at h
+          | some actualWorkspace =>
+              simp [hi, hd, hw] at h
+              rcases h with ⟨rfl, rfl⟩
+              exact (materialized_child_depth_bounded input _ hd).2
+
 theorem received_child_depth_and_authority_bounded
     (coordinator host behavior parentAgent childAgent : Nat)
     (row : DelegatedCall) (choice : Workspace.ChildChoice)

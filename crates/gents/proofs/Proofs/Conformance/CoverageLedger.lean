@@ -1208,10 +1208,11 @@ def caseCoverage : List CoverageEntry :=
       "conformance::delegation_depth_matches_runtime_limit"
       "This consumer compares the runtime depth limit only. Generated path acyclicity, boundedness and cascade witnesses need actual delegation/control traces; asserting their expected flags is not implementation coverage.")
       "background-tools" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "delegated_child_resolution_cases"
       "DelegatedChildResolutionCases"
-      "Native publication rechecks signed parent workspace provenance in the same transaction. Generated depth-two inherit, depth-three rejection, and read-only bind cases invoke real workspace resolution and signed child materialization; the bind choice is supplied by separate modeled child-resolution input, not decoded from published provider arguments. Two generated provision parent-seal drift cases invoke the real resolver with a modeled source stamp and physical observed workspace, but do not re-publish that source. Existing host provision tests cover real Git creation without binding generated success expectations. Other provision and changed-seal cases remain model-only; the exported expected result is not blanket native coverage.")
+      "trigger_engine::subagent_source::delegated_child_tests::generated_delegated_child_cases_bind_host_receiver"
+      "Three generated cases bind the composed receive/reservation owner's depth-two inherit, depth-three rejection and read-only bind outcomes to the real SubagentSource receiver with no local parent request. Copied accepted bridge fields and peer membership are fixture inputs; this test does not establish publication provenance, P2P delivery or document ACP. Separate publication bindings recheck signed parent workspace provenance. Host workspace observations and argument decoding remain native premises. Provision and changed-seal cases are not covered by this receiver test; separate resolver tests cover two provision parent-seal drift cases, not full host materialization. No atomicity is claimed between workspace observation and child creation.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"

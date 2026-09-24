@@ -347,19 +347,42 @@ def realSpawnProviderTurn : Segment :=
       realSpawnArgumentBytes⟩
     close := some (.closed .complete 1 [realSpawnArgumentBytes.length]) }
 
+def realSpawnProviderTurnForArguments (arguments : String) : Segment :=
+  let bytes := arguments.toUTF8.data.toList
+  { realSpawnProviderTurn with
+    flush := some ⟨0,
+      [⟨0, bytes.length, some
+        { block := 0, part := 0, kind := .arguments,
+          tool := some ⟨"native-call", none, "spawn_subagent"⟩ }⟩], bytes⟩
+    close := some (.closed .complete 1 [bytes.length]) }
+
 def realSpawnProviderMessage : MessageEnvelope :=
   { providerMessage with
     header := { providerMessage.header with refs := [⟨500, 0⟩] }
     blocks := [.toolCall 600 "native-call" none "spawn_subagent"
       ⟨⟨500, 0⟩, .full⟩ none none] }
 
+/-- Distinct physical calls and supplied argument bytes use the same
+accept-and-publish owner. The flush and close lengths are derived from those
+bytes; the addressed host resolves the requested workspace later. -/
+def acceptedDelegatedCallFor (call depth : Nat)
+    (workspace : Option DelegatedWorkspace)
+    (arguments : String := realSpawnArguments) : Option DelegatedCall := do
+  let world := { routedDepthWorld depth with
+    remoteRoutes := [(call, 2, 8)], workspace := workspace }
+  let toolContext := { remoteToolContext with callId := call }
+  let admission : ToolAdmission := ⟨call, toolContext, workspace⟩
+  let message := { realSpawnProviderMessage with
+    blocks := [.toolCall call "native-call" none "spawn_subagent"
+      ⟨⟨500, 0⟩, .full⟩ none none] }
+  let accepted ← (acceptAndPublish world 7
+    (realSpawnProviderTurnForArguments arguments) message
+    [{ remote with call := call }] [admission]).toOption
+  accepted.delegatedCalls.find? (fun row => row.call == call)
+
 def acceptedDelegatedCallAtDepthWithWorkspace (depth : Nat)
     (workspace : DelegatedWorkspace) : Option DelegatedCall := do
-  let world := { routedDepthWorld depth with workspace := some workspace }
-  let admission := { remoteAdmission with delegatedWorkspace := some workspace }
-  let accepted ← (acceptAndPublish world 7 realSpawnProviderTurn
-    realSpawnProviderMessage [remote] [admission]).toOption
-  accepted.delegatedCalls.find? (fun call => call.call == 600)
+  acceptedDelegatedCallFor 600 depth (some workspace)
 
 def acceptedDelegatedCallAtDepth (depth : Nat) : Option DelegatedCall :=
   acceptedDelegatedCallAtDepthWithWorkspace depth remoteWorkspace

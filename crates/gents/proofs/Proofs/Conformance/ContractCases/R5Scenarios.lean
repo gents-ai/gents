@@ -3,6 +3,8 @@ import Proofs.RequestExecutionLease.Transition
 import Proofs.Background.CancelAcknowledgement
 import Proofs.Background.CompletionDelivery
 import Proofs.Session.Properties.Executable
+import Proofs.EventDelivery.SubagentSource
+import Proofs.CanonicalOutput.Execution.Examples
 
 /-!
 # R5 distributed scenario compositions
@@ -22,10 +24,12 @@ inductive R5Terminal where | completed | failed | interrupted deriving Decidable
 
 inductive R5ScenarioAction where
   | pair (node peer : R5Node)
-  | acceptedBridge (tool child session : String) (parentDepth : Nat)
+  | acceptedBridge (tool child session : String) (parentDepth call : Nat)
+      (parentWorkspace : Option Workspace.ChildStamp)
   | rejectedSpawnInvocation (tool child session : String) (parentDepth : Nat)
   | replicateBridge (tool : String) (source target : R5Node)
-  | materializeChild (child tool : String)
+  | materializeChild (child tool : String) (payload : Nat)
+      (choice : Workspace.ChildChoice)
   | beginChild (child : String) (generation : Nat)
   | awaitChildExpiry (child : String)
   | replicateChild (child : String) (source target : R5Node)
@@ -49,7 +53,7 @@ structure R5BridgeFact where
   tool : String
   child : String
   session : String
-  parentDepth : Nat
+  accepted : CanonicalOutput.DelegatedCall
   state : ToolExecution.ToolCallState := .running
   cancel : Subagent.CancelAcknowledgement.Row := {}
   deriving Repr
@@ -57,6 +61,7 @@ structure R5BridgeFact where
 structure R5ChildFact where
   child : String
   depth : Nat := 0
+  workspace : Option Workspace.ChildStamp := none
   execution : RequestExecutionLease.World Nat := RequestExecutionLease.initial Nat
   interruptRequested : Bool := false
   deriving DecidableEq, Repr
@@ -76,6 +81,7 @@ structure R5ScenarioState where
   bNow : Time := 0
   aBridges : List R5BridgeFact := []
   bBridges : List R5BridgeFact := []
+  bReservations : List EventDelivery.SubagentSource.ReservedChildBinding := []
   rejectedInvocations : List String := []
   aChildren : List R5ChildFact := []
   bChildren : List R5ChildFact := []
@@ -288,12 +294,28 @@ def rejectedSpawnPost? : Option ToolExecution.ToolCallContext :=
         state := .pending, awaitMode := .foreground, childRequestId := none }
     (.spawnFailed .argumentInvalid)
 
+/-- R5's finite identity symbols stand for physical facts observed by the
+native SubagentSource. The accepted `DelegatedCall` itself always comes from
+`acceptAndPublish`; this function does not reconstruct it from depth or JSON. -/
+def r5HostFacts (row : CanonicalOutput.DelegatedCall) :
+    EventDelivery.SubagentSource.HostChildFacts :=
+  { child := row.call, parentRequest := 10, parentRequestDoc := 10,
+    parentTool := row.call, admission := row.call }
+
+def r5SpawnArguments (call : Nat) : String :=
+  "{\"await_mode\":\"background\",\"name\":\"lean-behavior-8\",\"prompt\":\"R5 child " ++
+    toString call ++ "\"}"
+
 def R5ScenarioState.step (s : R5ScenarioState) : R5ScenarioAction → R5ScenarioState
   | .pair _ _ => s
-  | .acceptedBridge tool child session parentDepth =>
-      if parentDepth < Subagent.maxSubagentDepth then
-        { s with aBridges := replaceBridge s.aBridges { tool, child, session, parentDepth } }
-      else s
+  | .acceptedBridge tool child session parentDepth call parentWorkspace =>
+      match CanonicalOutput.Execution.Examples.acceptedDelegatedCallFor
+          call parentDepth parentWorkspace (r5SpawnArguments call) with
+      | some accepted =>
+          let bridge : R5BridgeFact :=
+            { tool, child, session, accepted }
+          { s with aBridges := replaceBridge s.aBridges bridge }
+      | none => { s with observationsValid := false }
   | .rejectedSpawnInvocation tool _ _ parentDepth =>
       if parentDepth < Subagent.maxSubagentDepth then s else
       match rejectedSpawnPost? with
@@ -306,11 +328,36 @@ def R5ScenarioState.step (s : R5ScenarioState) : R5ScenarioAction → R5Scenario
       | some row => { s with bBridges := replaceBridge s.bBridges row }
       | none => s
   | .replicateBridge _ _ _ => s
-  | .materializeChild child tool =>
+  | .materializeChild child tool payload choice =>
       match s.bBridges.find? (fun row => row.tool == tool) with
-      | some bridge => if bridge.parentDepth < Subagent.maxSubagentDepth then
-          { s with bChildren := replaceChild s.bChildren { child, depth := bridge.parentDepth + 1 } }
-        else s
+      | some bridge =>
+          if bridge.state != .running then s else
+          if bridge.child != child then { s with observationsValid := false } else
+          let received := EventDelivery.SubagentSource.receiveAndReserveChild
+            s.bReservations 1 2 8 bridge.accepted (r5HostFacts bridge.accepted)
+            (fun arguments => if arguments ==
+                r5SpawnArguments bridge.accepted.call then
+              some (payload, choice) else none)
+          match received.1 with
+          | some .created =>
+              match received.2.find? (fun row => row.child == bridge.accepted.call) with
+              | some reserved =>
+                  let materialized : R5ChildFact :=
+                    { child, depth := reserved.depth, workspace := reserved.workspace }
+                  let reservations := received.2
+                  let withReservation := { s with bReservations := reservations }
+                  { withReservation with bChildren := replaceChild s.bChildren materialized }
+              | none => { s with observationsValid := false }
+          | some .replayed =>
+              match received.2.find? (fun row => row.child == bridge.accepted.call),
+                  child? s.bChildren child with
+              | some reserved, some existing =>
+                  if existing.depth == reserved.depth &&
+                      existing.workspace == reserved.workspace then
+                    { s with bReservations := received.2 }
+                  else { s with observationsValid := false }
+              | _, _ => { s with observationsValid := false }
+          | some .conflict | none => { s with observationsValid := false }
       | none => s
   | .beginChild child generation =>
       match child? s.bChildren child with
@@ -397,9 +444,9 @@ def r5RecoveryCheckpoints (scenario : R5ScenarioCase) : List (Nat × R5ScenarioS
         some (index, foldR5Scenario (scenario.actions.take (index + 1)) scenario.childLeaseSecs)
     | _ => none
 
-def setup (tool child session : String) : List R5ScenarioAction :=
-  [ .pair .a .b, .pair .b .a, .acceptedBridge tool child session 0,
-    .replicateBridge tool .a .b, .materializeChild child tool,
+def setup (tool child session : String) (call : Nat := 600) : List R5ScenarioAction :=
+  [ .pair .a .b, .pair .b .a, .acceptedBridge tool child session 0 call none,
+    .replicateBridge tool .a .b, .materializeChild child tool call .noWorkspace,
     .beginChild child 0,
     .replicateChild child .b .a ]
 
@@ -408,6 +455,31 @@ def complete (child : String) : List R5ScenarioAction :=
     .replicateTerminalRequest child .b .a,
     .replicateOutputSegments child .b .a,
     .replicateMessageHeader child .b .a ]
+
+/-- The host owner creates one reservation and child; exact replay cannot
+rewind a running or terminal child. A non-running replicated bridge cannot
+start materialization even when its immutable delegated row remains present. -/
+theorem r5_host_receive_creation_replay_and_stopped_bridge :
+    let accepted := foldR5Scenario
+      [ .acceptedBridge "tool" "child" "session" 0 600 none,
+        .replicateBridge "tool" .a .b ]
+    let created := accepted.step (.materializeChild "child" "tool" 600 .noWorkspace)
+    let running := created.step (.beginChild "child" 0)
+    let terminal := running.step (.publishTerminal "child" .completed true)
+    let stopped := (accepted.step (.cancelBridge "tool")).step
+      (.replicateBridge "tool" .a .b)
+    created.observationsValid = true ∧
+      created.bReservations.length = 1 ∧
+      created.bChildren.map (·.depth) = [1] ∧
+      (running.step (.materializeChild "child" "tool" 600 .noWorkspace)).bChildren =
+        running.bChildren ∧
+      (terminal.step (.materializeChild "child" "tool" 600 .noWorkspace)).bChildren =
+        terminal.bChildren ∧
+      (stopped.step (.materializeChild "child" "tool" 600 .noWorkspace)).bReservations =
+        stopped.bReservations ∧
+      (stopped.step (.materializeChild "child" "tool" 600 .noWorkspace)).bChildren =
+        stopped.bChildren := by
+  native_decide
 
 def r5ScenarioCases : List R5ScenarioCase :=
   [ r5Case "happy_path"
@@ -423,7 +495,7 @@ def r5ScenarioCases : List R5ScenarioCase :=
       (setup "tool-call-a-crash-before" "child-req-a-crash-before" "parent-before-session" ++
        [.crash .a true] ++ complete "child-req-a-crash-before" ++
        [.recoverBridges, .observeCompletion] ++
-       setup "tool-call-a-crash-after" "child-req-a-crash-after" "parent-after-session" ++
+       setup "tool-call-a-crash-after" "child-req-a-crash-after" "parent-after-session" 601 ++
        complete "child-req-a-crash-after" ++
        [.crash .a true, .recoverBridges, .observeCompletion, .converge])
   , r5Case "partition_during_cancel"
@@ -436,9 +508,9 @@ def r5ScenarioCases : List R5ScenarioCase :=
         .observeCompletion, .observeCancelAck, .converge])
   , r5Case "multi_completion_coalesce"
       (setup "tool-call-multi-1" "child-req-multi-1" "parent-multi-session" ++
-       [.acceptedBridge "tool-call-multi-2" "child-req-multi-2" "parent-multi-session" 0,
+       [.acceptedBridge "tool-call-multi-2" "child-req-multi-2" "parent-multi-session" 0 601 none,
         .replicateBridge "tool-call-multi-2" .a .b,
-        .materializeChild "child-req-multi-2" "tool-call-multi-2",
+        .materializeChild "child-req-multi-2" "tool-call-multi-2" 601 .noWorkspace,
         .beginChild "child-req-multi-2" 0,
         .replicateChild "child-req-multi-2" .b .a] ++
        complete "child-req-multi-1" ++ complete "child-req-multi-2" ++

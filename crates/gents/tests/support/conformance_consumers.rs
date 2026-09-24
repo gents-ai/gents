@@ -532,6 +532,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reserved_child_cases_drive_actual_transaction_owner",
         },
         ConformanceConsumer::RustTest {
+            id: "trigger_engine::subagent_source::delegated_child_tests::generated_delegated_child_cases_bind_host_receiver",
+            package: "gents",
+            source_path: "crates/gents/src/trigger_engine/subagent_source/delegated_child_tests.rs",
+            module_path: "trigger_engine::subagent_source::delegated_child_tests",
+            function: "generated_delegated_child_cases_bind_host_receiver",
+        },
+        ConformanceConsumer::RustTest {
             id: "rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec",
             package: "gents",
             source_path: "crates/gents/src/rendered_request/encoding.rs",

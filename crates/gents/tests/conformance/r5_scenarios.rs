@@ -164,46 +164,8 @@ async fn run_generated_case(name: &str) -> Vec<Observation> {
     );
     assert_eq!(last.a_process_generation, case.expected_a_generation);
     assert_eq!(last.b_process_generation, case.expected_b_generation);
-    for expected in &case.expected_a_bridges {
-        let bridge = last
-            .a_bridge_rows
-            .iter()
-            .find(|bridge| bridge.tool_call_id == expected.tool)
-            .unwrap_or_else(|| panic!("modeled bridge {} missing from A", expected.tool));
-        assert_eq!(
-            bridge.lifecycle_state, expected.state,
-            "Lean-derived final state of bridge {}",
-            expected.tool
-        );
-        let physical_child = harness
-            .generated_child_request_id(&expected.child)
-            .expect("modeled bridge has exact physical child");
-        assert_eq!(bridge.child_request_id.as_deref(), Some(physical_child));
-    }
-    for expected in &case.expected_b_children {
-        let physical_child = harness
-            .generated_child_request_id(&expected.child)
-            .expect("modeled B child has exact physical reservation");
-        let child = last
-            .b_child_requests
-            .iter()
-            .find(|child| child.request_id == physical_child)
-            .unwrap_or_else(|| panic!("modeled B child {} is missing", expected.child));
-        assert_eq!(
-            expected.terminal.as_deref(),
-            child
-                .lifecycle_state
-                .is_terminal()
-                .then_some(child.lifecycle_state.as_str()),
-            "Lean-derived terminal state of B child {}",
-            expected.child
-        );
-        assert_eq!(
-            child.interrupt_requested_at.is_some(),
-            expected.interrupt_requested,
-            "Lean-derived interrupt fact of B child {}",
-            expected.child
-        );
-    }
+    harness
+        .assert_final_child_and_bridge_facts(&case)
+        .expect("Lean-derived final child and bridge facts differ from native records");
     history.to_vec()
 }

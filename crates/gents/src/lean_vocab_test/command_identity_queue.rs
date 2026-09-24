@@ -308,7 +308,8 @@ pub(crate) struct LeanReservedChildBinding {
     pub(crate) parent_tool: usize,
     pub(crate) parent_tool_doc: usize,
     pub(crate) payload: usize,
-    pub(crate) workspace: Option<usize>,
+    pub(crate) depth: usize,
+    pub(crate) workspace: Option<super::canonical_execution::LeanCanonicalDelegatedWorkspace>,
     pub(crate) admission: usize,
 }
 

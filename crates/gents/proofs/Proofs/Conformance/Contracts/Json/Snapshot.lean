@@ -71,7 +71,8 @@ def reservedChildDecisionString : EventDelivery.SubagentSource.MaterializationDe
   | .conflict => "conflict"
 
 def reservedChildBindingJson (binding : EventDelivery.SubagentSource.ReservedChildBinding) : String :=
-  let workspaceJson := match binding.workspace with | none => "null" | some value => toString value
+  let workspaceJson := (binding.workspace.map
+    Conformance.DelegatedChildContracts.stampJson).getD "null"
   "{" ++ "\"child\":" ++ toString binding.child ++ ","
     ++ "\"agent\":" ++ toString binding.agent ++ ","
     ++ "\"behavior\":" ++ toString binding.behavior ++ ","
@@ -80,6 +81,7 @@ def reservedChildBindingJson (binding : EventDelivery.SubagentSource.ReservedChi
     ++ "\"parent_tool\":" ++ toString binding.parentTool ++ ","
     ++ "\"parent_tool_doc\":" ++ toString binding.parentToolDoc ++ ","
     ++ "\"payload\":" ++ toString binding.payload ++ ","
+    ++ "\"depth\":" ++ toString binding.depth ++ ","
     ++ "\"workspace\":" ++ workspaceJson ++ ","
     ++ "\"admission\":" ++ toString binding.admission ++ "}"
 

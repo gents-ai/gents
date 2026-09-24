@@ -1,5 +1,13 @@
 [
   {
+    "id":"tools.host-child-receive","constructors":[],
+    "model_symbols":[{"file":"crates/gents/proofs/Proofs/EventDelivery/SubagentSource.lean","symbol":"EventDelivery.SubagentSource.receivedChildCandidate?"},{"file":"crates/gents/proofs/Proofs/EventDelivery/SubagentSource.lean","symbol":"EventDelivery.SubagentSource.receiveAndReserveChild"},{"file":"crates/gents/proofs/Proofs/EventDelivery/SubagentSource.lean","symbol":"EventDelivery.SubagentSource.receive_rejection_preserves_stored"}],
+    "generated_groups":["delegated_child_resolution_cases","r5_scenario_cases"],"fixture_status":"concrete_inputs",
+    "native_owner_paths":["crates/gents/src/trigger_engine/subagent_source.rs","crates/gents/src/tool_call_lifecycle/subagent_request.rs"],
+    "consumer_paths":["crates/gents/src/trigger_engine/subagent_source.rs","crates/gents/tests/support/r5_conformance/runner.rs"],"native_status":"pending",
+    "required_cases":["A fresh receiving node consumes copied bridge input without a local parent request and derives the exact signed child depth and complete workspace stamp.","Generated depth-bound rejection creates no child; read-only parent authority cannot increase through an explicit bind.","Reservation replay compares depth and the complete workspace stamp, preserves a running or terminal child, and conflicts leave stored bindings unchanged.","R5 publication consumes generated argument bytes with only symbolic-to-physical identity translation; no separate literal payload policy.","Peer membership and workspace observations are explicit inputs, not document ACP or independent remote-ancestry proof. Workspace observation and child-create transaction are not claimed atomic.","Provision, arbitrary distributed interleavings and malformed imported bridge validation beyond the bound fixtures remain follow-ups."],"retired_bindings":["R5 child depth increment independent of the delegated receive owner","opaque workspace identity standing in for a full replay stamp"]
+  },
+  {
     "id":"tools.reserved-child-materialization","constructors":[],
     "model_symbols":[{"file":"crates/gents/proofs/Proofs/EventDelivery/SubagentSource.lean","symbol":"EventDelivery.SubagentSource.ensureReservedChild"},{"file":"crates/gents/proofs/Proofs/EventDelivery/SubagentSource.lean","symbol":"EventDelivery.SubagentSource.fresh_then_exact_replay_creates_once"},{"file":"crates/gents/proofs/Proofs/EventDelivery/SubagentSource.lean","symbol":"EventDelivery.SubagentSource.conflict_preserves_stored"}],
     "generated_groups":["reserved_child_materialization_cases"],"fixture_status":"concrete_inputs",

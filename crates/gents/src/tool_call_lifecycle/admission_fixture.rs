@@ -701,6 +701,7 @@ mod lifecycle_tests {
         parent_request_doc_id: &str,
         parent_tool_call_id: &str,
         parent_tool_call_doc_id: &str,
+        depth: u32,
         workspace: Option<WorkspaceLineage>,
         admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     ) {
@@ -717,7 +718,7 @@ mod lifecycle_tests {
         let spec = RequestSpec {
             workspace,
             subagent: Some(ParentLink {
-                depth: 1,
+                depth,
                 parent_request_id: parent_request_id.to_owned(),
                 parent_request_doc_id: parent_request_doc_id.to_owned(),
                 parent_tool_call_id: Some(parent_tool_call_id.to_owned()),
@@ -1381,12 +1382,24 @@ mod lifecycle_tests {
                 format!("{prefix}-{stored}")
             }
         }
-        fn workspace(value: Option<usize>, agent_did: &str) -> Option<WorkspaceLineage> {
+        fn workspace(
+            value: Option<&crate::lean_vocab_test::LeanCanonicalDelegatedWorkspace>,
+            modeled_agent: usize,
+            agent_did: &str,
+        ) -> Option<WorkspaceLineage> {
             value.map(|value| WorkspaceLineage {
-                workspace_id: Some(format!("workspace-{value}")),
-                workspace_owner_agent_did: Some(agent_did.to_owned()),
-                workspace_authority: Some("readWrite".into()),
-                workspace_seal_hash: Some(format!("seal-{value}")),
+                workspace_id: Some(format!("workspace-{}", value.workspace_id)),
+                workspace_owner_agent_did: Some(
+                    if value.workspace_owner_agent_did
+                        == u64::try_from(modeled_agent).expect("modeled agent fits native identity")
+                    {
+                        agent_did.to_owned()
+                    } else {
+                        format!("agent-{}", value.workspace_owner_agent_did)
+                    },
+                ),
+                workspace_authority: Some(value.workspace_authority.clone()),
+                workspace_seal_hash: value.workspace_seal_hash.map(|seal| format!("seal-{seal}")),
             })
         }
 
@@ -1394,6 +1407,11 @@ mod lifecycle_tests {
             let fixture = format!("reserved-child-{}", case.name);
             let (node, path, bridge) = published_background_bridge(&fixture).await;
             let candidate = &case.candidate;
+            let candidate_depth =
+                u32::try_from(candidate.depth).expect("modeled child depth fits native depth");
+            let parent_depth = candidate_depth
+                .checked_sub(1)
+                .expect("modeled child has a parent depth");
             let request_id = bridge
                 .child_request_id
                 .as_deref()
@@ -1406,7 +1424,8 @@ mod lifecycle_tests {
             let parent_request_doc_id = bridge.request_doc_id().unwrap().to_owned();
             let parent_tool_call_id = bridge.tool_call_id().to_owned();
             let parent_tool_call_doc_id = bridge.doc_id().unwrap().to_owned();
-            let candidate_workspace = workspace(candidate.workspace, &agent_did);
+            let candidate_workspace =
+                workspace(candidate.workspace.as_ref(), candidate.agent, &agent_did);
             let bridge_author = bridge
                 .requester_did()
                 .unwrap_or(bridge.agent_did())
@@ -1428,7 +1447,7 @@ mod lifecycle_tests {
                 let stored_workspace = if stored.workspace == candidate.workspace {
                     candidate_workspace.clone()
                 } else {
-                    workspace(stored.workspace, &agent_did)
+                    workspace(stored.workspace.as_ref(), candidate.agent, &agent_did)
                 };
                 let stored_admission = if stored.admission == candidate.admission {
                     if candidate.admission == 7 {
@@ -1479,6 +1498,8 @@ mod lifecycle_tests {
                         &parent_tool_call_doc_id,
                         "parent-tool-doc",
                     ),
+                    u32::try_from(stored.depth)
+                        .expect("modeled stored child depth fits native depth"),
                     stored_workspace,
                     stored_admission,
                 )
@@ -1506,7 +1527,7 @@ mod lifecycle_tests {
                     parent_request_doc_id.clone(),
                     parent_tool_call_id.clone(),
                     parent_tool_call_doc_id.clone(),
-                    0,
+                    parent_depth,
                     agent_did.clone(),
                     behavior_id.into(),
                     prompt.clone(),
@@ -1522,7 +1543,7 @@ mod lifecycle_tests {
                     parent_request_doc_id.clone(),
                     parent_tool_call_id.clone(),
                     parent_tool_call_doc_id.clone(),
-                    0,
+                    parent_depth,
                     agent_did.clone(),
                     behavior_id.into(),
                     prompt.clone(),
@@ -1585,7 +1606,7 @@ mod lifecycle_tests {
                         behavior_id,
                         &prompt,
                         &gents_protocol::request_input::RequestInput::default(),
-                        1,
+                        candidate_depth,
                         &parent_request_id,
                         &parent_request_doc_id,
                         &parent_tool_call_id,

@@ -3315,9 +3315,9 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
     native.node.shutdown().await;
 }
 
-// `choice` is exported separately from the accepted provider arguments: this
-// composes the real resolver and child-request owners, but does not claim the
-// trigger's workspace-argument decoder selected Bind from those arguments.
+// The accepted depth scripts retain their unchanged argument stream. The
+// receiver test separately binds model-published bind arguments to the actual
+// trigger decoder and materialization path.
 #[tokio::test]
 async fn generated_remote_depth_crosses_publication_and_child_creation_boundaries() {
     let contracts = crate::lean_vocab_test::lean_contract_snapshot();
@@ -3329,10 +3329,6 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
         (
             "remote_depth_three_rejects_child",
             "real_spawn_depth_three_copies_parent_depth",
-        ),
-        (
-            "readonly_parent_bind_readwrite_attenuates",
-            "real_spawn_depth_two_copies_parent_depth",
         ),
     ] {
         let modeled = contracts
@@ -3536,27 +3532,7 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
                     assert!(workspace.available);
                     crate::background_tools::SpawnWorkspaceArg::Inherit
                 }
-                crate::lean_vocab_test::LeanDelegatedChildChoice::Bind {
-                    workspace,
-                    requested_authority,
-                } => {
-                    assert_eq!(workspace.workspace_id, parent_stamp.workspace_id);
-                    assert_eq!(
-                        workspace.workspace_owner_agent_did,
-                        parent_stamp.workspace_owner_agent_did
-                    );
-                    assert_eq!(
-                        workspace.workspace_seal_hash,
-                        parent_stamp.workspace_seal_hash
-                    );
-                    assert_eq!(workspace.state, "ready");
-                    assert!(workspace.available);
-                    crate::background_tools::SpawnWorkspaceArg::Bind {
-                        id: format!("lean-workspace-{}", workspace.workspace_id),
-                        authority: requested_authority.clone(),
-                    }
-                }
-                _ => panic!("this native child binding only covers inherit and bind"),
+                _ => panic!("depth publication scripts require inherited workspace"),
             };
             let workspace =
                 crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(

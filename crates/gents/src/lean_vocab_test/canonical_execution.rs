@@ -90,7 +90,7 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) delegated_workspace: Option<LeanCanonicalDelegatedWorkspace>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalDelegatedWorkspace {
     pub(crate) workspace_id: u64,
