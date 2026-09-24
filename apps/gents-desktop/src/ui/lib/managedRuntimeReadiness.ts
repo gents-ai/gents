@@ -10,6 +10,7 @@ import {
   unsettledManagedServerError,
   type ManagedServerWait,
 } from "../../lib/managedServerStartup";
+import { setupErrorMessage } from "./providerLogin";
 
 type ReadinessApi = Pick<
   DesktopApiAdapter,
@@ -17,6 +18,9 @@ type ReadinessApi = Pick<
 >;
 
 export const MANAGED_RUNTIME_READY_TIMEOUT_MS = 30_000;
+
+const RUNTIME_UNAVAILABLE =
+  "The local agent is not running, so provider sign-in is unavailable. Start the agent and try again.";
 
 /** Raised when the managed runtime cannot be brought to a serving state. */
 export class ManagedRuntimeUnavailableError extends Error {
@@ -94,19 +98,26 @@ export async function ensureManagedRuntimeServing(
       }
       const agentName =
         status.agentName?.trim() || fallbackAgentName.trim() || "Local Agent";
-      await observeManagedServerOperation(
-        api,
-        () => startManagedServer(agentName),
-        onWait,
-      );
+      try {
+        await observeManagedServerOperation(
+          api,
+          () => startManagedServer(agentName),
+          onWait,
+        );
+      } catch (cause) {
+        throw new ManagedRuntimeUnavailableError(
+          setupErrorMessage(cause, RUNTIME_UNAVAILABLE),
+        );
+      }
     }
     await waitForManagedRuntimePairing(api, pairing);
   } catch (cause) {
     console.warn("managed runtime is not serving for setup", cause);
     throw new ManagedRuntimeUnavailableError(
-      cause instanceof ManagedServerStartupError
+      cause instanceof ManagedServerStartupError ||
+        cause instanceof ManagedRuntimeUnavailableError
         ? cause.message
-        : "The local agent is not running, so provider sign-in is unavailable. Start the agent and try again.",
+        : RUNTIME_UNAVAILABLE,
     );
   }
 }

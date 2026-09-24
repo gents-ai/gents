@@ -661,7 +661,7 @@ impl<R: CommandRunner> NativeServiceManager<R> {
     /// Why a loaded job is not running: the supervisor's record of the last
     /// failed exit while it waits to restart the process. `None` while the
     /// process runs, has never exited, or last exited successfully.
-    pub fn exit_failure(&self) -> Result<Option<String>> {
+    pub fn exit_failure(&self) -> Result<Option<ServiceExit>> {
         if !self.config.definition_path(self.platform).is_file() {
             return Ok(None);
         }
@@ -1120,7 +1120,15 @@ fn launchd_is_running(output: &str) -> bool {
     state_running && has_pid
 }
 
-fn launchd_exit_failure(output: &str) -> Option<String> {
+/// A failed exit the supervisor recorded, with how many times it has
+/// restarted the job since it was loaded.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ServiceExit {
+    pub reason: String,
+    pub restarts: u64,
+}
+
+fn launchd_exit_failure(output: &str) -> Option<ServiceExit> {
     if launchd_is_running(output) {
         return None;
     }
@@ -1131,17 +1139,23 @@ fn launchd_exit_failure(output: &str) -> Option<String> {
             .find_map(|line| line.strip_prefix(name))
             .map(str::trim)
     };
-    if let Some(signal) = field("last terminating signal = ") {
-        return Some(format!("terminated by signal {signal}"));
-    }
-    let code = field("last exit code = ")?;
-    if code.starts_with('(') || code.split(':').next().map(str::trim) == Some("0") {
-        return None;
-    }
-    Some(format!("exited with code {code}"))
+    let restarts = field("runs = ")
+        .and_then(|runs| runs.parse::<u64>().ok())
+        .unwrap_or_default()
+        .saturating_sub(1);
+    let reason = if let Some(signal) = field("last terminating signal = ") {
+        format!("terminated by signal {signal}")
+    } else {
+        let code = field("last exit code = ")?;
+        if code.starts_with('(') || code.split(':').next().map(str::trim) == Some("0") {
+            return None;
+        }
+        format!("exited with code {code}")
+    };
+    Some(ServiceExit { reason, restarts })
 }
 
-fn systemd_exit_failure(output: &str) -> Option<String> {
+fn systemd_exit_failure(output: &str) -> Option<ServiceExit> {
     let field = |name: &str| {
         output
             .lines()
@@ -1155,11 +1169,10 @@ fn systemd_exit_failure(output: &str) -> Option<String> {
     if sub != "auto-restart" && (result.is_empty() || result == "success") {
         return None;
     }
-    Some(format!(
-        "{result} (exit status {}, {} restarts)",
-        field("ExecMainStatus"),
-        field("NRestarts")
-    ))
+    Some(ServiceExit {
+        reason: format!("{result} (exit status {})", field("ExecMainStatus")),
+        restarts: field("NRestarts").parse().unwrap_or_default(),
+    })
 }
 
 fn launchd_is_disabled(output: &str) -> Result<bool> {
@@ -1683,14 +1696,20 @@ mod tests {
         assert_eq!(
             launchd_exit_failure(
                 "state = not running\nruns = 3\nlast exit code = 78: Function not implemented\n"
-            )
-            .as_deref(),
-            Some("exited with code 78: Function not implemented")
+            ),
+            Some(ServiceExit {
+                reason: "exited with code 78: Function not implemented".into(),
+                restarts: 2,
+            })
         );
         assert_eq!(
-            launchd_exit_failure("state = not running\nlast terminating signal = Killed: 9\n")
-                .as_deref(),
-            Some("terminated by signal Killed: 9")
+            launchd_exit_failure(
+                "state = not running\nruns = 1\nlast terminating signal = Killed: 9\n"
+            ),
+            Some(ServiceExit {
+                reason: "terminated by signal Killed: 9".into(),
+                restarts: 0,
+            })
         );
         assert!(
             launchd_exit_failure("state = not running\nlast exit code = (never exited)\n")
@@ -1702,9 +1721,11 @@ mod tests {
         assert_eq!(
             systemd_exit_failure(
                 "ActiveState=activating\nSubState=auto-restart\nResult=exit-code\nExecMainStatus=1\nNRestarts=4\n"
-            )
-            .as_deref(),
-            Some("exit-code (exit status 1, 4 restarts)")
+            ),
+            Some(ServiceExit {
+                reason: "exit-code (exit status 1)".into(),
+                restarts: 4,
+            })
         );
         assert!(systemd_exit_failure(
             "ActiveState=activating\nSubState=start\nResult=success\nExecMainStatus=0\nNRestarts=0\n"

@@ -228,6 +228,18 @@ describe("setup re-entry at the provider step", () => {
     expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
   });
 
+  it("shows the bridge's reason when starting the runtime fails", async () => {
+    const { api, shell } = harness();
+    api.managedServerStatus.mockResolvedValue(status({ state: "stopped" }));
+    api.startManagedServer.mockRejectedValue(
+      new Error(
+        "the native Gents service keeps exiting before it publishes runtime readiness: it exited with code 78 (restarted 3 times)",
+      ),
+    );
+    reenter(shell);
+    expect(await screen.findByRole("alert")).toHaveTextContent("exited with code 78");
+  });
+
   it("keeps a completed sign-in whose save failed and retries the save without OAuth", async () => {
     const { api, shell } = harness();
     api.managedServerStatus.mockResolvedValue(

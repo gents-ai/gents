@@ -22,6 +22,7 @@ import {
 import { restoreManagedServer } from "./managedServerLifecycle";
 import {
   ManagedServerStartupError,
+  observeManagedServerOperation,
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
 import { ownsAutomaticRecovery } from "../lib/shellPlatform";
@@ -227,13 +228,21 @@ export function useDesktopClientLifecycle({
     const status = managedServerFailure?.status;
     if (!status?.agentName || !status.effectiveToolCeiling || !api.restartManagedServer)
       return;
+    const restartManagedServer = api.restartManagedServer;
+    const agentName = status.agentName;
+    const authority = {
+      toolCeiling: status.effectiveToolCeiling,
+      toolRoot: status.effectiveToolRoot,
+    };
     setStarting(true);
     setError(null);
+    setStartupPhase("checking-managed-server");
     try {
-      await api.restartManagedServer(status.agentName, {
-        toolCeiling: status.effectiveToolCeiling,
-        toolRoot: status.effectiveToolRoot,
-      });
+      await observeManagedServerOperation(
+        api,
+        () => restartManagedServer(agentName, authority),
+        setManagedServerWait,
+      );
       await initializeDesktop();
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error));
