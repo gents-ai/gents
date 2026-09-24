@@ -179,6 +179,11 @@ async fn from_default_behavior_documents_composes_behavior_and_inference_profile
     ));
     assert_eq!(behavior.compaction_threshold(), 0.75);
     assert_eq!(behavior.stream_batch_ms, 500);
+    assert_ne!(
+        behavior.stream_liveness_timeout,
+        Duration::from_secs(crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+        "the explicit execution setting must override the shorter default lease",
+    );
     assert_eq!(behavior.stream_liveness_timeout, Duration::from_secs(45));
     assert_eq!(behavior.deadline_duration, Duration::from_secs(120));
 

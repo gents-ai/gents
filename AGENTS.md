@@ -122,6 +122,14 @@ reads.
 - Escape every interpolated GraphQL string with
   `graphql::escape_graphql_string()`.
 - Never emit `[]` in a DefraDB mutation; use `null` for an empty nillable list.
+- All application DefraDB access goes through the `gents::config_client` and
+  `gents::graphql` owners: single writes via `ConfigAccess::write`/`write_local`,
+  multi-statement or DID-scoped work via `ConfigAccess::transact*`, reads via
+  `graphql_with_transaction_retry` (embedded) or `ConfigAccess::execute`
+  (local/HTTP). Never call `EmbeddedNode::execute*`, `runner()`, or raw DefraDB
+  HTTP GraphQL from feature code, and never add another retry loop or access
+  wrapper. `write_owner_structure.rs` is a syntactic ratchet over direct node
+  access, not complete enforcement; its allowlist only shrinks.
 - Use `tracing`, never `println!`.
 - Treat flaky tests as defects: reproduce, file, and fix them.
 - Create worktrees with `make worktree BRANCH=<branch>` so build artifacts are

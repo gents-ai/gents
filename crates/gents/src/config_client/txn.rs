@@ -3,6 +3,8 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::future::Future;
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, OnceLock, Weak};
 use std::time::{Duration, Instant};
@@ -137,6 +139,31 @@ impl MutationWriteGate {
 
 tokio::task_local! {
     static ACTIVE_EMBEDDED_TRANSACTION: &'static str;
+}
+
+#[cfg(test)]
+struct SuccessfulMutationFault {
+    fail_after: Option<usize>,
+    count: AtomicUsize,
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static SUCCESSFUL_MUTATION_FAULT: Arc<SuccessfulMutationFault>;
+}
+
+#[cfg(test)]
+fn after_successful_mutation_for_test() -> Result<()> {
+    SUCCESSFUL_MUTATION_FAULT
+        .try_with(|fault| {
+            let count = fault.count.fetch_add(1, Ordering::Relaxed) + 1;
+            anyhow::ensure!(
+                fault.fail_after != Some(count),
+                "injected failure after successful transaction mutation {count}"
+            );
+            Ok(())
+        })
+        .unwrap_or(Ok(()))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -453,6 +480,22 @@ pub struct ConfigApplyTxn<'a> {
 }
 
 impl<'a> ConfigApplyTxn<'a> {
+    #[cfg(test)]
+    pub(crate) async fn with_successful_mutation_failure_at<F: Future>(
+        fail_after: Option<usize>,
+        future: F,
+    ) -> (F::Output, usize) {
+        assert!(fail_after.is_none_or(|index| index > 0));
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after,
+            count: AtomicUsize::new(0),
+        });
+        let output = SUCCESSFUL_MUTATION_FAULT
+            .scope(Arc::clone(&fault), future)
+            .await;
+        (output, fault.count.load(Ordering::Relaxed))
+    }
+
     async fn begin_local_owned(
         node: &'a EmbeddedNode,
         identity: Option<Did>,
@@ -569,6 +612,8 @@ impl<'a> ConfigApplyTxn<'a> {
         if document.trim_start().starts_with("mutation") {
             self.affected_documents
                 .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
+            #[cfg(test)]
+            after_successful_mutation_for_test()?;
         }
         Ok(response)
     }
@@ -644,6 +689,8 @@ impl<'a> ConfigApplyTxn<'a> {
             let envelope = json!({"data": response.data.as_ref().unwrap_or(&Value::Null)});
             self.affected_documents
                 .fetch_add(graphql::affected_documents(&envelope), Ordering::Relaxed);
+            #[cfg(test)]
+            after_successful_mutation_for_test()?;
         }
         Ok(response)
     }

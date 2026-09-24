@@ -71,7 +71,7 @@ describe("settings polish", () => {
     const user = userEvent.setup();
 
     await user.hover(screen.getByRole("button", { name: "Default behavior" }));
-    const card = await screen.findByTestId("behaviour-hover-card");
+    const card = await screen.findByTestId("behavior-hover-card");
     expect(card).toHaveTextContent("StatusEnabled");
     expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute(
       "href",

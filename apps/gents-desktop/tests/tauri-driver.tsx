@@ -92,11 +92,9 @@ export function renderTauriAppDriverWithBridge(
     configSectionTab(tabId: string) {
       const labels: Record<string, string> = {
         agent: "Agent",
-        behaviors: "Behaviours",
-        contexts: "Contexts",
+        behaviors: "Behaviors",
         skills: "Skills",
-        inference: "Backends",
-        profiles: "Profiles",
+        profiles: "Providers",
         tools: "Tools",
         "tool-services": "Remote Tools",
         tasks: "Tasks",

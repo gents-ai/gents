@@ -251,6 +251,12 @@ export type DesktopApiAdapter = {
     agentDid: string,
     credentialId: string,
   ) => Promise<void>;
+  /** Saves a sign-in the bridge holds after a failed credential save,
+   *  without repeating the browser login. `provider` is the credential kind. */
+  retrySaveProviderAccount?: (
+    agentDid: string,
+    provider: string,
+  ) => Promise<ProviderAccountView>;
   saveInferenceProfileConfig: (
     request: InferenceProfileSaveRequest,
   ) => Promise<DesktopClientSnapshot>;

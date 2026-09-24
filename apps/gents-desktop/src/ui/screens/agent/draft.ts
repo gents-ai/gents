@@ -2,16 +2,24 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 
 /* A reviewable draft. Nothing crosses the bridge until the user explicitly
-   saves; reset restores the last bridge-confirmed value. */
+   saves; reset restores the last bridge-confirmed value.
+
+   `save` resolves true only once the bridge accepted the write, so a caller
+   that closes or navigates on success never does so after a failure; the
+   error stays on the draft. A new document (`isNew`) is saveable as it
+   stands: prefilled is not the same as saved. */
 export function useDraft<T extends object>(
   saved: T,
-  persist: (next: T) => Promise<unknown>,
+  /* `intent` is whatever a caller passes to save, for a save with a choice */
+  persist: (next: T, intent?: unknown) => Promise<unknown>,
+  options: { isNew?: boolean } = {},
 ) {
   const [draft, setDraft] = useState<T>(saved);
   const [baseline, setBaseline] = useState<T>(saved);
   const baselineRef = useRef<T>(saved);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [created, setCreated] = useState(false);
   const savedKey = JSON.stringify(saved);
   useEffect(() => {
     const previousKey = JSON.stringify(baselineRef.current);
@@ -24,20 +32,35 @@ export function useDraft<T extends object>(
     // the bridge-confirmed generation this draft needs to observe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [savedKey]);
-  const dirty = JSON.stringify(draft) !== JSON.stringify(baseline);
-  const save = async () => {
-    if (!dirty || saving) return;
+  const dirty =
+    (options.isNew === true && !created) ||
+    JSON.stringify(draft) !== JSON.stringify(baseline);
+  const save = async (intent?: unknown): Promise<boolean> => {
+    if (!dirty || saving) return false;
     setSaving(true);
     setError(null);
     try {
-      await persist(draft);
+      const result = await persist(draft, intent);
       baselineRef.current = draft;
       setBaseline(draft);
-      toast("Saved");
+      setCreated(true);
+      /* a persist can say more than Saved, with one follow-up action */
+      const said = result as {
+        savedToast?: string;
+        savedAction?: { label: string; onClick: () => void };
+      } | null;
+      if (said && typeof said === "object" && typeof said.savedToast === "string")
+        toast(
+          said.savedToast,
+          said.savedAction ? { action: said.savedAction } : undefined,
+        );
+      else toast("Saved");
+      return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
       toast(`Save failed: ${message}`);
+      return false;
     } finally {
       setSaving(false);
     }

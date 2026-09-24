@@ -4,7 +4,6 @@ Minimal default: core + client-lifecycle (no runtime-admin, no config mutation)
 
 #### This default permission set includes the following:
 
-- `allow-desktop-bridge-contract`
 - `allow-desktop-bootstrap-summary`
 - `allow-desktop-client-snapshot`
 - `allow-desktop-observer-metrics`
@@ -173,32 +172,6 @@ Enables the desktop_bootstrap_summary command without any pre-configured scope.
 <td>
 
 Denies the desktop_bootstrap_summary command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:allow-desktop-bridge-contract`
-
-</td>
-<td>
-
-Enables the desktop_bridge_contract command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`gents-desktop-bridge:deny-desktop-bridge-contract`
-
-</td>
-<td>
-
-Denies the desktop_bridge_contract command without any pre-configured scope.
 
 </td>
 </tr>
@@ -1558,6 +1531,32 @@ Denies the desktop_provider_account_disconnect command without any pre-configure
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-provider-account-retry-save`
+
+</td>
+<td>
+
+Enables the desktop_provider_account_retry_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-provider-account-retry-save`
+
+</td>
+<td>
+
+Denies the desktop_provider_account_retry_save command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-provider-accounts-list`
 
 </td>
@@ -2239,7 +2238,7 @@ Denies the desktop_workspace_list command without any pre-configured scope.
 </td>
 <td>
 
-Contract, bootstrap summary, aggregate snapshot, observer metrics
+Bootstrap summary, aggregate snapshot, observer metrics
 
 </td>
 </tr>

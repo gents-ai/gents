@@ -109,6 +109,7 @@ export type {
   RenderedTimelineItem,
   RenderedToolCallView,
   ToolCallView,
+  ToolDiffLineKind,
   ToolDiffLineView,
   ToolPresentationView,
   RequestResendResult,

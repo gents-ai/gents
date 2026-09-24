@@ -41,6 +41,8 @@ pub(crate) struct LeanCanonicalExecutionSeed {
     pub(crate) request_id: u64,
     pub(crate) session_id: u64,
     pub(crate) principal: u64,
+    pub(crate) subagent_depth: u64,
+    pub(crate) workspace: Option<LeanCanonicalDelegatedWorkspace>,
     pub(crate) remote_routes: Vec<LeanCanonicalRemoteRoute>,
     pub(crate) lease: LeanRequestExecutionWorld,
     pub(crate) transcript_session_id: u64,
@@ -95,6 +97,62 @@ pub(crate) struct LeanCanonicalDelegatedWorkspace {
     pub(crate) workspace_owner_agent_did: u64,
     pub(crate) workspace_seal_hash: Option<u64>,
     pub(crate) workspace_authority: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegatedChildResolutionCase {
+    pub(crate) name: String,
+    pub(crate) parent_depth: u32,
+    pub(crate) parent_agent: u64,
+    pub(crate) child_agent: u64,
+    pub(crate) delegated_input: Option<LeanDelegatedChildInput>,
+    pub(crate) parent_workspace: Option<LeanCanonicalDelegatedWorkspace>,
+    pub(crate) choice: LeanDelegatedChildChoice,
+    pub(crate) expected: Option<LeanDelegatedChildResult>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanDelegatedChildChoice {
+    None,
+    Inherit {
+        workspace: LeanObservedChildWorkspace,
+    },
+    Bind {
+        workspace: LeanObservedChildWorkspace,
+        requested_authority: Option<String>,
+    },
+    Provision {
+        workspace: LeanObservedChildWorkspace,
+        parent_path_exact: bool,
+    },
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanObservedChildWorkspace {
+    pub(crate) workspace_id: u64,
+    pub(crate) workspace_owner_agent_did: u64,
+    pub(crate) workspace_seal_hash: Option<u64>,
+    pub(crate) state: String,
+    pub(crate) available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegatedChildInput {
+    pub(crate) source_close_doc_id: u64,
+    pub(crate) source_stream: u64,
+    pub(crate) arguments: String,
+    pub(crate) parent_subagent_depth: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDelegatedChildResult {
+    pub(crate) child_depth: u32,
+    pub(crate) child_workspace: Option<LeanCanonicalDelegatedWorkspace>,
 }
 
 /// A background tool spawned by an already running parent tool. It shares the

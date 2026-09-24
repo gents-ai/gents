@@ -46,7 +46,6 @@ fn render_tool_call(tool: ToolCallView) -> RenderedToolCallView {
         presentation,
         reconstruction: tool.reconstruction.clone(),
         partial_output_tail: tool.partial_output_tail.clone(),
-        partial_output_seq: tool.partial_output_seq,
         denial: tool.denial.clone(),
         cancel_cause: tool.cancel_cause.clone(),
     }
@@ -316,7 +315,6 @@ mod tests {
                     .to_string(),
             ),
             partial_output_tail: Some("reading watcher.rs".to_string()),
-            partial_output_seq: Some(18),
             result: None,
             reconstruction: MessageReconstructionView {
                 state: ReconstructionState::Ready,

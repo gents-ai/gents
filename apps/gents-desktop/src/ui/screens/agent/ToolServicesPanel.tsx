@@ -2,6 +2,7 @@ import type {
   DeploymentView,
   ToolServiceRegistry,
 } from "@source-inc/gents-desktop-client";
+import { dependentsWarning } from "./dependents";
 import type { Shell } from "@/hooks/useShell";
 import { Button } from "@gents/ui/components/button";
 import { toast } from "sonner";
@@ -13,10 +14,12 @@ import {
   NumberRow,
   SwitchRow,
   TextRow,
+  TagsRow,
 } from "./editors";
-import { fromLinesOrNull, newId, optionalInteger, toLines, useDraft } from "./draft";
+import { newId, optionalInteger, useDraft } from "./draft";
 import { DeleteButton, ListDetail } from "./ListDetail";
 import { Group } from "./rows";
+import { RowMenu } from "./RowMenu";
 
 function Editor({
   shell,
@@ -42,7 +45,7 @@ function Editor({
     mcpPath: service.mcp_path ?? "",
     sendAgentDid: service.send_agent_did ?? false,
     enabled: service.enabled ?? true,
-    tags: toLines(service.tags ?? []),
+    tags: service.tags ?? [],
   };
   const validatedEndpoint = (next: typeof saved) => {
     if (![next.hostname, next.tailscaleIp, next.lanIp].some((v) => v.trim()))
@@ -77,7 +80,7 @@ function Editor({
           mcp_path: endpoint.mcpPath,
           send_agent_did: next.sendAgentDid,
           enabled: next.enabled,
-          tags: fromLinesOrNull(next.tags),
+          tags: next.tags.length ? next.tags : null,
         },
       }),
     );
@@ -177,14 +180,11 @@ function Editor({
           checked={d.draft.enabled}
           onChange={(v) => d.choose("enabled", v)}
         />
-        <AreaRow
+        <TagsRow
           id={id("tags")}
           label="Tags"
-          description="One per line."
           value={d.draft.tags}
           onChange={(v) => d.set("tags", v)}
-          onCommit={d.commit}
-          rows={3}
         />
       </Group>
       <div className="mb-3 flex justify-end">
@@ -201,6 +201,7 @@ function Editor({
       />
       <DeleteButton
         label={service.display_name ?? service.service_id}
+        warning={dependentsWarning(deployment, "tool-service", service.service_id)}
         base={base}
         onDelete={() =>
           shell.applyConfig((api) =>
@@ -237,6 +238,21 @@ export function ToolServicesPanel({
         id: s.service_id,
         title: s.display_name ?? s.service_id,
         meta: s.hostname ?? "",
+        trailing: (
+          <RowMenu
+            name={s.display_name ?? s.service_id}
+            base={base}
+            id={s.service_id}
+            onDelete={() =>
+              shell.applyConfig((api) =>
+                api.deleteToolServiceConfig({
+                  serviceId: s.service_id,
+                  agentDid: deployment.agentDid,
+                }),
+              )
+            }
+          />
+        ),
       }))}
       createLabel="New remote tools"
       empty="No remote tools. Add an MCP connection, then select its tools in a Tools document."

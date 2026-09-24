@@ -35,7 +35,6 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            tauri_commands::lifecycle::desktop_bridge_contract,
             tauri_commands::external_url::desktop_open_external_url,
             tauri_commands::lifecycle::desktop_bootstrap_summary,
             tauri_commands::e2e::desktop_native_e2e_config,
@@ -106,6 +105,7 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
             tauri_commands::inference_setup::desktop_claude_login_cancel,
             tauri_commands::inference_setup::desktop_provider_accounts_list,
             tauri_commands::inference_setup::desktop_provider_account_disconnect,
+            tauri_commands::inference_setup::desktop_provider_account_retry_save,
             tauri_commands::tasks::desktop_task_save,
             tauri_commands::tasks::desktop_schedule_save,
             tauri_commands::tasks::desktop_schedule_run,

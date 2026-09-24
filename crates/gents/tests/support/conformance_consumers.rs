@@ -56,6 +56,13 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "lean_vocab_test::support::canonical_presentation::native_adapter::generated_payload_presentation_cases_use_native_reconstruction",
+            package: "gents",
+            source_path: "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs",
+            module_path: "lean_vocab_test::support::canonical_presentation::native_adapter",
+            function: "generated_payload_presentation_cases_use_native_reconstruction",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::persona_request::generated_root_admission_cases_drive_production_root_policy",
             package: "gents",
             source_path: "crates/gents/tests/conformance/persona_request.rs",

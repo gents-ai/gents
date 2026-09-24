@@ -112,9 +112,7 @@ impl ProviderInputCounter {
     /// path; rendered-request accounting calls `project_request` once for the
     /// request that may actually be dispatched.
     pub fn estimate_request(&self, request: &CompletionRequest) -> Result<usize> {
-        let mut body = self.project_body(request)?;
-        remove_output_limits(&mut body);
-        estimate_json(&body)
+        estimate_input_body(self.project_body(request)?)
     }
 
     // pub, not private: gents' own provider_input tests project a request
@@ -346,7 +344,6 @@ fn projected_accounting(
     estimator: &'static str,
 ) -> Result<ProviderInputProjection> {
     remove_output_limits(&mut body);
-    let estimated_input_tokens = estimate_json(&body)?;
 
     let provider_messages =
         field_estimate(&body, &["messages", "system", "input", "instructions"])?;
@@ -364,6 +361,7 @@ fn projected_accounting(
     let messages = documentless_messages;
     let tool_schemas = field_estimate(&body, &["tools", "tool_choice"])?;
     let output_schema = field_estimate(&body, &["response_format", "text"])?;
+    let estimated_input_tokens = estimate_input_body(body)?;
     let classified = messages
         .checked_add(documents)
         .and_then(|total| total.checked_add(tool_schemas))
@@ -390,6 +388,13 @@ fn projected_accounting(
         estimated_input_tokens,
         estimator,
     })
+}
+
+/// Accepts the final provider wire body, not native transcript JSON. Output
+/// limits are excluded by the same owner used by pre-dispatch estimation.
+pub fn estimate_input_body(mut body: Value) -> Result<usize> {
+    remove_output_limits(&mut body);
+    estimate_json(&body)
 }
 
 fn remove_output_limits(body: &mut Value) {

@@ -180,6 +180,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) cancel_propagation_cases: Vec<LeanCancelPropagationCase>,
     pub(crate) r6_background_theorem_witnesses: Vec<LeanBackgroundTheoremWitness>,
     pub(crate) subagent_delegation_graph_cases: Vec<LeanSubagentDelegationGraphCase>,
+    pub(crate) delegated_child_resolution_cases: Vec<LeanDelegatedChildResolutionCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,

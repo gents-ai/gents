@@ -533,6 +533,10 @@ pub(crate) async fn run_command(
         stderr_capture_incomplete,
         stdout_truncation: stdout.metadata,
         stderr_truncation: stderr.metadata,
+        hint: (timed_out
+            && !crate::tool_call_lifecycle::runtime::current_tool_runtime_context()
+                .is_some_and(|context| context.background))
+        .then(|| foreground_timeout_hint(duration_ms)),
     };
     let output = CommandOutput {
         metadata,
@@ -1478,6 +1482,20 @@ struct CommandMetadata {
     stderr_capture_incomplete: bool,
     stdout_truncation: StreamTruncationMetadata,
     stderr_truncation: StreamTruncationMetadata,
+    /// Model-facing next step; present only when the foreground timeout
+    /// stopped the command.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<String>,
+}
+
+/// The foreground timeout keeps the output captured so far; point the model
+/// at the background owner instead of a blind retry.
+fn foreground_timeout_hint(duration_ms: u64) -> String {
+    format!(
+        "timed out after {:.1}s; stdout and stderr below were captured before it was stopped. For long-running work use {} and poll its output.",
+        duration_ms as f64 / 1000.0,
+        crate::toolset::SPAWN_PROCESS_TOOL_NAME,
+    )
 }
 
 #[derive(Clone, Copy, Serialize)]

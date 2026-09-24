@@ -22,6 +22,28 @@ beforeAll(() => {
         dispatchEvent: () => false,
       }) as MediaQueryList;
   }
+  if (typeof globalThis.ResizeObserver !== "function") {
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    } as unknown as typeof ResizeObserver;
+  }
+  if (typeof window.PointerEvent !== "function") {
+    /* jsdom has no PointerEvent; Base UI's floating focus manager builds one */
+    window.PointerEvent = class extends MouseEvent {
+      readonly pointerId: number;
+      readonly pointerType: string;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 1;
+        this.pointerType = init.pointerType ?? "mouse";
+      }
+    } as unknown as typeof PointerEvent;
+  }
+  if (typeof Element.prototype.getAnimations !== "function") {
+    Element.prototype.getAnimations = () => [];
+  }
   if (!HTMLElement.prototype.scrollIntoView) {
     HTMLElement.prototype.scrollIntoView = () => {};
   }

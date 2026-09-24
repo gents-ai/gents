@@ -3,6 +3,10 @@ use serde::Deserialize;
 use super::canonical_execution::ExecutionFuture;
 use super::canonical_output::{LeanCanonicalMessage, LeanCanonicalSegment, LeanPayloadSpec};
 
+#[cfg(test)]
+#[path = "canonical_presentation/native_adapter.rs"]
+mod native_adapter;
+
 /// Payload presentation before provider-specific projection. These byte counts
 /// exclude metadata, escaping, media URLs and request structure; they are neither
 /// serialized request sizes nor token estimates. The existing provider_input

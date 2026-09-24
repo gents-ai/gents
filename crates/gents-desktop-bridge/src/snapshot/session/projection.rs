@@ -688,7 +688,6 @@ pub(super) fn build_session_snapshot_from_store_for_agent_with_transcript(
                 tool_call_id: normalize_optional(row.tool_call_id.as_deref()),
                 args,
                 partial_output_tail,
-                partial_output_seq: None,
                 result,
                 reconstruction,
                 status: normalize_optional(row.status.as_deref()),

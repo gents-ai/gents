@@ -5,7 +5,7 @@
 import { CircleMinus, CircleX, Clock } from "lucide-react";
 import { Spinner } from "@gents/ui/components/spinner";
 import { cn } from "@gents/ui/lib/utils";
-import { turnLabel } from "@/lib/live";
+import { isLive, turnLabel } from "@/lib/live";
 
 export function SessionStatus({
   turnState,
@@ -19,10 +19,15 @@ export function SessionStatus({
   const label = held ? "Needs you" : (turnLabel(turnState) ?? "Finished");
   const glyph = held ? (
     <span className="size-2 rounded-full bg-brand" />
-  ) : turnState === "running" ? (
-    <Spinner className="text-foreground" />
   ) : turnState === "waitingForClaim" ? (
     <Clock className="size-3.5 text-muted-foreground" />
+  ) : /* anything the runtime has not settled is working, whatever it calls
+       it: streaming, processing, or a state this build has not met. The
+       list agreed a session was live and then drew it as finished, because
+       the glyph knew two names for working and isLive knows every name for
+       done. */
+  isLive(turnState) ? (
+    <Spinner className="text-foreground" />
   ) : turnState === "failed" ? (
     <CircleX className="size-3.5 text-destructive" />
   ) : turnState === "interrupted" || turnState === "superseded" ? (

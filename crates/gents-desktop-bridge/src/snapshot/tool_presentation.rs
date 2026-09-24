@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-use super::super::types::{ToolCallView, ToolDiffLineView, ToolPresentationView};
+use super::super::types::{ToolCallView, ToolDiffLineKind, ToolDiffLineView, ToolPresentationView};
 
 const COMMAND_TOOLS: &[&str] = &["bash", "bash_unrestricted", "gents_exec", "exec_command"];
 const FILE_READ_TOOLS: &[&str] = &["read_file", "grep", "glob", "list_files"];
@@ -96,6 +96,18 @@ fn redact_sensitive(value: String) -> String {
 
 fn redact_sensitive_optional(value: Option<String>) -> Option<String> {
     value.map(redact_sensitive)
+}
+
+fn redact_sensitive_output(value: String) -> String {
+    if looks_sensitive(&value) {
+        "[redacted sensitive output]".to_string()
+    } else {
+        value
+    }
+}
+
+fn redact_sensitive_output_optional(value: Option<String>) -> Option<String> {
+    value.map(redact_sensitive_output)
 }
 
 fn split_envelope<'a>(value: &'a str, prefix: &str) -> (Option<Map<String, Value>>, &'a str) {
@@ -283,9 +295,9 @@ fn project_command(tool: &ToolCallView) -> ToolPresentationView {
         cwd: string_field(meta.as_ref(), "cwd").or_else(|| string_field(args.as_ref(), "cwd")),
         execution_mode: string_field(meta.as_ref(), "execution_mode"),
         network_mode: string_field(meta.as_ref(), "network_mode"),
-        stdout: redact_sensitive(streams.stdout),
-        stderr: redact_sensitive(streams.stderr),
-        fallback_output: redact_sensitive_optional(
+        stdout: redact_sensitive_output(streams.stdout),
+        stderr: redact_sensitive_output(streams.stderr),
+        fallback_output: redact_sensitive_output_optional(
             (!parsed_output).then(|| raw_result.to_string()),
         ),
     }
@@ -305,12 +317,12 @@ fn project_file_read(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
         returned_count: i64_field(meta.as_ref(), "returned_count"),
         total_count: i64_field(meta.as_ref(), "total_count"),
         truncated: bool_field(meta.as_ref(), "truncated") == Some(true),
-        body: redact_sensitive(
+        body: redact_sensitive_output(
             meta.as_ref()
                 .map(|_| body.trim_end().to_string())
                 .unwrap_or_default(),
         ),
-        fallback_output: redact_sensitive_optional(
+        fallback_output: redact_sensitive_output_optional(
             (meta.is_none())
                 .then(|| raw_result.to_string())
                 .filter(|v| !v.is_empty()),
@@ -318,35 +330,120 @@ fn project_file_read(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
     }
 }
 
-fn diff_lines(value: &str, kind: &str) -> Vec<ToolDiffLineView> {
-    value
-        .trim_end_matches(['\r', '\n'])
-        .split('\n')
-        .map(|line| ToolDiffLineView {
-            kind: kind.to_string(),
-            text: redact_sensitive(line.trim_end_matches('\r').to_string()),
+fn diff_line(kind: ToolDiffLineKind, text: &str) -> ToolDiffLineView {
+    ToolDiffLineView {
+        kind,
+        text: redact_sensitive(text.trim_end_matches('\r').to_string()),
+    }
+}
+
+fn text_lines(value: &str) -> Vec<&str> {
+    let value = value.trim_end_matches(['\r', '\n']);
+    if value.is_empty() {
+        return Vec::new();
+    }
+    value.split('\n').collect()
+}
+
+fn applied_diff(body: &str) -> Vec<ToolDiffLineView> {
+    let mut lines: Vec<ToolDiffLineView> = body
+        .lines()
+        .filter_map(|line| {
+            let kind = match line.as_bytes().first()? {
+                b'+' => ToolDiffLineKind::Added,
+                b'-' => ToolDiffLineKind::Removed,
+                b' ' => ToolDiffLineKind::Context,
+                _ => return None,
+            };
+            let (number, text) = line[1..].split_once(" |")?;
+            let number = number.trim_start();
+            if number.is_empty() || !number.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            Some(diff_line(kind, text.strip_prefix(' ').unwrap_or(text)))
         })
-        .collect()
+        .collect();
+    while lines
+        .last()
+        .is_some_and(|line| line.kind == ToolDiffLineKind::Context && line.text.is_empty())
+    {
+        lines.pop();
+    }
+    lines
+}
+
+fn requested_diff(old: &str, new: &str, operation: Option<&str>) -> Vec<ToolDiffLineView> {
+    let old = text_lines(old);
+    let new = text_lines(new);
+    let lines = |kind, lines: &[&str]| {
+        lines
+            .iter()
+            .map(|line| diff_line(kind, line))
+            .collect::<Vec<_>>()
+    };
+    match operation {
+        Some("insert_after") => [
+            lines(ToolDiffLineKind::Context, &old),
+            lines(ToolDiffLineKind::Added, &new),
+        ]
+        .concat(),
+        Some("insert_before") => [
+            lines(ToolDiffLineKind::Added, &new),
+            lines(ToolDiffLineKind::Context, &old),
+        ]
+        .concat(),
+        Some("delete") => lines(ToolDiffLineKind::Removed, &old),
+        _ => {
+            let prefix = old
+                .iter()
+                .zip(&new)
+                .take_while(|(old, new)| old == new)
+                .count();
+            let suffix = old[prefix..]
+                .iter()
+                .rev()
+                .zip(new[prefix..].iter().rev())
+                .take_while(|(old, new)| old == new)
+                .count();
+            [
+                lines(ToolDiffLineKind::Context, &old[..prefix]),
+                lines(ToolDiffLineKind::Removed, &old[prefix..old.len() - suffix]),
+                lines(ToolDiffLineKind::Added, &new[prefix..new.len() - suffix]),
+                lines(ToolDiffLineKind::Context, &old[old.len() - suffix..]),
+            ]
+            .concat()
+        }
+    }
 }
 
 fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationView {
     let args = json_object(tool.args.as_deref());
     let raw_result = tool.result.as_deref().unwrap_or_default();
-    let envelope_meta = split_envelope(raw_result, "gents_fs: ").0;
+    let (envelope_meta, body) = split_envelope(raw_result, "gents_fs: ");
+    let applied_body = envelope_meta.as_ref().map(|_| body.to_string());
     let meta = envelope_meta.or_else(|| bare_result_object(raw_result));
-    let mut diff = Vec::new();
-    if operation == "write_file" {
-        if let Some(content) = string_field(args.as_ref(), "content") {
-            diff.extend(diff_lines(&content, "add"));
-        }
+    let applied = applied_body
+        .or_else(|| string_field(meta.as_ref(), "diff"))
+        .map(|body| applied_diff(&body))
+        .unwrap_or_default();
+    let diff = if operation == "write_file" {
+        string_field(args.as_ref(), "content")
+            .map(|content| {
+                text_lines(&content)
+                    .into_iter()
+                    .map(|line| diff_line(ToolDiffLineKind::Added, line))
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else if !applied.is_empty() {
+        applied
     } else {
-        if let Some(old) = string_field(args.as_ref(), "old_text") {
-            diff.extend(diff_lines(&old, "del"));
-        }
-        if let Some(new) = string_field(args.as_ref(), "new_text") {
-            diff.extend(diff_lines(&new, "add"));
-        }
-    }
+        requested_diff(
+            &string_field(args.as_ref(), "old_text").unwrap_or_default(),
+            &string_field(args.as_ref(), "new_text").unwrap_or_default(),
+            string_field(args.as_ref(), "operation").as_deref(),
+        )
+    };
     ToolPresentationView::FileEdit {
         operation: operation.to_string(),
         path: redact_sensitive_optional(
@@ -355,7 +452,7 @@ fn project_file_edit(tool: &ToolCallView, operation: &str) -> ToolPresentationVi
         created: bool_field(meta.as_ref(), "created"),
         replacements_applied: i64_field(meta.as_ref(), "replacements_applied"),
         diff,
-        fallback_output: redact_sensitive_optional(
+        fallback_output: redact_sensitive_output_optional(
             (meta.is_none())
                 .then(|| raw_result.to_string())
                 .filter(|v| !v.is_empty()),
@@ -388,7 +485,7 @@ fn project_subagent(tool: &ToolCallView, name: &str) -> ToolPresentationView {
         name: string_field(args.as_ref(), "name"),
         child_request_id,
         description,
-        output: redact_sensitive_optional(clean_text(tool.result.as_deref())),
+        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
     }
 }
 
@@ -407,7 +504,7 @@ fn project_process(tool: &ToolCallView, name: &str) -> ToolPresentationView {
         action: action_label(name, "_process"),
         target,
         description,
-        output: redact_sensitive_optional(clean_text(tool.result.as_deref())),
+        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
     }
 }
 
@@ -417,7 +514,7 @@ fn project_mcp(tool: &ToolCallView) -> ToolPresentationView {
         service_id: string_field(args.as_ref(), "service_id"),
         selected_tool_name: string_field(args.as_ref(), "tool_name"),
         arguments: redact_sensitive_optional(json_field(args.as_ref(), "arguments")),
-        output: redact_sensitive_optional(clean_text(tool.result.as_deref())),
+        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
     }
 }
 
@@ -438,7 +535,7 @@ fn project_generic(tool: &ToolCallView) -> ToolPresentationView {
     ToolPresentationView::Generic {
         summary,
         input: redact_sensitive_optional(clean_text(tool.args.as_deref())),
-        output: redact_sensitive_optional(clean_text(tool.result.as_deref())),
+        output: redact_sensitive_output_optional(clean_text(tool.result.as_deref())),
     }
 }
 
@@ -486,7 +583,6 @@ mod tests {
             tool_call_id: Some("tool-1".into()),
             args: Some(args.into()),
             partial_output_tail: None,
-            partial_output_seq: None,
             result: Some(result.into()),
             reconstruction: crate::types::MessageReconstructionView {
                 state: crate::types::ReconstructionState::Ready,
@@ -504,6 +600,130 @@ mod tests {
             denial: None,
             cancel_cause: None,
         }
+    }
+
+    fn diff_of(projected: ToolPresentationView) -> Vec<(ToolDiffLineKind, String)> {
+        let ToolPresentationView::FileEdit { diff, .. } = projected else {
+            panic!("expected a file edit presentation");
+        };
+        diff.into_iter()
+            .map(|line| (line.kind, line.text))
+            .collect()
+    }
+
+    fn edit_file_result(content: &str, old_text: &str, new_text: &str) -> String {
+        use gents::toolset::edit_match::{decide, EditOutcome, EditRequest, MatchMode, Operation};
+        let EditOutcome::Applied {
+            diff, replacements, ..
+        } = decide(
+            content,
+            &EditRequest {
+                old_text,
+                new_text,
+                replace_all: false,
+                operation: Operation::Replace,
+                match_mode: MatchMode::Ladder,
+            },
+        )
+        else {
+            panic!("edit did not apply");
+        };
+        format!(
+            "gents_fs: {{\"ok\":true,\"status\":\"success\",\"tool\":\"edit_file\",\"path\":\"src/lib.rs\",\"replacements_applied\":{replacements}}}\nedit_file: edited src/lib.rs ({replacements} replacement, strategy exact)\n{diff}"
+        )
+    }
+
+    #[test]
+    fn write_file_lines_are_added() {
+        let projected = project_tool_presentation(&tool(
+            "write_file",
+            r##"{"path":"notes.md","content":"# Notes\nfirst\n"}"##,
+            "gents_fs: {\"ok\":true,\"status\":\"success\",\"tool\":\"write_file\",\"path\":\"notes.md\",\"created\":true}\nwrite_file: wrote 15 bytes to notes.md",
+            "completed",
+        ));
+        assert_eq!(
+            diff_of(projected),
+            vec![
+                (ToolDiffLineKind::Added, "# Notes".to_string()),
+                (ToolDiffLineKind::Added, "first".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn edit_file_classifies_added_changed_and_removed_lines() {
+        let content = "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n";
+        let old_text = "fn b() {}\nfn c() {}";
+        let new_text = "fn b() {}\nfn c2() {}\nfn e() {}";
+        let projected = project_tool_presentation(&tool(
+            "edit_file",
+            &serde_json::json!({ "path": "src/lib.rs", "old_text": old_text, "new_text": new_text })
+                .to_string(),
+            &edit_file_result(content, old_text, new_text),
+            "completed",
+        ));
+        assert_eq!(
+            diff_of(projected),
+            vec![
+                (ToolDiffLineKind::Context, "fn a() {}".to_string()),
+                (ToolDiffLineKind::Context, "fn b() {}".to_string()),
+                (ToolDiffLineKind::Removed, "fn c() {}".to_string()),
+                (ToolDiffLineKind::Added, "fn c2() {}".to_string()),
+                (ToolDiffLineKind::Added, "fn e() {}".to_string()),
+                (ToolDiffLineKind::Context, "fn d() {}".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn edit_file_removal_is_only_removed_lines() {
+        let content = "keep\ndrop me\nkeep too\n";
+        let projected = project_tool_presentation(&tool(
+            "edit_file",
+            r#"{"path":"src/lib.rs","old_text":"drop me\n","new_text":""}"#,
+            &edit_file_result(content, "drop me\n", ""),
+            "completed",
+        ));
+        let diff = diff_of(projected);
+        assert_eq!(
+            diff.iter()
+                .filter(|(kind, _)| *kind != ToolDiffLineKind::Context)
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec![(ToolDiffLineKind::Removed, "drop me".to_string())]
+        );
+    }
+
+    #[test]
+    fn edit_file_without_an_applied_diff_keeps_shared_lines_as_context() {
+        let projected = project_tool_presentation(&tool(
+            "edit_file",
+            r#"{"path":"src/lib.rs","old_text":"anchor\nold\ntail","new_text":"anchor\nnew\ntail"}"#,
+            "",
+            "running",
+        ));
+        assert_eq!(
+            diff_of(projected),
+            vec![
+                (ToolDiffLineKind::Context, "anchor".to_string()),
+                (ToolDiffLineKind::Removed, "old".to_string()),
+                (ToolDiffLineKind::Added, "new".to_string()),
+                (ToolDiffLineKind::Context, "tail".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_line_kinds_serialize_in_the_design_vocabulary() {
+        assert_eq!(
+            serde_json::to_value([
+                ToolDiffLineKind::Added,
+                ToolDiffLineKind::Removed,
+                ToolDiffLineKind::Context
+            ])
+            .unwrap(),
+            serde_json::json!(["added", "removed", "context"])
+        );
     }
 
     #[test]
@@ -574,6 +794,21 @@ mod tests {
             projected,
             ToolPresentationView::Command { ref command, .. }
                 if command == "[redacted sensitive input]"
+        ));
+    }
+
+    #[test]
+    fn command_output_redaction_names_the_output() {
+        let projected = project_tool_presentation(&tool(
+            "bash",
+            r#"{"command":"env"}"#,
+            "gents_exec: {\"ok\":true,\"status\":\"success\",\"command\":\"env\",\"exit_code\":0}\nstdout:\nAPI_KEY=abc\nstderr:\n",
+            "completed",
+        ));
+        assert!(matches!(
+            projected,
+            ToolPresentationView::Command { ref command, ref stdout, .. }
+                if command == "env" && stdout == "[redacted sensitive output]"
         ));
     }
 

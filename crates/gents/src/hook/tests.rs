@@ -68,6 +68,59 @@ fn hook_execution_fixture_key(hook: &DefraSessionHook, request_id: &str) -> Stri
 }
 
 #[tokio::test]
+async fn spawn_preplan_surfaces_missing_parent_but_keeps_malformed_intent_for_dispatch() {
+    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
+    crate::ensure_runtime_schemas(&node).await.unwrap();
+    let hook = DefraSessionHook::with_identity(
+        node.clone(),
+        "general",
+        "did:test:owner",
+        FailurePolicy::default(),
+    );
+    hook.state.lock().await.current_request_id = Some("missing-parent".to_owned());
+    let message = |arguments| Message::Assistant {
+        id: Some("provider-message".to_owned()),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "tool-call".to_owned(),
+            call_id: None,
+            function: ToolFunction {
+                name: crate::toolset::SPAWN_SUBAGENT_TOOL_NAME.to_owned(),
+                arguments,
+            },
+            signature: None,
+            additional_params: None,
+        })],
+    };
+    let internal_ids = vec!["internal-tool-call".to_owned()];
+
+    let malformed = message(json!({ "name": "child" }));
+    assert!(hook
+        .preplan_spawn_admissions(&malformed, &internal_ids)
+        .await
+        .unwrap()
+        .is_empty());
+    let empty_name = message(json!({ "name": "", "prompt": "work" }));
+    assert!(hook
+        .preplan_spawn_admissions(&empty_name, &internal_ids)
+        .await
+        .unwrap()
+        .is_empty());
+
+    let valid = message(json!({ "name": "child", "prompt": "work" }));
+    let error = hook
+        .preplan_spawn_admissions(&valid, &internal_ids)
+        .await
+        .expect_err("a failed parent read must stop preplanning before publication");
+    assert!(
+        error
+            .to_string()
+            .contains("preplan spawn admission for parent request missing-parent"),
+        "unexpected preplanning error: {error:#}"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn client_output_snapshot_reads_full_retained_window_without_widening_model_budget() {
     let dir = tempfile::tempdir().unwrap();
     let node = Arc::new(

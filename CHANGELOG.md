@@ -1,8 +1,8 @@
 # Changelog
 
 All desktop crates and npm packages release together at `workspace.package.version`
-(lockstep train). Bridge **contract** version (`MAJOR.MINOR`) moves independently
-and is what compatibility decisions key on — see `contracts/desktop-bridge.json`.
+(lockstep train). The bundled frontend and Rust bridge use generated types and
+source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 

@@ -229,7 +229,6 @@ describe("useDesktopSessionProjection", () => {
       outcome: "delta",
       revision: { storeVersion: 8, reconcileVersion: 3 },
       requestId: "request-1",
-      progressSeq: 2,
       turnState: "running",
       status: null,
       content: {

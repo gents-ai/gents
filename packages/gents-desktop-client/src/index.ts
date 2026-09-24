@@ -1,11 +1,4 @@
-export {
-  assertExactBridgeContract,
-  createDesktopClient,
-  BRIDGE_CONTRACT_VERSION,
-  PACKAGE_VERSION,
-  type DesktopBridgeContract,
-  type DesktopClient,
-} from "./client.js";
+export { createDesktopClient, type DesktopClient } from "./client.js";
 export {
   createDesktopStore,
   DEFAULT_TIMING,

@@ -1,5 +1,5 @@
 /* The desktop's slash-skill selector over the kit composer: typing "/"
-   on its own line lists the behaviour's skills; arrows move, Enter or
+   on its own line lists the behavior's skills; arrows move, Enter or
    Tab picks, Escape dismisses. The selector line stays in the message,
    as the desktop sends it. The caret is taken as the end of the draft,
    since the kit composer does not expose it. */

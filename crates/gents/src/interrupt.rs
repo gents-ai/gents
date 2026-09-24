@@ -16,7 +16,7 @@ use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queu
 /// current timestamp is preserved and this call is a no-op.
 ///
 /// The runtime's per-request observer (see `spawn_request_interrupt_observer`)
-/// polls this field and signals the daemon to cancel in-flight inference and
+/// watches this field and signals the daemon to cancel in-flight inference and
 /// transition the request to `interrupted`. Writing this field on a terminal
 /// request is harmless — the lifecycle state machine filters terminal statuses.
 ///
@@ -424,11 +424,12 @@ pub struct InterruptIntent {
 
 const OBSERVER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Spawn an observer task that polls `interrupt_requested_at` for a single
+/// Spawn an observer task that reads `interrupt_requested_at` for a single
 /// request and signals the channel when the field flips to non-null.
 ///
-/// Polls rather than subscribes because DefraDB lacks per-field watchpoints;
-/// the 2s interval is a compromise between Esc UX latency and DB load.
+/// The field is re-read whenever the node reports a change to this request
+/// document (local write or replicated merge), and on a slower fallback tick
+/// in case the change subscription overflows or closes.
 ///
 /// The task exits when:
 ///   - the channel has been signaled once (idempotent latch), OR
@@ -440,76 +441,142 @@ pub fn spawn_request_interrupt_observer(
     interrupt_tx: watch::Sender<Option<InterruptIntent>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> tokio::task::JoinHandle<()> {
+    let changes = node.subscribe_document_changes();
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(OBSERVER_POLL_INTERVAL);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        loop {
-            tokio::select! {
-                _ = shutdown.changed() => return,
-                _ = ticker.tick() => {}
-            }
-            if interrupt_tx.borrow().is_some() {
-                return;
-            }
-            let query = format!(
-                r#"query {{
-                    AgentRequest(
-                        filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
-                        limit: 1
-                    ) {{
-                        interrupt_requested_at
-                    }}
-                }}"#,
-                doc_id = escape_graphql_string(&request_doc_id),
-            );
-            let resp = node.execute(&query).await;
-            if resp.has_errors() {
-                tracing::warn!(
-                    doc_id = %request_doc_id,
-                    errors = ?resp.errors,
-                    "interrupt observer query failed; will retry"
-                );
-                continue;
-            }
-            let Some(at_str) = resp
-                .data
-                .as_ref()
-                .and_then(|d| d.get("AgentRequest"))
-                .and_then(|v| v.as_array())
-                .and_then(|arr| arr.first())
-                .and_then(|row| row.get("interrupt_requested_at"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_owned)
-            else {
-                continue;
-            };
-            match chrono::DateTime::parse_from_rfc3339(&at_str) {
-                Ok(dt) => {
-                    let intent = InterruptIntent {
-                        at: dt.with_timezone(&Utc),
-                    };
-                    let _ = interrupt_tx.send(Some(intent));
-                    tracing::info!(
-                        request_doc_id = %request_doc_id,
-                        interrupt_at = %dt.to_rfc3339(),
-                        "interrupt observer latched; signaled daemon"
-                    );
-                    return;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        doc_id = %request_doc_id,
-                        bad_value = %at_str,
-                        error = %e,
-                        "invalid interrupt_requested_at; observer continuing"
-                    );
-                    continue;
-                }
-            }
-        }
+        observe_request_interrupt(
+            &request_doc_id,
+            Some(changes),
+            || read_interrupt_requested_at(&node, &request_doc_id),
+            &interrupt_tx,
+            &mut shutdown,
+        )
+        .await;
     })
 }
+
+trait InterruptChangeFeed: Send {
+    fn recv(
+        &mut self,
+    ) -> impl std::future::Future<Output = Option<events::DocumentChangeBatch>> + Send;
+}
+
+impl InterruptChangeFeed for events::DocumentChangeSubscription {
+    fn recv(
+        &mut self,
+    ) -> impl std::future::Future<Output = Option<events::DocumentChangeBatch>> + Send {
+        events::DocumentChangeSubscription::recv(self)
+    }
+}
+
+async fn read_interrupt_requested_at(node: &EmbeddedNode, request_doc_id: &str) -> Option<String> {
+    let query = format!(
+        r#"query {{
+            AgentRequest(
+                filter: {{ _docID: {{ _eq: "{doc_id}" }} }},
+                limit: 1
+            ) {{
+                interrupt_requested_at
+            }}
+        }}"#,
+        doc_id = escape_graphql_string(request_doc_id),
+    );
+    let resp = node.execute(&query).await;
+    if resp.has_errors() {
+        tracing::warn!(
+            doc_id = %request_doc_id,
+            errors = ?resp.errors,
+            "interrupt observer query failed; will retry"
+        );
+        return None;
+    }
+    resp.data
+        .as_ref()
+        .and_then(|d| d.get("AgentRequest"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|row| row.get("interrupt_requested_at"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
+/// The fallback tick is polled before the change feed so a feed that is
+/// always ready with unrelated documents cannot starve the initial read or
+/// the periodic re-read.
+async fn observe_request_interrupt<F, R, Fut>(
+    request_doc_id: &str,
+    mut changes: Option<F>,
+    mut read: R,
+    interrupt_tx: &watch::Sender<Option<InterruptIntent>>,
+    shutdown: &mut watch::Receiver<bool>,
+) where
+    F: InterruptChangeFeed,
+    R: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    let mut ticker = tokio::time::interval(OBSERVER_POLL_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => return,
+            _ = ticker.tick() => {}
+            batch = async {
+                match changes.as_mut() {
+                    Some(changes) => changes.recv().await,
+                    None => std::future::pending().await,
+                }
+            } => match batch {
+                Some(batch)
+                    if batch.resync_required
+                        || batch
+                            .changes
+                            .iter()
+                            .any(|change| change.doc_id == request_doc_id) => {}
+                Some(_) => continue,
+                None => {
+                    tracing::warn!(
+                        doc_id = %request_doc_id,
+                        "interrupt observer change subscription closed; polling only"
+                    );
+                    changes = None;
+                    continue;
+                }
+            },
+        }
+        if interrupt_tx.borrow().is_some() {
+            return;
+        }
+        let Some(at_str) = read().await else {
+            continue;
+        };
+        match chrono::DateTime::parse_from_rfc3339(&at_str) {
+            Ok(dt) => {
+                let intent = InterruptIntent {
+                    at: dt.with_timezone(&Utc),
+                };
+                let _ = interrupt_tx.send(Some(intent));
+                tracing::info!(
+                    request_doc_id = %request_doc_id,
+                    interrupt_at = %dt.to_rfc3339(),
+                    "interrupt observer latched; signaled daemon"
+                );
+                return;
+            }
+            Err(e) => {
+                tracing::warn!(
+                    doc_id = %request_doc_id,
+                    bad_value = %at_str,
+                    error = %e,
+                    "invalid interrupt_requested_at; observer continuing"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod observer_scheduling_tests;
 
 #[cfg(test)]
 mod scope_tests;

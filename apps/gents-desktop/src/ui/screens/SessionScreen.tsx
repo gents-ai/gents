@@ -3,7 +3,11 @@
    session projection: the timeline items are the bridge's own
    RenderedTimelineItem, rendered as they arrive. */
 import {
+  Fragment,
+  createContext,
+  useCallback,
   memo,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -14,24 +18,35 @@ import {
 import {
   ArrowDown,
   ArrowLeft,
+  ChevronDown,
   Copy,
   PanelRight,
+  Play,
   Pencil,
   Split,
   Target,
+  Timer,
   X,
+  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
 import type {
+  DeploymentView,
+  DerivedCancelCauseView,
+  RenderedToolCallView,
   DesktopSessionSnapshot,
   GoalView,
   RenderedTimelineItem,
 } from "@source-inc/gents-desktop-client";
+import type { SessionSummary } from "@source-inc/gents-desktop-client";
 import type { SendStatus } from "@source-inc/gents-desktop-chat";
+import { Badge } from "@gents/ui/components/badge";
 import { Button } from "@gents/ui/components/button";
+import { cn } from "@gents/ui/lib/utils";
 import { Input } from "@gents/ui/components/input";
 import {
   AssistantMessage,
+  scrollParent,
   Composer,
   ToolStep,
   ToolSteps,
@@ -39,11 +54,20 @@ import {
   type ToolStepStatus,
 } from "@gents/ui/conversation";
 import type { Shell } from "@/hooks/useShell";
+import { anchor } from "@/lib/scroll";
 import { useResizableWidth } from "@/lib/resizable";
 import { useMediaQuery } from "@/lib/media";
 import { Sheet, SheetContent, SheetTitle } from "@gents/ui/components/sheet";
 import { href, navigate } from "@/lib/router";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@gents/ui/components/collapsible";
 import { Hint } from "./Hint";
+import { firstFailure, foldWorkers, workerStory, type ToolRun } from "./tool-runs";
+import { DeploymentContext, useDeployment } from "./deployment-context";
+import { ToolIcon } from "./tool-icon";
 import { ScrollArea } from "@gents/ui/components/scroll-area";
 import { bashAccess, behaviorName, fileAccess, network } from "./behavior";
 import { AgentAvatar } from "./AgentAvatar";
@@ -53,6 +77,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
+import { activityStatus, isStopping } from "./activity-status";
 import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar, BehaviorChip } from "./parts";
 import { BehaviorHoverCard } from "./HoverCards";
@@ -69,6 +94,11 @@ import {
 } from "@gents/ui/components/alert-dialog";
 import { Markdown } from "./Markdown";
 import { ToolBody } from "./tool-views";
+import { WorkerStep, isWorkerStep } from "./WorkerStep";
+import { useWorkers, type Workers } from "./workers";
+import { useParentWork, type ParentWork } from "./parentWork";
+import { WorkerActionsContext, type WorkerActions } from "./WorkerActions";
+import { ArrowUpRight } from "lucide-react";
 import { toolSummary } from "./tool-summary";
 import { Popover, PopoverContent, PopoverTrigger } from "@gents/ui/components/popover";
 import { useExclusivePopover } from "@/hooks/useExclusivePopover";
@@ -161,15 +191,87 @@ export function useTranscriptFollow(
 
   const toBottom = () => {
     const viewport = transcriptViewport(ownerRef.current);
-    if (viewport) {
-      viewport.scrollTo({ top: viewport.scrollHeight, behavior: "smooth" });
-    }
+    if (!viewport) return;
+    /* A smooth scroll is abandoned the moment anything else writes to the
+       scroller, and a long transcript writes constantly: every scroll event
+       on the way down re-renders hundreds of rows, and the animation is
+       dropped halfway or never starts. The button then plays its press and
+       does nothing, which is worse than arriving without ceremony.
+
+       So a short way is animated and a long way is not, and either way the
+       foot is claimed again on the next frame, after whatever render the
+       click set off has landed. */
+    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    shouldFollow.current = true;
+    viewport.scrollTo({
+      top: viewport.scrollHeight,
+      behavior: distance > viewport.clientHeight * 2 ? "auto" : "smooth",
+    });
+    requestAnimationFrame(() => {
+      if (shouldFollow.current) viewport.scrollTop = viewport.scrollHeight;
+    });
   };
 
   return { atBottom, toBottom };
 }
 
-function SessionContext({ context }: { context: DesktopSessionSnapshot["context"] }) {
+/* how full the context is, as a stroked ring: the track is the window, the
+   arc is what the conversation has used; past the compaction threshold the
+   arc takes the brand color, so the number beside it need not */
+function ContextRing({
+  used,
+  window,
+  threshold,
+}: {
+  used: number;
+  window: number;
+  threshold: number;
+}) {
+  /* a 20px ring with a 7px radius: enough arc to read at a glance */
+  const r = 7;
+  const c = 2 * Math.PI * r;
+  const share = Math.min(1, used / window);
+  const nearCompaction = threshold > 0 && used >= threshold;
+  return (
+    <svg
+      viewBox="0 0 20 20"
+      className="size-5 shrink-0 -rotate-90"
+      aria-hidden="true"
+      data-testid="context-ring"
+      data-share={share.toFixed(2)}
+    >
+      <circle
+        cx="10"
+        cy="10"
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeOpacity="0.2"
+        strokeWidth="2"
+      />
+      <circle
+        cx="10"
+        cy="10"
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeDasharray={`${share * c} ${c}`}
+        className={nearCompaction ? "text-brand" : ""}
+      />
+    </svg>
+  );
+}
+
+function SessionContext({
+  context,
+  compact = false,
+}: {
+  context: DesktopSessionSnapshot["context"];
+  /* in the compact header: the ring alone, the numbers in its tooltip and popover */
+  compact?: boolean;
+}) {
   const popover = useExclusivePopover();
   const used = Math.max(0, context.estimatedConversationTokens);
   const window = Math.max(
@@ -180,25 +282,62 @@ function SessionContext({ context }: { context: DesktopSessionSnapshot["context"
     0,
     context.lastRequest?.compactionThresholdTokens ?? context.compactionThresholdTokens,
   );
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const canHover = () => globalThis.matchMedia?.("(hover: hover)").matches ?? true;
+  const hoverOpen = () => {
+    if (!canHover()) return;
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => popover.onOpenChange(true), 150);
+  };
+  const hoverClose = () => {
+    if (!canHover()) return;
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => popover.onOpenChange(false), 200);
+  };
   return (
     <Popover
       open={popover.open}
       onOpenChange={popover.onOpenChange}
       onOpenChangeComplete={popover.onOpenChangeComplete}
     >
+      {/* the details open on hover as well as click where there is a pointer;
+          on touch a tap opens them. Leaving trigger and popup both closes. */}
       <PopoverTrigger
         render={
-          <Button variant="quiet" size="sm" data-testid="context-meter">
-            Context ~{formatTokens(used)} / {formatTokens(window)}
-          </Button>
+          compact ? (
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              data-testid="context-meter-compact"
+              aria-label={`Context ~${formatTokens(used)} of ${formatTokens(window)}`}
+            />
+          ) : (
+            <Button
+              variant="quiet"
+              size="sm"
+              data-testid="context-meter"
+              className="gap-2"
+            />
+          )
         }
-      />
+        onMouseEnter={hoverOpen}
+        onMouseLeave={hoverClose}
+      >
+        <ContextRing used={used} window={window} threshold={threshold} />
+        {!compact && (
+          <span className="tabular-nums">
+            ~{formatTokens(used)} / {formatTokens(window)}
+          </span>
+        )}
+      </PopoverTrigger>
       <PopoverContent
         ref={popover.popupRef}
         aria-label="Session context details"
         align="start"
         className="w-80"
         data-testid="context-details"
+        onMouseEnter={hoverOpen}
+        onMouseLeave={hoverClose}
       >
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
@@ -285,6 +424,90 @@ export function SessionSubmissionStatus({
   );
 }
 
+/* an earlier request's failure, shown where it happened; the session has
+   moved on to a later request, so there is nothing to retry here */
+
+/* where this session came from: the parent that started it, from
+   provenance; how the two are bound (await mode, cancel policy) waits in
+   the link's title rather than the header line */
+function ParentLine({ work }: { work: ParentWork }) {
+  if (!work.parent) return null;
+  const edge = work.edge;
+  const how = [
+    edge?.awaitMode === "background" ? "runs in the background" : edge?.awaitMode,
+    edge?.cancelPolicy ? `${edge.cancelPolicy} on cancel` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+      Started by
+      <a
+        href={href({ name: "session", sessionId: work.parent.sessionId })}
+        title={how || undefined}
+        className="flex min-w-0 items-center gap-0.5 truncate hover:text-foreground hover:underline"
+      >
+        {work.parent.title ?? "its parent"}
+        <ArrowUpRight className="size-3 shrink-0" />
+      </a>
+    </span>
+  );
+}
+
+/* A session nobody started by typing says who did. The list can filter on
+   it and could not show it; the session itself said nothing at all, so a
+   run that arrived overnight looked like one a person had asked for. */
+function StartedByAutomation({
+  summary,
+  agentDid,
+}: {
+  summary: SessionSummary;
+  agentDid: string | null;
+}) {
+  const how =
+    summary.triggerKind === "schedule"
+      ? "on a schedule"
+      : summary.triggerKind === "event"
+        ? "by an event"
+        : summary.triggerKind
+          ? `by a ${summary.triggerKind}`
+          : null;
+  const name = summary.taskName ?? "a task";
+  return (
+    <span className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+      {/* a task is a Play and a schedule is a Timer, the way the config
+          names them: the mark is the thing it points at */}
+      {summary.triggerKind === "schedule" ? (
+        <Timer className="size-3 shrink-0" />
+      ) : summary.triggerKind === "event" ? (
+        <Zap className="size-3 shrink-0" />
+      ) : (
+        <Play className="size-3 shrink-0" />
+      )}
+      Started by
+      {/* the task is a thing that exists and can be changed, so the name
+         goes to it: reading why a run happened and deciding it should not
+         happen again are the same errand */}
+      {agentDid && summary.taskId ? (
+        <a
+          href={href({
+            name: "agent",
+            agentDid,
+            section: "tasks",
+            item: summary.taskId,
+          })}
+          className="truncate hover:text-foreground hover:underline"
+        >
+          {name}
+        </a>
+      ) : (
+        <span className="truncate">{name}</span>
+      )}
+      {how && <span className="shrink-0">· {how}</span>}
+    </span>
+  );
+}
+
 function copyActions(text: string | null | undefined) {
   return [
     {
@@ -298,41 +521,199 @@ function copyActions(text: string | null | undefined) {
   ];
 }
 
+/* what the parent knows about its delegated work; memoised items read it
+   from context so a lineage refresh re-renders only the worker rows */
+const WorkersContext = createContext<Workers>({
+  byChildRequest: () => null,
+  byToolCall: () => null,
+  loaded: false,
+});
+
+/* the parent this session works for, if any; a turn the parent sent is
+   labeled as such above the message */
+const ParentContext = createContext<ParentWork | null>(null);
+
+/* one tool call as a row, wherever it sits: loose in the group, or among
+   the calls a run folded together */
+function Step({ tool, workers }: { tool: RenderedToolCallView; workers: Workers }) {
+  if (isWorkerStep(tool)) return <WorkerStep tool={tool} workers={workers} />;
+  const summary = toolSummary(tool);
+  return (
+    <ToolStep
+      label={`${summary.kind} ${summary.primary}`.trim()}
+      icon={<ToolIcon tool={tool} />}
+      status={stepStatus(tool.statusKind)}
+    >
+      {tool.statusKind !== "running" && tool.statusKind !== "held" ? (
+        <ToolBody tool={tool} />
+      ) : undefined}
+    </ToolStep>
+  );
+}
+
+/* A worker's scattered steps as one row: who it was, where it got to, and
+   what was done to it along the way. Its steps keep their order inside. */
+function WorkerRunStep({
+  tools,
+  workers,
+}: {
+  tools: RenderedToolCallView[];
+  workers: Workers;
+}) {
+  const deployment = useDeployment();
+  const first = tools[0]!;
+  const p = first.presentation;
+  const name = (p.kind === "subagent" && p.name) || "a worker";
+  const last = tools[tools.length - 1]!;
+  const failed = tools.some(
+    (t) => t.statusKind === "error" || t.statusKind === "failed",
+  );
+  /* the row is about one agent, so it wears that agent's mark: the same
+     avatar the session list and the parent's turns use. A worker with
+     no session summary has no behavior to wear, and falls back to the
+     kind's glyph. */
+  const child = p.kind === "subagent" && p.childRequestId;
+  const behaviorId =
+    (child && workers.byChildRequest(child)?.summary?.behaviorId) || null;
+  return (
+    <ToolStep
+      label={name}
+      icon={
+        behaviorId ? (
+          <BehaviorAvatar
+            name={behaviorName(behaviorId, deployment)}
+            behaviorId={behaviorId}
+            className="size-4 text-[8px]"
+          />
+        ) : (
+          <ToolIcon tool={first} />
+        )
+      }
+      detail={workerStory(tools)}
+      status={last.statusKind === "running" ? "running" : failed ? "pending" : "done"}
+    >
+      <ToolSteps className="-mx-2">
+        {tools.map((tool) => (
+          <WorkerStep key={tool.itemKey} tool={tool} workers={workers} />
+        ))}
+      </ToolSteps>
+    </ToolStep>
+  );
+}
+
+/* what the run was made of, and what went wrong in it if anything did */
+function runDetail(run: Extract<ToolRun, { kind: "run" }>) {
+  /* what went wrong leads, and says what it was: the reason a person opens
+     a folded run is almost always the exception inside it, and a bare count
+     of failures makes them go looking for it */
+  const bad = firstFailure(run.tools);
+  if (bad) {
+    const summary = toolSummary(bad);
+    const others = run.failures > 1 ? ` · ${run.failures - 1} more failed` : "";
+    return `${summary.kind} ${summary.primary}`.trim() + " failed" + others;
+  }
+  const top = run.tally
+    .slice(0, 4)
+    .map((t: { label: string; count: number }) => `${t.label} ${t.count}`);
+  const rest = run.tally.length - top.length;
+  return [...top, rest > 0 ? `+${rest} more` : null].filter(Boolean).join(" · ");
+}
+
 const TranscriptItem = memo(function TranscriptItem({
   item,
+  status = null,
 }: {
   item: RenderedTimelineItem;
+  status?: string | null;
 }) {
+  const workers = useContext(WorkersContext);
+  const parentWork = useContext(ParentContext);
   switch (item.kind) {
     case "userMessage":
-    case "pendingUserTurn":
-      return (
+    case "pendingUserTurn": {
+      const kind = item.content ? (parentWork?.sentBy(item.content) ?? null) : null;
+      const message = (
         <UserMessage actions={copyActions(item.content)}>{item.content}</UserMessage>
       );
+      if (!kind || !parentWork?.parent) return message;
+      /* a turn the parent sent wears the parent's mark, the way any other
+         sender would; its state, where the mark cannot say it, is a chip
+         seated on the bubble's bottom edge */
+      const state =
+        item.kind === "pendingUserTurn"
+          ? "Queued"
+          : kind === "interruption"
+            ? "Interrupt"
+            : null;
+      return (
+        /* the mark hangs in the transcript's right gutter, seated on the
+           first line's center: the bubble's own my-1 and py-3 put that 26px
+           down, half the avatar is 12 */
+        <div className={cn("relative", state && "mb-2")}>
+          <BehaviorAvatar
+            name={parentWork.parentBehaviorName ?? parentWork.parent.title ?? "parent"}
+            behaviorId={parentWork.parent.behaviorId}
+            /* in the gutter where there is one; seated on the bubble's
+               top corner when the screen is too narrow to spare it */
+            className="absolute -top-1 right-2 size-6 text-[10px] ring-2 ring-background sm:top-3.5 sm:-right-8 sm:ring-0"
+            aria-hidden={false}
+            role="img"
+            aria-label={`Sent by ${parentWork.parent.title ?? "the parent"}`}
+            title={`Sent by ${parentWork.parent.title ?? "the parent"}`}
+          />
+          <div className="relative min-w-0">
+            {message}
+            {state && (
+              <Badge
+                variant="outline"
+                className="absolute right-4 bottom-0 translate-y-1/2 border-border/60 bg-background text-[10px] font-normal text-muted-foreground"
+              >
+                {state}
+              </Badge>
+            )}
+          </div>
+        </div>
+      );
+    }
     case "assistantMessage":
       return (
-        <AssistantMessage actions={copyActions(item.content)}>
+        /* a turn that thought and then acted leaves reasoning with nothing
+           said after it: that is a think, not an empty answer, so it carries
+           no action bar and no blank line where prose would be */
+        <AssistantMessage actions={item.content ? copyActions(item.content) : false}>
           {item.reasoning && <Reasoning text={item.reasoning} />}
-          <Markdown>{item.content ?? ""}</Markdown>
+          {item.content ? <Markdown>{item.content}</Markdown> : null}
         </AssistantMessage>
       );
     case "toolGroup":
       return (
         <ToolSteps>
-          {item.tools.map((tool) => {
-            const summary = toolSummary(tool);
-            return (
+          {foldWorkers(item.tools).map((entry) =>
+            entry.kind === "one" ? (
+              <Step key={entry.tool.itemKey} tool={entry.tool} workers={workers} />
+            ) : entry.kind === "worker" ? (
+              <WorkerRunStep key={entry.key} tools={entry.tools} workers={workers} />
+            ) : (
               <ToolStep
-                key={tool.itemKey}
-                label={`${summary.kind} ${summary.primary}`.trim()}
-                status={stepStatus(tool.statusKind)}
+                key={entry.key}
+                label={entry.label}
+                icon={<ToolIcon tool={entry.tools[0]!} />}
+                detail={runDetail(entry)}
+                status={entry.failures ? "pending" : "done"}
+                /* the moment a run forms, three rows become one with nothing
+                   to see: it arrives with a beat so the fold is noticed */
+                className="animate-in fade-in-0 slide-in-from-top-1 duration-200 motion-reduce:animate-none"
               >
-                {tool.statusKind !== "running" && tool.statusKind !== "held" ? (
-                  <ToolBody tool={tool} />
-                ) : undefined}
+                {/* its own group, so opening a step inside a run does not
+                    fold the run away from under it */}
+                <ToolSteps className="-mx-2">
+                  {entry.tools.map((tool) => (
+                    <Step key={tool.itemKey} tool={tool} workers={workers} />
+                  ))}
+                </ToolSteps>
               </ToolStep>
-            );
-          })}
+            ),
+          )}
         </ToolSteps>
       );
     case "liveAssistant":
@@ -340,12 +721,64 @@ const TranscriptItem = memo(function TranscriptItem({
         <div data-testid="live-assistant">
           <AssistantMessage>
             {item.content && <Markdown>{item.content}</Markdown>}
-            <Thinking />
+            {status && <Thinking label={status} />}
           </AssistantMessage>
         </div>
       );
   }
 });
+
+const STOP_SOURCES: Record<string, string> = {
+  requestInterrupt: "a stop request on this request",
+  parentCascade: "a stop request on its parent",
+  requestLifecycle: "the request's lifecycle state",
+  deadline: "its deadline",
+};
+
+function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
+  const headline =
+    cause?.cause === "userCancelled"
+      ? "You stopped this response."
+      : cause?.cause === "deadline"
+        ? "This response stopped at its deadline."
+        : "This response was stopped.";
+  const at = cause?.at ? new Date(cause.at) : null;
+  return (
+    <Collapsible
+      className="px-2 text-xs text-muted-foreground"
+      data-testid="stopped-notice"
+    >
+      <p className="flex items-center gap-2">
+        {headline}
+        {cause && (
+          <CollapsibleTrigger className="cursor-pointer underline decoration-border underline-offset-4 hover:text-foreground">
+            Details
+          </CollapsibleTrigger>
+        )}
+      </p>
+      {cause && (
+        <CollapsibleContent>
+          <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 font-mono text-[11px]">
+            <dt>stopped by</dt>
+            <dd>{STOP_SOURCES[cause.source] ?? cause.source}</dd>
+            {at && !Number.isNaN(at.getTime()) && (
+              <>
+                <dt>at</dt>
+                <dd>{at.toLocaleTimeString()}</dd>
+              </>
+            )}
+            {cause.evidence.map((line) => (
+              <Fragment key={line}>
+                <dt>evidence</dt>
+                <dd className="break-all">{line}</dd>
+              </Fragment>
+            ))}
+          </dl>
+        </CollapsibleContent>
+      )}
+    </Collapsible>
+  );
+}
 
 type TranscriptActions = Pick<Shell, "loadOlderSessionTimeline" | "retryMessage">;
 
@@ -353,14 +786,24 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   actionsRef,
   holdsCount,
   inFlight,
+  stopping = false,
   ownerRef,
   session,
+  workers,
+  parentWork,
+  workerActions,
+  deployment,
 }: {
   actionsRef: RefObject<TranscriptActions>;
   holdsCount: number;
   inFlight: boolean;
+  stopping?: boolean;
   ownerRef: RefObject<HTMLDivElement | null>;
   session: DesktopSessionSnapshot | null;
+  workers: Workers;
+  parentWork: ParentWork;
+  workerActions: WorkerActions;
+  deployment: DeploymentView | null;
 }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -370,6 +813,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   }, [session?.sessionId]);
 
   const live = session?.timelineItems.find((item) => item.kind === "liveAssistant");
+  const status = inFlight
+    ? activityStatus(session?.timelineItems ?? [], stopping)
+    : null;
   const wasInterrupted = session?.turnState === "interrupted";
   const responseError =
     session?.turnState === "failed"
@@ -408,7 +854,16 @@ export const TranscriptPanel = memo(function TranscriptPanel({
   };
 
   return (
-    <div className="mt-6 grid gap-5" data-testid="transcript-panel">
+    /* the condensed header floats over the scroller, so a step opening
+       near the top must stop below it, not under it (h-12 plus a little) */
+    <div
+      /* the composer is sticky over the foot of this scroller, so the
+         transcript keeps its height clear: without it the last thing in a
+         session sits underneath the composer, and anything that sticks to
+         the bottom lands there too */
+      className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-5 pb-[var(--composer-h,0px)] [--step-scroll-inset:56]"
+      data-testid="transcript-panel"
+    >
       {session?.timelinePage?.hasOlder && (
         <Button
           variant="ghost"
@@ -421,11 +876,23 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           {loadingOlder ? "Loading older messages…" : "Load older messages"}
         </Button>
       )}
-      {session?.timelineItems.map((item) => (
-        <TranscriptItem key={item.itemKey} item={item} />
-      ))}
+      <DeploymentContext.Provider value={deployment}>
+        <WorkersContext.Provider value={workers}>
+          <WorkerActionsContext.Provider value={workerActions}>
+            <ParentContext.Provider value={parentWork}>
+              {session?.timelineItems.map((item) => (
+                <TranscriptItem
+                  key={item.itemKey}
+                  item={item}
+                  status={item.kind === "liveAssistant" ? status : null}
+                />
+              ))}
+            </ParentContext.Provider>
+          </WorkerActionsContext.Provider>
+        </WorkersContext.Provider>
+      </DeploymentContext.Provider>
       {wasInterrupted && !inFlight && (
-        <p className="px-2 text-xs text-muted-foreground">Interrupted</p>
+        <StoppedNotice cause={session?.latestRequestOutcome?.cancelCause ?? null} />
       )}
       {showError && (
         <div className="rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3">
@@ -448,9 +915,9 @@ export const TranscriptPanel = memo(function TranscriptPanel({
           )}
         </div>
       )}
-      {inFlight && !live && holdsCount === 0 && (
+      {status && !live && holdsCount === 0 && (
         <AssistantMessage>
-          <Thinking />
+          <Thinking label={status} />
         </AssistantMessage>
       )}
     </div>
@@ -461,6 +928,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
   const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
+  const [requestedStop, setRequestedStop] = useState<string | null>(null);
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
     null,
   );
@@ -487,7 +955,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               return `${item.itemKey}:${item.tools
                 .map(
                   (tool) =>
-                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputSeq ?? 0}:${tool.partialOutputTail?.length ?? 0}`,
+                    `${tool.itemKey}:${tool.statusKind}:${tool.partialOutputTail?.length ?? 0}`,
                 )
                 .join(",")}`;
           }
@@ -536,7 +1004,64 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   });
   const choice = useBehaviorChoice(shell);
   const deployment = shell.selectedDeployment;
+  const workers = useWorkers(shell);
+  const parentWork = useParentWork(shell);
+  /* the composer mounts with the session, not with the screen, so this
+     measures from a callback ref rather than an effect that would run once
+     while it was still absent. The height goes on the column, not the
+     composer: a custom property inherits down, and the blocks that need to
+     clear it are the composer's siblings. */
+  const composerCleanup = useRef<(() => void) | null>(null);
+  const composer = useCallback((el: HTMLDivElement | null) => {
+    composerCleanup.current?.();
+    composerCleanup.current = null;
+    if (!el) return;
+    /* what a block sticking to the foot needs is not the composer's height
+       but how far its top sits above the scrollport's bottom edge. The two
+       coincide only when the scroller ends where the window does, which is
+       not true once the app is drawn inside a window frame. */
+    const publish = () => {
+      const scroller = scrollParent(el);
+      const floor = scroller
+        ? scroller.getBoundingClientRect().bottom
+        : window.innerHeight;
+      const gap = Math.max(0, Math.round(floor - el.getBoundingClientRect().top));
+      /* the transcript pins itself to the foot when a session opens, and
+         this measurement arrives after that: the room it reserves appears
+         underneath a view that has already stopped, leaving it exactly a
+         composer short of the end. A reader at the foot stays at the foot. */
+      const was =
+        scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+      column.current?.style.setProperty("--composer-h", `${gap}px`);
+      if (scroller && was !== null && was < 4)
+        requestAnimationFrame(() => {
+          scroller.scrollTop = scroller.scrollHeight;
+        });
+    };
+    publish();
+    const size = new ResizeObserver(publish);
+    size.observe(el);
+    /* the frame around the app resizes without the composer changing size */
+    window.addEventListener("resize", publish);
+    composerCleanup.current = () => {
+      size.disconnect();
+      window.removeEventListener("resize", publish);
+    };
+  }, []);
+  /* a person acting on a worker from here: cancel is the desktop's
+     interrupt after the cascade preview, the same path as Stop */
+  const workerActions = useMemo<WorkerActions>(
+    () => ({
+      parentRequestId: session?.latestRequestId ?? null,
+      cancel: (requestId) => setCascadeFor(requestId),
+    }),
+    [session?.latestRequestId],
+  );
   const agentName = deployment?.agentPrincipal.displayName ?? "the agent";
+  /* the snapshot says what happened in a session; the summary says where it
+     came from, which is the list's own view of it */
+  const summary =
+    deployment?.sessions.find((x) => x.sessionId === session?.sessionId) ?? null;
 
   const send = async (text: string) => {
     const pending = shell.sendMessage(text, session?.behaviorId ?? choice.behaviorId);
@@ -662,9 +1187,21 @@ export function SessionScreen({ shell }: { shell: Shell }) {
 
   /* stop: the desktop previews the cascade first; with no children it
      interrupts at once, otherwise it asks */
+  const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
+  const stopping = isStopping({
+    inFlight,
+    requestId: stoppableRequestId,
+    latestRequestId: session?.latestRequestId ?? null,
+    interruptObserved:
+      session?.latestRequestOutcome?.cancelCause?.source === "requestInterrupt",
+    requestedStop,
+  });
   const stop = async () => {
-    const requestId = shell.activeRequestId ?? session?.latestRequestId;
-    if (!requestId) return;
+    const requestId = stoppableRequestId;
+    if (!requestId || stopping) return;
+    setRequestedStop(requestId);
+    const release = () =>
+      setRequestedStop((current) => (current === requestId ? null : current));
     try {
       const preview = await shell.api.previewInterruptCascade({
         requestId,
@@ -675,7 +1212,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         preview.willInterrupt.length +
         preview.willDetach.length +
         preview.unknownPolicy.length;
-      if (kids > 0) return setCascadeFor(requestId);
+      if (kids > 0) {
+        release();
+        return setCascadeFor(requestId);
+      }
       const r = await shell.api.interruptRequest({
         requestId,
         agentDid: shell.selectedAgentDid,
@@ -683,15 +1223,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         cascade: false,
         expectedPreviewSignature: null,
       });
-      toast(
-        r.accepted
-          ? "Interrupt requested"
-          : r.alreadyInterrupted
-            ? "Already interrupted"
-            : "Not interrupted",
-      );
+      if (!r.accepted && !r.alreadyInterrupted) {
+        release();
+        toast("This response had already finished.");
+      }
     } catch (e) {
-      toast(`Couldn't interrupt: ${String(e)}`);
+      release();
+      toast(`Couldn't stop: ${String(e)}`);
     }
   };
 
@@ -756,6 +1294,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             <span className="min-w-0 flex-1 truncate font-heading text-sm font-medium text-heading">
               {session?.title}
             </span>
+            {session?.context && <SessionContext context={session.context} compact />}
             <Hint label="Fork session">
               <Button
                 variant="ghost"
@@ -783,7 +1322,16 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             the composer sticks to the foot so the bar runs the full height */}
         <div ref={column} className="min-h-0 flex-1">
           <ScrollArea className="h-full">
-            <div className="mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4">
+            {/* the right gutter is the parent marks' column, so it is only
+                  spent where marks can appear: a session with a parent, on a
+                  screen wide enough to give the width away. Elsewhere the
+                  column keeps its even padding. */}
+            <div
+              className={cn(
+                "mx-auto flex min-h-full w-full max-w-page flex-col px-6 pt-4",
+                parentWork.parent && "sm:pr-14",
+              )}
+            >
               <a
                 href={href({ name: "sessions" })}
                 className="mb-4 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
@@ -811,7 +1359,22 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                       {shell.sessionLoad.phase}
                     </h1>
                   )}
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {parentWork.parent && (
+                    <div className="mt-1 mb-1">
+                      <ParentLine work={parentWork} />
+                    </div>
+                  )}
+                  {summary &&
+                    !parentWork.parent &&
+                    (summary.taskId || summary.triggerId) && (
+                      <div className="mt-1 mb-1">
+                        <StartedByAutomation
+                          summary={summary}
+                          agentDid={deployment?.agentDid ?? null}
+                        />
+                      </div>
+                    )}
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
                     <BehaviorChip
                       behaviorId={session?.behaviorId ?? null}
                       deployment={deployment}
@@ -848,13 +1411,37 @@ export function SessionScreen({ shell }: { shell: Shell }) {
               {session?.goal && <Goal goal={session.goal} />}
               <div ref={headerEnd} aria-hidden="true" />
               <TranscriptPanel
+                deployment={deployment}
                 actionsRef={transcriptActions}
                 holdsCount={holdsHere.length}
                 inFlight={inFlight}
+                stopping={stopping}
                 ownerRef={column}
                 session={session}
+                workers={workers}
+                parentWork={parentWork}
+                workerActions={workerActions}
               />
-              <div className="sticky bottom-0 mt-auto bg-background pt-6 pb-6">
+              {/* its height is published as --composer-h, so a block that
+                  sticks to the foot of the scroller can sit clear of it
+                  rather than hard-coding what the composer happens to be */}
+              {/* the composer owns the foot of the scroller: anything else
+                  that sticks there passes behind it rather than over it,
+                  however short the block it belongs to turns out to be */}
+              <div
+                ref={composer}
+                className="sticky bottom-0 z-20 mt-auto bg-background pt-6 pb-6"
+              >
+                {/* conversation still running on under the composer: a short
+                    fade on its top edge says the transcript has not ended,
+                    where a hard edge reads as the end of it */}
+                <div
+                  aria-hidden
+                  className={cn(
+                    "pointer-events-none absolute inset-x-0 bottom-full h-8 bg-gradient-to-t from-background to-transparent transition-opacity duration-200",
+                    atBottom ? "opacity-0" : "opacity-100",
+                  )}
+                />
                 {/* the way back sits on the footer's top edge, whatever the footer holds */}
                 {!atBottom && (
                   <Button
@@ -935,7 +1522,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
                     }
                     onKeyDown={slash.onKeyDown}
                     sending={shell.sending || inFlight}
-                    onStop={inFlight ? stop : undefined}
+                    onStop={inFlight && !stopping ? stop : undefined}
                     placeholder={
                       status.kind === "disabled" && !inFlight
                         ? status.hint
@@ -1127,14 +1714,115 @@ function Goal({ goal }: { goal: GoalView }) {
   );
 }
 
-/* the model's reasoning, folded under the answer the way the desktop does */
+/* The model's reasoning, folded under the answer the way the desktop does.
+   It runs to thousands of words, so opening it shows a screenful and says
+   how much more there is. A tool's contents scroll inside their frame,
+   because they are reference to dip into; reasoning is prose read from the
+   top, and a scroller inside a transcript traps the wheel and stops a
+   reader scanning past it. It stays quieter than the answer it explains. */
 function Reasoning({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const [all, setAll] = useState(false);
+  /* whether there is anything behind the fade: a short reasoning needs no
+     way to expand it, and offering one says there is more to read */
+  const [clipped, setClipped] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const body = useRef<HTMLDivElement>(null);
+  const words = text.trim().split(/\s+/).length;
+  useEffect(() => {
+    const el = body.current;
+    if (!open || !el) return;
+    const measure = () => setClipped(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    /* prose reflows as fonts land and the column resizes */
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [open, all, text]);
+  /* folding thousands of words away moves everything under them; hold the
+     block where the reader left it rather than dropping them elsewhere */
+  const fold = (next: () => void) => {
+    const restore = anchor(root.current);
+    next();
+    restore();
+  };
   return (
-    <details className="group mb-2 text-xs text-muted-foreground">
-      <summary className="cursor-pointer select-none">Thinking</summary>
-      <div className="mt-1 border-l border-border pl-3">
-        <Markdown>{text}</Markdown>
-      </div>
-    </details>
+    <Collapsible
+      ref={root}
+      open={open}
+      onOpenChange={(next) => (next ? setOpen(true) : fold(() => setOpen(false)))}
+      className="mb-2"
+    >
+      {/* the controls at the foot are the way out, so the trigger stays put:
+          two sticky things for one block meet in the middle as soon as the
+          block is short, and then neither is where it was reached for */}
+      <CollapsibleTrigger className="-mx-2 -my-1 flex cursor-pointer items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent/30 hover:text-foreground">
+        <ChevronDown
+          className={cn("size-3.5 transition-transform", open && "rotate-180")}
+        />
+        Thinking
+        <span className="tabular-nums opacity-70">
+          · {words.toLocaleString()} words
+        </span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-1 border-l border-border pl-3">
+        <div
+          ref={body}
+          className={cn(
+            "relative text-muted-foreground",
+            !all && "max-h-80 overflow-hidden",
+          )}
+        >
+          <Markdown>{text}</Markdown>
+          {!all && clipped && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-background to-transparent" />
+          )}
+        </div>
+        {/* the way out sits where the reading ends, not back up at the top,
+            and it is there whether or not the rest was ever unfolded; a
+            reasoning that fits on a screen needs neither */}
+        {(all || clipped) && (
+          /* at the foot of the view while the block is in it, clear of the
+             composer, so a long reasoning can be left without reading to
+             the end of it */
+          <div
+            className={cn(
+              "mt-1 flex w-fit items-center gap-1 rounded-lg p-0.5",
+              /* only a block taller than the view has anywhere to stick:
+                 clipped, it is a screenful and its foot is already in
+                 reach, and sticky inside a short box just parks the
+                 controls at its end, which may be under the composer */
+              /* the composer floats over the foot of the scroller, and
+                 padding the transcript does not move a sticky element:
+                 it pins against the scrollport, so the offset is still
+                 the room the composer leaves */
+              all &&
+                "sticky bottom-[calc(var(--composer-h,0px)+0.75rem)] z-10 border border-border bg-raised/95 shadow-sm backdrop-blur",
+            )}
+          >
+            {all ? (
+              <Button
+                variant="quiet"
+                size="xs"
+                onClick={() => fold(() => setAll(false))}
+              >
+                Show less
+              </Button>
+            ) : (
+              <Button variant="quiet" size="xs" onClick={() => setAll(true)}>
+                Show all {words.toLocaleString()} words
+              </Button>
+            )}
+            <Button
+              variant="quiet"
+              size="xs"
+              onClick={() => fold(() => setOpen(false))}
+            >
+              Close
+            </Button>
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

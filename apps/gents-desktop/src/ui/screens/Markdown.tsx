@@ -54,9 +54,22 @@ function CodeBlock({ children }: { children?: ReactNode }) {
   );
 }
 
+/* a table that will not fit scrolls on its own rather than squeezing its
+   columns into the width it was given */
+function Table({ children }: { children?: ReactNode }) {
+  return (
+    <div className="max-w-full overflow-x-auto">
+      <table>{children}</table>
+    </div>
+  );
+}
+
 export const Markdown = memo(function Markdown({ children }: { children: string }) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ pre: CodeBlock }}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{ pre: CodeBlock, table: Table }}
+    >
       {children}
     </ReactMarkdown>
   );

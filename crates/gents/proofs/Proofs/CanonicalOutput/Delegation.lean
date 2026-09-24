@@ -1,42 +1,20 @@
 import Proofs.CanonicalOutput.Message
-import Proofs.Workspace.Types
+import Proofs.Workspace.ChildResolution
+import Proofs.Background.State
 
 namespace CanonicalOutput
 
-structure DelegatedWorkspace where
-  workspaceId : Nat
-  ownerAgent : Nat
-  sealHash : Option Nat
-  authority : BindingAuthority
-  deriving DecidableEq, Repr
+abbrev DelegatedWorkspace := Workspace.ChildStamp
 
-def workspaceAuthorityRank : BindingAuthority → Nat
-  | .readOnly => 0
-  | .integrate => 1
-  | .readWrite => 2
-
-def workspaceAttenuates (source child : DelegatedWorkspace) : Bool :=
-  child.workspaceId == source.workspaceId && child.ownerAgent == source.ownerAgent &&
-    child.sealHash == source.sealHash &&
-    workspaceAuthorityRank child.authority <= workspaceAuthorityRank source.authority
-
-def receiveDelegatedWorkspace (source child : Option DelegatedWorkspace) : Bool :=
-  match source, child with
-  | none, none => true
-  | some parent, some requested => workspaceAttenuates parent requested
-  | _, _ => false
-
-theorem delegated_workspace_cannot_escalate_readonly
-    (source child : DelegatedWorkspace)
-    (hsource : source.authority = .readOnly)
-    (h : workspaceAttenuates source child = true) :
-    child.authority = .readOnly := by
-  cases ha : child.authority <;>
-    simp [workspaceAttenuates, workspaceAuthorityRank, hsource, ha] at h ⊢
+/-- The addressed bridge copies the accepted parent stamp exactly. A child
+workspace request is resolved later by `Workspace.resolveChild`. -/
+def receiveDelegatedWorkspace (source copied : Option DelegatedWorkspace) : Bool :=
+  source == copied
 
 structure DelegatedInput where
   source : PayloadRef
   arguments : String
+  parentSubagentDepth : Nat
   deriving DecidableEq, Repr
 
 inductive DelegationError where
@@ -61,7 +39,7 @@ def isCompleteProviderSource (closing : Segment) : Bool :=
 transaction, not on the remote host. Only the addressed call's bytes are copied;
 the returned source reference is provenance and grants no parent read access. -/
 def prepareDelegatedInput (records : List Segment) (denied : List DocId)
-    (message : MessageEnvelope) (intent : ToolIntent) :
+    (message : MessageEnvelope) (intent : ToolIntent) (parentSubagentDepth : Nat) :
     Except DelegationError DelegatedInput := do
   if message.header.outcome != .complete || message.header.role != .assistant then
     .error .invalidPublication
@@ -79,7 +57,7 @@ def prepareDelegatedInput (records : List Segment) (denied : List DocId)
       if declaration.kind != .arguments then .error .invalidSource
       else match utf8? bytes with
         | none => .error .invalidSource
-        | some arguments => .ok ⟨intent.arguments, arguments⟩
+        | some arguments => .ok ⟨intent.arguments, arguments, parentSubagentDepth⟩
 
 /-- The accepted row is addressed under existing coordinator document ACP.
 There are no parent header/segment dependencies in this transport value. -/
@@ -89,6 +67,7 @@ structure DelegatedCall where
   target : Nat
   behavior : Nat
   input : DelegatedInput
+  workspace : Option DelegatedWorkspace
   deriving DecidableEq, Repr
 
 def receiveDelegatedInput (authenticatedCoordinator host configuredBehavior : Nat)
@@ -96,37 +75,113 @@ def receiveDelegatedInput (authenticatedCoordinator host configuredBehavior : Na
   if row.coordinator = authenticatedCoordinator ∧ row.target = host ∧
       row.behavior = configuredBehavior ∧ row.coordinator ≠ row.target then some row.input else none
 
+/-- The trusted paired peer consumes the copied depth at child creation. The
+bound is the existing subagent owner, not a second delegation limit. -/
+def materializeDelegatedChildDepth (input : DelegatedInput) : Option Nat :=
+  if input.parentSubagentDepth < Subagent.maxSubagentDepth then
+    some (input.parentSubagentDepth + 1)
+  else none
+
+def receiveDelegatedChildDepth (authenticatedCoordinator host configuredBehavior : Nat)
+    (row : DelegatedCall) : Option Nat :=
+  (receiveDelegatedInput authenticatedCoordinator host configuredBehavior row).bind
+    materializeDelegatedChildDepth
+
+/-- Host materialization composes the copied parent stamp with the existing
+workspace resolver; the requested child workspace is never the copied stamp. -/
+def receiveDelegatedChild (authenticatedCoordinator host configuredBehavior
+    parentAgent childAgent : Nat) (row : DelegatedCall)
+    (choice : Workspace.ChildChoice) : Option (Nat × Option DelegatedWorkspace) := do
+  let input ← receiveDelegatedInput authenticatedCoordinator host configuredBehavior row
+  let depth ← materializeDelegatedChildDepth input
+  let workspace ← Workspace.resolveChild row.workspace parentAgent childAgent choice
+  some (depth, workspace)
+
+theorem materialized_child_depth_bounded (input : DelegatedInput) (child : Nat)
+    (h : materializeDelegatedChildDepth input = some child) :
+    child = input.parentSubagentDepth + 1 ∧ child ≤ Subagent.maxSubagentDepth := by
+  unfold materializeDelegatedChildDepth at h
+  split at h
+  · cases h
+    constructor
+    · rfl
+    · omega
+  · contradiction
+
+theorem received_child_depth_and_authority_bounded
+    (coordinator host behavior parentAgent childAgent : Nat)
+    (row : DelegatedCall) (choice : Workspace.ChildChoice)
+    (parent child : DelegatedWorkspace) (depth : Nat)
+    (hp : row.workspace = some parent)
+    (h : receiveDelegatedChild coordinator host behavior parentAgent childAgent row choice =
+      some (depth, some child)) :
+    depth ≤ Subagent.maxSubagentDepth ∧
+      Workspace.authorityRank child.authority ≤ Workspace.authorityRank parent.authority := by
+  unfold receiveDelegatedChild at h
+  cases hi : receiveDelegatedInput coordinator host behavior row with
+  | none => simp [hi] at h
+  | some input =>
+      simp only [hi, Option.bind_some] at h
+      cases hd : materializeDelegatedChildDepth input with
+      | none => simp [hd] at h
+      | some actualDepth =>
+          cases hw : Workspace.resolveChild row.workspace parentAgent childAgent choice with
+          | none => simp [hw] at h
+          | some actualWorkspace =>
+              simp [hi, hd, hw] at h
+              rcases h with ⟨rfl, rfl⟩
+              exact ⟨(materialized_child_depth_bounded input _ hd).2,
+                Workspace.resolved_child_cannot_exceed_parent parent child
+                  parentAgent childAgent choice (by simpa [hp] using hw)⟩
+
+theorem received_readonly_parent_cannot_escalate
+    (coordinator host behavior parentAgent childAgent : Nat)
+    (row : DelegatedCall) (choice : Workspace.ChildChoice)
+    (parent child : DelegatedWorkspace) (depth : Nat)
+    (hp : row.workspace = some parent) (ha : parent.authority = .readOnly)
+    (h : receiveDelegatedChild coordinator host behavior parentAgent childAgent row choice =
+      some (depth, some child)) : child.authority = .readOnly := by
+  have bound := (received_child_depth_and_authority_bounded coordinator host behavior
+    parentAgent childAgent row choice parent child depth hp h).2
+  cases hc : child.authority <;> simp [Workspace.authorityRank, ha, hc] at bound ⊢
+
 /-- The coordinator binds the copied argument bytes to the one addressed remote
 call. Local calls retain no delegated projection. -/
 def prepareDelegatedCall (records : List Segment) (denied : List DocId)
-    (message : MessageEnvelope) (intent : ToolIntent) (coordinator target behavior : Nat) :
+    (message : MessageEnvelope) (intent : ToolIntent) (coordinator target behavior
+    parentSubagentDepth : Nat) (workspace : Option DelegatedWorkspace) :
     Except DelegationError DelegatedCall := do
   if coordinator = target then .error .localTarget
   else
-    let input ← prepareDelegatedInput records denied message intent
-    .ok ⟨intent.call, coordinator, target, behavior, input⟩
+    let input ← prepareDelegatedInput records denied message intent parentSubagentDepth
+    .ok ⟨intent.call, coordinator, target, behavior, input, workspace⟩
 
 theorem wrong_target_cannot_receive (coordinator host : Nat) (row : DelegatedCall)
     (h : row.target ≠ host) : receiveDelegatedInput coordinator host row.behavior row = none := by
   simp [receiveDelegatedInput, h]
 
-theorem local_call_has_no_delegated_input (principal call : Nat) (input : DelegatedInput) :
-    receiveDelegatedInput principal principal 7 ⟨call, principal, principal, 7, input⟩ = none := by
+theorem local_call_has_no_delegated_input (principal call configuredBehavior : Nat)
+    (input : DelegatedInput) :
+    receiveDelegatedInput principal principal configuredBehavior
+      ⟨call, principal, principal, configuredBehavior, input, none⟩ = none := by
   simp [receiveDelegatedInput]
 
 theorem source_reference_is_not_a_hydration_root
-    (coordinator host call : Nat) (input : DelegatedInput) (hremote : coordinator ≠ host) :
-    receiveDelegatedInput coordinator host 7 ⟨call, coordinator, host, 7, input⟩ = some input := by
+    (coordinator host call configuredBehavior : Nat) (input : DelegatedInput)
+    (hremote : coordinator ≠ host) :
+    receiveDelegatedInput coordinator host configuredBehavior
+      ⟨call, coordinator, host, configuredBehavior, input, none⟩ = some input := by
   simp [receiveDelegatedInput, hremote]
 
 theorem admitted_input_is_exact_argument_stream
     (records : List Segment) (denied : List DocId)
-    (message : MessageEnvelope) (intent : ToolIntent) (input : DelegatedInput)
-    (h : prepareDelegatedInput records denied message intent = .ok input) :
+    (message : MessageEnvelope) (intent : ToolIntent) (parentSubagentDepth : Nat)
+    (input : DelegatedInput)
+    (h : prepareDelegatedInput records denied message intent parentSubagentDepth = .ok input) :
     input.source = intent.arguments ∧
       ∃ declaration bytes, reconstructPayload records denied intent.arguments =
         .ok (declaration, bytes) ∧ utf8? bytes = some input.arguments ∧
-          declaration.kind = .arguments := by
+          declaration.kind = .arguments ∧ input.parentSubagentDepth = parentSubagentDepth := by
   unfold prepareDelegatedInput at h
   split at h
   · contradiction
@@ -158,6 +213,6 @@ theorem admitted_input_is_exact_argument_stream
                       simp only [hutf8, Except.ok.injEq] at h
                       cases h
                       refine ⟨rfl, declaration, bytes, rfl, hutf8, ?_⟩
-                      simpa using hkind
+                      exact ⟨by simpa using hkind, rfl⟩
 
 end CanonicalOutput

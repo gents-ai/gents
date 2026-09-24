@@ -1,5 +1,4 @@
 const COMMANDS: &[&str] = &[
-    "desktop_bridge_contract",
     "desktop_bootstrap_summary",
     "desktop_native_e2e_config",
     "desktop_native_e2e_status",
@@ -70,6 +69,7 @@ const COMMANDS: &[&str] = &[
     "desktop_claude_login_cancel",
     "desktop_provider_accounts_list",
     "desktop_provider_account_disconnect",
+    "desktop_provider_account_retry_save",
     "desktop_task_save",
     "desktop_schedule_save",
     "desktop_schedule_run",

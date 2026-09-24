@@ -1,7 +1,8 @@
 /* Shared configuration editor rows plus explicit Save/Cancel actions.
    Fields only update their local draft; persistence is user-controlled. */
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { XIcon } from "lucide-react";
+import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
+import { canPickDirectory, pickDirectory } from "@/lib/pickDirectory";
 import { Input } from "@gents/ui/components/input";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -12,7 +13,9 @@ import {
   ComboboxContent,
   ComboboxEmpty,
   ComboboxItem,
+  ComboboxInput,
   ComboboxList,
+  ComboboxTrigger,
   ComboboxValue,
 } from "@gents/ui/components/combobox";
 import {
@@ -22,13 +25,21 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@gents/ui/components/select";
+import { href, type Route } from "@/lib/router";
 import { Switch } from "@gents/ui/components/switch";
 import { Textarea } from "@gents/ui/components/textarea";
 import { Fact, Row, StackedRow } from "./rows";
 
 export type Choice = { value: string; label: string };
 
-type Common = { id: string; label: ReactNode; description?: ReactNode };
+type Common = {
+  id: string;
+  label: ReactNode;
+  description?: ReactNode;
+  /* shown at the field, under its description */
+  error?: string;
+  disabled?: boolean;
+};
 
 export function DraftActions({
   dirty,
@@ -36,12 +47,14 @@ export function DraftActions({
   error,
   onSave,
   onCancel,
+  saveLabel = "Save",
 }: {
   dirty: boolean;
   saving: boolean;
   error: string | null;
-  onSave: () => void | Promise<void>;
+  onSave: () => unknown;
   onCancel: () => void;
+  saveLabel?: string;
 }) {
   return (
     <div className="mb-6">
@@ -54,8 +67,12 @@ export function DraftActions({
         <Button variant="quiet" disabled={!dirty || saving} onClick={onCancel}>
           Cancel
         </Button>
-        <Button variant="brand" disabled={!dirty || saving} onClick={onSave}>
-          {saving ? "Saving…" : "Save"}
+        <Button
+          variant="brand"
+          disabled={!dirty || saving}
+          onClick={() => void onSave()}
+        >
+          {saving ? "Saving…" : saveLabel}
         </Button>
       </div>
     </div>
@@ -74,6 +91,8 @@ export function TextRow({
   mono,
   password,
   wide,
+  error,
+  disabled,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
@@ -85,9 +104,11 @@ export function TextRow({
   wide?: boolean;
 }) {
   return (
-    <Row label={label} description={description} htmlFor={id}>
+    <Row label={label} description={description} htmlFor={id} error={error}>
       <Input
         id={id}
+        aria-invalid={error ? true : undefined}
+        disabled={disabled}
         type={password ? "password" : "text"}
         value={value}
         onChange={(e) => onChange(e.target.value)}
@@ -144,6 +165,9 @@ export function AreaRow({
   rows = 3,
   mono,
   stacked,
+  expandedByDefault = false,
+  error,
+  disabled,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
@@ -152,9 +176,11 @@ export function AreaRow({
   rows?: number;
   mono?: boolean;
   stacked?: boolean;
+  /* a stacked area that opens showing all of its text */
+  expandedByDefault?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement>(null);
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(expandedByDefault);
   const [overflowing, setOverflowing] = useState(false);
   useEffect(() => {
     const element = ref.current;
@@ -169,10 +195,12 @@ export function AreaRow({
   const clipped = stacked && !expanded;
   const Wrap = stacked ? StackedRow : Row;
   return (
-    <Wrap label={label} description={description} htmlFor={id}>
+    <Wrap label={label} description={description} htmlFor={id} error={error}>
       <Textarea
         ref={ref}
         id={id}
+        aria-invalid={error ? true : undefined}
+        readOnly={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onBlur={onCommit}
@@ -204,6 +232,8 @@ export function ChoiceRow({
   onChange,
   items,
   none,
+  error,
+  disabled,
 }: Common & {
   value: string;
   onChange: (v: string) => void;
@@ -212,9 +242,18 @@ export function ChoiceRow({
 }) {
   const all = none ? [{ value: "", label: none }, ...items] : items;
   return (
-    <Row label={label} description={description} htmlFor={id}>
-      <Select items={all} value={value} onValueChange={(v) => onChange(v ?? "")}>
-        <SelectTrigger id={id} className="w-72 max-md:w-full">
+    <Row label={label} description={description} htmlFor={id} error={error}>
+      <Select
+        items={all}
+        value={value}
+        onValueChange={(v) => onChange(v ?? "")}
+        disabled={disabled}
+      >
+        <SelectTrigger
+          id={id}
+          aria-invalid={error ? true : undefined}
+          className="w-72 max-md:w-full"
+        >
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -229,6 +268,235 @@ export function ChoiceRow({
   );
 }
 
+/* a directory: typed, or chosen with the OS picker where
+   the app has one (the desktop shell). The button appears only then. */
+export function PathRow({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  onCommit,
+  onEnter,
+  placeholder,
+  error,
+  disabled,
+}: Common & {
+  value: string;
+  onChange: (v: string) => void;
+  onCommit: () => void;
+  onEnter: (e: React.KeyboardEvent<HTMLElement>) => void;
+  placeholder?: string;
+}) {
+  const [picking, setPicking] = useState(false);
+  const choose = async () => {
+    setPicking(true);
+    try {
+      const picked = await pickDirectory({
+        defaultPath: value || null,
+        title: String(label),
+      });
+      if (picked) {
+        onChange(picked);
+        onCommit();
+      }
+    } finally {
+      setPicking(false);
+    }
+  };
+  return (
+    <Row label={label} description={description} htmlFor={id} error={error}>
+      <span className="flex w-72 items-center gap-1 max-md:w-full">
+        <Input
+          id={id}
+          aria-invalid={error ? true : undefined}
+          disabled={disabled}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={onCommit}
+          onKeyDown={onEnter}
+          placeholder={placeholder ?? "~/Projects/…"}
+          className="min-w-0 flex-1 font-mono text-xs"
+        />
+        {canPickDirectory() && (
+          <Button
+            variant="quiet"
+            size="icon"
+            aria-label="Choose a folder"
+            disabled={disabled || picking}
+            onClick={() => void choose()}
+          >
+            <FolderOpen />
+          </Button>
+        )}
+      </span>
+    </Row>
+  );
+}
+
+/* a field that points at another document. Three affordances, always: pick
+   one, create a new one without leaving the page, open the chosen one.
+   `onCreate` makes the document (a dialog or a direct save) and resolves
+   with its id, or null if the user backed out. */
+export function RefRow({
+  id,
+  label,
+  description,
+  value,
+  onChange,
+  items,
+  none,
+  error,
+  disabled,
+  createLabel,
+  onCreate,
+  openRoute,
+  onOpen,
+}: Common & {
+  value: string;
+  onChange: (v: string) => void;
+  items: Choice[];
+  none?: string;
+  createLabel: string;
+  onCreate?: () => Promise<string | null>;
+  openRoute?: (id: string) => Route;
+  /* opens the chosen document beside the page instead of navigating to it */
+  onOpen?: (id: string) => void;
+}) {
+  const all = none ? [{ value: "", label: none }, ...items] : items;
+  /* the select renders whatever value it is given; the New item is never it */
+  const known = all.some((i) => i.value === value);
+  /* a reference to a document that no longer exists: shown as such, and the
+     field is invalid until another is picked (the desktop's DocumentSelection rule) */
+  const shown = known ? all : [...all, { value, label: `${value} (unavailable)` }];
+  const invalid = error ? true : !known && value ? true : undefined;
+  const [open, setOpen] = useState(false);
+  /* a label reads "Name · summary"; the summary sits beside the name in the list */
+  const labelOf = (v: string) => {
+    const full = shown.find((i) => i.value === v)?.label ?? v;
+    const at = full.indexOf(" · ");
+    return at === -1
+      ? { name: full, hint: "" }
+      : { name: full.slice(0, at), hint: full.slice(at + 3) };
+  };
+  return (
+    <Row
+      label={label}
+      description={description}
+      htmlFor={id}
+      error={
+        error ??
+        (!known && value
+          ? "That document no longer exists. Choose another."
+          : undefined)
+      }
+    >
+      <span className="flex w-72 items-center gap-1 max-md:w-full">
+        <Combobox
+          items={shown.map((i) => i.value)}
+          value={value}
+          onValueChange={(v) => {
+            setOpen(false);
+            onChange(v ?? "");
+          }}
+          open={open}
+          onOpenChange={setOpen}
+          disabled={disabled}
+          itemToStringLabel={(v: string) => labelOf(v).name}
+          filter={(v: string, query: string) => {
+            const q = query.trim().toLowerCase();
+            const l = labelOf(v);
+            return !q || `${l.name} ${l.hint}`.toLowerCase().includes(q);
+          }}
+        >
+          <ComboboxTrigger
+            id={id}
+            aria-invalid={invalid}
+            className="flex h-9 min-w-0 flex-1 items-center justify-between gap-1.5 rounded-2xl border border-transparent bg-input/50 px-3 text-sm whitespace-nowrap outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20"
+          >
+            <span
+              className={`truncate ${value || none ? "" : "text-muted-foreground"}`}
+            >
+              {value ? labelOf(value).name : (none ?? "Choose")}
+            </span>
+          </ComboboxTrigger>
+          {/* wide, so the summary beside each name has room; searchable past a few */}
+          <ComboboxContent
+            aria-label={`Choose ${String(label).toLowerCase()}`}
+            className="w-[28rem] min-w-[28rem] max-md:w-[calc(100vw-2rem)] max-md:min-w-0"
+          >
+            {shown.length > 6 && (
+              <ComboboxInput
+                showTrigger={false}
+                aria-label={`Search ${String(label).toLowerCase()}`}
+                placeholder={`Search ${items.length}`}
+              />
+            )}
+            <ComboboxEmpty>Nothing by that name.</ComboboxEmpty>
+            <ComboboxList>
+              {(v: string) => {
+                const l = labelOf(v);
+                return (
+                  <ComboboxItem key={v || "∅"} value={v}>
+                    <span className="flex min-w-0 flex-1 items-baseline justify-between gap-4">
+                      <span className="truncate">{l.name}</span>
+                      {l.hint && (
+                        <span className="max-w-48 shrink-0 truncate text-xs text-muted-foreground">
+                          {l.hint}
+                        </span>
+                      )}
+                    </span>
+                  </ComboboxItem>
+                );
+              }}
+            </ComboboxList>
+          </ComboboxContent>
+        </Combobox>
+        {onCreate && (
+          <Button
+            variant="quiet"
+            size="icon"
+            aria-label={createLabel.replace(/…$/, "")}
+            title={createLabel.replace(/…$/, "")}
+            onClick={() =>
+              void onCreate().then((created) => {
+                if (created) onChange(created);
+              })
+            }
+          >
+            <Plus />
+          </Button>
+        )}
+        {onOpen && value && known ? (
+          <Button
+            variant="quiet"
+            size="icon"
+            aria-label="Open"
+            onClick={() => onOpen(value)}
+          >
+            <ExternalLink />
+          </Button>
+        ) : (
+          openRoute &&
+          value &&
+          known && (
+            <Button
+              variant="quiet"
+              size="icon"
+              aria-label="Open"
+              nativeButton={false}
+              render={<a href={href(openRoute(value))} />}
+            >
+              <ExternalLink />
+            </Button>
+          )
+        )}
+      </span>
+    </Row>
+  );
+}
+
+/* several picks from a known list, shown as chips; typing filters the list */
 export function ChipsRow({
   id,
   label,
@@ -238,56 +506,91 @@ export function ChipsRow({
   items,
   placeholder = "Add",
   empty = "No match.",
+  error,
+  disabled,
+  createLabel,
+  onCreate,
 }: Common & {
   value: string[];
   onChange: (value: string[]) => void;
   items: Choice[];
   placeholder?: string;
   empty?: string;
+  /* a last item that makes a new document and adds it to the chips */
+  createLabel?: string;
+  onCreate?: () => Promise<string | null>;
 }) {
-  const name = (value: string) =>
-    items.find((item) => item.value === value)?.label ?? value;
+  const name = (v: string) =>
+    items.find((i) => i.value === v)?.label ?? `${v} (unavailable)`;
+  const all = items.map((i) => i.value);
   return (
-    <Row label={label} description={description} htmlFor={id}>
-      <Combobox
-        multiple
-        items={items.map((item) => item.value)}
-        itemToStringLabel={name}
-        value={value}
-        onValueChange={(next) => onChange(next ?? [])}
-      >
-        <ComboboxChips className="w-96 max-md:w-full">
-          <ComboboxValue>
-            {(values: string[]) =>
-              values.map((selected) => (
-                <ComboboxChip key={selected} showRemove={false}>
-                  {name(selected)}
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={`Remove ${name(selected)}`}
-                    className="-ml-0.5 size-4.5 opacity-50 hover:opacity-100"
-                    onClick={() => onChange(value.filter((item) => item !== selected))}
-                  >
-                    <XIcon />
-                  </Button>
-                </ComboboxChip>
-              ))
+    <Row label={label} description={description} htmlFor={id} error={error}>
+      <span className="flex w-96 items-center gap-1 max-md:w-full">
+        <Combobox
+          multiple
+          disabled={disabled}
+          items={all}
+          itemToStringLabel={name}
+          value={value}
+          filter={(v: string, query: string) =>
+            name(v).toLowerCase().includes(query.trim().toLowerCase())
+          }
+          onValueChange={(v) => onChange(v ?? [])}
+        >
+          <ComboboxChips className="min-w-0 flex-1">
+            <ComboboxValue>
+              {(values: string[]) =>
+                values.map((selected) => (
+                  <ComboboxChip key={selected} showRemove={false}>
+                    {name(selected)}
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      aria-label={`Remove ${name(selected)}`}
+                      className="-ml-0.5 size-4.5 opacity-50 hover:opacity-100"
+                      onClick={() =>
+                        onChange(value.filter((item) => item !== selected))
+                      }
+                    >
+                      <XIcon />
+                    </Button>
+                  </ComboboxChip>
+                ))
+              }
+            </ComboboxValue>
+            <ComboboxChipsInput
+              id={id}
+              aria-invalid={error ? true : undefined}
+              placeholder={value.length ? "" : placeholder}
+            />
+          </ComboboxChips>
+          <ComboboxContent aria-label={`Choose ${String(label).toLowerCase()}`}>
+            <ComboboxEmpty>{empty}</ComboboxEmpty>
+            <ComboboxList>
+              {(v: string) => (
+                <ComboboxItem key={v} value={v}>
+                  {name(v)}
+                </ComboboxItem>
+              )}
+            </ComboboxList>
+          </ComboboxContent>
+        </Combobox>
+        {onCreate && (
+          <Button
+            variant="quiet"
+            size="icon"
+            aria-label={(createLabel ?? "New").replace(/…$/, "")}
+            title={(createLabel ?? "New").replace(/…$/, "")}
+            onClick={() =>
+              void onCreate().then((created) => {
+                if (created) onChange([...value, created]);
+              })
             }
-          </ComboboxValue>
-          <ComboboxChipsInput id={id} placeholder={value.length ? "" : placeholder} />
-        </ComboboxChips>
-        <ComboboxContent>
-          <ComboboxEmpty>{empty}</ComboboxEmpty>
-          <ComboboxList>
-            {(item: string) => (
-              <ComboboxItem key={item} value={item}>
-                {name(item)}
-              </ComboboxItem>
-            )}
-          </ComboboxList>
-        </ComboboxContent>
-      </Combobox>
+          >
+            <Plus />
+          </Button>
+        )}
+      </span>
     </Row>
   );
 }

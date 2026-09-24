@@ -49,14 +49,13 @@ test.describe("first-run install", () => {
     const section = page.getByRole("combobox", { name: "Section", exact: true });
     if (await section.isVisible()) {
       await section.click();
-      await page.getByRole("option", { name: /^Backends\b/ }).click();
+      await page.getByRole("option", { name: /^Providers\b/ }).click();
     } else {
-      await page.getByRole("link", { name: /^Backends\b/ }).click();
+      await page.getByRole("link", { name: /^Providers\b/ }).click();
     }
     await page.getByRole("button", { name: "New backend" }).click();
-    await expect(
-      page.getByRole("heading", { name: "Add an inference backend" }),
-    ).toBeVisible();
+    await page.getByRole("menuitem", { name: "OpenAI" }).click();
+    await expect(page.getByRole("heading", { name: "Set up OpenAI" })).toBeVisible();
     const panel = page.getByTestId("inference-setup-panel");
     const bounds = await panel.boundingBox();
     expect(bounds).not.toBeNull();
@@ -67,9 +66,7 @@ test.describe("first-run install", () => {
     await page.getByRole("option", { name: "gpt-5.6-sol", exact: true }).click();
     await page.getByRole("button", { name: "Save backend", exact: true }).click();
     await expect(page.getByRole("button", { name: "New backend" })).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: "Add an inference backend" }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Set up OpenAI" })).toHaveCount(0);
   });
 
   test("keeps selection and shows an actionable error when the operator save fails", async ({

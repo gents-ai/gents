@@ -3,17 +3,7 @@
    opens to its body: outputs, contents, the diff, a live tail while it
    runs. Nothing opens on its own. */
 import { useState } from "react";
-import {
-  ChevronDown,
-  FileText,
-  PenLine,
-  Search,
-  SlidersHorizontal,
-  Sparkles,
-  Terminal,
-  Wrench,
-  X,
-} from "lucide-react";
+import { ChevronDown, ListTree, X } from "lucide-react";
 import type { RenderedToolCallView } from "@source-inc/gents-desktop-client";
 import { Button } from "@gents/ui/components/button";
 import {
@@ -28,22 +18,7 @@ import type { Shell } from "@/hooks/useShell";
 import { useNow } from "@/lib/clock";
 import { duration } from "./tool-summary";
 import { ToolBody, ToolSummary } from "./tool-views";
-
-const ICONS: Record<string, typeof Wrench> = {
-  read_doc: FileText,
-  read_file: FileText,
-  grep: Search,
-  metrics: Search,
-  edit_file: PenLine,
-  bash: Terminal,
-  reason: Sparkles,
-  plan: Sparkles,
-  delegate: Sparkles,
-};
-function ToolIcon({ name }: { name: string }) {
-  const Icon = ICONS[name.split(".")[0]!] ?? Wrench;
-  return <Icon className="size-4" />;
-}
+import { ToolIcon } from "./tool-icon";
 
 function Entry({
   tool,
@@ -59,11 +34,7 @@ function Entry({
     <Collapsible open={open} onOpenChange={onOpenChange}>
       <CollapsibleTrigger className="flex w-full cursor-pointer items-center gap-2.5 py-2 text-left text-sm">
         <span className="grid size-4 place-items-center text-muted-foreground">
-          {live ? (
-            <Spinner className="text-foreground" />
-          ) : (
-            <ToolIcon name={tool.toolName} />
-          )}
+          {live ? <Spinner className="text-foreground" /> : <ToolIcon tool={tool} />}
         </span>
         <ToolSummary
           tool={tool}
@@ -77,7 +48,7 @@ function Entry({
         )}
         {tool.statusKind === "cancelled" && (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            cancelled
+            canceled
           </span>
         )}
         <Took tool={tool} />
@@ -111,7 +82,9 @@ export function TracePanel({ shell, onClose }: { shell: Shell; onClose: () => vo
   return (
     <aside className="flex h-full min-h-0 flex-col rounded-2xl border border-border/60 bg-raised">
       <div className="flex h-12 items-center gap-2.5 border-b border-border/60 px-3">
-        <SlidersHorizontal className="size-4 text-muted-foreground" />
+        {/* the calls of a request, in order: not a setting, which is what
+            the sliders mean in the shell and in the config's profiles */}
+        <ListTree className="size-4 text-muted-foreground" />
         <span className="font-heading text-sm font-medium text-heading">Trace</span>
         {running && <Spinner className="ml-1 text-foreground" />}
         <Button

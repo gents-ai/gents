@@ -32,9 +32,10 @@ describeLive("Tauri app live bridge runner behavior config", () => {
         },
         { timeout: 30_000 },
       );
+      /* a behavior edits its own instructions (its context) on its page */
       await driver.openConfig();
-      await driver.openConfigSection("contexts");
-      await driver.openConfigItem(contextId);
+      await driver.openConfigSection("behaviors");
+      await driver.openConfigItem(behaviorId);
       await waitFor(() => {
         expect(driver.contextSystemPrompt()).toBeInTheDocument();
       });
@@ -52,8 +53,8 @@ describeLive("Tauri app live bridge runner behavior config", () => {
       logTurn(`context config saved behaviorId=${behaviorId} contextId=${contextId}`);
 
       await driver.openConfigSection("agent");
-      await driver.openConfigSection("contexts");
-      await driver.openConfigItem(contextId);
+      await driver.openConfigSection("behaviors");
+      await driver.openConfigItem(behaviorId);
       await waitFor(() => {
         expect(driver.contextSystemPrompt()).toHaveValue(systemPrompt);
       });

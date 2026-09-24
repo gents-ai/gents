@@ -1,15 +1,23 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 import type { Shell } from "../src/ui/hooks/useShell";
 import { AgentPanel } from "../src/ui/screens/agent/AgentPanel";
-import { BehaviorsPanel } from "../src/ui/screens/agent/BehaviorsPanel";
+import {
+  BehaviorEditor,
+  BehaviorsPanel,
+  newBehaviorView,
+} from "../src/ui/screens/agent/BehaviorsPanel";
 import { ContextsPanel } from "../src/ui/screens/agent/ContextsPanel";
 import { EventSourcesPanel } from "../src/ui/screens/agent/EventSourcesPanel";
 import { InferencePanel } from "../src/ui/screens/agent/InferencePanel";
-import { ProfilesPanel } from "../src/ui/screens/agent/ProfilesPanel";
+import {
+  ProfileEditor,
+  ProfilesPanel,
+  newProfileDocument,
+} from "../src/ui/screens/agent/ProfilesPanel";
 import { SetupScreen } from "../src/ui/screens/setup/SetupScreen";
 import { SchedulesPanel } from "../src/ui/screens/agent/SchedulesPanel";
 import { SkillsPanel } from "../src/ui/screens/agent/SkillsPanel";
@@ -72,6 +80,7 @@ function harness() {
     deleteEventSourceConfig: vi.fn().mockResolvedValue({}),
     deleteTriggerConfig: vi.fn().mockResolvedValue({}),
     deleteInferenceProfileConfig: vi.fn().mockResolvedValue({}),
+    fetchOperationsSnapshot: vi.fn().mockResolvedValue(null),
   };
   const refreshSnapshot = vi.fn().mockResolvedValue(undefined);
   const shell = {
@@ -460,14 +469,67 @@ describe("configuration panels", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("opens shared provider setup without eagerly creating a blank backend", async () => {
+  it("keeps a profile whose backend is gone on the Providers page", async () => {
     const { api, shell } = harness();
     api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({ providers: [] });
+    const orphan = {
+      ...deployment.inferenceProfiles[0]!,
+      profile_id: "profile-orphan",
+      display_name: "Orphaned profile",
+      backend_id: "backend-deleted",
+    };
+    render(
+      <ProfilesPanel
+        shell={shell}
+        deployment={{
+          ...deployment,
+          inferenceProfiles: [...deployment.inferenceProfiles, orphan],
+        }}
+      />,
+    );
+    expect(await screen.findByText("Orphaned profile")).toBeInTheDocument();
+    expect(screen.getAllByText("Backend is missing").length).toBeGreaterThan(0);
+  });
+
+  it("says when the provider catalog cannot be read and reads it again on Retry", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("catalog offline"))
+      .mockResolvedValueOnce({ providers: [] });
     render(<InferencePanel shell={shell} deployment={deployment} />);
-    await userEvent.setup().click(screen.getByRole("button", { name: "New backend" }));
-    expect(
-      await screen.findByRole("heading", { name: "Add an inference backend" }),
-    ).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("catalog offline");
+    await userEvent.setup().click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(api.getInferenceSetupCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens shared provider setup without eagerly creating a blank backend", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockResolvedValue({
+      providers: [
+        {
+          id: "openai",
+          displayName: "OpenAI",
+          description: "OpenAI models",
+          authMethods: ["api_key"],
+          authOptions: [
+            {
+              method: "api_key",
+              displayName: "API key",
+              defaultEndpoint: "https://api.openai.com/v1",
+            },
+          ],
+          defaultAuthMethod: "api_key",
+          defaultEndpoint: "https://api.openai.com/v1",
+        },
+      ],
+    });
+    render(<InferencePanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "New backend" }));
+    await user.click(await screen.findByRole("menuitem", { name: "OpenAI" }));
+    expect(await screen.findByRole("heading", { name: "Set up OpenAI" })).toBeVisible();
     expect(api.getInferenceSetupCatalog).toHaveBeenCalled();
     expect(api.saveBackendConfig).not.toHaveBeenCalled();
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
@@ -476,7 +538,7 @@ describe("configuration panels", () => {
   it("requires the agent identity fields and saves editable principal tags", async () => {
     const { api, shell } = harness();
     render(<AgentPanel shell={shell} deployment={deployment} />);
-    expectFields(["Display name", "Default behaviour", "Enabled", "Tags"]);
+    expectFields(["Display name", "Default behavior", "Enabled", "Tags"]);
 
     const user = await replace("Display name", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -486,7 +548,7 @@ describe("configuration panels", () => {
     expect(api.saveAgentConfig).not.toHaveBeenCalled();
 
     await replace("Display name", "Acceptance Agent");
-    await replace("Tags", "acceptance\ndesktop");
+    await replace("Tags", "acceptance{Enter}desktop{Enter}");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(api.saveAgentConfig).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -504,33 +566,216 @@ describe("configuration panels", () => {
     expectFields([
       "Display name",
       "Description",
-      "Context",
+      "System prompt",
       "Inference profile",
-      "Enabled",
-      "Default behaviour",
       "Tags",
     ]);
     const user = await replace("Display name", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Display name is required",
+      "Give the behavior a name.",
     );
     expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
   });
 
-  it("creates behavior scaffolds disabled until the operator saves them", async () => {
+  it("opens a new behavior as an unsaved, disabled draft until the operator saves it", async () => {
     const { api, shell } = harness();
     render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
 
-    await userEvent
-      .setup()
-      .click(screen.getByRole("button", { name: "New behaviour" }));
+    await user.click(screen.getByRole("button", { name: "New behavior" }));
 
-    expect(api.saveBehaviorConfig).toHaveBeenCalledWith(
+    expect(screen.getByLabelText("Display name")).toHaveValue("");
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    /* the new context and the behavior that points at it are one apply */
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
+    const request = api.applyConfigComponents.mock.calls[0][0];
+    expect(request.document.agent_behaviors).toEqual([
       expect.objectContaining({
-        document: expect.objectContaining({ enabled: false }),
+        display_name: "Reviewer",
+        enabled: false,
+        context_id: request.document.contexts[0].context_id,
+      }),
+    ]);
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+  });
+
+  it("keeps a new behavior's draft open on a failed save and retries the same context", async () => {
+    const { api, shell } = harness();
+    api.applyConfigComponents
+      .mockRejectedValueOnce(new Error("bridge offline"))
+      .mockResolvedValueOnce({});
+    const onSaved = vi.fn();
+    render(
+      <BehaviorEditor
+        shell={shell}
+        deployment={deployment}
+        behavior={newBehaviorView(deployment)}
+        draft={{ onSaved, onCancel: vi.fn() }}
+      />,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("bridge offline");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Display name")).toHaveValue("Reviewer");
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    const [first, second] = api.applyConfigComponents.mock.calls.map(
+      (call) => call[0].document.contexts[0].context_id,
+    );
+    expect(second).toBe(first);
+  });
+
+  it("creates a prefilled new profile as it stands, and closes only on success", async () => {
+    const { api, shell } = harness();
+    api.applyConfigComponents
+      .mockRejectedValueOnce(new Error("write refused"))
+      .mockResolvedValueOnce({});
+    const onSaved = vi.fn();
+    /* a prefilled draft, as Add profile under a backend opens it */
+    const profile = {
+      ...newProfileDocument(deployment, "backend-a"),
+      model_name: deployment.inferenceProfiles[0]!.model_name,
+      backend_id: deployment.inferenceProfiles[0]!.backend_id,
+    };
+    render(
+      <ProfileEditor
+        shell={shell}
+        deployment={deployment}
+        profile={profile}
+        draft={{ onSaved, onCancel: vi.fn() }}
+        embedded
+      />,
+    );
+    const user = userEvent.setup();
+    /* model-aware defaults arrive before a profile can be written */
+    await waitFor(() =>
+      expect(api.getInferenceBackendRecommendation).toHaveBeenCalled(),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const create = screen.getByRole("button", { name: "Create" });
+    expect(create).toBeEnabled();
+
+    await user.click(create);
+    expect(await screen.findByRole("alert")).toHaveTextContent("write refused");
+    expect(onSaved).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(profile.profile_id));
+    expect(api.applyConfigComponents).toHaveBeenCalledTimes(2);
+    expect(
+      api.applyConfigComponents.mock.calls[1][0].document.inference_profiles,
+    ).toEqual([expect.objectContaining({ profile_id: profile.profile_id })]);
+  });
+
+  it("turns a behavior on or off from its row with a patch of enabled alone", async () => {
+    const { api, shell } = harness();
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
+    const toggle = screen.getAllByRole("switch", {
+      name: `${ops.displayName} is ${ops.enabled ? "enabled" : "disabled"}`,
+    })[0]!;
+    await userEvent.setup().click(toggle);
+    await waitFor(() =>
+      expect(api.patchConfigComponents).toHaveBeenCalledWith({
+        agentDid: deployment.agentDid,
+        patches: [
+          {
+            collection: "AgentBehavior",
+            id: "ops",
+            changes: { enabled: !ops.enabled },
+          },
+        ],
       }),
     );
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+  });
+
+  it("makes a behavior the agent's default from its row menu", async () => {
+    const { api, shell } = harness();
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
+    const ops = deployment.behaviors.find((b) => b.behaviorId === "ops")!;
+    await user.click(
+      screen.getAllByRole("button", { name: `More for ${ops.displayName}` })[0]!,
+    );
+    await user.click(await screen.findByRole("menuitem", { name: "Make default" }));
+    await waitFor(() =>
+      expect(api.saveAgentConfig).toHaveBeenCalledWith({
+        document: expect.objectContaining({
+          agent_did: deployment.agentDid,
+          default_behavior_id: "ops",
+        }),
+      }),
+    );
+  });
+
+  it("patches only the changed context field and the behavior in one call", async () => {
+    const { api, shell } = harness();
+    render(<BehaviorsPanel shell={shell} deployment={deployment} behaviorId="ops" />);
+    const user = userEvent.setup();
+    const prompt = screen.getByLabelText("System prompt");
+    await user.clear(prompt);
+    await user.type(prompt, "Watch the fleet");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.patchConfigComponents).toHaveBeenCalledTimes(1));
+    const { patches } = api.patchConfigComponents.mock.calls[0][0];
+    expect(patches[0]).toEqual({
+      collection: "AgentContext",
+      id: "context-b",
+      changes: { system_prompt: "Watch the fleet" },
+    });
+    expect(patches[1]).toEqual(
+      expect.objectContaining({ collection: "AgentBehavior", id: "ops" }),
+    );
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    expect(api.saveBehaviorConfig).not.toHaveBeenCalled();
+  });
+
+  it("says when the runtime's execution defaults cannot be read", async () => {
+    const { api, shell } = harness();
+    api.getInferenceSetupCatalog = vi.fn().mockRejectedValue(new Error("no catalog"));
+    render(<ProfilesPanel shell={shell} deployment={deployment} item="profile-a" />);
+    expect(
+      await screen.findByText(
+        /Couldn’t read the runtime’s execution defaults: no catalog/,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("creates an automation off when the bridge says its behavior cannot run", async () => {
+    const { shell } = harness();
+    const blocked = {
+      ...deployment,
+      behaviorReadiness: {
+        ...deployment.behaviorReadiness,
+        behaviors: [
+          {
+            state: "unavailable",
+            behaviorId: "default",
+            reason: "credentials_required",
+          },
+          { state: "ready", behaviorId: "ops" },
+        ],
+      },
+    } as typeof deployment;
+    render(<TasksPanel shell={shell} deployment={blocked} item="task-a" />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+    const dialog = await screen.findByRole("dialog", { name: "When it runs" });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Turn it on now" }),
+    ).toHaveAttribute("aria-disabled", "true");
   });
 
   it("coalesces repeated create activation while the operator write is pending", async () => {
@@ -591,13 +836,16 @@ describe("configuration panels", () => {
     expect(api.applyConfigComponents).not.toHaveBeenCalled();
   });
 
-  it("creates only the new context and represents empty lists as null", async () => {
+  it("creates only the new behavior's context and represents empty lists as null", async () => {
     const { api, shell } = harness();
-    render(<ContextsPanel shell={shell} deployment={deployment} />);
+    render(<BehaviorsPanel shell={shell} deployment={deployment} />);
+    const user = userEvent.setup();
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "New context" }));
+    await user.click(screen.getByRole("button", { name: "New behavior" }));
+    await user.type(screen.getByLabelText("Display name"), "Reviewer");
+    await user.click(screen.getByRole("button", { name: "Create" }));
 
-    expect(api.applyConfigComponents).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
     const request = api.applyConfigComponents.mock.calls[0][0];
     expect(request.document.contexts).toHaveLength(1);
     expect(request.document.contexts[0]).toEqual(
@@ -785,23 +1033,93 @@ describe("configuration panels", () => {
     render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
     expectFields([
       "Name",
-      "Behaviour",
+      "Behavior",
       "Enabled",
       "Description",
       "Prompt template",
       "Durable goal objective",
       "Goal token budget",
       "Output schema ref",
-      "Task hooks",
       "Tags",
       "Args",
     ]);
+    expect(screen.getByText("Hooks")).toBeInTheDocument();
     const user = await replace("Prompt template", " ");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Prompt template is required",
     );
     expect(api.saveTaskConfig).not.toHaveBeenCalled();
+  });
+
+  it("adds a schedule to a task only on Create, as one apply with the trigger off", async () => {
+    const { api, shell } = harness();
+    api.applyConfigComponents
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({});
+    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Schedule" }));
+    const dialog = await screen.findByRole("dialog", { name: "When it runs" });
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
+    expect(api.saveTriggerConfig).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(await within(dialog).findByText("offline")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(2));
+
+    const [first, second] = api.applyConfigComponents.mock.calls.map(
+      (call) => call[0].document,
+    );
+    expect(second.schedules).toHaveLength(1);
+    expect(second.triggers).toEqual([
+      expect.objectContaining({
+        task_id: "task-a",
+        enabled: false,
+        source: { kind: "schedule", schedule_id: second.schedules[0].schedule_id },
+      }),
+    ]);
+    expect(second.tasks).toBeUndefined();
+    /* a retry writes the same documents, never a second copy */
+    expect(second.schedules[0].schedule_id).toBe(first.schedules[0].schedule_id);
+    expect(second.triggers[0].trigger_id).toBe(first.triggers[0].trigger_id);
+    expect(api.saveScheduleConfig).not.toHaveBeenCalled();
+    expect(api.saveTriggerConfig).not.toHaveBeenCalled();
+  });
+
+  it("asks which collection an event watches instead of defaulting to requests", async () => {
+    const { api, shell } = harness();
+    render(<TasksPanel shell={shell} deployment={deployment} item="task-a" />);
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Event" }));
+    const dialog = await screen.findByRole("dialog", { name: "When it runs" });
+    expect(within(dialog).getByLabelText("Collection")).toHaveValue("");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    expect(
+      await within(dialog).findByText("Name the collection to watch."),
+    ).toBeInTheDocument();
+    expect(api.applyConfigComponents).not.toHaveBeenCalled();
+    expect(api.saveEventSourceConfig).not.toHaveBeenCalled();
+
+    await user.type(within(dialog).getByLabelText("Collection"), "MailboxItem");
+    const turnOn = within(dialog).getByRole("checkbox", { name: "Turn it on now" });
+    expect(turnOn).toHaveAttribute("aria-checked", "false");
+    await user.click(within(dialog).getByText("Turn it on now"));
+    expect(turnOn).toHaveAttribute("aria-checked", "true");
+    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await waitFor(() => expect(api.applyConfigComponents).toHaveBeenCalledTimes(1));
+    const document = api.applyConfigComponents.mock.calls[0][0].document;
+    expect(document.event_sources).toEqual([
+      expect.objectContaining({
+        source_collection: "MailboxItem",
+        event_kind: "created",
+      }),
+    ]);
+    expect(document.triggers[0].enabled).toBe(true);
   });
 
   it("does not publish a task result after the user changes compose intent", async () => {
@@ -1027,6 +1345,58 @@ describe("configuration panels", () => {
     }
   });
 
+  it("names the documents a delete leaves without their reference", async () => {
+    const user = userEvent.setup();
+    const cases: Array<[React.ReactElement, RegExp]> = [
+      [
+        <ProfilesPanel
+          shell={harness().shell}
+          deployment={deployment}
+          item="profile-a"
+        />,
+        /Used by \d+ behaviors?; they lose this reference\./,
+      ],
+      [
+        <SchedulesPanel
+          shell={harness().shell}
+          deployment={deployment}
+          item="timer-a"
+        />,
+        /Used by 1 trigger; they lose this reference\./,
+      ],
+    ];
+    for (const [panel, warning] of cases) {
+      const view = render(panel);
+      await user.click(
+        screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
+      );
+      expect(within(screen.getByRole("alertdialog")).getByText(warning)).toBeVisible();
+      view.unmount();
+    }
+  });
+
+  it("asks for the name before a list row's delete runs", async () => {
+    const { api, shell } = harness();
+    const user = userEvent.setup();
+    render(<TasksPanel shell={shell} deployment={deployment} />);
+    const name = deployment.tasks[0]!.name ?? deployment.tasks[0]!.taskId;
+    await user.click(screen.getAllByRole("button", { name: `More for ${name}` })[0]!);
+    await user.click(await screen.findByRole("menuitem", { name: /Delete/ }));
+    const dialog = screen.getByRole("alertdialog");
+    /* the row's warning is the same owner's wording as the Danger zone's */
+    expect(
+      within(dialog).getByText(/Used by 1 trigger; they lose this reference\./),
+    ).toBeVisible();
+    const button = within(dialog).getByRole("button", { name: /^Delete / });
+    expect(button).toBeDisabled();
+    await user.type(within(dialog).getByRole("textbox"), name);
+    await user.click(button);
+    expect(api.deleteTaskConfig).toHaveBeenCalledWith({
+      taskId: deployment.tasks[0]!.taskId,
+      agentDid: deployment.agentDid,
+    });
+  });
+
   it("routes every destructive panel action through its typed delete command", async () => {
     const cases: Array<{
       renderPanel: (shell: Shell) => React.ReactElement;
@@ -1113,15 +1483,26 @@ describe("configuration panels", () => {
         screen.getByTestId("danger-zone").getElementsByTagName("button")[0]!,
       );
       expect(api[testCase.method], testCase.method).not.toHaveBeenCalled();
+      /* every delete asks for the document's name, as it did before the sync */
       const confirmation = screen.getByRole("textbox", {
         name: /^Type .+ to confirm$/,
       });
       const accessibleName = confirmation.getAttribute("aria-label")!;
+      expect(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: /^Delete /,
+        }),
+        testCase.method,
+      ).toBeDisabled();
       await user.type(
         confirmation,
         accessibleName.replace(/^Type /, "").replace(/ to confirm$/, ""),
       );
-      await user.click(screen.getByRole("button", { name: /^Delete / }));
+      await user.click(
+        within(screen.getByRole("alertdialog")).getByRole("button", {
+          name: /^Delete /,
+        }),
+      );
       expect(api[testCase.method], testCase.method).toHaveBeenCalledWith(
         testCase.request,
       );

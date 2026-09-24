@@ -90,20 +90,20 @@ theorem recovery_can_omit_incomplete_json :
       (.ok ⟨.assistant, none, [.text [65]]⟩) = true := by native_decide
 
 theorem delegated_input_contains_only_arguments :
-    agrees (prepareDelegatedInput [segment] [] message intent)
-      (.ok ⟨⟨100, 1⟩, "{}"⟩) = true := by native_decide
+    agrees (prepareDelegatedInput [segment] [] message intent 2)
+      (.ok ⟨⟨100, 1⟩, "{}", 2⟩) = true := by native_decide
 
 theorem changing_other_stream_does_not_change_delegated_bytes :
-    agrees (prepareDelegatedInput [segment 66] [] message intent)
-      (prepareDelegatedInput [segment 65] [] message intent) = true := by native_decide
+    agrees (prepareDelegatedInput [segment 66] [] message intent 2)
+      (prepareDelegatedInput [segment 65] [] message intent 2) = true := by native_decide
 
 theorem partial_publication_cannot_delegate :
     let partialMessage := { message with header := { message.header with outcome := .«partial» } }
-    agrees (prepareDelegatedInput [segment] [] partialMessage intent)
+    agrees (prepareDelegatedInput [segment] [] partialMessage intent 2)
       (.error .invalidPublication) = true := by native_decide
 
 theorem unknown_call_cannot_delegate :
-    agrees (prepareDelegatedInput [segment] [] message { intent with call := 999 })
+    agrees (prepareDelegatedInput [segment] [] message { intent with call := 999 } 2)
       (.error .unknownCall) = true := by native_decide
 
 theorem provider_id_mismatch_rejected :
@@ -136,17 +136,17 @@ theorem media_kind_mismatch_rejected :
 
 theorem delegation_rejects_wrong_request_scope :
     let wrong := { message with header := { message.header with request := some 11 } }
-    agrees (prepareDelegatedInput [segment] [] wrong intent)
+    agrees (prepareDelegatedInput [segment] [] wrong intent 2)
       (.error (.message .wrongSource)) = true := by native_decide
 
 theorem delegation_rejects_wrong_generation :
     let wrong := { message with header :=
       { message.header with publication := .requestExecution 8 } }
-    agrees (prepareDelegatedInput [segment] [] wrong intent)
+    agrees (prepareDelegatedInput [segment] [] wrong intent 2)
       (.error (.message .wrongSource)) = true := by native_decide
 
 theorem local_call_cannot_receive_delegated_projection :
-    receiveDelegatedInput 1 1 7 ⟨300, 1, 1, 7, ⟨⟨100, 1⟩, "{}"⟩⟩ = none := by
+    receiveDelegatedInput 1 1 7 ⟨300, 1, 1, 7, ⟨⟨100, 1⟩, "{}", 2⟩, none⟩ = none := by
   rfl
 
 theorem presentation_preserves_recorded_normalization :
