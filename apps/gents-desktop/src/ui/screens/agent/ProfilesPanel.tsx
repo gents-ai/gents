@@ -183,6 +183,11 @@ export function ProfileEditor({
         (row) => row.execution_id === profile.execution_id,
       )?.stream_liveness_timeout_secs,
     ),
+    providerIdleSecs: str(
+      deployment.inferenceExecution.find(
+        (row) => row.execution_id === profile.execution_id,
+      )?.provider_idle_timeout_secs,
+    ),
     deadlineSecs: str(
       deployment.inferenceExecution.find(
         (row) => row.execution_id === profile.execution_id,
@@ -247,6 +252,7 @@ export function ProfileEditor({
         next.maxTotalTokens,
         next.streamBatchMs,
         next.streamLivenessSecs,
+        next.providerIdleSecs,
         next.deadlineSecs,
         next.retryPolicyId,
       ].some((value) => value.trim());
@@ -292,8 +298,13 @@ export function ProfileEditor({
         min: 1,
       });
       const streamLivenessSecs = optionalInteger(
-        "Stream liveness timeout",
+        "Execution lease",
         next.streamLivenessSecs,
+        { min: 1 },
+      );
+      const providerIdleSecs = optionalInteger(
+        "Provider idle timeout",
+        next.providerIdleSecs,
         { min: 1 },
       );
       const deadlineSecs = optionalInteger("Deadline", next.deadlineSecs, { min: 1 });
@@ -302,7 +313,7 @@ export function ProfileEditor({
         deadlineSecs != null &&
         streamLivenessSecs >= deadlineSecs
       )
-        throw new Error("Stream liveness timeout must be less than the deadline");
+        throw new Error("Execution lease must be less than the deadline");
 
       const sampling = deployment.inferenceSampling.find(
         (row) => row.sampling_id === effectiveSamplingId,
@@ -349,6 +360,7 @@ export function ProfileEditor({
             max_total_tokens: maxTotalTokens,
             stream_batch_ms: streamBatchMs,
             stream_liveness_timeout_secs: streamLivenessSecs,
+            provider_idle_timeout_secs: providerIdleSecs,
             deadline_duration_secs: deadlineSecs,
             retry_policy_id: next.retryPolicyId.trim() || null,
           }
@@ -400,6 +412,7 @@ export function ProfileEditor({
       | "maxTotalTokens"
       | "streamBatchMs"
       | "streamLivenessSecs"
+      | "providerIdleSecs"
       | "deadlineSecs",
     value: string,
   ) => {
@@ -758,7 +771,7 @@ export function ProfileEditor({
         />
         <NumberRow
           id={id("liveness")}
-          label="Stream liveness seconds"
+          label="Execution lease seconds"
           value={
             editedExecution.has("streamLivenessSecs")
               ? d.draft.streamLivenessSecs
@@ -768,6 +781,21 @@ export function ProfileEditor({
                   : String(executionDefaults.streamLivenessSecs))
           }
           onChange={(v) => setExecution("streamLivenessSecs", v)}
+          onCommit={d.commit}
+          onEnter={d.onEnter}
+        />
+        <NumberRow
+          id={id("provider-idle")}
+          label="Provider idle seconds"
+          value={
+            editedExecution.has("providerIdleSecs")
+              ? d.draft.providerIdleSecs
+              : d.draft.providerIdleSecs ||
+                (executionDefaults.providerIdleSecs == null
+                  ? ""
+                  : String(executionDefaults.providerIdleSecs))
+          }
+          onChange={(v) => setExecution("providerIdleSecs", v)}
           onCommit={d.commit}
           onEnter={d.onEnter}
         />

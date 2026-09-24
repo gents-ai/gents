@@ -71,7 +71,7 @@ pub use request_assembly::{
 };
 pub use tool_dispatch::dispatch_tool;
 
-use provider_idle::next_provider_item;
+use provider_idle::{within_provider_idle, ProviderAttemptFailure};
 use request_assembly::{
     build_budgeted_request, context_accounting_for_request, prepare_dispatch_attempt,
     repair_and_rebuild_request,
@@ -230,7 +230,7 @@ where
             // from the transcript, so it rides in the trace.
             let mut build_path = AssemblyBuildPath::Budgeted;
             'attempts: loop {
-                let mut stream = loop {
+                let (mut stream, activity) = loop {
                     let prepared_dispatch = prepare_dispatch_attempt(
                         &request,
                         &config,
@@ -275,12 +275,20 @@ where
                             })?;
                     }
 
-                    match model.stream(dispatch_request).await {
-                        Ok(stream) => break stream,
-                        Err(completion_error) => {
-                            let streaming_error = StreamingError::Completion(completion_error);
-                            let classified = crate::error::classify_completion_error(&streaming_error);
-                            let error_text = streaming_error.to_string();
+                    let activity =
+                        crate::rendered_request::scope::attempt_activity(turn_index, attempt);
+                    match within_provider_idle(
+                        model.stream(dispatch_request),
+                        config.provider_idle_timeout,
+                        activity.as_deref(),
+                        true,
+                    )
+                    .await
+                    .and_then(|result| result.map_err(ProviderAttemptFailure::Completion))
+                    {
+                        Ok(stream) => break (stream, activity),
+                        Err(failure) => {
+                            let (classified, error_text) = failure.classify();
                             match retry.on_pre_stream_failure(
                                 &classified,
                                 &error_text,
@@ -389,9 +397,16 @@ where
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
-            while let Some(item) =
-                next_provider_item(&mut stream, config.provider_idle_timeout, saw_stream_item).await
-            {
+            while let Some(item) = within_provider_idle(
+                stream.next(),
+                config.provider_idle_timeout,
+                activity.as_deref(),
+                !saw_stream_item,
+            )
+            .await
+            .map_or_else(|stall| Some(Err(stall)), |next| {
+                next.map(|item| item.map_err(ProviderAttemptFailure::Completion))
+            }) {
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
@@ -411,6 +426,10 @@ where
                     // and its turn is accepted. No host effect exists here.
                     Err(failure) => {
                         let (classified, error_text) = failure.classify();
+                        // Everything received was already yielded. Release the
+                        // admission permit and provider connection before any
+                        // retry backoff.
+                        drop(stream);
                         if !saw_stream_item {
                             match retry.on_pre_stream_failure(
                                 &classified,

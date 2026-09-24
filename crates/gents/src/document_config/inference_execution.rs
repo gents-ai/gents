@@ -25,10 +25,14 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stream_batch_ms: Option<i64>,
-    /// Maximum provider-stream silence before the first item and between items; expiry is a retryable attempt failure. Also the execution lease duration. Default 120s.
+    /// Execution lease duration, renewed by the owned execution independently of provider output. Default 120s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stream_liveness_timeout_secs: Option<i64>,
+    /// Maximum provider transport silence per attempt, including the wait for response headers; expiry is a retryable attempt failure. Independent of the lease. Default 300s.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+    pub provider_idle_timeout_secs: Option<i64>,
     /// Overall claimed-request duration. Existing default 86,400s; includes tools.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
@@ -102,6 +106,10 @@ impl InferenceExecution {
             (
                 "stream_liveness_timeout_secs",
                 self.stream_liveness_timeout_secs,
+            ),
+            (
+                "provider_idle_timeout_secs",
+                self.provider_idle_timeout_secs,
             ),
             ("deadline_duration_secs", self.deadline_duration_secs),
         ] {
@@ -205,6 +213,21 @@ mod tests {
             assert!(execution.validate().is_err());
         }
         assert!(InferenceExecution {
+            stream_liveness_timeout_secs: Some(1),
+            deadline_duration_secs: Some(2),
+            ..Default::default()
+        }
+        .validate()
+        .is_ok());
+        // The provider idle window is independent of the lease and deadline.
+        assert!(InferenceExecution {
+            provider_idle_timeout_secs: Some(0),
+            ..Default::default()
+        }
+        .validate()
+        .is_err());
+        assert!(InferenceExecution {
+            provider_idle_timeout_secs: Some(600),
             stream_liveness_timeout_secs: Some(1),
             deadline_duration_secs: Some(2),
             ..Default::default()

@@ -305,11 +305,32 @@ where
                 parts.uri.authority().map(|authority| authority.as_str()),
             ),
         );
+        let activity = match &decision {
+            CaptureDecision::Capture { pending, .. } => Some(pending.activity.clone()),
+            CaptureDecision::Forward | CaptureDecision::Refuse { .. } => None,
+        };
         async move {
             capture_or_refuse(decision, &body).await?;
+            // The idle window opens at the send, after admission and capture.
+            if let Some(activity) = &activity {
+                activity.touch();
+            }
             let req = Request::from_parts(parts, body);
-            let response = HttpClientExt::send_streaming(&inner, req).await?;
-            Ok(crate::provider_stream::guard_response(response, protocol))
+            let response = match HttpClientExt::send_streaming(&inner, req).await {
+                Ok(response) => response,
+                Err(error) => {
+                    if let Some(activity) = &activity {
+                        activity.settle();
+                    }
+                    return Err(error);
+                }
+            };
+            if let Some(activity) = &activity {
+                activity.touch();
+            }
+            Ok(crate::provider_stream::guard_response(
+                response, protocol, activity,
+            ))
         }
     }
 }

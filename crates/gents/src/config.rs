@@ -20,12 +20,17 @@ pub use gents_loop::compaction::{
     DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX, DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
-/// Default for InferenceExecution's stream_liveness_timeout_secs: the owned
-/// loop's provider idle window (first item and between items) and the
-/// execution lease duration. The renewal task keeps the lease current
-/// independently of provider output, so silent tool work stays owned while a
-/// silent provider stream fails its attempt through the retry owner.
+/// Default execution lease duration, exposed by InferenceExecution's
+/// stream_liveness_timeout_secs field. The owned renewal task keeps live work
+/// current independently of provider output.
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
+/// Default for InferenceExecution's provider_idle_timeout_secs: the longest a
+/// provider attempt's transport may stay silent (header wait included) before
+/// the owned loop fails the attempt through the completion retry owner.
+/// Independent of the execution lease. Sized for keepalive-less first-token
+/// and reasoning silence (Responses reasoning without summaries, long vLLM
+/// prefill); Codex CLI uses the same 300s stream idle bound.
+pub const DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS: u64 = 300;
 /// Overall wall-clock budget for a claimed request. Long-running goals may
 /// legitimately work for many hours while continuing to emit model/tool data.
 pub const DEFAULT_DEADLINE_DURATION_SECS: u64 = 86_400;
@@ -62,6 +67,7 @@ pub struct ResolvedBehavior {
     pub max_total_tokens: Option<u64>,
     pub stream_batch_ms: u64,
     pub stream_liveness_timeout: Duration,
+    pub provider_idle_timeout: Duration,
     pub deadline_duration: Duration,
     pub completion_retry: CompletionRetryProfileFields,
     pub sampling: SamplingConfig,
@@ -347,6 +353,7 @@ impl std::fmt::Debug for ResolvedBehavior {
             .field("max_total_tokens", &self.max_total_tokens)
             .field("stream_batch_ms", &self.stream_batch_ms)
             .field("stream_liveness_timeout", &self.stream_liveness_timeout)
+            .field("provider_idle_timeout", &self.provider_idle_timeout)
             .field("deadline_duration", &self.deadline_duration)
             .field("completion_retry", &self.completion_retry)
             .field("sampling", &self.sampling)
@@ -462,6 +469,7 @@ mod tests {
             max_total_tokens: None,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+            provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),

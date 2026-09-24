@@ -457,6 +457,7 @@ describe("configuration panels", () => {
         maxTotalTokens: null,
         streamBatchMs: 100,
         streamLivenessSecs: 1800,
+        providerIdleSecs: 300,
         deadlineSecs: 86400,
       },
     });
@@ -1041,7 +1042,8 @@ describe("configuration panels", () => {
       "Max turns",
       "Max total tokens",
       "Stream batch ms",
-      "Stream liveness seconds",
+      "Execution lease seconds",
+      "Provider idle seconds",
       "Deadline seconds",
       "Retry policy ID",
       "Tags",

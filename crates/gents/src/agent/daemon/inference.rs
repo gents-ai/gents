@@ -892,6 +892,9 @@ mod tests {
             stream_batch_ms: 0,
             stream_liveness_timeout: Duration::from_secs(5),
             deadline_duration: Duration::from_secs(30),
+            provider_idle_timeout: Duration::from_secs(
+                crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+            ),
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),

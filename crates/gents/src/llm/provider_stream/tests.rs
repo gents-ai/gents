@@ -39,7 +39,7 @@ async fn provider_stream_requires_explicit_terminal_across_all_chunk_boundaries(
                 Ok(Bytes::copy_from_slice(&payload.as_bytes()[..split])),
                 Ok(Bytes::copy_from_slice(&payload.as_bytes()[split..])),
             ];
-            let guarded = guard_response(response(chunks, 200), Some(protocol));
+            let guarded = guard_response(response(chunks, 200), Some(protocol), None);
             assert_eq!(guarded.headers()["x-test"], "preserved");
             let result = guarded.into_body().collect::<Vec<_>>().await;
             let actual: Vec<u8> = result
@@ -62,6 +62,7 @@ async fn provider_stream_partial_empty_and_unterminated_final_are_unexpected_eof
         let guarded = guard_response(
             response(vec![Ok(Bytes::copy_from_slice(payload.as_bytes()))], 200),
             Some(ProviderStreamProtocol::ChatCompletions),
+            None,
         );
         let mut body = guarded.into_body();
         assert_eq!(body.next().await.unwrap().unwrap(), payload.as_bytes());
@@ -85,6 +86,7 @@ async fn provider_stream_preserves_http_errors_and_non_completion_bodies() {
         let guarded = guard_response(
             response(vec![Ok(Bytes::from_static(b"original error body"))], status),
             protocol,
+            None,
         );
         assert_eq!(guarded.status().as_u16(), status);
         let result = guarded.into_body().collect::<Vec<_>>().await;
@@ -100,6 +102,7 @@ async fn provider_stream_preserves_http_errors_and_non_completion_bodies() {
     let result = guard_response(
         response(vec![Err(error)], 200),
         Some(ProviderStreamProtocol::ChatCompletions),
+        None,
     )
     .into_body()
     .collect::<Vec<_>>()

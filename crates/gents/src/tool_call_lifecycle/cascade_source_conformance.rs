@@ -169,6 +169,9 @@ fn source_snapshot(case: &Case) -> ActiveRuntimeSnapshot {
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        provider_idle_timeout: Duration::from_secs(
+            crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+        ),
         completion_retry: crate::agent::completion_retry::CompletionRetryProfileFields::default(),
         sampling: crate::config::SamplingConfig::default(),
         skills: Vec::new(),

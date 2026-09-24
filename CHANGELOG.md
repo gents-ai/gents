@@ -21,11 +21,14 @@ source consistency checks, not a separate runtime compatibility version.
   collections, when the managed runtime it starts differs, instead of
   accepting messages the runtime can never receive. Versions whose replicated
   collections match stay compatible.
-- A provider stream that goes silent no longer holds a request until its
-  deadline. When no output arrives within `stream_liveness_timeout_secs`
-  (default 120s), before the first item or between items, the attempt fails
-  and follows the configured completion retry policy. Tool execution is not
-  bounded by this window.
+- A provider that goes silent no longer holds a request until its deadline.
+  The new InferenceExecution `provider_idle_timeout_secs` (default 300s)
+  bounds how long an attempt's provider connection may deliver no bytes,
+  including the wait for response headers; expiry fails the attempt and
+  follows the configured completion retry policy. Keepalives and thinking
+  output count as activity. Queueing for a backend slot, tool execution and
+  retry backoff are not bounded by it, and `stream_liveness_timeout_secs`
+  remains only the execution lease. The profile editor shows both fields.
 - Desktop startup waits for a background agent that is still booting instead
   of failing, and shows how long it has waited. It fails when the service
   stops, when it keeps exiting (with the exit reason), or after five minutes,

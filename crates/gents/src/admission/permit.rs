@@ -18,6 +18,7 @@ pub(crate) struct AdmissionPermit {
     finished: bool,
     cancel_observer: Option<CancellationToken>,
     terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
+    provider_activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
 }
 
 #[derive(Clone, Debug)]
@@ -45,6 +46,7 @@ impl AdmissionPermit {
             finished: false,
             cancel_observer,
             terminal_failure_observer,
+            provider_activity: None,
         }
     }
 
@@ -56,6 +58,15 @@ impl AdmissionPermit {
     #[cfg(test)]
     pub(super) fn attribution_for_test(&self) -> &str {
         &self.call.backend_config_fingerprint
+    }
+
+    /// The armed attempt this call serves; its stall reason names a drop
+    /// caused by the owned loop's provider idle window.
+    pub(crate) fn observe_provider_activity(
+        &mut self,
+        activity: Option<Arc<gents_loop::provider_activity::ProviderActivity>>,
+    ) {
+        self.provider_activity = activity;
     }
 
     pub(crate) async fn finish_success(
@@ -169,13 +180,18 @@ impl Drop for AdmissionPermit {
             return;
         }
         self.finished = true;
-        let terminal_failure_reason =
-            self.terminal_failure_observer
-                .as_ref()
-                .and_then(|observer| match observer.lock() {
-                    Ok(reason) => reason.clone(),
-                    Err(poisoned) => poisoned.into_inner().clone(),
-                });
+        let terminal_failure_reason = self
+            .provider_activity
+            .as_ref()
+            .and_then(|activity| activity.stall_reason())
+            .or_else(|| {
+                self.terminal_failure_observer
+                    .as_ref()
+                    .and_then(|observer| match observer.lock() {
+                        Ok(reason) => reason.clone(),
+                        Err(poisoned) => poisoned.into_inner().clone(),
+                    })
+            });
         let terminal = self.terminal.clone().unwrap_or_else(|| {
             if self
                 .cancel_observer

@@ -429,6 +429,9 @@ fn behavior_with_retry(completion_retry: CompletionRetryProfileFields) -> Resolv
             crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
         ),
         deadline_duration: Duration::from_secs(crate::config::DEFAULT_DEADLINE_DURATION_SECS),
+        provider_idle_timeout: Duration::from_secs(
+            crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS,
+        ),
         completion_retry,
         sampling: SamplingConfig::default(),
         skills: Vec::new(),

@@ -1,19 +1,39 @@
-//! Provider idle window at the attempt seam. A silent provider stream is a
-//! transport-class attempt failure handed to the completion retry owner; it
-//! never becomes a separate retry path.
+//! Provider idle window at the attempt seam. A provider silent at the
+//! transport is a transport-class attempt failure handed to the completion
+//! retry owner; it never becomes a separate retry path.
 
-use futures::{Stream, StreamExt};
+use std::future::Future;
+use std::time::Duration;
+
 use rig::agent::StreamingError;
 use rig::completion::CompletionError;
 
 use crate::error::InferenceError;
+use crate::provider_activity::{ActivityPhase, ProviderActivity};
+
+#[derive(Debug)]
+pub(super) struct ProviderStall {
+    idle: Duration,
+    first_item: bool,
+}
+
+impl ProviderStall {
+    fn reason(&self) -> String {
+        format!(
+            "provider stream stalled: no transport activity for {:?} {}",
+            self.idle,
+            if self.first_item {
+                "before the first item"
+            } else {
+                "after the last item"
+            }
+        )
+    }
+}
 
 pub(super) enum ProviderAttemptFailure {
     Completion(CompletionError),
-    Stalled {
-        idle: std::time::Duration,
-        first_item: bool,
-    },
+    Stalled(ProviderStall),
 }
 
 impl ProviderAttemptFailure {
@@ -26,47 +46,52 @@ impl ProviderAttemptFailure {
                     error.to_string(),
                 )
             }
-            Self::Stalled { idle, first_item } => (
+            Self::Stalled(stall) => (
                 InferenceError::Timeout {
-                    timeout_secs: idle.as_secs(),
+                    timeout: stall.idle,
                 },
-                format!(
-                    "provider stream stalled: no {} within {idle:?}",
-                    if first_item {
-                        "first item"
-                    } else {
-                        "further item"
-                    }
-                ),
+                stall.reason(),
             ),
         }
     }
 }
 
-/// Expiry drops only the pending `next`; every item received before it was
-/// already returned to the loop. The caller keeps the stream alive while it
-/// reports the attempt failure or retraction and must not poll it again.
-pub(super) async fn next_provider_item<S, T>(
-    stream: &mut S,
-    idle: Option<std::time::Duration>,
-    saw_item: bool,
-) -> Option<Result<T, ProviderAttemptFailure>>
-where
-    S: Stream<Item = Result<T, CompletionError>> + Unpin,
-{
-    let next = match idle {
-        Some(idle) => match tokio::time::timeout(idle, stream.next()).await {
-            Ok(next) => next,
-            Err(_) => {
-                return Some(Err(ProviderAttemptFailure::Stalled {
-                    idle,
-                    first_item: !saw_item,
-                }))
-            }
-        },
-        None => stream.next().await,
+/// Drive one provider future (the stream constructor or one `next`) while
+/// the attempt's transport is idle for less than `idle`. Without a window or
+/// an armed attempt, the future runs unbounded. Expiry drops only `future`;
+/// the caller must drop the attempt's stream before any retry backoff so its
+/// admission permit is released.
+pub(super) async fn within_provider_idle<F: Future>(
+    future: F,
+    idle: Option<Duration>,
+    activity: Option<&ProviderActivity>,
+    first_item: bool,
+) -> Result<F::Output, ProviderAttemptFailure> {
+    let (Some(idle), Some(activity)) = (idle, activity) else {
+        return Ok(future.await);
     };
-    next.map(|item| item.map_err(ProviderAttemptFailure::Completion))
+    tokio::pin!(future);
+    loop {
+        let check_at = match activity.phase() {
+            ActivityPhase::Active(last) => last + idle,
+            ActivityPhase::AwaitingSend | ActivityPhase::Settled => {
+                tokio::time::Instant::now() + idle
+            }
+        };
+        tokio::select! {
+            biased;
+            output = &mut future => return Ok(output),
+            _ = tokio::time::sleep_until(check_at) => {
+                if let ActivityPhase::Active(last) = activity.phase() {
+                    if last.elapsed() >= idle {
+                        let stall = ProviderStall { idle, first_item };
+                        activity.mark_stalled(stall.reason());
+                        return Err(ProviderAttemptFailure::Stalled(stall));
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
