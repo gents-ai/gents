@@ -123,10 +123,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(lean_contract_snapshot().root_admission_cases.len(), 27);
-    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 100);
+    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
-    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 17);
+    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
         lean_contract_snapshot()
             .inference_slot_accounting_cases
@@ -232,7 +232,6 @@ async fn agent_tool_call_has_cross_principal_coordination_fields() {
 fn lean_boundary_metadata_is_typed_and_reviewable() {
     let snapshot = lean_contract_snapshot();
     let expected_boundary_ids = [
-        "boundary.request.input-required-reserved",
         "boundary.request.dead-preclaim-only",
         "boundary.request.recovery-sweep-reachable",
         "boundary.tool-call.permanent-without-retry-evidence",

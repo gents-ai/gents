@@ -97,6 +97,8 @@ theorem stored_receipt_is_durable (state post : RegistryState)
     (h : storedCreateReceipt? state request = some (post, row)) :
     (∃ stored ∈ post.rows, stored.envelope = row ∧ stored.isOpen = true) ∧
       row.identity.ownerPrefix = request.identity.ownerPrefix ∧
+      row.identity.requesterDid = request.identity.requesterDid ∧
+      row.identity.agentDid = request.identity.agentDid ∧
       row.handling = request.handling ∧ row.sessionId = request.sessionId ∧
       row.requestId = request.requestId ∧ row.content = request.content := by
   by_cases hstamp : stamped request = true
@@ -120,7 +122,14 @@ theorem stored_receipt_is_durable (state post : RegistryState)
             simp only [Bool.and_eq_true] at hpred
             aesop
           exact ⟨found, by simpa [next] using hmem, rfl, hopen⟩
-        · simp_all
+        · have hprefix : found.envelope.identity.ownerPrefix =
+              request.identity.ownerPrefix := by
+            aesop
+          have hrequester : found.envelope.identity.requesterDid =
+              request.identity.requesterDid := by
+            simpa [Identity.ownerPrefix] using
+              congrArg OwnerPrefix.requesterDid hprefix
+          simp_all
   · simp [storedCreateReceipt?, hstamp] at h
 
 theorem terminalize_never_reopens (state : RegistryState)

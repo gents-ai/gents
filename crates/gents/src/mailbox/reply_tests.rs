@@ -197,18 +197,28 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
     };
     use std::time::Duration;
 
-    // The model uses symbolic Nat/request and physical document IDs; the
-    // native fixture maps those identities to signed UUID/document rows while
-    // preserving their equality, separation, session, and action relations.
+    // The model uses symbolic Nat/request and physical document IDs; this
+    // positive owner-sequence regression maps those to signed request rows.
+    // It calls the mailbox tool and terminal owner explicitly: it does not
+    // prove an AgentToolCall result was observed by the completion loop.
+    // The local-self admission also keeps requester and agent DIDs equal.
     let modeled = crate::lean_vocab_test::lean_contract_snapshot()
         .mailbox_handoff_cases
         .iter()
-        .find(|case| case["variant"] == "fresh-linked")
+        .find(|case| case.variant == "fresh-linked")
         .expect("modeled linked handoff case");
-    assert_eq!(modeled["request_id"], modeled["producer_request_id"]);
-    assert_eq!(modeled["request_id"], modeled["tool_request_id"]);
-    assert_eq!(modeled["session_id"], modeled["reply_session_id"]);
-    assert_eq!(modeled["reply_bound_session_id"], modeled["session_id"]);
+    assert_eq!(modeled.request_id, modeled.producer_request_id);
+    assert_eq!(modeled.request_id, modeled.tool_request_id);
+    assert_eq!(modeled.session_id, modeled.reply_session_id);
+    assert_eq!(
+        modeled.reply_bound_session_id.as_deref(),
+        Some(modeled.session_id.as_str())
+    );
+    assert_eq!(modeled.producer_agent_did, modeled.question_agent_did);
+    assert_eq!(
+        modeled.producer_requester_did,
+        modeled.question_requester_did
+    );
     let node = tests::test_node().await;
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("handoff.key"), None).unwrap();
@@ -234,8 +244,8 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         node.clone(),
         MailboxNotificationPolicy {
             identity: NotificationIdentity::Event,
-            kind: serde_json::from_value(modeled["kind"].clone()).unwrap(),
-            action: serde_json::from_value(modeled["action"].clone()).unwrap(),
+            kind: serde_json::from_value(json!(modeled.kind)).unwrap(),
+            action: serde_json::from_value(json!(modeled.action)).unwrap(),
             expected_collection: None,
         },
     );
@@ -251,7 +261,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
             None,
             Some(producer.session_id.clone()),
             tool.call(MailboxContentArgs {
-                title: modeled["content"].as_str().unwrap().into(),
+                title: modeled.content.clone(),
                 summary: None,
                 payload: None,
             }),
@@ -271,10 +281,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         super::notification_tests::stored_value(&filed),
         super::notification_tests::stored_value(&returned)
     );
-    assert_eq!(
-        filed.status == "open",
-        modeled["stored_open_receipt"].as_bool().unwrap()
-    );
+    assert_eq!(filed.status == "open", modeled.stored_open_receipt);
     assert_eq!(
         filed.request_id.as_deref(),
         Some(producer.request_id.as_str())
@@ -284,7 +291,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         Some(producer.session_id.as_str())
     );
 
-    assert!(modeled["handoff_accepted"].as_bool().unwrap());
+    assert!(modeled.handoff_accepted);
     assert_eq!(
         lifecycle
             .terminalize_owned(
@@ -334,7 +341,7 @@ async fn modeled_handoff_positive_sequence_maps_to_native_owners() {
         consumed.resolved_doc_id.as_deref(),
         Some(reply.doc_id.as_str())
     );
-    assert!(modeled["linked_reply_accepted"].as_bool().unwrap());
+    assert!(modeled.linked_reply_accepted);
     node.shutdown().await;
 }
 

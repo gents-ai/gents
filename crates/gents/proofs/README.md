@@ -533,10 +533,17 @@ The current proof suite covers twenty practical areas:
     session handoff, then delegates a distinct signed reply request to the
     existing reply-claim owner. General success theorems bind the durable open
     question and reply source, session, requester, and target agent to the
-    producer; generated cases cover positive and rejected boundaries. Native
-    coverage drives the positive committed mailbox-tool receipt, completion, and reply
-    sequence through existing owners. Negative handoff guards remain model-only;
-    generic Ask/Gate notifications do not automatically complete a request.
+    symbolic producer; a finite theorem pins all generated positive and
+    rejected outcomes to those executable owners. Native coverage exercises
+    one signed positive sequence: the mailbox tool's committed receipt,
+    explicit request terminal owner, and linked reply claim. It does not
+    execute an AgentToolCall row or prove that the completion loop observed
+    the tool result before terminalization. The model supplies a matching
+    `Item` to the reply owner but does not prove that projection from the
+    stored row; the native fixture uses a local-self requester, so distinct
+    requester/agent DIDs are not covered. Negative handoff guards remain
+    model-only; generic Ask/Gate notifications do not automatically complete
+    a request.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
     explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,

@@ -318,8 +318,7 @@ mod tests {
         assert_eq!(authorize_renewal(observed, GEN, 10, 1, 9), None);
     }
 
-    // Conformance: `terminal_lifecycle_rejects_renewal_even_with_active_lease`
-    // and `foreground_tool_wait_explicitly_renews`.
+    // Conformance: `terminal_lifecycle_rejects_renewal_even_with_active_lease`.
     #[test]
     fn renewable_lifecycle_includes_claimed_and_processing_and_excludes_terminal() {
         let deadline = 10;

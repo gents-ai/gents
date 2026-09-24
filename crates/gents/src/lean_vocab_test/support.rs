@@ -55,7 +55,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) invalid_tool_progress_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_notification_cases: Vec<serde_json::Value>,
     pub(crate) mailbox_reply_cases: Vec<serde_json::Value>,
-    pub(crate) mailbox_handoff_cases: Vec<serde_json::Value>,
+    pub(crate) mailbox_handoff_cases: Vec<LeanMailboxHandoffCase>,
     pub(crate) graph_invocation_publication_cases: Vec<serde_json::Value>,
     pub(crate) graph_failure_attribution_traces: Vec<serde_json::Value>,
     pub(crate) request_transition_cases: Vec<LeanLifecycleTransitionCase>,
@@ -225,6 +225,32 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) event_delivery_transition_cases: Vec<LeanEventDeliveryTransitionCase>,
     pub(crate) event_delivery_source_instances: Vec<LeanEventDeliverySourceInstance>,
     pub(crate) event_delivery_convergence_traces: Vec<LeanEventDeliveryConvergenceTrace>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanMailboxHandoffCase {
+    pub(crate) variant: String,
+    pub(crate) kind: String,
+    pub(crate) action: String,
+    pub(crate) content: String,
+    pub(crate) request_id: u64,
+    pub(crate) producer_request_id: u64,
+    pub(crate) tool_request_id: u64,
+    pub(crate) producer_agent_did: String,
+    pub(crate) producer_requester_did: String,
+    pub(crate) question_agent_did: String,
+    pub(crate) question_requester_did: String,
+    pub(crate) session_id: String,
+    pub(crate) request_doc_id: String,
+    pub(crate) mailbox_doc_id: String,
+    pub(crate) reply_request_doc_id: String,
+    pub(crate) reply_source_doc_id: String,
+    pub(crate) reply_session_id: String,
+    pub(crate) reply_bound_session_id: Option<String>,
+    pub(crate) handoff_accepted: bool,
+    pub(crate) stored_open_receipt: bool,
+    pub(crate) linked_reply_accepted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -2077,7 +2103,7 @@ pub(crate) fn assert_lifecycle_transition_cases_partition(
         }
         if !matches!(
             case.classification.as_str(),
-            "legal" | "illegal" | "productUnreachable" | "recoveryReachable"
+            "legal" | "illegal" | "recoveryReachable"
         ) {
             invalid_cases.push(format!(
                 "{} has invalid classification {:?}",
@@ -2090,14 +2116,10 @@ pub(crate) fn assert_lifecycle_transition_cases_partition(
         if case.classification != "legal" && case.action.is_some() {
             invalid_cases.push(format!("{} non-legal case has action", case.name));
         }
-        // `productUnreachable` and `recoveryReachable` are the two classifications
-        // that stand outside the machine's own transition relation, so each must
-        // name the boundary that licenses it. `legal` and `illegal` are decided by
-        // the relation itself and must not carry one.
-        let requires_boundary = matches!(
-            case.classification.as_str(),
-            "productUnreachable" | "recoveryReachable"
-        );
+        // Recovery stands outside the machine's own transition relation and
+        // must name the boundary that licenses it. Legal and illegal cases are
+        // decided by the relation itself and must not carry a boundary.
+        let requires_boundary = case.classification == "recoveryReachable";
         if requires_boundary && case.boundary.is_none() {
             invalid_cases.push(format!(
                 "{} {} case missing boundary",

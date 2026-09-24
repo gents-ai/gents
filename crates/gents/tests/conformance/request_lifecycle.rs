@@ -513,12 +513,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                 );
                 drive_generated_request_recovery_reachable_case(case).await;
             }
-            "productUnreachable" => {
-                panic!(
-                    "Request transition {} has no product-unreachable state: {} -> {}",
-                    case.name, case.from, case.to
-                );
-            }
             other => panic!(
                 "generated Request transition {} has unknown classification {other:?}",
                 case.name

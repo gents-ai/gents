@@ -11,10 +11,11 @@ create produces the stored row receipt first; the ordinary tool-completion
 and request-terminal owners then run. It does not make all Ask/Gate notices
 terminalize their producer or introduce a waiting request state.
 
-The native refinement must establish that a successful `file_mailbox_item`
-tool result follows its acknowledged storage commit and that the owned loop
-observes that result before terminalizing. This model does not treat a tool
-result, a provider assertion, or a Boolean as proof of a stored mailbox row.
+An end-to-end native refinement would have to show that the owned loop observes
+the committed `file_mailbox_item` tool result before terminalizing. The current
+native regression checks the real storage receipt and explicit terminal owner
+sequence, but does not exercise an AgentToolCall row or the completion loop.
+This model does not treat a provider assertion or Boolean as a stored row.
 -/
 namespace Mailbox.Handoff
 
@@ -22,6 +23,8 @@ structure Producer where
   requestId : RequestId
   requestDocId : String
   sessionId : String
+  requesterDid : String
+  agentDid : String
   lease : RequestExecutionLease.World Nat
   tool : ToolExecution.ToolCallContext
   deriving DecidableEq
@@ -45,8 +48,11 @@ def eligible (producer : Producer) (request : CreateRequest) : Bool :=
       request.sessionId != "" && request.requestId != 0 &&
       producer.sessionId != "" && producer.requestId != 0 &&
       producer.requestDocId != "" &&
+      producer.requesterDid != "" && producer.agentDid != "" &&
       request.sessionId == producer.sessionId &&
       request.requestId == producer.requestId &&
+      request.identity.requesterDid == producer.requesterDid &&
+      request.identity.agentDid == producer.agentDid &&
       producer.tool.requestId == producer.requestId
 
 /-- An explicit, session-bound handoff only. The three calls are the existing
@@ -78,7 +84,9 @@ theorem successful_handoff_has_stored_question_and_terminal_producer
       receipt.producer.lease.request = .completed ∧
       receipt.producer.tool.state = .completed ∧
       receipt.question.sessionId = producer.sessionId ∧
-      receipt.question.requestId = producer.requestId := by
+      receipt.question.requestId = producer.requestId ∧
+      receipt.question.identity.requesterDid = producer.requesterDid ∧
+      receipt.question.identity.agentDid = producer.agentDid := by
   by_cases he : eligible producer request = true
   · unfold fileAndComplete? at h
     simp only [he, Bool.not_true, Bool.false_eq_true, ↓reduceIte] at h
@@ -102,12 +110,16 @@ theorem successful_handoff_has_stored_question_and_terminal_producer
                   simp [ToolExecution.ToolCallContext.step?] at htool
                   rw [← htool.2]
                 have hbinding : request.sessionId = producer.sessionId ∧
-                    request.requestId = producer.requestId := by
+                    request.requestId = producer.requestId ∧
+                    request.identity.requesterDid = producer.requesterDid ∧
+                    request.identity.agentDid = producer.agentDid := by
                   simp [eligible] at he
-                  exact ⟨he.1.1.2, he.1.2⟩
+                  aesop
                 exact ⟨hstored.1, hterminal.2, htoolState,
-                  hstored.2.2.2.1.trans hbinding.1,
-                  hstored.2.2.2.2.1.trans hbinding.2⟩
+                  hstored.2.2.2.2.2.1.trans hbinding.1,
+                  hstored.2.2.2.2.2.2.1.trans hbinding.2.1,
+                  hstored.2.2.1.trans hbinding.2.2.1,
+                  hstored.2.2.2.1.trans hbinding.2.2.2⟩
   · have hf : eligible producer request = false := Bool.eq_false_iff.mpr he
     simp [fileAndComplete?, hf] at h
 
@@ -158,6 +170,7 @@ def question (key doc : String) (request : RequestId)
 
 def producer : Producer :=
   { requestId := 1, requestDocId := "parent-doc", sessionId := "session"
+    requesterDid := "owner", agentDid := "agent"
     lease := { (RequestExecutionLease.initial Nat) with
       request := .processing, lease := .active 7 10 10,
       usedGenerations := [7], now := 5 }
