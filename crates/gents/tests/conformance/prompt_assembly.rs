@@ -41,7 +41,7 @@ use gents_loop::provider_input::ProviderInputProfile;
 use std::collections::HashSet;
 
 use gents::claude_messages::{
-    build_messages_body_native, parse_messages_sse, CLAUDE_CODE_IDENTITY,
+    build_messages_body_native, parse_messages_sse, parse_messages_sse_typed, CLAUDE_CODE_IDENTITY,
 };
 use gents::claude_subscription::ClaudeStreamResponse;
 use rig::completion::CompletionError;
@@ -620,21 +620,13 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
     );
     for case in cases {
         let surface = case.surface.iter().cloned().collect::<HashSet<_>>();
-        let parsed = parse_messages_sse(&claude_thinking_events_as_sse(&case.events), &surface);
+        let parsed =
+            parse_messages_sse_typed(&claude_thinking_events_as_sse(&case.events), &surface);
         if case.outcome != "ok" {
             use gents::claude_messages::{MessagesParseError, ThinkingParseCause};
             let error = parsed.expect_err("modeled malformed block must fail closed");
-            let CompletionError::RequestError(source) = error else {
-                panic!(
-                    "{}: expected typed malformed thinking request error: {error}",
-                    case.name
-                );
-            };
-            let parsed = source
-                .downcast_ref::<MessagesParseError>()
-                .unwrap_or_else(|| panic!("{}: expected MessagesParseError: {source}", case.name));
-            let MessagesParseError::MalformedThinking { cause } = parsed else {
-                panic!("{}: expected malformed thinking: {parsed}", case.name);
+            let MessagesParseError::MalformedThinking { cause } = error else {
+                panic!("{}: expected malformed thinking: {error}", case.name);
             };
             let expected = match case.outcome.as_str() {
                 "missingSignature" => ThinkingParseCause::MissingSignature,
@@ -648,7 +640,7 @@ fn generated_claude_thinking_stream_cases_drive_native_sse_parser() {
                 ),
                 other => panic!("unknown modeled Claude thinking error {other}"),
             };
-            assert_eq!(cause, &expected, "{}", case.name);
+            assert_eq!(cause, expected, "{}", case.name);
             continue;
         }
         let parsed = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
@@ -1087,6 +1079,59 @@ fn replay_checkpoint_outcome(
         Error::MissingRequired => "missingRequiredReplay",
         Error::Evidence(error) => replay_evidence_outcome(error),
         Error::Codec(error) => replay_codec_outcome(error),
+    }
+}
+
+#[test]
+fn generated_protected_replay_compaction_cases_bind_native_split_and_checkpoint() {
+    use crate::lean_vocab_test::lean_protected_replay_compaction_cases;
+    use gents_loop::claude_messages_body::{prepare_replay_checkpoint, TaggedAssistantRow};
+    use gents_loop::compaction::history::protected_pair_safe_split_index;
+
+    let cases = lean_protected_replay_compaction_cases();
+    assert_eq!(cases.len(), 5);
+    for case in cases {
+        let messages =
+            super::streaming_compaction::compaction_messages_for_count(case.message_count);
+        let assistant_count = messages
+            .iter()
+            .filter(|message| matches!(message, Message::Assistant { .. }))
+            .count();
+        assert_eq!(case.rows.len(), assistant_count, "{}", case.name);
+
+        let split = protected_pair_safe_split_index(&messages, case.raw_index, case.max_prefix);
+        assert_eq!(
+            split, case.selected_split,
+            "{}: pair-safe protected split",
+            case.name
+        );
+        let outcome = match split {
+            None => "cannot_fit",
+            Some(split) => {
+                let assistant_split = messages[..split]
+                    .iter()
+                    .filter(|message| matches!(message, Message::Assistant { .. }))
+                    .count();
+                let rows = case
+                    .rows
+                    .iter()
+                    .map(|row| TaggedAssistantRow {
+                        source: row.source.as_ref().map(native_replay_tag),
+                        id: None,
+                        content: native_claude_replay_content(&row.blocks),
+                    })
+                    .collect();
+                match prepare_replay_checkpoint(
+                    case.required.iter().map(native_replay_tag).collect(),
+                    rows,
+                    assistant_split,
+                ) {
+                    Ok(_) => "ok",
+                    Err(error) => replay_checkpoint_outcome(&error),
+                }
+            }
+        };
+        assert_eq!(outcome, case.outcome, "{}: composed checkpoint", case.name);
     }
 }
 

@@ -8,6 +8,12 @@ theorem local_request_build_is_permanent_without_retry (s : State)
       some { s with phase := .failedPermanent } := by
   simp [FailureOrigin.class, step?, hphase]
 
+theorem provider_stream_malformed_requires_retraction (s : State)
+    (hphase : s.phase = .streaming) (error : String) (wake : Time) :
+    step? s (.observeFailure FailureOrigin.providerStreamMalformed.class error wake) =
+      some { s with phase := .retractRequired .transport error wake } := by
+  simp [FailureOrigin.class, step?, hphase]
+
 theorem retry_schedule_requires_retracted {s s' : State}
     (h : step? s .schedule = some s')
     (_hretry : ∃ wake, s'.phase = .backingOff wake) :

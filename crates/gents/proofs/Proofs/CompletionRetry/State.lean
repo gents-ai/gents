@@ -15,11 +15,15 @@ their existing separate interpretation. -/
 inductive FailureOrigin
   | localRequestBuild
   | retryableTransport
+  /-- A malformed or truncated provider-delivered stream is not a malformed
+  local request. This origin applies whether or not a preview item arrived. -/
+  | providerStreamMalformed
   deriving DecidableEq, Repr
 
 def FailureOrigin.class : FailureOrigin → FailureClass
   | .localRequestBuild => .permanent
   | .retryableTransport => .transport
+  | .providerStreamMalformed => .transport
 
 structure Budget where
   transportRetries : Nat
@@ -31,6 +35,9 @@ structure Budget where
 publication-side observations, not provider-attempt phases. -/
 inductive Phase
   | issuing
+  /-- A provider attempt is in flight; this does not assert that the first
+  streamed item has arrived. Native pre-first and mid-stream routes both
+  refine this phase, with retraction after a failed attempt. -/
   | streaming
   | retractRequired (failure : FailureClass) (error : String) (wake : Time)
   | retracted (failure : FailureClass) (error : String) (wake : Time)

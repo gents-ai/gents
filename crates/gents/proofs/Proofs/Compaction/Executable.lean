@@ -38,6 +38,59 @@ theorem caseFixture_boundaries_pinned :
       pairSafeBoundary (caseFixture 2) 1 = 0 := by
   refine ⟨?_, ?_, ?_, ?_⟩ <;> decide
 
+/-- A protected split is selected before any summary completion. The tagged
+assistant rows are the exact projection of the
+four whole-message fixture rows (assistant positions 1 and 3). -/
+structure ProtectedReplayCompactionCase where
+  name : String
+  messageCount : Nat
+  rawIndex : Nat
+  maxPrefix : Nat
+  required : List PromptAssembly.ClaudeMap.ReplayTag
+  rows : List PromptAssembly.ClaudeMap.TaggedReplayRow
+  selectedSplit : Option Nat
+  outcome : String
+  deriving Repr
+
+private def protectedTag : PromptAssembly.ClaudeMap.ReplayTag :=
+  { request := 7, source := .provider 2 1 0 }
+
+private def protectedRows : List PromptAssembly.ClaudeMap.TaggedReplayRow :=
+  [ { source := some protectedTag, blocks :=
+        [.reasoning none [.text [65] (some "sig")],
+         .toolCall 9 "call" none "echo" [123, 125] none none] }
+  , { source := none, blocks := [.text [66]] } ]
+
+private def protectedReplayCase (name : String) (rawIndex maxPrefix : Nat) :
+    ProtectedReplayCompactionCase :=
+  let msgs := caseFixture 4
+  let selectedSplit := protectedPairSafeBoundary msgs rawIndex maxPrefix
+  let outcome := match prepareProtectedReplayCheckpoint msgs rawIndex maxPrefix
+      [protectedTag] protectedRows with
+    | .ok _ => "ok"
+    | .error .cannotFit => "cannot_fit"
+    | .error .misalignedAssistantProjection => "misaligned_assistant_projection"
+    | .error (.replay error) => PromptAssembly.ClaudeMap.errorName error
+  { name, messageCount := 4, rawIndex, maxPrefix,
+    required := [protectedTag], rows := protectedRows, selectedSplit, outcome }
+
+def protectedReplayCompactionCases : List ProtectedReplayCompactionCase :=
+  [ protectedReplayCase "historical-prefix-before-required" 3 1
+  , protectedReplayCase "required-at-first-row-cannot-summarize" 3 0
+  , protectedReplayCase "protected-pair-retreat" 3 2
+  , protectedReplayCase "no-useful-budget-split" 0 1
+  , protectedReplayCase "incorrect-bound-still-fails-replay-owner" 3 3 ]
+
+theorem protectedReplayCompactionCases_owner_computed :
+    protectedReplayCompactionCases.map (fun c => (c.name, c.selectedSplit, c.outcome)) =
+      [ ("historical-prefix-before-required", some 1, "ok")
+      , ("required-at-first-row-cannot-summarize", none, "cannot_fit")
+      , ("protected-pair-retreat", some 1, "ok")
+      , ("no-useful-budget-split", none, "cannot_fit")
+      , ("incorrect-bound-still-fails-replay-owner", some 3,
+         "requiredReplayInPrefix") ] := by
+  native_decide
+
 structure CompactionReducerCase where
   name                : String
   group               : String

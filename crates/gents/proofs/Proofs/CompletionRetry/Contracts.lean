@@ -17,6 +17,7 @@ def failureClassName : FailureClass → String
 def failureOriginName : FailureOrigin → String
   | .localRequestBuild => "local_request_build"
   | .retryableTransport => "retryable_transport"
+  | .providerStreamMalformed => "provider_stream_malformed"
 
 def phaseName : Phase → String
   | .issuing => "issuing"

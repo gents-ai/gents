@@ -16,7 +16,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        20,
+        21,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -48,6 +48,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "second_repair_issue_is_rejected",
             "local_request_build_fails_permanently_without_retry",
             "retryable_transport_still_requires_retraction",
+            "provider_stream_malformed_requires_retraction",
         ]),
         "CompletionRetry witness names drifted"
     );
@@ -110,6 +111,30 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
         "retryable_transport" => rig::agent::StreamingError::Completion(
             rig::completion::CompletionError::ProviderError("connection reset".into()),
         ),
+        "provider_stream_malformed" => {
+            use gents::claude_messages::{
+                parse_messages_sse, parse_messages_sse_typed, MessagesParseError,
+                ThinkingParseCause,
+            };
+            let sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n";
+            assert_eq!(
+                parse_messages_sse_typed(sse, &Default::default())
+                    .expect_err("open provider thinking must fail at EOF"),
+                MessagesParseError::MalformedThinking {
+                    cause: ThinkingParseCause::IncompleteBlock,
+                },
+            );
+            let completion = parse_messages_sse(sse, &Default::default())
+                .expect_err("provider truncation must reach the Rig boundary");
+            assert!(
+                matches!(
+                    &completion,
+                    rig::completion::CompletionError::ResponseError(_)
+                ),
+                "provider stream parse failure must not be a local RequestError: {completion}"
+            );
+            rig::agent::StreamingError::Completion(completion)
+        }
         other => panic!("unknown modeled failure origin {other}"),
     };
     let classified = classify_completion_error(&error);
@@ -145,6 +170,38 @@ fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
                 "{}: {directive:?}",
                 case.name
             );
+            if origin == "provider_stream_malformed" {
+                // A preview item before EOF takes the native mid-stream
+                // branch. Lean's `.streaming` means an in-flight attempt,
+                // not a claim that an item has already been observed.
+                let mut parser = gents::claude_messages::MessagesSseState::new(Default::default());
+                let preview_sse = "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"partial\"}}\n\n";
+                let mut saw_preview = false;
+                for line in preview_sse.lines() {
+                    for event in parser.push_line(line).expect("provider preview") {
+                        saw_preview |= matches!(
+                            event,
+                            rig::streaming::RawStreamingChoice::ReasoningDelta { .. }
+                        );
+                    }
+                }
+                assert!(
+                    saw_preview,
+                    "the mid-stream branch needs a real preview item"
+                );
+                let eof = parser
+                    .finish()
+                    .expect_err("provider truncated after preview");
+                assert!(
+                    matches!(&eof, rig::completion::CompletionError::ResponseError(_)),
+                    "truncated provider stream must stay transient after a preview: {eof}"
+                );
+                let mut state = CompletionRetryState::new(scheduled_like_policy());
+                assert!(matches!(
+                    state.on_mid_stream_failure(false, now(), None),
+                    MidStreamDirective::RetractAndResample { .. }
+                ));
+            }
         }
         other => panic!("unexpected modeled phase for {}: {other:?}", case.name),
     }

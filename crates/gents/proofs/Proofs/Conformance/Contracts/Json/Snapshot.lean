@@ -482,6 +482,8 @@ def snapshotJson : String :=
     ++ promptAssemblyClaudeNarrowingCasesJson ++ ","
     ++ "\"prompt_assembly_claude_checkpoint_cases\":"
     ++ promptAssemblyClaudeCheckpointCasesJson ++ ","
+    ++ "\"protected_replay_compaction_cases\":"
+    ++ protectedReplayCompactionCasesJson ++ ","
     ++ "\"rendered_capture_cases\":"
       ++ renderedCaptureCasesJson ++ ","
     ++ "\"rendered_capture_storage_cases\":"
