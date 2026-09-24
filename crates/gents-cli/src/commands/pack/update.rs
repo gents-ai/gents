@@ -60,7 +60,8 @@ async fn outdated_packs(
 fn is_newer(latest: &str, installed: &str) -> Option<bool> {
     let latest = semver::Version::parse(latest).ok()?;
     let installed = semver::Version::parse(installed).ok()?;
-    Some(latest > installed)
+    // Build metadata carries no precedence; plain `>` would order it lexically.
+    Some(latest.cmp_precedence(&installed).is_gt())
 }
 
 /// The coordinates `update` reinstalls: the named pack, or every installed
@@ -184,5 +185,7 @@ mod tests {
         assert_eq!(is_newer("1.1.0", "1.2.0"), Some(false));
         assert_eq!(is_newer("1.10.0", "1.9.0"), Some(true));
         assert_eq!(is_newer("latest", "1.0.0"), None);
+        assert_eq!(is_newer("1.2.0+build.2", "1.2.0+build.1"), Some(false));
+        assert_eq!(is_newer("1.2.0", "1.2.0-rc.1"), Some(true));
     }
 }
