@@ -1,4 +1,5 @@
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.ContractCases.PromptAssembly
 
 namespace Conformance.Contracts
@@ -22,6 +23,18 @@ def promptAssemblyItemJson (item : PromptAssemblyItemCase) : String :=
     ++ "\"item\":" ++ jsonString item.item ++ ","
     ++ "\"value\":" ++ toString item.value
     ++ "}"
+
+def promptAssemblyAssistantOrderCaseJson
+    (witness : PromptAssemblyAssistantOrderCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"order_mode\":" ++ jsonString witness.orderMode ++
+    ",\"input\":" ++ jsonArray (witness.input.map promptAssemblyItemJson) ++
+    ",\"expected\":" ++ jsonArray (witness.expected.map promptAssemblyItemJson) ++
+    ",\"expected_twice\":" ++
+      jsonArray (witness.expectedTwice.map promptAssemblyItemJson) ++ "}"
+
+def promptAssemblyAssistantOrderCasesJson : String :=
+  jsonArray (promptAssemblyAssistantOrderCases.map promptAssemblyAssistantOrderCaseJson)
 
 def promptAssemblyRowJson (row : PromptAssemblyRowCase) : String :=
   "{"
@@ -51,6 +64,17 @@ def promptAssemblySanitizeCaseJson (witness : PromptAssemblySanitizeCase) : Stri
 
 def promptAssemblySanitizeCasesJson : String :=
   jsonArray (promptAssemblySanitizeCases.map promptAssemblySanitizeCaseJson)
+
+def promptAssemblyModeSanitizeCaseJson
+    (witness : PromptAssemblyModeSanitizeCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"order_mode\":" ++ jsonString witness.orderMode ++
+    ",\"input\":" ++ promptAssemblyRowsJson witness.input ++
+    ",\"expected\":" ++ promptAssemblyRowsJson witness.expected ++
+    ",\"expected_twice\":" ++ promptAssemblyRowsJson witness.expectedTwice ++ "}"
+
+def promptAssemblyModeSanitizeCasesJson : String :=
+  jsonArray (promptAssemblyModeSanitizeCases.map promptAssemblyModeSanitizeCaseJson)
 
 def promptAssemblyLayerCaseJson (witness : PromptAssemblyLayerCase) : String :=
   "{"
@@ -283,5 +307,82 @@ def promptAssemblyClaudeReplayCaseJson (witness : PromptAssemblyClaudeReplayCase
 
 def promptAssemblyClaudeReplayCasesJson : String :=
   jsonArray (promptAssemblyClaudeReplayCases.map promptAssemblyClaudeReplayCaseJson)
+
+private def claudeReplayUsageJson : PromptAssembly.ClaudeMap.ReplayUsage → String
+  | .historical => jsonString "historical"
+  | .requiredCurrent => jsonString "requiredCurrent"
+
+private def claudeReplayOriginJson : PromptAssembly.ClaudeMap.ReplayOrigin → String
+  | .claudeSubscription => jsonString "claudeSubscription"
+  | .foreign => jsonString "foreign"
+  | .missing => jsonString "missing"
+  | .ambiguous => jsonString "ambiguous"
+
+private def claudeReasoningWitnessJson
+    (witness : PromptAssembly.ClaudeMap.ReasoningWitness) : String :=
+  jsonArray (witness.map fun (index, parts) =>
+    "{\"block_index\":" ++ toString index ++ ",\"parts\":" ++
+      jsonArray (parts.map (claudeReasoningPartJson claudeBytesJson)) ++ "}")
+
+private def claudeNarrowingInputJson
+    (input : PromptAssembly.ClaudeMap.ReplayInput) : String :=
+  "{\"usage\":" ++ claudeReplayUsageJson input.usage ++
+    ",\"origin\":" ++ claudeReplayOriginJson input.origin ++
+    ",\"expected_reasoning\":" ++
+      (match input.expectedReasoning with
+       | none => "null"
+       | some expected => claudeReasoningWitnessJson expected) ++
+    ",\"blocks\":" ++ jsonArray (input.blocks.map claudeReplayInputBlockJson) ++ "}"
+
+def promptAssemblyClaudeNarrowingCaseJson
+    (witness : PromptAssemblyClaudeNarrowingCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"rows\":" ++ jsonArray (witness.rows.map claudeNarrowingInputJson) ++
+    ",\"carriers\":" ++ jsonStringArray witness.carriers ++
+    ",\"outcome\":" ++ jsonString witness.outcome ++
+    ",\"replay\":" ++ jsonArray (witness.replay.map fun row =>
+      jsonArray (row.map claudeReplayBlockJson)) ++ "}"
+
+def promptAssemblyClaudeNarrowingCasesJson : String :=
+  jsonArray (promptAssemblyClaudeNarrowingCases.map promptAssemblyClaudeNarrowingCaseJson)
+
+private def claudeReplayTagJson (tag : PromptAssembly.ClaudeMap.ReplayTag) : String :=
+  "{\"request\":" ++ toString tag.request ++
+    ",\"source\":" ++ sourceJson tag.source ++ "}"
+
+private def claudeTaggedReplayRowJson
+    (row : PromptAssembly.ClaudeMap.TaggedReplayRow) : String :=
+  "{\"source\":" ++
+    (match row.source with
+     | none => "null"
+     | some tag => claudeReplayTagJson tag) ++
+    ",\"blocks\":" ++ jsonArray (row.blocks.map claudeReplayInputBlockJson) ++ "}"
+
+private def claudeCheckpointResolutionJson
+    (resolution : PromptAssemblyClaudeCheckpointResolution) : String :=
+  "{\"tag\":" ++ claudeReplayTagJson resolution.tag ++
+    ",\"origin\":" ++ claudeReplayOriginJson resolution.evidence.origin ++
+    ",\"expected_reasoning\":" ++
+      claudeReasoningWitnessJson resolution.evidence.reasoning ++ "}"
+
+def promptAssemblyClaudeCheckpointCaseJson
+    (witness : PromptAssemblyClaudeCheckpointCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"required\":" ++ jsonArray (witness.required.map claudeReplayTagJson) ++
+    ",\"rows\":" ++ jsonArray (witness.rows.map claudeTaggedReplayRowJson) ++
+    ",\"split\":" ++ toString witness.split ++
+    ",\"carrier_ids\":" ++ jsonStringArray witness.carrierIds ++
+    ",\"resolutions\":" ++
+      jsonArray (witness.resolutions.map claudeCheckpointResolutionJson) ++
+    ",\"outcome\":" ++ jsonString witness.outcome ++
+    ",\"prefix_rows\":" ++
+      jsonArray (witness.prefixRows.map claudeTaggedReplayRowJson) ++
+    ",\"retained\":" ++
+      jsonArray (witness.retained.map claudeTaggedReplayRowJson) ++
+    ",\"replay\":" ++ jsonArray (witness.replay.map fun row =>
+      jsonArray (row.map claudeReplayBlockJson)) ++ "}"
+
+def promptAssemblyClaudeCheckpointCasesJson : String :=
+  jsonArray (promptAssemblyClaudeCheckpointCases.map promptAssemblyClaudeCheckpointCaseJson)
 
 end Conformance.Contracts

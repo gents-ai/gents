@@ -14,6 +14,10 @@ def failureClassName : FailureClass → String
   | .parseBadRequest => "parse_bad_request"
   | .permanent => "permanent"
 
+def failureOriginName : FailureOrigin → String
+  | .localRequestBuild => "local_request_build"
+  | .retryableTransport => "retryable_transport"
+
 def phaseName : Phase → String
   | .issuing => "issuing"
   | .streaming => "streaming"
@@ -56,6 +60,10 @@ def RetryCase.toJson (c : RetryCase) : String :=
     ++ "\"name\":" ++ jsonString c.name ++ ","
     ++ "\"domain\":\"completionRetry\","
     ++ "\"action\":" ++ jsonString (actionName c.action) ++ ","
+    ++ "\"failure_origin\":" ++
+      (c.origin.map (jsonString ∘ failureOriginName)).getD "null" ++ ","
+    ++ "\"classified_failure\":" ++
+      (c.origin.map (jsonString ∘ failureClassName ∘ FailureOrigin.class)).getD "null" ++ ","
     ++ "\"legal\":" ++ boolJson c.post.isSome ++ ","
     ++ "\"pre_phase\":" ++ jsonString (phaseName c.pre.phase) ++ ","
     ++ "\"pre_now\":" ++ toString c.pre.now ++ ","

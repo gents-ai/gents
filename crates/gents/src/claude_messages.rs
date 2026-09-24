@@ -44,8 +44,25 @@ pub use gents_loop::claude_messages_body::{
     ADVERTISED_REASONING_EFFORTS_PARAM, CLAUDE_CODE_IDENTITY,
 };
 
-/// Fail-closed outcomes of the Messages tool-block parser. Display strings are
-/// matched by the conformance drivers; keep them stable.
+/// Fail-closed causes for a malformed native thinking block. These distinguish
+/// the model's indexed and block-shape errors without parsing display text.
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum ThinkingParseCause {
+    #[error("wrong content block")]
+    WrongBlock,
+    #[error("wrong content index {0}")]
+    WrongIndex(u64),
+    #[error("incomplete content block")]
+    IncompleteBlock,
+    #[error("thinking after signature")]
+    SignatureOrder,
+    #[error("thinking block has no signature")]
+    MissingSignature,
+    #[error("{0}")]
+    Malformed(&'static str),
+}
+
+/// Fail-closed outcomes of the Messages tool-block parser.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum MessagesParseError {
     #[error("fail-closed: tool_use observed ({names})")]
@@ -56,13 +73,18 @@ pub enum MessagesParseError {
     MalformedToolUse { message: String },
     #[error("fail-closed: overlapping tool_use block {id}")]
     OverlappingToolUse { id: String },
-    #[error("fail-closed: malformed thinking: {message}")]
-    MalformedThinking { message: String },
+    #[error("fail-closed: malformed thinking: {cause}")]
+    MalformedThinking { cause: ThinkingParseCause },
 }
 
 impl From<MessagesParseError> for CompletionError {
     fn from(error: MessagesParseError) -> Self {
-        CompletionError::ProviderError(error.to_string())
+        match error {
+            error @ MessagesParseError::MalformedThinking { .. } => {
+                CompletionError::RequestError(Box::new(error))
+            }
+            other => CompletionError::ProviderError(other.to_string()),
+        }
     }
 }
 
@@ -206,7 +228,7 @@ impl MessagesSseState {
                 Ok(())
             }
             Some(PendingBlock::Thinking { .. } | PendingBlock::Redacted { .. }) => {
-                Err(malformed_thinking("incomplete content block"))
+                Err(malformed_thinking(ThinkingParseCause::IncompleteBlock))
             }
             None => Ok(()),
         }
@@ -253,17 +275,22 @@ impl MessagesSseState {
                     }
                     Some("thinking" | "redacted_thinking") => {
                         if self.pending.is_some() {
-                            return Err(malformed_thinking("overlapping content block"));
+                            return Err(malformed_thinking(ThinkingParseCause::WrongBlock));
                         }
                         let index = reasoning_index(payload)?;
                         if self.last_reasoning_index.is_some_and(|last| index <= last) {
-                            return Err(malformed_thinking("reused or backward content index"));
+                            return Err(malformed_thinking(ThinkingParseCause::WrongIndex(index)));
                         }
                         if block["type"] == "thinking" {
-                            let text = block
-                                .get("thinking")
-                                .and_then(Value::as_str)
-                                .ok_or_else(|| malformed_thinking("thinking start has no text"))?;
+                            let text =
+                                block
+                                    .get("thinking")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| {
+                                        malformed_thinking(ThinkingParseCause::Malformed(
+                                            "thinking start has no text",
+                                        ))
+                                    })?;
                             self.pending = Some(PendingBlock::Thinking {
                                 index,
                                 text: text.to_owned(),
@@ -281,7 +308,11 @@ impl MessagesSseState {
                                 .get("data")
                                 .and_then(Value::as_str)
                                 .filter(|data| !data.is_empty())
-                                .ok_or_else(|| malformed_thinking("redacted block has no data"))?;
+                                .ok_or_else(|| {
+                                    malformed_thinking(ThinkingParseCause::Malformed(
+                                        "redacted block has no data",
+                                    ))
+                                })?;
                             self.pending = Some(PendingBlock::Redacted {
                                 index,
                                 data: data.to_owned(),
@@ -298,9 +329,7 @@ impl MessagesSseState {
                 match delta.get("type").and_then(Value::as_str) {
                     Some("text_delta") => {
                         if self.pending.is_some() {
-                            return Err(malformed_thinking(
-                                "text delta inside another content block",
-                            ));
+                            return Err(malformed_thinking(ThinkingParseCause::WrongBlock));
                         }
                         if let Some(text) = delta.get("text").and_then(Value::as_str) {
                             if !text.is_empty() {
@@ -315,7 +344,7 @@ impl MessagesSseState {
                         ) {
                             tool.deltas.push_str(partial);
                         } else if self.pending.is_some() {
-                            return Err(malformed_thinking("tool delta inside reasoning block"));
+                            return Err(malformed_thinking(ThinkingParseCause::WrongBlock));
                         }
                     }
                     Some("thinking_delta") => {
@@ -327,10 +356,14 @@ impl MessagesSseState {
                                 signature_started,
                                 ..
                             }) if *current == index && !*signature_started => {
-                                let fragment =
-                                    delta.get("thinking").and_then(Value::as_str).ok_or_else(
-                                        || malformed_thinking("thinking delta has no text"),
-                                    )?;
+                                let fragment = delta
+                                    .get("thinking")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| {
+                                        malformed_thinking(ThinkingParseCause::Malformed(
+                                            "thinking delta has no text",
+                                        ))
+                                    })?;
                                 text.push_str(fragment);
                                 if !fragment.is_empty() {
                                     events.push(RawStreamingChoice::ReasoningDelta {
@@ -344,9 +377,14 @@ impl MessagesSseState {
                                 signature_started: true,
                                 ..
                             }) if *current == index => {
-                                return Err(malformed_thinking("thinking after signature"));
+                                return Err(malformed_thinking(ThinkingParseCause::SignatureOrder));
                             }
-                            _ => return Err(malformed_thinking("wrong thinking block or index")),
+                            Some(PendingBlock::Thinking { .. }) => {
+                                return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                                    index,
+                                )));
+                            }
+                            _ => return Err(malformed_thinking(ThinkingParseCause::WrongBlock)),
                         }
                     }
                     Some("signature_delta") => {
@@ -358,14 +396,23 @@ impl MessagesSseState {
                                 signature_started,
                                 ..
                             }) if *current == index => {
-                                let fragment =
-                                    delta.get("signature").and_then(Value::as_str).ok_or_else(
-                                        || malformed_thinking("signature delta has no signature"),
-                                    )?;
+                                let fragment = delta
+                                    .get("signature")
+                                    .and_then(Value::as_str)
+                                    .ok_or_else(|| {
+                                        malformed_thinking(ThinkingParseCause::Malformed(
+                                            "signature delta has no signature",
+                                        ))
+                                    })?;
                                 signature.push_str(fragment);
                                 *signature_started = true;
                             }
-                            _ => return Err(malformed_thinking("wrong signature block or index")),
+                            Some(PendingBlock::Thinking { .. }) => {
+                                return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                                    index,
+                                )));
+                            }
+                            _ => return Err(malformed_thinking(ThinkingParseCause::WrongBlock)),
                         }
                     }
                     _ => {}
@@ -381,11 +428,14 @@ impl MessagesSseState {
                     signature,
                     ..
                 }) => {
-                    if reasoning_index(payload)? != index {
-                        return Err(malformed_thinking("wrong thinking stop index"));
+                    let observed_index = reasoning_index(payload)?;
+                    if observed_index != index {
+                        return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                            observed_index,
+                        )));
                     }
                     if signature.is_empty() {
-                        return Err(malformed_thinking("thinking block has no signature"));
+                        return Err(malformed_thinking(ThinkingParseCause::MissingSignature));
                     }
                     self.last_reasoning_index = Some(index);
                     events.push(RawStreamingChoice::Reasoning {
@@ -397,8 +447,11 @@ impl MessagesSseState {
                     });
                 }
                 Some(PendingBlock::Redacted { index, data }) => {
-                    if reasoning_index(payload)? != index {
-                        return Err(malformed_thinking("wrong redacted stop index"));
+                    let observed_index = reasoning_index(payload)?;
+                    if observed_index != index {
+                        return Err(malformed_thinking(ThinkingParseCause::WrongIndex(
+                            observed_index,
+                        )));
                     }
                     self.last_reasoning_index = Some(index);
                     events.push(RawStreamingChoice::Reasoning {
@@ -468,18 +521,15 @@ enum PendingBlock {
     },
 }
 
-fn malformed_thinking(message: &str) -> CompletionError {
-    MessagesParseError::MalformedThinking {
-        message: message.to_owned(),
-    }
-    .into()
+fn malformed_thinking(cause: ThinkingParseCause) -> CompletionError {
+    MessagesParseError::MalformedThinking { cause }.into()
 }
 
 fn reasoning_index(payload: &Value) -> Result<u64, CompletionError> {
     payload
         .get("index")
         .and_then(Value::as_u64)
-        .ok_or_else(|| malformed_thinking("missing content index"))
+        .ok_or_else(|| malformed_thinking(ThinkingParseCause::Malformed("missing content index")))
 }
 
 struct PendingTool {
@@ -636,10 +686,16 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     #[cfg(not(test))]
     let fixture: Option<String> = None;
     let body = build_messages_body(model, request).map_err(|error| {
-        CompletionError::ProviderError(format!("Claude Messages body: {error}"))
+        CompletionError::RequestError(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Claude Messages body: {error:#}"),
+        )))
     })?;
     let body_bytes = serde_json::to_vec(&body).map_err(|error| {
-        CompletionError::ProviderError(format!("encode Claude Messages body: {error}"))
+        CompletionError::RequestError(Box::new(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("encode Claude Messages body: {error}"),
+        )))
     })?;
 
     let mut builder = Request::builder()

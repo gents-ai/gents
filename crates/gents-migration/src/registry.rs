@@ -460,7 +460,7 @@ pub static DEFAULT_BASELINE: &[BaselineCollection<'static>] = &[
     baseline_entry!(
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION_NAME,
         gents_protocol::schemas::PROVIDER_CONTEXT_REDUCTION,
-        "bafyreicrv4m7jfwnfeydicb4lm4q4avcvy6uvbezxdmxlft6mcgck5twwq"
+        "bafyreiaon3ziv3yuduotqbsebc5ztwn7x3xmkeru2yn3bpoh2smhvv3oge"
     ),
     baseline_entry!(
         gents_protocol::schemas::PROJECTION_ACP_BINDING_NAME,

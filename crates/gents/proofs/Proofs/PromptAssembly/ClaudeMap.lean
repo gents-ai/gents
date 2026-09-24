@@ -67,6 +67,16 @@ inductive MapError where
   | malformedRedacted
   | unsupportedReasoning
   | unsupportedReplayBlock
+  | missingContinuationOrigin
+  | foreignContinuationOrigin
+  | ambiguousContinuationOrigin
+  | missingReasoningWitness
+  | alteredReasoning
+  | invalidReplayAssociation
+  | duplicateReplayAssociation
+  | missingRequiredReplay
+  | requiredReplayInPrefix
+  | invalidReplaySplit
   deriving DecidableEq, Repr
 
 def errorName : MapError → String
@@ -82,6 +92,16 @@ def errorName : MapError → String
   | .malformedRedacted => "malformedRedacted"
   | .unsupportedReasoning => "unsupportedReasoning"
   | .unsupportedReplayBlock => "unsupportedReplayBlock"
+  | .missingContinuationOrigin => "missingContinuationOrigin"
+  | .foreignContinuationOrigin => "foreignContinuationOrigin"
+  | .ambiguousContinuationOrigin => "ambiguousContinuationOrigin"
+  | .missingReasoningWitness => "missingReasoningWitness"
+  | .alteredReasoning => "alteredReasoning"
+  | .invalidReplayAssociation => "invalidReplayAssociation"
+  | .duplicateReplayAssociation => "duplicateReplayAssociation"
+  | .missingRequiredReplay => "missingRequiredReplay"
+  | .requiredReplayInPrefix => "requiredReplayInPrefix"
+  | .invalidReplaySplit => "invalidReplaySplit"
 
 def blockTag : Block → String
   | .text => "text"
@@ -484,9 +504,533 @@ def replayBlock : CanonicalOutput.MessageBlock (List UInt8) →
       .ok [.toolUse id name arguments]
   | .toolResult .. | .media .. => .error .unsupportedReplayBlock
 
-def replayBlocks (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
-    Except MapError (List ReplayBlock) := do
-  return (← blocks.mapM replayBlock).flatten
+def replayBlocks : List (CanonicalOutput.MessageBlock (List UInt8)) →
+    Except MapError (List ReplayBlock)
+  | [] => .ok []
+  | block :: rest =>
+      match replayBlock block with
+      | .error error => .error error
+      | .ok first =>
+          match replayBlocks rest with
+          | .error error => .error error
+          | .ok suffix => .ok (first ++ suffix)
+
+/-- Recursive presentation is the original left-to-right `mapM` followed by
+flattening, including which malformed block wins first. -/
+theorem replayBlocks_mapM_equiv
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    replayBlocks blocks = (blocks.mapM replayBlock).map List.flatten := by
+  induction blocks with
+  | nil => rfl
+  | cons block rest ih =>
+      cases hb : replayBlock block with
+      | error error =>
+          simp [replayBlocks, hb, List.mapM_cons, Except.map, Except.bind]
+          rfl
+      | ok first =>
+          cases ht : rest.mapM replayBlock with
+          | error error =>
+              simp [replayBlocks, ih, hb, ht, List.mapM_cons, Except.map, Except.bind]
+              rfl
+          | ok suffix =>
+              simp [replayBlocks, ih, hb, ht, List.mapM_cons, Except.map, Except.bind]
+              rfl
+
+/-! ## Provenance-gated replay
+
+The caller supplies the result of the canonical closing-segment → provider-turn
+→ rendered-request join. This owner does not derive issuer from a signature,
+model name, or Rig's history/prompt carrier. `expectedReasoning` is the exact
+wire-relevant reasoning projection of the current canonical continuation:
+ordered parts, bytes, signatures, and block positions, but not the native
+reasoning-block ID (which Claude does not replay). It must come from the same
+trusted owner as `origin`.
+Restoring that evidence from a durable checkpoint is a native binding
+obligation, not established by this pure model. Provenance and exact blocks
+also do not prove provider acceptance if earlier system, tool, or message
+prefixes change; provider capability/prefix policy is outside this owner
+(#1693). Evidence is supplied for each selected row, potentially several
+assistant rows in one ongoing tool-use turn; this owner does not prove upstream
+row selection was complete. It imposes no universal thinking-first rule. -/
+
+inductive ReplayUsage where
+  | historical
+  | requiredCurrent
+  deriving DecidableEq, Repr
+
+inductive ReplayOrigin where
+  | claudeSubscription
+  | foreign
+  | missing
+  | ambiguous
+  deriving DecidableEq, Repr
+
+abbrev ReasoningWitness := List (Nat × List (CanonicalOutput.ReasoningPart (List UInt8)))
+
+structure ReplayInput where
+  usage : ReplayUsage
+  origin : ReplayOrigin
+  expectedReasoning : Option ReasoningWitness
+  blocks : List (CanonicalOutput.MessageBlock (List UInt8))
+  deriving Repr
+
+def stripHistoricalReasoning :
+    List (CanonicalOutput.MessageBlock (List UInt8)) →
+    List (CanonicalOutput.MessageBlock (List UInt8))
+  | [] => []
+  | .reasoning .. :: rest => stripHistoricalReasoning rest
+  | block :: rest => block :: stripHistoricalReasoning rest
+
+def reasoningProjectionFrom (index : Nat) :
+    List (CanonicalOutput.MessageBlock (List UInt8)) → ReasoningWitness
+  | [] => []
+  | .reasoning _ parts :: rest =>
+      (index, parts) :: reasoningProjectionFrom (index + 1) rest
+  | _ :: rest => reasoningProjectionFrom (index + 1) rest
+
+def reasoningProjection (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    ReasoningWitness :=
+  reasoningProjectionFrom 0 blocks
+
+/-- Historical reasoning is never sent to a different Claude continuation.
+Required current reasoning is replayed only with a unique Claude provenance
+join and exact wire-relevant reasoning witness. Existing `replayBlocks` supplies
+strict signature, redaction, unsupported-kind and order checks. -/
+def narrowReplay (input : ReplayInput) : Except MapError (List ReplayBlock) :=
+  match input.usage with
+  | .historical => replayBlocks (stripHistoricalReasoning input.blocks)
+  | .requiredCurrent =>
+      match input.origin with
+      | .missing => .error .missingContinuationOrigin
+      | .foreign => .error .foreignContinuationOrigin
+      | .ambiguous => .error .ambiguousContinuationOrigin
+      | .claudeSubscription =>
+          match input.expectedReasoning with
+          | none => .error .missingReasoningWitness
+          | some expected =>
+              if reasoningProjection input.blocks == expected then
+                replayBlocks input.blocks
+              else
+                .error .alteredReasoning
+
+def narrowReplayRows (inputs : List ReplayInput) :
+    Except MapError (List (List ReplayBlock)) :=
+  inputs.mapM narrowReplay
+
+/-! ## Source-preserving reduction and restored continuation
+
+The tag is an existing canonical provider-output coordinate, not a provider
+message ID. Rows here are selected assistant occurrences only; user/tool-result
+rows and the full provider request remain separate representation bindings.
+The native owner must issue a tag from the accepted physical header and carry
+it beside the row through checkpoint storage. A native reduction split must
+retain each selected assistant occurrence's original source index, not merely
+count assistant rows. `resolve` below is an
+owner-supplied canonical header/close/capture lookup, not a proof of that DB
+join. In particular, equal-byte rows with swapped tags cannot be detected by
+this pure model; sidecar integrity remains a native obligation. -/
+
+abbrev ReplayTag := CanonicalOutput.Coordinate
+
+def providerReplayTag (tag : ReplayTag) : Bool :=
+  match tag.source with
+  | .provider .. => true
+  | .tool .. | .authored .. => false
+
+structure TaggedReplayRow where
+  source : Option ReplayTag
+  blocks : List (CanonicalOutput.MessageBlock (List UInt8))
+  deriving Repr
+
+structure ResolvedReplayEvidence where
+  origin : ReplayOrigin
+  reasoning : ReasoningWitness
+  deriving Repr
+
+/-- Selection is the same order-preserving filter used by the source owner.
+The independently supplied `required` set is never computed from this list. -/
+def selectReplayRows (keep : TaggedReplayRow → Bool) (rows : List TaggedReplayRow) :
+    List TaggedReplayRow :=
+  rows.filter keep
+
+/-- Argument repair changes only tool-call payload, not a row's coordinate or
+the reasoning projection. This is the modeled part of request repair. -/
+def repairReplayBlock (repair : List UInt8 → List UInt8) :
+    CanonicalOutput.MessageBlock (List UInt8) →
+    CanonicalOutput.MessageBlock (List UInt8)
+  | .toolCall docId id callId name arguments signature additionalParams =>
+      .toolCall docId id callId name (repair arguments) signature additionalParams
+  | block => block
+
+def repairReplayRows (repair : List UInt8 → List UInt8)
+    (rows : List TaggedReplayRow) : List TaggedReplayRow :=
+  rows.map fun row => { row with blocks := row.blocks.map (repairReplayBlock repair) }
+
+theorem selectReplayRows_sublist (keep : TaggedReplayRow → Bool)
+    (rows : List TaggedReplayRow) :
+    List.Sublist (selectReplayRows keep rows) rows := by
+  simpa only [selectReplayRows] using (List.filter_sublist (p := keep) rows)
+
+theorem repairReplayRows_keeps_sources (repair : List UInt8 → List UInt8)
+    (rows : List TaggedReplayRow) :
+    (repairReplayRows repair rows).map TaggedReplayRow.source =
+      rows.map TaggedReplayRow.source := by
+  induction rows with
+  | nil => rfl
+  | cons row rest ih => simp [repairReplayRows, ih]
+
+theorem repairReplayBlock_keeps_reasoning (repair : List UInt8 → List UInt8)
+    (index : Nat) (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    reasoningProjectionFrom index (blocks.map (repairReplayBlock repair)) =
+      reasoningProjectionFrom index blocks := by
+  induction blocks generalizing index with
+  | nil => rfl
+  | cons block rest ih =>
+      cases block <;> simp [repairReplayBlock, reasoningProjectionFrom, ih]
+
+theorem repairReplayRows_keeps_reasoning (repair : List UInt8 → List UInt8)
+    (row : TaggedReplayRow) :
+    reasoningProjection (row.blocks.map (repairReplayBlock repair)) =
+      reasoningProjection row.blocks := by
+  exact repairReplayBlock_keeps_reasoning repair 0 row.blocks
+
+def replayTagCount (tag : ReplayTag) (rows : List TaggedReplayRow) : Nat :=
+  (rows.filter fun row => row.source == some tag).length
+
+structure ReplayCheckpoint where
+  required : List ReplayTag
+  prefixRows : List TaggedReplayRow
+  retained : List TaggedReplayRow
+  deriving Repr
+
+/-- Exact `take`/`drop` split. Every required current reasoning coordinate must
+survive exactly once in the retained suffix; reducing it to the summary is not
+implicit retirement. Historical rows have no capture requirement. -/
+def prepareReplayCheckpoint (required : List ReplayTag)
+    (rows : List TaggedReplayRow) (split : Nat) : Except MapError ReplayCheckpoint :=
+  if split > rows.length then .error .invalidReplaySplit
+  else if !(required.all providerReplayTag) ||
+      rows.any (fun row => row.source.any (fun tag => !providerReplayTag tag)) then
+    .error .invalidReplayAssociation
+  else if required.length != required.eraseDups.length ||
+      (rows.filterMap TaggedReplayRow.source).length !=
+        (rows.filterMap TaggedReplayRow.source).eraseDups.length then
+    .error .duplicateReplayAssociation
+  else if required.any (fun tag => replayTagCount tag (rows.take split) != 0) then
+    .error .requiredReplayInPrefix
+  else if required.any (fun tag => replayTagCount tag (rows.drop split) != 1) then
+    .error .missingRequiredReplay
+  else
+    .ok { required, prefixRows := rows.take split, retained := rows.drop split }
+
+theorem preparedReplayCheckpoint_exact_split (required : List ReplayTag)
+    (rows : List TaggedReplayRow) (split : Nat) (checkpoint : ReplayCheckpoint)
+    (h : prepareReplayCheckpoint required rows split = .ok checkpoint) :
+    checkpoint.prefixRows = rows.take split ∧ checkpoint.retained = rows.drop split := by
+  unfold prepareReplayCheckpoint at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  cases h
+  exact ⟨rfl, rfl⟩
+
+def narrowResolvedReplay (tag : ReplayTag)
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
+    (resolve : ReplayTag → List ResolvedReplayEvidence) :
+    Except MapError (List ReplayBlock) :=
+  match resolve tag with
+  | [] => .error .missingContinuationOrigin
+  | [evidence] =>
+      narrowReplay (ReplayInput.mk .requiredCurrent evidence.origin
+        (some evidence.reasoning) blocks)
+  | _ => .error .ambiguousContinuationOrigin
+
+/-- Restore checks the carried association again, then calls the existing
+strict replay owner once per row. Resolution is queried only for required
+current coordinates. A historical row strips reasoning even if its old capture
+is absent or foreign. The returned ordered payload is the one input for
+estimation, capture and send at the native adapter; this assistant-only model
+does not establish complete request assembly or equality of separately
+parameterized serializers. -/
+def restoreAndNarrowReplay (checkpoint : ReplayCheckpoint)
+    (resolve : ReplayTag → List ResolvedReplayEvidence) :
+    Except MapError (List (List ReplayBlock)) :=
+  let rows := checkpoint.prefixRows ++ checkpoint.retained
+  match prepareReplayCheckpoint checkpoint.required rows checkpoint.prefixRows.length with
+  | .error error => .error error
+  | .ok checked =>
+      checked.retained.mapM fun row =>
+        match row.source with
+        | some tag =>
+            if tag ∈ checkpoint.required then
+              narrowResolvedReplay tag row.blocks resolve
+            else
+              narrowReplay (ReplayInput.mk .historical .missing none row.blocks)
+        | none =>
+            narrowReplay (ReplayInput.mk .historical .missing none row.blocks)
+
+theorem required_replay_not_silently_removed (required : List ReplayTag)
+    (rows : List TaggedReplayRow) (split : Nat) (checkpoint : ReplayCheckpoint)
+    (h : prepareReplayCheckpoint required rows split = .ok checkpoint)
+    (tag : ReplayTag) (htag : tag ∈ required) :
+    replayTagCount tag checkpoint.prefixRows = 0 ∧
+      replayTagCount tag checkpoint.retained = 1 := by
+  unfold prepareReplayCheckpoint at h
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  split at h <;> try contradiction
+  rename_i _ _ _ hprefix hsuffix
+  cases h
+  constructor
+  · by_contra hnonzero
+    apply hprefix
+    simp only [List.any_eq_true]
+    exact ⟨tag, htag, by simp [hnonzero]⟩
+  · by_contra hnotone
+    apply hsuffix
+    simp only [List.any_eq_true]
+    exact ⟨tag, htag, by simp [hnotone]⟩
+
+theorem restored_success_retains_each_required_once
+    (checkpoint : ReplayCheckpoint)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (replay : List (List ReplayBlock))
+    (h : restoreAndNarrowReplay checkpoint resolve = .ok replay)
+    (tag : ReplayTag) (htag : tag ∈ checkpoint.required) :
+    replayTagCount tag checkpoint.prefixRows = 0 ∧
+      replayTagCount tag checkpoint.retained = 1 := by
+  unfold restoreAndNarrowReplay at h
+  cases hprepared : prepareReplayCheckpoint checkpoint.required
+      (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length with
+  | error error => simp [hprepared] at h
+  | ok checked =>
+      have hcounts := required_replay_not_silently_removed checkpoint.required
+        (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
+        checked hprepared tag htag
+      have hsplit := preparedReplayCheckpoint_exact_split checkpoint.required
+        (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
+        checked hprepared
+      simpa [hsplit.1, hsplit.2] using hcounts
+
+def isThinkingReplay : ReplayBlock → Bool
+  | .signedThinking .. | .redactedThinking .. => true
+  | .text .. | .toolUse .. => false
+
+theorem historical_success_has_no_thinking
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
+    (replay : List ReplayBlock)
+    (hsuccess : replayBlocks (stripHistoricalReasoning blocks) = .ok replay) :
+    replay.all (fun block => !isThinkingReplay block) = true := by
+  induction blocks generalizing replay with
+  | nil =>
+      simp [stripHistoricalReasoning, replayBlocks] at hsuccess
+      subst replay
+      rfl
+  | cons block rest ih =>
+      cases block with
+      | reasoning _ _ =>
+          simp [stripHistoricalReasoning] at hsuccess
+          exact ih replay hsuccess
+      | text payload =>
+          by_cases hempty : payload.isEmpty
+          · cases htail : replayBlocks (stripHistoricalReasoning rest) with
+            | error error =>
+                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
+                  htail] at hsuccess
+            | ok tail =>
+                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
+                  htail] at hsuccess
+                cases hsuccess
+                exact ih replay htail
+          · cases htail : replayBlocks (stripHistoricalReasoning rest) with
+            | error error =>
+                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
+                  htail] at hsuccess
+            | ok tail =>
+                simp [stripHistoricalReasoning, replayBlocks, replayBlock, hempty,
+                  htail] at hsuccess
+                cases hsuccess
+                simpa [isThinkingReplay] using ih tail htail
+      | toolCall docId id callId name arguments signature additionalParams =>
+          cases htail : replayBlocks (stripHistoricalReasoning rest) with
+          | error error =>
+              simp [stripHistoricalReasoning, replayBlocks, replayBlock, htail] at hsuccess
+          | ok tail =>
+              simp [stripHistoricalReasoning, replayBlocks, replayBlock, htail] at hsuccess
+              cases hsuccess
+              simpa [isThinkingReplay] using ih tail htail
+      | toolResult docId id callId parts =>
+          simp [stripHistoricalReasoning, replayBlocks, replayBlock] at hsuccess
+      | media media =>
+          simp [stripHistoricalReasoning, replayBlocks, replayBlock] at hsuccess
+
+theorem historical_narrow_success_has_no_thinking
+    (input : ReplayInput) (replay : List ReplayBlock)
+    (husage : input.usage = .historical)
+    (hsuccess : narrowReplay input = .ok replay) :
+    replay.all (fun block => !isThinkingReplay block) = true := by
+  simp [narrowReplay, husage] at hsuccess
+  exact historical_success_has_no_thinking input.blocks replay hsuccess
+
+theorem historical_narrowing_idempotent
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    stripHistoricalReasoning (stripHistoricalReasoning blocks) =
+      stripHistoricalReasoning blocks := by
+  induction blocks with
+  | nil => rfl
+  | cons block rest ih =>
+      cases block <;> simp [stripHistoricalReasoning, ih]
+
+theorem required_claude_replays_exact_blocks
+    (blocks : List (CanonicalOutput.MessageBlock (List UInt8))) :
+    narrowReplay (ReplayInput.mk .requiredCurrent .claudeSubscription
+      (some (reasoningProjection blocks)) blocks) =
+      replayBlocks blocks := by
+  simp [narrowReplay]
+
+theorem required_claude_reasoning_parts_keep_exact_bytes
+    (parts : List (CanonicalOutput.ReasoningPart (List UInt8))) :
+    narrowReplay (ReplayInput.mk .requiredCurrent .claudeSubscription
+      (some (reasoningProjection [.reasoning none parts]))
+      [.reasoning none parts]) = parts.mapM replayPart := by
+  rw [required_claude_replays_exact_blocks]
+  cases hparts : parts.mapM replayPart <;>
+    simp [replayBlocks, replayBlock, hparts]
+
+theorem required_success_has_claude_origin_and_exact_witness
+    (input : ReplayInput) (replay : List ReplayBlock)
+    (husage : input.usage = .requiredCurrent)
+    (hsuccess : narrowReplay input = .ok replay) :
+    input.origin = .claudeSubscription ∧
+      input.expectedReasoning = some (reasoningProjection input.blocks) ∧
+      replayBlocks input.blocks = .ok replay := by
+  cases input with
+  | mk usage origin expectedReasoning blocks =>
+    cases usage with
+    | historical => contradiction
+    | requiredCurrent =>
+      cases origin with
+      | foreign => simp [narrowReplay] at hsuccess
+      | missing => simp [narrowReplay] at hsuccess
+      | ambiguous => simp [narrowReplay] at hsuccess
+      | claudeSubscription =>
+        cases expectedReasoning with
+        | none => simp [narrowReplay] at hsuccess
+        | some expected =>
+          by_cases hexact : reasoningProjection blocks = expected
+          · simp [narrowReplay, hexact] at hsuccess ⊢
+            exact hsuccess
+          · simp [narrowReplay, hexact] at hsuccess
+
+theorem narrowResolvedReplay_success_has_unique_claude_evidence
+    (tag : ReplayTag) (blocks : List (CanonicalOutput.MessageBlock (List UInt8)))
+    (resolve : ReplayTag → List ResolvedReplayEvidence) (replay : List ReplayBlock)
+    (h : narrowResolvedReplay tag blocks resolve = .ok replay) :
+    ∃ evidence, resolve tag = [evidence] ∧
+      evidence.origin = .claudeSubscription ∧
+      evidence.reasoning = reasoningProjection blocks ∧
+      replayBlocks blocks = .ok replay := by
+  unfold narrowResolvedReplay at h
+  cases hresolve : resolve tag with
+  | nil => simp [hresolve] at h
+  | cons first rest =>
+      cases rest with
+      | nil =>
+          have howner := required_success_has_claude_origin_and_exact_witness
+            (ReplayInput.mk .requiredCurrent first.origin (some first.reasoning) blocks)
+            replay rfl (by simpa [hresolve] using h)
+          exact ⟨first, rfl, howner.1,
+            Option.some.inj howner.2.1, howner.2.2⟩
+      | cons second tail => simp [hresolve] at h
+
+private theorem mapM_except_success_at_member {α β : Type}
+    (f : α → Except MapError β) (rows : List α) (result : List β)
+    (h : rows.mapM f = .ok result) (row : α) (hrow : row ∈ rows) :
+    ∃ value, f row = .ok value := by
+  induction rows generalizing result with
+  | nil => simp at hrow
+  | cons first rest ih =>
+      cases hfirst : f first with
+      | error error =>
+          simp [List.mapM_cons, hfirst] at h
+          change (Except.error error : Except MapError (List β)) = .ok result at h
+          cases h
+      | ok firstValue =>
+          cases hrest : rest.mapM f with
+          | error error =>
+              simp [List.mapM_cons, hfirst, hrest] at h
+              change (Except.error error : Except MapError (List β)) = .ok result at h
+              cases h
+          | ok restValues =>
+              simp only [List.mem_cons] at hrow
+              rcases hrow with rfl | htail
+              · exact ⟨firstValue, hfirst⟩
+              · exact ih restValues hrest htail
+
+/-- A successful restored replay has an exactly-once retained assistant row
+and an exactly-one canonical resolution for *every* independently required
+coordinate. Each resolved row passed the same strict replay codec in list
+order. This is conditional on native issuance, durable sidecar integrity and
+the supplied canonical resolution; it does not prove those DB operations. -/
+theorem restored_success_has_all_required_claude_evidence
+    (checkpoint : ReplayCheckpoint)
+    (resolve : ReplayTag → List ResolvedReplayEvidence)
+    (replay : List (List ReplayBlock))
+    (h : restoreAndNarrowReplay checkpoint resolve = .ok replay)
+    (tag : ReplayTag) (htag : tag ∈ checkpoint.required) :
+    replayTagCount tag checkpoint.prefixRows = 0 ∧
+    replayTagCount tag checkpoint.retained = 1 ∧
+    ∃ row, row ∈ checkpoint.retained ∧ row.source = some tag ∧
+      ∃ evidence rowReplay, resolve tag = [evidence] ∧
+        evidence.origin = .claudeSubscription ∧
+        evidence.reasoning = reasoningProjection row.blocks ∧
+        replayBlocks row.blocks = .ok rowReplay := by
+  have hcounts := restored_success_retains_each_required_once
+    checkpoint resolve replay h tag htag
+  refine ⟨hcounts.1, hcounts.2, ?_⟩
+  have hrow : ∃ row, row ∈ checkpoint.retained ∧ row.source = some tag := by
+    unfold replayTagCount at hcounts
+    cases hfiltered : checkpoint.retained.filter
+        (fun row => row.source == some tag) with
+    | nil => simp [hfiltered] at hcounts
+    | cons row rest =>
+        have hmem : row ∈ checkpoint.retained.filter
+            (fun row => row.source == some tag) := by
+          rw [hfiltered]
+          simp
+        have hparts := List.mem_filter.mp hmem
+        exact ⟨row, hparts.1, by simpa using hparts.2⟩
+  obtain ⟨row, hmem, hsource⟩ := hrow
+  let runRow : TaggedReplayRow → Except MapError (List ReplayBlock) := fun candidate =>
+    match candidate.source with
+    | some candidateTag =>
+        if candidateTag ∈ checkpoint.required then
+          narrowResolvedReplay candidateTag candidate.blocks resolve
+        else
+          narrowReplay (ReplayInput.mk .historical .missing none candidate.blocks)
+    | none => narrowReplay (ReplayInput.mk .historical .missing none candidate.blocks)
+  cases hprepared : prepareReplayCheckpoint checkpoint.required
+      (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length with
+  | error error => simp [restoreAndNarrowReplay, hprepared] at h
+  | ok checked =>
+      have hsplit := preparedReplayCheckpoint_exact_split checkpoint.required
+        (checkpoint.prefixRows ++ checkpoint.retained) checkpoint.prefixRows.length
+        checked hprepared
+      have hmap : checkpoint.retained.mapM runRow = .ok replay := by
+        simpa [restoreAndNarrowReplay, hprepared, runRow, hsplit.2] using h
+      obtain ⟨rowReplay, hsuccess⟩ :=
+        mapM_except_success_at_member runRow checkpoint.retained replay hmap row hmem
+      have hnarrow : narrowResolvedReplay tag row.blocks resolve = .ok rowReplay := by
+        simpa [runRow, hsource, htag] using hsuccess
+      obtain ⟨evidence, hresolution, horigin, hwitness, hcodec⟩ :=
+        narrowResolvedReplay_success_has_unique_claude_evidence
+          tag row.blocks resolve rowReplay hnarrow
+      exact ⟨row, hmem, hsource, evidence, rowReplay,
+        hresolution, horigin, hwitness, hcodec⟩
 
 theorem replay_signed_bytes_and_signature (payload : List UInt8) (signature : String)
     (nonempty : signature ≠ "") :
@@ -503,7 +1047,8 @@ theorem replay_redacted_bytes (payload : List UInt8) (nonempty : payload ≠ [])
 theorem replay_reasoning_parts_in_order
     (parts : List (CanonicalOutput.ReasoningPart (List UInt8))) :
     replayBlocks [.reasoning none parts] = parts.mapM replayPart := by
-  simp [replayBlocks, replayBlock]
+  cases hparts : parts.mapM replayPart <;>
+    simp [replayBlocks, replayBlock, hparts]
 
 theorem replay_empty_ordinary_text_is_omitted :
     replayBlocks [.text []] = .ok [] := by

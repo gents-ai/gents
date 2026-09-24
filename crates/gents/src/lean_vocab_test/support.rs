@@ -202,6 +202,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) compaction_reducer_cases: Vec<LeanCompactionReducerCase>,
     pub(crate) compaction_cursor_cases: Vec<LeanCompactionCursorCase>,
     pub(crate) prompt_assembly_sanitize_cases: Vec<LeanPromptAssemblySanitizeCase>,
+    pub(crate) prompt_assembly_assistant_order_cases: Vec<LeanPromptAssemblyAssistantOrderCase>,
+    pub(crate) prompt_assembly_mode_sanitize_cases: Vec<LeanPromptAssemblyModeSanitizeCase>,
     pub(crate) current_input_cases: Vec<LeanCurrentInputCase>,
     pub(crate) prompt_assembly_layer_cases: Vec<LeanPromptAssemblyLayerCase>,
     pub(crate) prompt_assembly_repair_cases: Vec<LeanPromptAssemblyRepairCase>,
@@ -214,6 +216,8 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
+    pub(crate) prompt_assembly_claude_narrowing_cases: Vec<LeanPromptAssemblyClaudeNarrowingCase>,
+    pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -1770,6 +1774,16 @@ pub(crate) fn lean_prompt_assembly_sanitize_cases() -> &'static [LeanPromptAssem
     &lean_contract_snapshot().prompt_assembly_sanitize_cases
 }
 
+pub(crate) fn lean_prompt_assembly_assistant_order_cases(
+) -> &'static [LeanPromptAssemblyAssistantOrderCase] {
+    &lean_contract_snapshot().prompt_assembly_assistant_order_cases
+}
+
+pub(crate) fn lean_prompt_assembly_mode_sanitize_cases(
+) -> &'static [LeanPromptAssemblyModeSanitizeCase] {
+    &lean_contract_snapshot().prompt_assembly_mode_sanitize_cases
+}
+
 pub(crate) fn lean_prompt_assembly_layer_cases() -> &'static [LeanPromptAssemblyLayerCase] {
     &lean_contract_snapshot().prompt_assembly_layer_cases
 }
@@ -1814,6 +1828,16 @@ pub(crate) fn lean_prompt_assembly_claude_thinking_stream_cases(
 pub(crate) fn lean_prompt_assembly_claude_replay_cases(
 ) -> &'static [LeanPromptAssemblyClaudeReplayCase] {
     &lean_contract_snapshot().prompt_assembly_claude_replay_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_narrowing_cases(
+) -> &'static [LeanPromptAssemblyClaudeNarrowingCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_narrowing_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_checkpoint_cases(
+) -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
 }
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {

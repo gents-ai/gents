@@ -146,6 +146,21 @@ theorem not_emptyAssistantRow_of_nonDegenerate {pr : ProviderRow}
 
 /-! ## Stage 3 — content ordering -/
 
+def normalizeRowFor (mode : Content.OrderMode) (pr : ProviderRow) : ProviderRow :=
+  { pr with content := Content.normalizeFor mode pr.content }
+
+@[simp] theorem normalizeRowFor_row (mode : Content.OrderMode) (pr : ProviderRow) :
+    (normalizeRowFor mode pr).row = pr.row := rfl
+
+def normalizeOrderFor (mode : Content.OrderMode) (rows : List ProviderRow) :
+    List ProviderRow :=
+  rows.map (normalizeRowFor mode)
+
+@[simp] theorem normalizeOrderFor_nativePreserved (rows : List ProviderRow) :
+    normalizeOrderFor .nativePreserved rows = rows := by
+  change rows.map id = rows
+  simp
+
 def normalizeRow (pr : ProviderRow) : ProviderRow :=
   { pr with content := Content.normalize pr.content }
 
@@ -154,6 +169,38 @@ def normalizeRow (pr : ProviderRow) : ProviderRow :=
 
 def normalizeOrder (rows : List ProviderRow) : List ProviderRow :=
   rows.map normalizeRow
+
+@[simp] theorem normalizeOrderFor_grouped (rows : List ProviderRow) :
+    normalizeOrderFor .grouped rows = normalizeOrder rows := rfl
+
+@[simp] theorem project_normalizeOrderFor (mode : Content.OrderMode)
+    (rows : List ProviderRow) :
+    project (normalizeOrderFor mode rows) = project rows := by
+  simp [project, normalizeOrderFor]
+
+theorem allCoherent_normalizeOrderFor {rows : List ProviderRow}
+    (mode : Content.OrderMode) (h : AllCoherent rows) :
+    AllCoherent (normalizeOrderFor mode rows) := by
+  intro pr hpr
+  obtain ⟨source, hsource, rfl⟩ := List.mem_map.mp hpr
+  have hs := h source hsource
+  cases hk : source.row.kind with
+  | assistantToolCalls ids =>
+    simpa [Coherent, normalizeRowFor, hk,
+      Content.callsOf_normalizeFor] using hs
+  | ordinary =>
+    simpa [Coherent, normalizeRowFor, hk,
+      Content.callsOf_normalizeFor] using hs
+  | toolResult id key =>
+    simpa [Coherent, normalizeRowFor, hk,
+      Content.callsOf_normalizeFor] using hs
+
+theorem normalizeOrderFor_idempotent (mode : Content.OrderMode)
+    (rows : List ProviderRow) :
+    normalizeOrderFor mode (normalizeOrderFor mode rows) =
+      normalizeOrderFor mode rows := by
+  simp [normalizeOrderFor, List.map_map, normalizeRowFor,
+    Content.normalizeFor_idempotent]
 
 @[simp] theorem normalizeOrder_nil : normalizeOrder [] = [] := rfl
 
@@ -169,11 +216,13 @@ def normalizeOrder (rows : List ProviderRow) : List ProviderRow :=
 
 theorem coherent_normalizeRow {pr : ProviderRow} (h : Coherent pr) :
     Coherent (normalizeRow pr) := by
-  unfold Coherent at h ⊢
-  simp only [normalizeRow_row]
-  cases hk : pr.row.kind <;>
-    · rw [hk] at h
-      simpa [normalizeRow, Content.callsOf_normalize] using h
+  cases hk : pr.row.kind with
+  | assistantToolCalls ids =>
+    simpa [Coherent, normalizeRow, hk, Content.callsOf_normalize] using h
+  | ordinary =>
+    simpa [Coherent, normalizeRow, hk, Content.callsOf_normalize] using h
+  | toolResult id key =>
+    simpa [Coherent, normalizeRow, hk, Content.callsOf_normalize] using h
 
 theorem allCoherent_normalizeOrder {rows : List ProviderRow}
     (h : AllCoherent rows) : AllCoherent (normalizeOrder rows) := by
@@ -463,10 +512,21 @@ def resolvedInP (rows : List ProviderRow) : Finset ToolExecution.ToolCallId :=
 def dropUnpairedCallsP (rows : List ProviderRow) : List ProviderRow :=
   filterCallsByP (resolvedInP rows) rows
 
-/-- Three-stage content projection using global resolution. This is a
-conditional proof model, not the unrestricted production algorithm. -/
+/-- Three-stage content projection using global resolution. The two provider
+order modes share the *same* orphan and unpaired-call stages; only the final
+assistant-content ordering stage differs. This remains a conditional proof
+model, not the unrestricted production algorithm. -/
+def sanitizeForProviderGlobalFor (mode : Content.OrderMode)
+    (rows : List ProviderRow) : List ProviderRow :=
+  normalizeOrderFor mode (dropUnpairedCallsP (dropOrphanedResultsP rows))
+
+/-- The established grouped-provider instance of the composed owner. Its
+definition remains explicit so existing grouped theorems retain their form. -/
 def sanitizeForProviderGlobal (rows : List ProviderRow) : List ProviderRow :=
   normalizeOrder (dropUnpairedCallsP (dropOrphanedResultsP rows))
+
+@[simp] theorem sanitizeForProviderGlobalFor_grouped (rows : List ProviderRow) :
+    sanitizeForProviderGlobalFor .grouped rows = sanitizeForProviderGlobal rows := rfl
 
 section FilterReduction
 
@@ -1183,6 +1243,83 @@ theorem sanitizeForProviderGlobal_idempotent {rows : List ProviderRow}
     (allNonDegenerate_sanitizeForProvider rows) ?_
   unfold sanitizeForProviderGlobal
   exact normalizeOrder_idempotent _
+
+/-! ### The same composed sanitizer with selected assistant order -/
+
+theorem sanitizeForProviderGlobalFor_sound (mode : Content.OrderMode)
+    {rows : List ProviderRow} (huniq : UniqueCallIds (project rows))
+    (hcoh : AllCoherent rows) :
+    ProviderValid (project (sanitizeForProviderGlobalFor mode rows)) := by
+  cases mode with
+  | grouped => exact sanitizeForProviderGlobal_sound huniq hcoh
+  | nativePreserved =>
+    unfold sanitizeForProviderGlobalFor dropUnpairedCallsP dropOrphanedResultsP resolvedInP
+    constructor
+    rw [project_normalizeOrderFor]
+    simpa using
+      activeBlockValidFrom_filterCallsByP rows ∅ huniq (Finset.disjoint_empty_left _) hcoh
+
+theorem sanitizeForProviderGlobalFor_split_stable (mode : Content.OrderMode)
+    {old recent : List ProviderRow}
+    (huniq : UniqueCallIds (project (old ++ recent)))
+    (hcoh : AllCoherent recent) :
+    ProviderValid (project (sanitizeForProviderGlobalFor mode recent)) := by
+  refine sanitizeForProviderGlobalFor_sound mode ?_ hcoh
+  refine UniqueCallIds.of_append_right (a := project old) ?_
+  simpa [project, List.map_append] using huniq
+
+theorem nonemptyAnnouncements_sanitizeForProviderFor (mode : Content.OrderMode)
+    (rows : List ProviderRow) :
+    NonemptyAnnouncements (project (sanitizeForProviderGlobalFor mode rows)) := by
+  unfold sanitizeForProviderGlobalFor dropUnpairedCallsP
+  rw [project_normalizeOrderFor]
+  exact nonemptyAnnouncements_filterCallsByP _ _
+
+theorem allCoherent_sanitizeForProviderFor (mode : Content.OrderMode)
+    {rows : List ProviderRow} (hcoh : AllCoherent rows) :
+    AllCoherent (sanitizeForProviderGlobalFor mode rows) := by
+  unfold sanitizeForProviderGlobalFor dropUnpairedCallsP dropOrphanedResultsP
+  exact allCoherent_normalizeOrderFor mode
+    (allCoherent_filterCallsByP _ (allCoherent_dropOrphanedFromP hcoh ∅))
+
+theorem allNonDegenerate_sanitizeForProviderFor (mode : Content.OrderMode)
+    (rows : List ProviderRow) :
+    AllNonDegenerate (sanitizeForProviderGlobalFor mode rows) := by
+  cases mode with
+  | grouped => exact allNonDegenerate_sanitizeForProvider rows
+  | nativePreserved =>
+    unfold sanitizeForProviderGlobalFor dropUnpairedCallsP dropOrphanedResultsP
+    simpa using
+      (allNonDegenerate_filterCallsByP _ (orphanStagePruned_dropOrphanedFromP rows ∅))
+
+theorem sanitizeForProviderGlobalFor_fixpoint (mode : Content.OrderMode)
+    {rows : List ProviderRow}
+    (hvalid : ProviderValid (project rows))
+    (hne : NonemptyAnnouncements (project rows))
+    (hcoh : AllCoherent rows)
+    (hnd : AllNonDegenerate rows)
+    (hordered : normalizeOrderFor mode rows = rows) :
+    sanitizeForProviderGlobalFor mode rows = rows := by
+  unfold sanitizeForProviderGlobalFor dropUnpairedCallsP dropOrphanedResultsP resolvedInP
+  rw [dropOrphanedFromP_eq_self rows hnd ∅ hvalid.activeBlockValid]
+  rw [filterCallsByP_eq_self rows hnd (resolvedIn (project rows)) ∅
+    hvalid.activeBlockValid hne hcoh (Finset.Subset.refl _)]
+  exact hordered
+
+/-- Both composed provider views are fixpoints on coherent unique-call input;
+Claude's branch preserves the native assistant order at both passes. -/
+theorem sanitizeForProviderGlobalFor_idempotent (mode : Content.OrderMode)
+    {rows : List ProviderRow}
+    (huniq : UniqueCallIds (project rows)) (hcoh : AllCoherent rows) :
+    sanitizeForProviderGlobalFor mode (sanitizeForProviderGlobalFor mode rows) =
+      sanitizeForProviderGlobalFor mode rows := by
+  refine sanitizeForProviderGlobalFor_fixpoint mode
+    (sanitizeForProviderGlobalFor_sound mode huniq hcoh)
+    (nonemptyAnnouncements_sanitizeForProviderFor mode rows)
+    (allCoherent_sanitizeForProviderFor mode hcoh)
+    (allNonDegenerate_sanitizeForProviderFor mode rows) ?_
+  unfold sanitizeForProviderGlobalFor
+  exact normalizeOrderFor_idempotent mode _
 
 /-! ## Refinement: how this relates to the row-only `sanitizeGlobal`
 

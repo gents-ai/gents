@@ -326,7 +326,7 @@ async fn aggregate_budget_charges_tool_turn_before_clamping_later_dispatch() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the tool"),
+        TaggedMessage::unassociated(Message::user("use the tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         loop_config,
@@ -374,7 +374,9 @@ async fn nested_compaction_charges_the_same_request_budget() {
             )
             .await?;
             Ok(TurnCompactionOutcome::Reduced {
-                messages: vec![Message::user("compacted prompt")],
+                messages: vec![TaggedMessage::unassociated(Message::user(
+                    "compacted prompt",
+                ))],
                 reduction_key: "reduction-1".to_string(),
             })
         })
@@ -383,7 +385,7 @@ async fn nested_compaction_charges_the_same_request_budget() {
     let collected = collect_scripted_stream(run_loop_stream(
         outer_model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("x".repeat(8_000)),
+        TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -411,7 +413,9 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
     loop_config.turn_compactor = Some(Arc::new(|_| {
         Box::pin(async {
             Ok(TurnCompactionOutcome::ProviderViewRepaired {
-                messages: vec![Message::user("repaired prompt")],
+                messages: vec![TaggedMessage::unassociated(Message::user(
+                    "repaired prompt",
+                ))],
             })
         })
     }));
@@ -430,7 +434,7 @@ async fn provider_view_repair_is_not_reported_as_a_durable_compaction() {
     let collected = collect_scripted_stream(run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("x".repeat(8_000)),
+        TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -469,7 +473,7 @@ async fn per_turn_compaction_preserves_canonical_budget_exhaustion() {
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("x".repeat(8_000)),
+        TaggedMessage::unassociated(Message::user("x".repeat(8_000))),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -511,7 +515,7 @@ async fn aggregate_budget_charges_retracted_structured_output_attempt() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("return json"),
+        TaggedMessage::unassociated(Message::user("return json")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -539,7 +543,7 @@ async fn exact_aggregate_exhaustion_allows_a_valid_terminal_response() {
     let collected = collect_scripted_stream(run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("finish"),
+        TaggedMessage::unassociated(Message::user("finish")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -563,7 +567,7 @@ async fn exact_aggregate_exhaustion_rejects_tool_intent_before_dispatch() {
     let collected = collect_scripted_stream(run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the tool"),
+        TaggedMessage::unassociated(Message::user("use the tool")),
         Vec::new(),
         Arc::new(vec![Box::new(CountingTool {
             name: "echo".to_string(),
@@ -599,7 +603,7 @@ async fn aggregate_budget_fails_closed_on_missing_or_zero_usage() {
         let collected = collect_scripted_stream(run_loop_stream(
             model,
             None::<crate::hook::DefraSessionHook>,
-            Message::user("finish"),
+            TaggedMessage::unassociated(Message::user("finish")),
             Vec::new(),
             Arc::new(Vec::new()),
             loop_config,
@@ -630,7 +634,7 @@ async fn aggregate_budget_fails_closed_on_provider_reported_overrun() {
     let collected = collect_scripted_stream(run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("finish"),
+        TaggedMessage::unassociated(Message::user("finish")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -670,7 +674,7 @@ async fn completion_output_ceiling_is_clamped_to_remaining_context() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        prompt,
+        TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -711,7 +715,7 @@ async fn zero_remaining_capacity_is_not_captured_or_dispatched() {
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        prompt,
+        TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config.clone(),
@@ -787,7 +791,7 @@ async fn reduction_cannot_fit_is_typed_and_never_dispatched() {
     let stream = run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        Message::user("an indivisible current prompt"),
+        TaggedMessage::unassociated(Message::user("an indivisible current prompt")),
         Vec::new(),
         Arc::new(Vec::new()),
         loop_config,
@@ -856,8 +860,11 @@ async fn final_fit_failure_after_compaction_is_typed_and_never_dispatched() {
     let collected = collect_scripted_stream(run_loop_stream(
         model.clone(),
         None::<crate::hook::DefraSessionHook>,
-        prompt,
-        vec![Message::assistant("x".repeat(20_000))],
+        TaggedMessage::unassociated(prompt),
+        (vec![Message::assistant("x".repeat(20_000))])
+            .into_iter()
+            .map(TaggedMessage::unassociated)
+            .collect(),
         Arc::new(Vec::new()),
         loop_config,
     ))
@@ -938,9 +945,9 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
         Box::pin(async move {
             compactions.fetch_add(1, Ordering::SeqCst);
             let keep_from = request.messages.len().saturating_sub(2);
-            let mut compacted = vec![Message::user(
+            let mut compacted = vec![TaggedMessage::unassociated(Message::user(
                 "<system-reminder>compacted earlier turn</system-reminder>",
-            )];
+            ))];
             compacted.extend(request.messages.into_iter().skip(keep_from));
             Ok(TurnCompactionOutcome::Reduced {
                 messages: compacted,
@@ -949,7 +956,14 @@ async fn later_completion_turn_is_compacted_before_provider_dispatch() {
         })
     }));
 
-    let stream = run_loop_stream(model.clone(), None::<crate::hook::DefraSessionHook>, prompt, Vec::new(), tools, loop_config);
+    let stream = run_loop_stream(
+        model.clone(),
+        None::<crate::hook::DefraSessionHook>,
+        TaggedMessage::unassociated(prompt),
+        Vec::new(),
+        tools,
+        loop_config,
+    );
     let collected = collect_scripted_stream(stream).await;
 
     assert_eq!(collected.error, None);
@@ -1028,11 +1042,11 @@ async fn aggregate_budget_fails_closed_on_mid_stream_error_before_retry() {
         let collected = collect_scripted_stream(run_loop_stream(
             model.clone(),
             None::<crate::hook::DefraSessionHook>,
-            if with_tool {
+            TaggedMessage::unassociated(if with_tool {
                 Message::user("use the echo tool")
             } else {
                 Message::user("hi")
-            },
+            }),
             Vec::new(),
             Arc::new(tools),
             loop_config,
@@ -1085,7 +1099,7 @@ async fn mid_stream_failure_after_tool_budget_exhausted_fails() {
     let stream = run_loop_stream(
         model,
         None::<crate::hook::DefraSessionHook>,
-        Message::user("use the echo tool"),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(tools),
         loop_config,
