@@ -213,6 +213,8 @@ impl PendingOAuthCredentials {
 #[derive(Default)]
 pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
+    /// The single in-flight replicated-schema observation of the managed runtime.
+    pub schema_observation_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
     /// Cancels a start that is waiting outside the lifecycle lock.

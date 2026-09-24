@@ -73,11 +73,16 @@ struct AdminPinRow {
 }
 
 impl ClientCore {
-    /// Start observing runtime `runtime_did`; call before fetching its
-    /// `/status` so the observation is fenced to the current route.
-    pub fn begin_runtime_schema_observation(&self, runtime_did: &str) -> RuntimeSchemaObservation {
+    /// Start observing runtime `runtime_did` through its configured route at
+    /// `endpoint`; call before fetching that endpoint's `/status`. `None` when
+    /// no current route of that runtime uses `endpoint`.
+    pub fn begin_runtime_schema_observation(
+        &self,
+        runtime_did: &str,
+        endpoint: &str,
+    ) -> Option<RuntimeSchemaObservation> {
         self.sync_state
-            .begin_runtime_schema_observation(runtime_did)
+            .begin_runtime_schema_observation(runtime_did, Some(endpoint))
     }
 
     /// Compare the fetched `status` with this node's replicated collection

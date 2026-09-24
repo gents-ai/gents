@@ -330,24 +330,32 @@ impl ClientSyncStateOwner {
         });
     }
 
-    /// Capture the configured peers of `runtime_did` and a sequence number
-    /// before the runtime's `/status` is fetched. Finishing records only on
-    /// peers still in that generation and never behind a newer observation.
+    /// Capture the configured peers of `runtime_did` routed through
+    /// `endpoint`, plus a sequence number, before that endpoint's `/status`
+    /// is fetched. `None` when no current route matches, so a fetch can only
+    /// be recorded against the generation of the endpoint it came from.
+    /// Finishing records only on peers still in that generation and never
+    /// behind a newer observation.
     pub(super) fn begin_runtime_schema_observation(
         &self,
         runtime_did: &str,
-    ) -> RuntimeSchemaObservation {
-        RuntimeSchemaObservation {
+        endpoint: Option<&str>,
+    ) -> Option<RuntimeSchemaObservation> {
+        let expected = self
+            .records()
+            .into_iter()
+            .filter(|record| {
+                record.agent_did == runtime_did && record.graphql.as_deref() == endpoint
+            })
+            .collect::<Vec<_>>();
+        (!expected.is_empty()).then(|| RuntimeSchemaObservation {
             runtime_did: runtime_did.to_string(),
+            endpoint: endpoint.map(str::to_string),
             sequence: self
                 .schema_observation_sequence
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
-            expected: self
-                .records()
-                .into_iter()
-                .filter(|record| record.agent_did == runtime_did)
-                .collect(),
-        }
+            expected,
+        })
     }
 
     /// Compare the fetched `/status` with this node's replicated collection
@@ -573,8 +581,17 @@ impl ClientSyncStateOwner {
 #[derive(Debug, Clone)]
 pub struct RuntimeSchemaObservation {
     runtime_did: String,
+    endpoint: Option<String>,
     sequence: u64,
     expected: Vec<PeerRecord>,
+}
+
+impl RuntimeSchemaObservation {
+    /// The GraphQL endpoint of the bound route; its `/status` is the only
+    /// payload this observation may record.
+    pub fn endpoint(&self) -> Option<&str> {
+        self.endpoint.as_deref()
+    }
 }
 
 /// Bind `status` to `runtime_did` and compare its advertised versions.
@@ -745,7 +762,9 @@ mod tests {
         let mut updates = owner.subscribe();
         let next_release = status(&runtime.agent_did, &replicated_schema("bafy-next-release"));
 
-        let observation = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
         let error = owner
             .record_runtime_schema(&observation, &local, &next_release)
             .unwrap_err();
@@ -761,7 +780,9 @@ mod tests {
             Some(vec!["AgentSession".to_string()])
         );
 
-        let observation = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
         owner
             .record_runtime_schema(&observation, &local, &next_release)
             .unwrap_err();
@@ -770,11 +791,29 @@ mod tests {
             "same skew is not republished"
         );
 
-        let observation = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
         owner
             .record_runtime_schema(&observation, &local, &status(&runtime.agent_did, &local))
             .unwrap();
         assert!(owner.snapshot().peer_schema_skew.is_empty());
+    }
+
+    #[tokio::test]
+    async fn observation_binds_to_the_route_endpoint() {
+        let runtime = record("a");
+        let (_tempdir, owner) =
+            ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
+        assert!(owner
+            .begin_runtime_schema_observation(
+                &runtime.agent_did,
+                Some("http://other/api/v0/graphql")
+            )
+            .is_none());
+        assert!(owner
+            .begin_runtime_schema_observation("did:key:unconfigured", None)
+            .is_none());
     }
 
     #[tokio::test]
@@ -784,8 +823,12 @@ mod tests {
             ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
         let local = replicated_schema("bafy-session");
 
-        let older = owner.begin_runtime_schema_observation(&runtime.agent_did);
-        let newer = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let older = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        let newer = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
         owner
             .record_runtime_schema(&newer, &local, &status(&runtime.agent_did, &local))
             .unwrap();
@@ -805,7 +848,9 @@ mod tests {
         let (_tempdir, owner) =
             ClientSyncStateOwner::for_test(vec![runtime.clone()], vec![peer("a")]).await;
         let local = replicated_schema("bafy-session");
-        let observation = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let observation = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
 
         let error = owner
             .record_runtime_schema(
@@ -841,8 +886,12 @@ mod tests {
         let local = replicated_schema("bafy-session");
         let skewed = status(&runtime.agent_did, &replicated_schema("bafy-other"));
 
-        let first = owner.begin_runtime_schema_observation(&runtime.agent_did);
-        let in_flight = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let first = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
+        let in_flight = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
         owner
             .record_runtime_schema(&first, &local, &skewed)
             .unwrap_err();
@@ -862,7 +911,9 @@ mod tests {
             "an observation begun against the old generation is fenced"
         );
 
-        let current = owner.begin_runtime_schema_observation(&runtime.agent_did);
+        let current = owner
+            .begin_runtime_schema_observation(&runtime.agent_did, None)
+            .expect("configured route");
         owner
             .record_runtime_schema(&current, &local, &skewed)
             .unwrap_err();

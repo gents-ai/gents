@@ -741,14 +741,10 @@ async fn serve_foreground(mut args: ServeArgs) -> Result<()> {
         return Err(error);
     }
     gents::migration::ensure_all_runtime_migrations(node.clone()).await?;
-    match gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone()).await {
-        Ok(schema) => {
-            let _ = replicated_schema.set(schema);
-        }
-        Err(error) => {
-            tracing::warn!(error = %error, "failed to read replicated collection versions");
-        }
-    }
+    let schema = gents::agent::p2p_reconcile::read_client_replicated_schema(node.clone())
+        .await
+        .context("reading client route collection versions after migrations")?;
+    replicated_schema.set(schema).ok();
     let enrollment_network = crate::http::enrollment::ensure_enrollment_network(
         node.as_ref(),
         identity.as_ref(),

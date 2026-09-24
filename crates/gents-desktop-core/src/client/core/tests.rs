@@ -1148,7 +1148,9 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     core.add_local_standard_peer_for_test(runtime_did)
         .await
         .expect("configured runtime peer");
-    let observation = core.begin_runtime_schema_observation(runtime_did);
+    let observation = core
+        .begin_runtime_schema_observation(runtime_did, "http://127.0.0.1:56001/graphql")
+        .expect("configured route");
     core.finish_runtime_schema_observation(&observation, &skewed)
         .await
         .unwrap_err();
@@ -1163,7 +1165,9 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "agent_did": runtime_did,
         STATUS_REPLICATED_SCHEMA_FIELD: local,
     });
-    let observation = core.begin_runtime_schema_observation(runtime_did);
+    let observation = core
+        .begin_runtime_schema_observation(runtime_did, "http://127.0.0.1:56001/graphql")
+        .expect("configured route");
     core.finish_runtime_schema_observation(&observation, &matching)
         .await
         .expect("same collection versions are compatible");

@@ -1496,18 +1496,29 @@ async fn start_managed_runtime_pairing(
 ) {
     // A durably paired runtime skips pairing below, so its replicated schema
     // is observed on every start; a failed fetch leaves the last state.
-    let observed_core = Arc::clone(&core);
-    let observed_target = target.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(error) = observe_managed_runtime_schema(&observed_core, &observed_target).await {
-            tracing::warn!(
-                target: "gents_desktop::managed_server",
-                agent_did = %observed_target.agent_did,
-                error = %error,
-                "managed runtime replicated schema observation failed"
-            );
+    {
+        let mut managed = state.managed_server.lock().await;
+        if !managed
+            .schema_observation_task
+            .as_ref()
+            .is_some_and(|task| !task.inner().is_finished())
+        {
+            let observed_core = Arc::clone(&core);
+            let observed_target = target.clone();
+            managed.schema_observation_task = Some(tauri::async_runtime::spawn(async move {
+                if let Err(error) =
+                    observe_managed_runtime_schema(&observed_core, &observed_target).await
+                {
+                    tracing::warn!(
+                        target: "gents_desktop::managed_server",
+                        agent_did = %observed_target.agent_did,
+                        error = %error,
+                        "managed runtime replicated schema observation failed"
+                    );
+                }
+            }));
         }
-    });
+    }
 
     if core.peer_records().await.iter().any(|peer| {
         peer.agent_did == target.agent_did
@@ -1545,10 +1556,8 @@ const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
 /// Fetch the managed runtime's `/status`, retrying within
 /// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or has not yet
 /// published its replicated schema.
-async fn fetch_managed_runtime_status(
-    target: &ManagedPairingTarget,
-) -> Result<serde_json::Value, String> {
-    let mut status_url = reqwest::Url::parse(&target.graphql)
+async fn fetch_managed_runtime_status(graphql: &str) -> Result<serde_json::Value, String> {
+    let mut status_url = reqwest::Url::parse(graphql)
         .map_err(|error| format!("parsing managed runtime GraphQL URL: {error}"))?;
     status_url.set_path("/status");
     status_url.set_query(None);
@@ -1574,8 +1583,18 @@ async fn observe_managed_runtime_schema(
     core: &ClientCore,
     target: &ManagedPairingTarget,
 ) -> Result<(), String> {
-    let observation = core.begin_runtime_schema_observation(&target.agent_did);
-    let status = fetch_managed_runtime_status(target).await?;
+    let observation = core
+        .begin_runtime_schema_observation(&target.agent_did, &target.graphql)
+        .ok_or_else(|| {
+            format!(
+                "managed runtime {} no longer routes through {}",
+                target.agent_did, target.graphql
+            )
+        })?;
+    let endpoint = observation
+        .endpoint()
+        .ok_or_else(|| "managed runtime route has no endpoint".to_string())?;
+    let status = fetch_managed_runtime_status(endpoint).await?;
     core.finish_runtime_schema_observation(&observation, &status)
         .await
         .map_err(|error| format!("{error:#}"))
@@ -1595,7 +1614,7 @@ async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
-    let status = fetch_managed_runtime_status(target)
+    let status = fetch_managed_runtime_status(&target.graphql)
         .await
         .map_err(|error| format!("loading managed runtime enrollment offer: {error}"))?;
     let enrollment = core
@@ -1667,8 +1686,14 @@ fn pairing_target(status: &ManagedServerStatus) -> Option<ManagedPairingTarget> 
 }
 
 pub(super) async fn drain_managed_runtime_pairing(state: &DesktopAppState) {
-    let task = state.managed_server.lock().await.pairing_task.take();
-    if let Some(task) = task {
+    let tasks = {
+        let mut managed = state.managed_server.lock().await;
+        [
+            managed.pairing_task.take(),
+            managed.schema_observation_task.take(),
+        ]
+    };
+    for task in tasks.into_iter().flatten() {
         if let Err(error) = task.await {
             tracing::warn!(
                 target: "gents_desktop::managed_server",
@@ -3780,10 +3805,14 @@ mod tests {
             },
         )
         .await;
-        assert!(
-            state.managed_server.lock().await.pairing_task.is_none(),
-            "a chat-ready runtime is not re-paired"
-        );
+        {
+            let managed = state.managed_server.lock().await;
+            assert!(
+                managed.pairing_task.is_none(),
+                "a chat-ready runtime is not re-paired"
+            );
+            assert!(managed.schema_observation_task.is_some());
+        }
         let health = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 if let Some(health) = project_sync_health(&updates.borrow_and_update()) {
@@ -3801,7 +3830,51 @@ mod tests {
             .as_deref()
             .is_some_and(|error| error.contains("AgentSession")));
 
+        drain_managed_runtime_pairing(&state).await;
+        assert!(state
+            .managed_server
+            .lock()
+            .await
+            .schema_observation_task
+            .is_none());
         server.task.abort();
+        core.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn managed_schema_observation_refuses_a_target_whose_route_was_replaced() {
+        let temp = tempfile::tempdir().expect("temp");
+        let agent_did = "did:key:managed-runtime";
+        let (core, route_a) = skewed_managed_runtime(&temp, agent_did).await;
+        let target_a = ManagedPairingTarget {
+            agent_name: "Managed".to_string(),
+            agent_did: agent_did.to_string(),
+            graphql: route_a.graphql(),
+        };
+        let route_b = "http://127.0.0.1:1/api/v0/graphql";
+        core.add_managed_enrollment_peer_for_test(agent_did, route_b, "/tmp/managed-home", 2)
+            .await
+            .expect("route B replaces route A");
+
+        route_a
+            .hold
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let error = observe_managed_runtime_schema(&core, &target_a)
+            .await
+            .unwrap_err();
+        assert!(error.contains("no longer routes through"), "{error}");
+        assert!(
+            core.sync_state().peer_schema_skew.is_empty(),
+            "route A's status is never recorded against route B"
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(200), route_a.received.notified())
+                .await
+                .is_err(),
+            "route A is not fetched once its route is replaced"
+        );
+
+        route_a.task.abort();
         core.shutdown().await.expect("shutdown");
     }
 
