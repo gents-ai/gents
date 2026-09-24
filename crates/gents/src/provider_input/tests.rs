@@ -418,6 +418,7 @@ fn claude_messages_projection_is_the_messages_body_regardless_of_wire() {
         assert_eq!(
             counter.project_body(&request).expect("provider body"),
             crate::claude_messages::build_messages_body("claude-sonnet-5", &request)
+                .expect("Claude body")
         );
     }
     let projection = ProviderInputCounter::new(

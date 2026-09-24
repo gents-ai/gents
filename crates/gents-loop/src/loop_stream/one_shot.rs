@@ -18,6 +18,7 @@ where
     M: CompletionModel + 'static,
     M::StreamingResponse: 'static,
 {
+    let provider_profile = config.provider_input_counter.profile();
     let stream = run_loop_stream::<M, crate::session_hook::NoopSessionHook>(
         model, None, prompt, history, tools, config,
     );
@@ -64,11 +65,13 @@ where
             LoopStreamItem::Item(item) => match item {
                 MultiTurnStreamItem::StreamAssistantItem(content) => match content {
                     StreamedAssistantContent::Text(text) => accumulator.push_text(&text.text),
-                    StreamedAssistantContent::Reasoning(reasoning) => {
-                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning))
-                    }
+                    StreamedAssistantContent::Reasoning(reasoning) => accumulator
+                        .push_provider_reasoning(
+                            provider_profile,
+                            rig_compat::from_rig_reasoning(&reasoning),
+                        )?,
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                        accumulator.push_reasoning_delta(id, &reasoning)
+                        accumulator.push_provider_reasoning_delta(provider_profile, id, &reasoning)
                     }
                     StreamedAssistantContent::ToolCall {
                         tool_call,

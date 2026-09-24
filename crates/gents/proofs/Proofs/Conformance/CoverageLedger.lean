@@ -1558,15 +1558,23 @@ def caseCoverage : List CoverageEntry :=
       "PromptAssemblyClaudeStreamCases"
       "conformance::prompt_assembly::generated_claude_stream_cases_drive_the_messages_parser")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
       "PromptAssemblyClaudeThinkingStreamCases"
-      "Modeled signed/redacted thinking events, provisional text, and sealed content are exported but not yet bound to the native Claude Messages SSE parser/accumulator.")
+      "conformance::prompt_assembly::generated_claude_thinking_stream_cases_drive_native_sse_parser"
+      "Drives the native Claude Messages SSE parser and compares cumulative provisional text and sealed signed/redacted content. The owned loop's persistence and provider continuation are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeThinkingStreamCases"
+      "conformance::prompt_assembly::generated_claude_initial_thinking_text_seals_in_native_accumulator"
+      "Drives modeled nonempty thinking-start text through the native parser and canonical accumulator, checking exact sealed content. Owned-loop persistence and provider continuation remain unbound.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "prompt_assembly_cases"
       "PromptAssemblyClaudeReplayCases"
-      "Modeled reconstructed native signed/redacted reasoning replay is exported but not yet bound to the native Claude Messages request serializer.")
+      "conformance::prompt_assembly::generated_claude_replay_cases_drive_native_messages_body"
+      "Reconstructs native assistant blocks and checks exact Claude body replay or fail-closed error, including empty text and unsupported assistant image. Actual HTTP transport and request budgeting are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "rendered_capture_cases"

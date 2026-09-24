@@ -17,6 +17,7 @@ use std::sync::{Mutex, OnceLock};
 
 use bytes::Bytes;
 use futures::StreamExt;
+use rig::completion::message::ReasoningContent;
 use rig::completion::{CompletionError, CompletionRequest};
 use rig::http_client::{
     self, HeaderValue, HttpClientExt, LazyBody, MultipartForm, Request, ReqwestClient, Response,
@@ -55,6 +56,8 @@ pub enum MessagesParseError {
     MalformedToolUse { message: String },
     #[error("fail-closed: overlapping tool_use block {id}")]
     OverlappingToolUse { id: String },
+    #[error("fail-closed: malformed thinking: {message}")]
+    MalformedThinking { message: String },
 }
 
 impl From<MessagesParseError> for CompletionError {
@@ -108,7 +111,8 @@ pub(crate) fn lock_fixtures_for_test() -> std::sync::MutexGuard<'static, ()> {
 /// [`finish`]: MessagesSseState::finish
 pub struct MessagesSseState {
     surface: HashSet<String>,
-    pending: Option<PendingTool>,
+    pending: Option<PendingBlock>,
+    last_reasoning_index: Option<u64>,
     seen_ids: HashSet<String>,
     usage: Option<rig::completion::Usage>,
     data: String,
@@ -122,6 +126,7 @@ impl MessagesSseState {
         Self {
             surface,
             pending: None,
+            last_reasoning_index: None,
             seen_ids: HashSet::new(),
             usage: None,
             data: String::new(),
@@ -161,9 +166,7 @@ impl MessagesSseState {
         mut self,
     ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
         let mut events = self.dispatch_pending_data()?;
-        if let Some(tool) = self.pending.take() {
-            events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
-        }
+        self.close_at_eof(&mut events)?;
         if !self.finished {
             self.finished = true;
             events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
@@ -193,6 +196,22 @@ impl MessagesSseState {
         self.handle_payload(&payload)
     }
 
+    fn close_at_eof(
+        &mut self,
+        events: &mut Vec<RawStreamingChoice<ClaudeStreamResponse>>,
+    ) -> Result<(), CompletionError> {
+        match self.pending.take() {
+            Some(PendingBlock::Tool(tool)) => {
+                events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
+                Ok(())
+            }
+            Some(PendingBlock::Thinking { .. } | PendingBlock::Redacted { .. }) => {
+                Err(malformed_thinking("incomplete content block"))
+            }
+            None => Ok(()),
+        }
+    }
+
     fn handle_payload(
         &mut self,
         payload: &Value,
@@ -206,32 +225,71 @@ impl MessagesSseState {
                 let Some(block) = payload.get("content_block") else {
                     return Ok(events);
                 };
-                if block.get("type").and_then(Value::as_str) != Some("tool_use") {
-                    return Ok(events);
+                match block.get("type").and_then(Value::as_str) {
+                    Some("tool_use") => {
+                        let id = block
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if self.pending.is_some() {
+                            return Err(MessagesParseError::OverlappingToolUse { id }.into());
+                        }
+                        let name = block
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let start_input = match block.get("input") {
+                            Some(Value::Object(_)) => Some(block["input"].to_string()),
+                            _ => None,
+                        };
+                        self.pending = Some(PendingBlock::Tool(PendingTool {
+                            id,
+                            name,
+                            start_input,
+                            deltas: String::new(),
+                        }));
+                    }
+                    Some("thinking" | "redacted_thinking") => {
+                        if self.pending.is_some() {
+                            return Err(malformed_thinking("overlapping content block"));
+                        }
+                        let index = reasoning_index(payload)?;
+                        if self.last_reasoning_index.is_some_and(|last| index <= last) {
+                            return Err(malformed_thinking("reused or backward content index"));
+                        }
+                        if block["type"] == "thinking" {
+                            let text = block
+                                .get("thinking")
+                                .and_then(Value::as_str)
+                                .ok_or_else(|| malformed_thinking("thinking start has no text"))?;
+                            self.pending = Some(PendingBlock::Thinking {
+                                index,
+                                text: text.to_owned(),
+                                signature: String::new(),
+                                signature_started: false,
+                            });
+                            if !text.is_empty() {
+                                events.push(RawStreamingChoice::ReasoningDelta {
+                                    id: None,
+                                    reasoning: text.to_owned(),
+                                });
+                            }
+                        } else {
+                            let data = block
+                                .get("data")
+                                .and_then(Value::as_str)
+                                .filter(|data| !data.is_empty())
+                                .ok_or_else(|| malformed_thinking("redacted block has no data"))?;
+                            self.pending = Some(PendingBlock::Redacted {
+                                index,
+                                data: data.to_owned(),
+                            });
+                        }
+                    }
+                    _ => {}
                 }
-                let id = block
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                if self.pending.is_some() {
-                    return Err(MessagesParseError::OverlappingToolUse { id }.into());
-                }
-                let name = block
-                    .get("name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let start_input = match block.get("input") {
-                    Some(Value::Object(_)) => Some(block["input"].to_string()),
-                    _ => None,
-                };
-                self.pending = Some(PendingTool {
-                    id,
-                    name,
-                    start_input,
-                    deltas: String::new(),
-                });
             }
             "content_block_delta" => {
                 let Some(delta) = payload.get("delta") else {
@@ -239,6 +297,11 @@ impl MessagesSseState {
                 };
                 match delta.get("type").and_then(Value::as_str) {
                     Some("text_delta") => {
+                        if self.pending.is_some() {
+                            return Err(malformed_thinking(
+                                "text delta inside another content block",
+                            ));
+                        }
                         if let Some(text) = delta.get("text").and_then(Value::as_str) {
                             if !text.is_empty() {
                                 events.push(RawStreamingChoice::Message(text.to_string()));
@@ -246,21 +309,105 @@ impl MessagesSseState {
                         }
                     }
                     Some("input_json_delta") => {
-                        if let (Some(tool), Some(partial)) = (
+                        if let (Some(PendingBlock::Tool(tool)), Some(partial)) = (
                             self.pending.as_mut(),
                             delta.get("partial_json").and_then(Value::as_str),
                         ) {
                             tool.deltas.push_str(partial);
+                        } else if self.pending.is_some() {
+                            return Err(malformed_thinking("tool delta inside reasoning block"));
+                        }
+                    }
+                    Some("thinking_delta") => {
+                        let index = reasoning_index(payload)?;
+                        match self.pending.as_mut() {
+                            Some(PendingBlock::Thinking {
+                                index: current,
+                                text,
+                                signature_started,
+                                ..
+                            }) if *current == index && !*signature_started => {
+                                let fragment =
+                                    delta.get("thinking").and_then(Value::as_str).ok_or_else(
+                                        || malformed_thinking("thinking delta has no text"),
+                                    )?;
+                                text.push_str(fragment);
+                                if !fragment.is_empty() {
+                                    events.push(RawStreamingChoice::ReasoningDelta {
+                                        id: None,
+                                        reasoning: fragment.to_owned(),
+                                    });
+                                }
+                            }
+                            Some(PendingBlock::Thinking {
+                                index: current,
+                                signature_started: true,
+                                ..
+                            }) if *current == index => {
+                                return Err(malformed_thinking("thinking after signature"));
+                            }
+                            _ => return Err(malformed_thinking("wrong thinking block or index")),
+                        }
+                    }
+                    Some("signature_delta") => {
+                        let index = reasoning_index(payload)?;
+                        match self.pending.as_mut() {
+                            Some(PendingBlock::Thinking {
+                                index: current,
+                                signature,
+                                signature_started,
+                                ..
+                            }) if *current == index => {
+                                let fragment =
+                                    delta.get("signature").and_then(Value::as_str).ok_or_else(
+                                        || malformed_thinking("signature delta has no signature"),
+                                    )?;
+                                signature.push_str(fragment);
+                                *signature_started = true;
+                            }
+                            _ => return Err(malformed_thinking("wrong signature block or index")),
                         }
                     }
                     _ => {}
                 }
             }
-            "content_block_stop" => {
-                if let Some(tool) = self.pending.take() {
+            "content_block_stop" => match self.pending.take() {
+                Some(PendingBlock::Tool(tool)) => {
                     events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
                 }
-            }
+                Some(PendingBlock::Thinking {
+                    index,
+                    text,
+                    signature,
+                    ..
+                }) => {
+                    if reasoning_index(payload)? != index {
+                        return Err(malformed_thinking("wrong thinking stop index"));
+                    }
+                    if signature.is_empty() {
+                        return Err(malformed_thinking("thinking block has no signature"));
+                    }
+                    self.last_reasoning_index = Some(index);
+                    events.push(RawStreamingChoice::Reasoning {
+                        id: None,
+                        content: ReasoningContent::Text {
+                            text,
+                            signature: Some(signature),
+                        },
+                    });
+                }
+                Some(PendingBlock::Redacted { index, data }) => {
+                    if reasoning_index(payload)? != index {
+                        return Err(malformed_thinking("wrong redacted stop index"));
+                    }
+                    self.last_reasoning_index = Some(index);
+                    events.push(RawStreamingChoice::Reasoning {
+                        id: None,
+                        content: ReasoningContent::Redacted { data },
+                    });
+                }
+                None => {}
+            },
             "message_delta" => {
                 if let Some(value) = payload.get("usage") {
                     self.usage = Some(usage_from_sse(value));
@@ -269,9 +416,7 @@ impl MessagesSseState {
             "message_stop" => {
                 // A malformed stream may end without `content_block_stop`;
                 // the open block still precedes the final response.
-                if let Some(tool) = self.pending.take() {
-                    events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
-                }
+                self.close_at_eof(&mut events)?;
                 if !self.finished {
                     self.finished = true;
                     events.push(RawStreamingChoice::FinalResponse(ClaudeStreamResponse {
@@ -307,6 +452,34 @@ pub fn parse_messages_sse(
     }
     events.extend(state.finish()?);
     Ok(events)
+}
+
+enum PendingBlock {
+    Tool(PendingTool),
+    Thinking {
+        index: u64,
+        text: String,
+        signature: String,
+        signature_started: bool,
+    },
+    Redacted {
+        index: u64,
+        data: String,
+    },
+}
+
+fn malformed_thinking(message: &str) -> CompletionError {
+    MessagesParseError::MalformedThinking {
+        message: message.to_owned(),
+    }
+    .into()
+}
+
+fn reasoning_index(payload: &Value) -> Result<u64, CompletionError> {
+    payload
+        .get("index")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| malformed_thinking("missing content index"))
 }
 
 struct PendingTool {
@@ -462,7 +635,9 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
     let fixture = take_messages_sse_fixture();
     #[cfg(not(test))]
     let fixture: Option<String> = None;
-    let body = build_messages_body(model, request);
+    let body = build_messages_body(model, request).map_err(|error| {
+        CompletionError::ProviderError(format!("Claude Messages body: {error}"))
+    })?;
     let body_bytes = serde_json::to_vec(&body).map_err(|error| {
         CompletionError::ProviderError(format!("encode Claude Messages body: {error}"))
     })?;

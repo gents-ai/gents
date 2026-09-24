@@ -153,7 +153,7 @@ impl ProviderInputCounter {
                 rewrite_bytes(body, crate::provider_patches::patch_store_false)?
             }
             ProviderInputProfile::ClaudeMessages => {
-                crate::claude_messages_body::build_messages_body(&self.model, request)
+                crate::claude_messages_body::build_messages_body(&self.model, request)?
             }
         };
         Ok(body)
@@ -170,10 +170,7 @@ impl ProviderInputCounter {
     #[cfg(not(feature = "native"))]
     pub fn project_body(&self, request: &CompletionRequest) -> Result<Value> {
         if self.profile == ProviderInputProfile::ClaudeMessages {
-            return Ok(crate::claude_messages_body::build_messages_body(
-                &self.model,
-                request,
-            ));
+            return crate::claude_messages_body::build_messages_body(&self.model, request);
         }
         let mut body = serde_json::json!({
             "model": request.model.clone().unwrap_or_else(|| self.model.clone()),
