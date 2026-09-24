@@ -120,12 +120,19 @@ async fn tool_call_turn_executes_threads_result_and_completes() {
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
-        prompt,
+        TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
 
     // The tool ran, its (bounded) result was threaded/yielded, and the loop
@@ -193,7 +200,7 @@ async fn tool_does_not_execute_when_provider_stalls_before_turn_closure() {
     let stream = run_loop_stream(
         model,
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("use the echo tool then stall"),
+        TaggedMessage::unassociated(Message::user("use the echo tool then stall")),
         Vec::new(),
         Arc::new(tools),
         config(4),
@@ -236,7 +243,7 @@ async fn tool_definition_receives_prompt_rag_text() {
     let stream = run_loop_stream(
         model,
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("teach me rust"),
+        TaggedMessage::unassociated(Message::user("teach me rust")),
         Vec::new(),
         Arc::new(vec![tool]),
         config(1),
@@ -268,7 +275,7 @@ async fn toolset_is_attached_to_every_completion_request_in_the_loop() {
     let stream = run_loop_stream(
         model.clone(),
         None::<gents_loop::session_hook::NoopSessionHook>,
-        Message::user("use the echo tool"),
+        TaggedMessage::unassociated(Message::user("use the echo tool")),
         Vec::new(),
         Arc::new(vec![echo_tool()]),
         config(4),
@@ -321,12 +328,19 @@ async fn oversized_tool_result_is_bounded_before_threading() {
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
-        prompt,
+        TaggedMessage::unassociated(prompt),
         Vec::new(),
         Arc::new(tools),
         owned_config(4),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
 
     let tool_results = collected.tool_results;
@@ -516,14 +530,21 @@ async fn missing_tool_args_notify_model_and_terminalize_failed() {
     let stream = run_loop_stream(
         model,
         Some(hook.clone()),
-        Message::user("post a status report"),
+        TaggedMessage::unassociated(Message::user("post a status report")),
         Vec::new(),
         Arc::new(tools),
         owned_config(4),
     );
     // The model is notified via a tool result (no error ends the stream); it sees
     // the actionable missing-field notice and answers on the next turn.
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     let tool_results = collected.tool_results;
     assert!(

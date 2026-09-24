@@ -20,7 +20,15 @@ where
 {
     let provider_profile = config.provider_input_counter.profile();
     let stream = run_loop_stream::<M, crate::session_hook::NoopSessionHook>(
-        model, None, prompt, history, tools, config,
+        model,
+        None,
+        TaggedMessage::unassociated(prompt),
+        history
+            .into_iter()
+            .map(TaggedMessage::unassociated)
+            .collect(),
+        tools,
+        config,
     );
     futures::pin_mut!(stream);
     let mut accumulator = AssistantTurnAccumulator::default();

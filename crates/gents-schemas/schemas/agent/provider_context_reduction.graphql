@@ -41,6 +41,9 @@ type ProviderContextReduction @branchable {
     pair_closed: Boolean @immutable
     # Exact sticky native provider projection activated after persistence.
     checkpoint_messages_json: String @immutable
+    # Canonical provider-source tags aligned to the exact prefix/suffix native
+    # projection. Contains no copied reasoning witness or message bytes.
+    replay_associations_json: String @immutable
     summary: String @immutable
     messages_compacted: Int @immutable
     original_tokens: Int @immutable

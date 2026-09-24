@@ -183,6 +183,8 @@ pub(crate) struct LeanCompletionRetryCase {
     pub(crate) name: String,
     pub(crate) domain: String,
     pub(crate) action: String,
+    pub(crate) failure_origin: Option<String>,
+    pub(crate) classified_failure: Option<String>,
     pub(crate) legal: bool,
     pub(crate) pre_phase: String,
     pub(crate) pre_now: i64,

@@ -34,6 +34,21 @@ pub(super) fn build_session_context_view(
             row.profile_id == behavior.inference_profile_id && row.agent_did == behavior.agent_did
         })
     });
+    let selected_provider_profile = inference_profile
+        .and_then(|profile| {
+            store.inference_backends.iter().find(|backend| {
+                backend.backend_id == profile.backend_id && backend.agent_did == profile.agent_did
+            })
+        })
+        .map(|backend| {
+            gents::ProviderInputProfile::resolve(
+                backend.provider_kind,
+                gents::openai_wire::OpenAiWireApi::effective_for_provider(
+                    backend.provider_kind,
+                    backend.openai_wire_api,
+                ),
+            )
+        });
     let context = behavior
         .and_then(|behavior| behavior.context_id.as_deref().map(|id| (behavior, id)))
         .and_then(|(behavior, context_id)| {
@@ -120,7 +135,15 @@ pub(super) fn build_session_context_view(
         })
         .map(|(_, message)| message)
         .collect::<Vec<_>>();
-    let (active_provider_messages, _) = gents::compaction::provider_view(provider_input);
+    // A partial desktop store may not contain the backend yet. In that case
+    // retain the established grouped *display* projection for this coarse
+    // meter, never as an inferred provider/admission choice. The two order
+    // modes only permute blocks within assistant rows, so counts and JSON-byte
+    // estimates are invariant; once configured, use the actual source profile.
+    let display_profile =
+        selected_provider_profile.unwrap_or(gents::ProviderInputProfile::OpenAiChatCompletions);
+    let (active_provider_messages, _) =
+        gents::compaction::provider_view(display_profile, provider_input);
     let summaries = compaction_rows
         .iter()
         .filter_map(|row| row.summary.clone())
@@ -210,6 +233,101 @@ pub(super) fn build_session_context_from_stores(
         durable_message_count,
         transcript_totals_exact && durable_message_count == observed_header_count,
     )
+}
+
+#[cfg(test)]
+mod order_profile_tests {
+    use super::*;
+    use gents_desktop_core::client::ClientStoreRows;
+    use gents_protocol::message::{AssistantContent, Reasoning, ReasoningContent};
+
+    #[test]
+    fn partial_store_display_meter_matches_configured_grouped_and_native_order() {
+        let behavior = serde_json::from_value(serde_json::json!({
+            "behavior_id": "behavior", "agent_did": "did:test:meter",
+            "inference_profile_id": "profile"
+        }))
+        .expect("behavior");
+        let profile = serde_json::from_value(serde_json::json!({
+            "profile_id": "profile", "agent_did": "did:test:meter",
+            "backend_id": "backend", "model_name": "model"
+        }))
+        .expect("profile");
+        let base = ClientStoreRows {
+            behaviors: vec![behavior],
+            inference_profiles: vec![profile],
+            ..ClientStoreRows::default()
+        };
+        let messages = vec![
+            (
+                Some(1),
+                Message::Assistant {
+                    id: Some("assistant".into()),
+                    content: vec![
+                        AssistantContent::Reasoning(Reasoning {
+                            id: Some("thinking".into()),
+                            content: vec![ReasoningContent::Text {
+                                text: "native first".into(),
+                                signature: Some("signed".into()),
+                            }],
+                        }),
+                        AssistantContent::text("text after thinking"),
+                    ],
+                },
+            ),
+            (Some(2), Message::user("follow up")),
+        ];
+        let context = |rows: ClientStoreRows| {
+            let store = ClientStore::from_rows(rows);
+            build_session_context_view(
+                &store,
+                &store,
+                Some("did:test:meter"),
+                Some("behavior"),
+                "session",
+                messages.clone(),
+                messages.len(),
+                true,
+            )
+        };
+        let partial = context(base.clone());
+        let backend = |provider_kind: &str| {
+            serde_json::from_value(serde_json::json!({
+                "backend_id": "backend", "agent_did": "did:test:meter",
+                "name": "Backend", "provider_kind": provider_kind,
+                "endpoint": "http://localhost:8000/v1",
+                "auth": {"kind": "unauthenticated"}
+            }))
+            .expect("backend")
+        };
+        let mut grouped_rows = base.clone();
+        grouped_rows
+            .inference_backends
+            .push(backend("OpenAiCompatible"));
+        let grouped = context(grouped_rows);
+        let mut native_rows = base;
+        native_rows
+            .inference_backends
+            .push(backend("ClaudeCliSubscription"));
+        let native = context(native_rows);
+
+        assert_eq!(
+            partial.provider_message_count,
+            grouped.provider_message_count
+        );
+        assert_eq!(
+            partial.provider_message_count,
+            native.provider_message_count
+        );
+        assert_eq!(
+            partial.estimated_conversation_tokens,
+            grouped.estimated_conversation_tokens
+        );
+        assert_eq!(
+            partial.estimated_conversation_tokens,
+            native.estimated_conversation_tokens
+        );
+    }
 }
 
 pub fn attach_last_request_context(

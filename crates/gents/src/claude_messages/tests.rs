@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::llm::message::{
-    AssistantContent, Message, ToolCall, ToolFunction, ToolResultContent, UserContent,
+    AssistantContent, Image, Message, ToolCall, ToolFunction, ToolResultContent, UserContent,
 };
 
 /// Lean `ClaudeMap.identity` and Rust `CLAUDE_CODE_IDENTITY` are the same
@@ -584,4 +584,66 @@ async fn transport_401_invalidates_the_bearer_once() {
             .any(|line| line.eq_ignore_ascii_case("authorization: Bearer access-STALE")),
         "{request}"
     );
+}
+
+/// An unsupported native replay block fails before bearer lookup or HTTP,
+/// and its deterministic request-build error cannot enter transport backoff.
+#[tokio::test]
+async fn unsupported_replay_body_is_a_permanent_request_error() {
+    let request = unsupported_replay_request();
+    let bearer = crate::claude_subscription::StaticBearer::new("unused");
+    let error = stream_messages_at(
+        "http://127.0.0.1:1",
+        "claude-sonnet-5",
+        &request,
+        HashSet::new(),
+        &bearer,
+        &ReqwestClient::new(),
+    )
+    .await
+    .err()
+    .expect("unsupported replay block");
+    assert!(matches!(error, CompletionError::RequestError(_)), "{error}");
+    let classified =
+        crate::error::classify_completion_error(&rig::agent::StreamingError::Completion(error));
+    assert!(matches!(
+        classified,
+        crate::error::InferenceError::PermanentFailure { .. }
+    ));
+}
+
+fn unsupported_replay_request() -> CompletionRequest {
+    request_from_native(
+        None,
+        vec![Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Image(Image::default())],
+        }],
+        vec![],
+    )
+}
+
+#[test]
+fn unsupported_replay_preflight_is_a_permanent_request_error() {
+    let counter = crate::provider_input::ProviderInputCounter::new(
+        crate::BackendProviderKind::ClaudeCliSubscription,
+        crate::OpenAiWireApi::ChatCompletions,
+        "claude-sonnet-5",
+    );
+    let error = gents_loop::loop_stream::completion_request_input_components(
+        &unsupported_replay_request(),
+        &counter,
+    )
+    .expect_err("unsupported replay block");
+    assert!(
+        matches!(
+            &error,
+            rig::agent::StreamingError::Completion(CompletionError::RequestError(_))
+        ),
+        "{error}"
+    );
+    assert!(matches!(
+        crate::error::classify_completion_error(&error),
+        crate::error::InferenceError::PermanentFailure { .. }
+    ));
 }

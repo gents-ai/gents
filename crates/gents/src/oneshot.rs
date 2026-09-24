@@ -4,6 +4,7 @@ use crate::llm::message::Message;
 use crate::llm::tool::ToolDyn;
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
+use gents_loop::loop_stream::TaggedMessage;
 use gents_loop::output_obligation::OutputObligationCheck;
 use rig::client::CompletionClient;
 use rig::completion::CompletionModel;
@@ -225,6 +226,14 @@ where
         .as_deref()
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc));
+    // A fresh one-shot has no restored assistant history. Accepted turns may
+    // still continue through tools, so bind their reasoning to the same
+    // physical header/close/capture owner used by the daemon.
+    config.replay = crate::provider_input::replay::owned_replay_input(
+        node.clone(),
+        request.clone(),
+        request_commit_cid.clone(),
+    );
     let output_obligation_gate =
         match crate::agent::output_obligation::OutputObligationGate::for_request(
             node.clone(),
@@ -299,7 +308,7 @@ where
         let mut stream = Box::pin(crate::agent::loop_stream::run_loop_stream(
             model,
             Some(hook.clone()),
-            Message::user(prompt),
+            TaggedMessage::unassociated(Message::user(prompt)),
             history,
             tools,
             config,

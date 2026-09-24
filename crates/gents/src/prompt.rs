@@ -25,6 +25,7 @@ use crate::llm::message::Message;
 #[cfg(test)]
 use crate::llm::message::{Text, UserContent};
 use anyhow::Result;
+use gents_loop::loop_stream::TaggedMessage;
 
 use crate::config::ResolvedBehavior;
 use crate::tool_surface::ToolSurface;
@@ -57,13 +58,25 @@ Workflow: discover_tools -> describe_tool -> call_tool
 #[derive(Debug, Clone)]
 pub struct BuiltPrompt {
     pub preamble: String,
-    pub messages: Vec<Message>,
+    pub messages: Vec<TaggedMessage>,
+}
+
+impl BuiltPrompt {
+    /// Representation-only view for consumers that need native messages.
+    /// Continuation evidence remains on `messages` until the owned provider
+    /// boundary narrows one prepared request for estimate, capture and send.
+    pub fn native_messages(&self) -> Vec<Message> {
+        self.messages
+            .iter()
+            .map(|row| row.message.clone())
+            .collect()
+    }
 }
 
 pub trait PromptBuilder: Send + Sync {
     fn build(
         &self,
-        messages: &[Message],
+        messages: &[TaggedMessage],
         compaction_summaries: &[String],
     ) -> impl std::future::Future<Output = Result<BuiltPrompt>> + Send;
 }
@@ -151,13 +164,13 @@ impl LayeredPromptBuilder {
 impl PromptBuilder for LayeredPromptBuilder {
     async fn build(
         &self,
-        messages: &[Message],
+        messages: &[TaggedMessage],
         compaction_summaries: &[String],
     ) -> Result<BuiltPrompt> {
         let mut assembled = Vec::new();
 
         if let Some(summary_message) = compaction_summary_message(compaction_summaries) {
-            assembled.push(summary_message);
+            assembled.push(TaggedMessage::unassociated(summary_message));
         }
 
         assembled.extend_from_slice(messages);

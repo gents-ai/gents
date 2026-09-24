@@ -11,6 +11,7 @@ use gents_protocol::message::{
 
 use super::summary::dedupe_paths;
 use super::FileActivity;
+use crate::provider_input::ProviderInputProfile;
 
 #[derive(Debug)]
 pub struct SourcedMessage {
@@ -254,26 +255,36 @@ pub fn drop_orphaned_tool_results_sourced(messages: Vec<SourcedMessage>) -> Vec<
     kept_messages
 }
 
-/// Normalize assistant content to the canonical provider order — text, then
-/// reasoning (and any other non-call content), then tool calls — at the
-/// provider-send boundary.
+/// Select the provider's assistant content order at the send boundary.
+/// Grouped providers require text, then reasoning (and any other non-call
+/// content), then tool calls; Claude retains the exact native block order.
 ///
-/// `AssistantTurnAccumulator::build_message` writes this order for newly
+/// `AssistantTurnAccumulator::build_message` writes grouped order for newly
 /// persisted turns, but transcripts persisted before the ordering fix can carry
-/// text *after* tool calls, which strict providers reject on reload. Like
+/// text *after* tool calls, which grouped strict providers reject on reload. Like
 /// `drop_unpaired_tool_calls`, this narrows the durable transcript to the
 /// provider format at the request-build boundary; the stored messages and the
 /// conformance-fenced reducers are untouched. Relative order within each
 /// category is preserved.
-pub fn normalize_assistant_content_order(messages: Vec<Message>) -> Vec<Message> {
-    messages_only(normalize_assistant_content_order_sourced(source_messages(
-        messages,
-    )))
+pub fn normalize_assistant_content_order(
+    profile: ProviderInputProfile,
+    messages: Vec<Message>,
+) -> Vec<Message> {
+    messages_only(normalize_assistant_content_order_sourced(
+        profile,
+        source_messages(messages),
+    ))
 }
 
 pub fn normalize_assistant_content_order_sourced(
+    profile: ProviderInputProfile,
     messages: Vec<SourcedMessage>,
 ) -> Vec<SourcedMessage> {
+    // Claude continuation replays native blocks in their original order.
+    // Signatures do not select this branch; the configured provider wire does.
+    if profile == ProviderInputProfile::ClaudeMessages {
+        return messages;
+    }
     messages
         .into_iter()
         .map(|sourced| {

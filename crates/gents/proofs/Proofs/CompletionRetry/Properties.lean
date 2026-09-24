@@ -2,6 +2,12 @@ import Proofs.CompletionRetry.Transition
 
 namespace CompletionRetry
 
+theorem local_request_build_is_permanent_without_retry (s : State)
+    (hphase : s.phase = .streaming) (error : String) (wake : Time) :
+    step? s (.observeFailure FailureOrigin.localRequestBuild.class error wake) =
+      some { s with phase := .failedPermanent } := by
+  simp [FailureOrigin.class, step?, hphase]
+
 theorem retry_schedule_requires_retracted {s s' : State}
     (h : step? s .schedule = some s')
     (_hretry : ∃ wake, s'.phase = .backingOff wake) :
