@@ -1,6 +1,16 @@
 import { pathToFileURL } from "node:url";
 import { HostEnvironment } from "./host-environment.mjs";
 
+// Rust sends i64 capacities; values beyond 2^53 - 1 would round silently.
+export function capacity(value, name, minimum) {
+  const parsed = /^\d+$/.test(value ?? "") ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < minimum)
+    throw new Error(
+      `Host eval ${name} must be a safe integer of at least ${minimum}: ${value}`,
+    );
+  return parsed;
+}
+
 // Process boundary for the Rust eval coordinator, not a model-facing tool.
 export async function control(argv, env = process.env) {
   const [operation, id, fault] = argv;
@@ -32,8 +42,8 @@ export async function control(argv, env = process.env) {
         "start requires inference endpoint, model, max concurrency and max queue depth",
       );
     const [, endpoint, model] = argv;
-    const maxConcurrent = Number(argv[3]);
-    const maxQueueDepth = Number(argv[4]);
+    const maxConcurrent = capacity(argv[3], "max concurrency", 1);
+    const maxQueueDepth = capacity(argv[4], "max queue depth", 0);
     const host = await HostEnvironment.start({
       runtime: true,
       endpoint,

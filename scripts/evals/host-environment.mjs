@@ -268,11 +268,13 @@ export class HostEnvironment {
       );
     if (!model || typeof model !== "string")
       throw new Error("Host eval model is required");
-    if (!Number.isInteger(maxConcurrent) || maxConcurrent < 1)
-      throw new Error("Host eval max concurrency must be a positive integer");
-    if (!Number.isInteger(maxQueueDepth) || maxQueueDepth < 0)
+    if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1)
       throw new Error(
-        "Host eval max queue depth must be a non-negative integer",
+        "Host eval max concurrency must be a positive safe integer",
+      );
+    if (!Number.isSafeInteger(maxQueueDepth) || maxQueueDepth < 0)
+      throw new Error(
+        "Host eval max queue depth must be a non-negative safe integer",
       );
     await this.exec([
       "gents",
