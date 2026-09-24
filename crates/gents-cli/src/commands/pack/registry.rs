@@ -78,7 +78,9 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
 
 pub(crate) async fn search(args: PackSearchArgs) -> Result<()> {
     let client = RegistryClient::new(resolve_registry_url(args.registry.as_deref()));
-    let results = client.search(args.query.as_deref().unwrap_or("")).await?;
+    let results = client
+        .search(args.query.as_deref().unwrap_or(""), args.page.max(1))
+        .await?;
     crate::print_json(&results)
 }
 

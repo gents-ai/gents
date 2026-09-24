@@ -638,6 +638,8 @@ pub(crate) struct PackBuildArgs {
 pub(crate) struct PackSearchArgs {
     #[arg(help = "Search terms; omit to list every published pack")]
     pub(crate) query: Option<String>,
+    #[arg(long, default_value_t = 1, help = "Result page, 50 packs each")]
+    pub(crate) page: u32,
     #[arg(
         long,
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"

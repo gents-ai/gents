@@ -128,12 +128,13 @@ impl RegistryClient {
         .await
     }
 
-    pub async fn search(&self, query: &str) -> Result<Value> {
+    /// One page of search results; `page` is 1-based.
+    pub async fn search(&self, query: &str, page: u32) -> Result<Value> {
         let url = self.api(&format!("/{}", self.kind.path()));
         let response = self
             .http
             .get(&url)
-            .query(&[("q", query)])
+            .query(&[("q", query), ("page", &page.to_string())])
             .send()
             .await
             .with_context(|| self.unreachable())?;
@@ -537,7 +538,7 @@ mod tests {
         let client = RegistryClient::new("http://127.0.0.1:1".to_string());
         for error in [
             client.package("acme", "demo").await.unwrap_err(),
-            client.search("demo").await.unwrap_err(),
+            client.search("demo", 1).await.unwrap_err(),
             client.download("acme", "demo", "1.0.0").await.unwrap_err(),
         ] {
             let message = format!("{error:#}");

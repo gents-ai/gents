@@ -38,10 +38,11 @@ pub const DEFAULT_NAMESPACE: &str = "gents";
 /// under a megabyte (the largest, `grok_tui_port`, carries 139 assets in
 /// under a megabyte); a plugin's compiled `.afb` is usually a WASI command
 /// module of a few hundred kilobytes, and at the top end a Python plugin's
-/// self-contained pyodide bundle runs to a few megabytes, so 64 MiB is
+/// self-contained pyodide bundle runs to a few megabytes, so 50 MiB is
 /// generous headroom, not a tight fit, and is checked before a single byte
-/// is decompressed.
-pub const MAX_PACK_BYTES: usize = 64 * 1024 * 1024;
+/// is decompressed. It is the registry's upload limit too, so a pack that
+/// builds can always be published.
+pub const MAX_PACK_BYTES: usize = 50 * 1024 * 1024;
 
 /// Hard cap on total decompressed bytes, enforced by counting bytes as they
 /// come out of the decoder rather than trusted from a header: gzip's own
