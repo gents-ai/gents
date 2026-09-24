@@ -142,7 +142,7 @@
       "generated_groups": ["canonical_payload_presentation_cases", "terminal_diagnostic_presentation_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": ["crates/gents-protocol/src/output.rs", "crates/gents/src/session/history.rs", "crates/gents/src/tool_call_lifecycle/delivery.rs", "crates/gents/src/toolset/cli_tool.rs"],
-      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs"],
+      "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_presentation.rs", "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs", "crates/gents/src/tool_call_lifecycle/delivery.rs"],
       "native_status": "pending",
       "required_cases": [
         "Bind exact terminal diagnostic ranges, literals and rendered bytes to the longest UTF-8-safe committed suffix within the supplied byte budget; invalid byte inputs are rejected at the adapter conversion boundary before the typed native helper.",

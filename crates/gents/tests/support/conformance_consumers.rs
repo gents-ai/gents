@@ -70,10 +70,10 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_reasoning_visibility_matches_live_preview",
         },
         ConformanceConsumer::RustTest {
-            id: "lean_vocab_test::support::canonical_presentation::native_adapter::generated_terminal_diagnostic_cases_bind_native_presentation",
+            id: "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_cases_bind_native_presentation",
             package: "gents",
-            source_path: "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs",
-            module_path: "lean_vocab_test::support::canonical_presentation::native_adapter",
+            source_path: "crates/gents/src/tool_call_lifecycle/delivery.rs",
+            module_path: "tool_call_lifecycle::delivery::spawned_background_tests",
             function: "generated_terminal_diagnostic_cases_bind_native_presentation",
         },
         ConformanceConsumer::RustTest {

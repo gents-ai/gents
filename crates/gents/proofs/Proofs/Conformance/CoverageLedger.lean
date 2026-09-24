@@ -1373,7 +1373,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "terminal_diagnostic_presentation_cases"
       "TerminalDiagnosticPresentationCases"
-      "lean_vocab_test::support::canonical_presentation::native_adapter::generated_terminal_diagnostic_cases_bind_native_presentation"
+      "tool_call_lifecycle::delivery::spawned_background_tests::generated_terminal_diagnostic_cases_bind_native_presentation"
       "Eight valid generated inputs bind exact native presentation ranges, literals, and rendered bytes. Two invalid UTF-8 inputs are rejected at the adapter representation boundary via String::from_utf8; the production presentation helper accepts typed strings. This pure binding does not establish capture of uncommitted process bytes, terminal CAS authority, crash recovery, or provider continuation; those remain obligations of their existing owners.")
       "canonical-output" [Surface.agentFacing, Surface.runtimeInternal]
   , tagged (followUpCoverage

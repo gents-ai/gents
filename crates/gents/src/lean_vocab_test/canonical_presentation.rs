@@ -9,6 +9,9 @@ use super::canonical_output::{
 #[path = "canonical_presentation/native_adapter.rs"]
 mod native_adapter;
 
+#[cfg(test)]
+pub(crate) use native_adapter::native_presentation;
+
 /// Payload presentation before provider-specific projection. These byte counts
 /// exclude metadata, escaping, media URLs and request structure; they are neither
 /// serialized request sizes nor token estimates. The existing provider_input

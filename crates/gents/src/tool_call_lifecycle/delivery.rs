@@ -2022,6 +2022,63 @@ mod spawned_background_tests {
         assert_eq!(retained.rendered.as_bytes(), rendered);
     }
 
+    #[test]
+    fn generated_terminal_diagnostic_cases_bind_native_presentation() {
+        use crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected;
+
+        let cases = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases();
+        assert_eq!(
+            cases.len(),
+            10,
+            "all generated terminal diagnostic boundaries must be bound"
+        );
+        for case in cases {
+            let raw = String::from_utf8(case.raw.clone());
+            let cause = String::from_utf8(case.cause.clone());
+            match &case.expected {
+                LeanTerminalDiagnosticPresentationExpected::InvalidUtf8 => {
+                    assert!(
+                        raw.is_err() || cause.is_err(),
+                        "{}: model rejected valid native UTF-8 input",
+                        case.name
+                    );
+                }
+                LeanTerminalDiagnosticPresentationExpected::UnexpectedError { error } => {
+                    panic!(
+                        "{}: model produced unexpected presentation error: {error}",
+                        case.name
+                    )
+                }
+                LeanTerminalDiagnosticPresentationExpected::Ok {
+                    presentation,
+                    rendered,
+                } => {
+                    let raw = raw.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                    let cause = cause.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                    let budget = usize::try_from(case.tail_budget)
+                        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                    let actual = terminal_diagnostic_presentation(&raw, &cause, budget)
+                        .expect("valid native diagnostic input");
+                    assert_eq!(
+                        actual,
+                        crate::lean_vocab_test::native_presentation(presentation)
+                            .expect("modeled presentation translates"),
+                        "{}: native terminal diagnostic presentation diverged",
+                        case.name
+                    );
+                    assert_eq!(
+                        render_presentation(&raw, &actual)
+                            .expect("native presentation renders")
+                            .as_bytes(),
+                        rendered,
+                        "{}: native rendered diagnostic diverged",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
+
     fn admission(deadline_at: DateTime<Utc>) -> SpawnedBackgroundToolAdmission {
         SpawnedBackgroundToolAdmission {
             tool_name: "background_worker".into(),
