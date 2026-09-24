@@ -949,7 +949,7 @@ mod tests {
                 content: Some("Fix the project.".to_string()),
                 max_total_tokens: Some(10_000),
                 lifecycle_state: Some(RequestLifecycleState::Completed),
-                backend_id: Some("d4f".to_string()),
+                backend_id: Some("backend-1".to_string()),
                 created_at: Some("2026-07-31T20:00:00Z".to_string()),
                 ..TimelineRequestRow::default()
             },

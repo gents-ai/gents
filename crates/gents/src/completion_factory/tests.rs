@@ -184,7 +184,7 @@ fn profile_none_disables_local_thinking() {
 /// a TOP-LEVEL `chat_template_kwargs` object — that is exactly where vLLM's
 /// `--reasoning-parser` reads `enable_thinking` to turn the reasoning trace on.
 /// This runs the real rig OpenAI request conversion (the same path the live
-/// `CompletionsClient` uses for the d4f backend) and asserts the flattened body,
+/// `CompletionsClient` uses for OpenAI-compatible backends) and asserts the flattened body,
 /// so it proves the kwarg reaches the server without needing a live endpoint.
 #[test]
 fn profile_reasoning_serializes_top_level_into_openai_body() {
@@ -223,9 +223,11 @@ fn profile_reasoning_serializes_top_level_into_openai_body() {
 
     // Same conversion the live OpenAI CompletionsClient performs before POSTing
     // to `/chat/completions`.
-    let openai_req =
-        rig::providers::openai::CompletionRequest::try_from(("d4f".to_string(), core_req))
-            .expect("openai request conversion should succeed");
+    let openai_req = rig::providers::openai::CompletionRequest::try_from((
+        "fixture-model".to_string(),
+        core_req,
+    ))
+    .expect("openai request conversion should succeed");
     let body = serde_json::to_value(&openai_req).expect("serializing openai request");
 
     // Flattened to the top level of the request body — NOT nested under any

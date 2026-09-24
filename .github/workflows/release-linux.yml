@@ -58,7 +58,7 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             runner_arch: ARM64
             runner_label: spark
-            # spark-1/2 serve the resident d4f vLLM model in unified memory,
+            # spark-1/2 serve the resident vLLM model in unified memory,
             # leaving only ~7-9 GB free. Disable LTO and cap parallelism so the
             # link fits. Cross-compiling on workstation-1 is the tracked
             # long-term fix (see the build-flavors epic).

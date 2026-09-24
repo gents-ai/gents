@@ -7,20 +7,19 @@ use gents::mailbox::{canonical_mailbox_write_decl, list_mailbox_items, MailboxSt
 use gents::{AgentIdentity, Collection, DatastoreToolSurfaceDocument};
 
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
-use crate::support::live_inference::{bind_d4f_backend, boot_d4f_agent, wait_for_request_terminal};
+use crate::support::live_inference::{
+    bind_target, boot_live_agent, live_target, wait_for_request_terminal,
+};
 use crate::support::test_db;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
+#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
-    assert!(
-        std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1"),
-        "set GENTS_D4F_LIVE=1 and pass --ignored to run mailbox live qualification"
-    );
+    let target = live_target();
 
     let db = test_db("mailbox-real-inference").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("mailbox-real-inference"));
-    let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
+    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
     let surface_id = "mailbox-live-surface";
     configure_behavior_tools(
         db.node.as_ref(),
@@ -82,7 +81,7 @@ async fn real_model_files_a_stamped_mailbox_item_through_granted_surface() {
         .expect("created mailbox live source id")
         .to_string();
 
-    let _agent = boot_d4f_agent(&db, Arc::clone(&identity))
+    let _agent = boot_live_agent(&db, Arc::clone(&identity))
         .await
         .expect("boot mailbox live agent");
     let request_id = "request-mailbox-live";

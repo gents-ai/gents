@@ -288,7 +288,7 @@ pub(crate) use gents_loop::compaction::merge_optional_params;
 /// (#540).
 ///
 /// vLLM's OpenAI-compatible server (with a `--reasoning-parser`, e.g.
-/// `deepseek_v4` on the d4f harvest server) only emits the chain-of-thought in
+/// `deepseek_v4` on a DeepSeek V4 Flash server) only emits the chain-of-thought in
 /// the response `message.reasoning` field when the request carries
 /// `chat_template_kwargs={"enable_thinking": true}`. Without it the server
 /// defaults thinking OFF and the `reasoning` field is empty, so our harvest

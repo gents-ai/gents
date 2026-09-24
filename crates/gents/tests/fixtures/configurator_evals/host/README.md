@@ -164,8 +164,7 @@ This verifies source provenance, not bit-for-bit reproducibility of OS packages.
 ```sh
 GENTS_LIVE_CONFIG_RUNS=1 GENTS_LIVE_CONFIG_CONCURRENCY=1 \
 GENTS_LIVE_CONFIG_REASONING_EFFORT=high \
-GENTS_D4F_ENDPOINT=http://workstation-1:8000/v1 \
-GENTS_D4F_MODEL=GLM-5.3-Flash-NVFP4 make live-host-steward-eval
+GENTS_EVAL_TARGET=workstation-1 make live-host-steward-eval
 ```
 
 The runner prints the private evidence directory. Use the existing

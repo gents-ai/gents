@@ -428,10 +428,10 @@ def promptAssemblyRepairCases : List PromptAssemblyRepairCase :=
 /-! ## Provider input and dynamic output budgets
 
 The old daemon trigger reserved the full configured output ceiling on every
-turn, which reduced D4F's effective input to 65,536 tokens. These cases are
-computed from `PromptAssembly.Budget`; the observed 118,785 + 393,216 = 512,001
-provider rejection now demonstrates why the output ceiling must be clamped to
-the remaining context on each dispatch.
+turn, which reduced the 512K DeepSeek V4 Flash deployment's effective input to
+65,536 tokens. These cases are computed from `PromptAssembly.Budget`; the
+observed 118,785 + 393,216 = 512,001 provider rejection now demonstrates why
+the output ceiling must be clamped to the remaining context on each dispatch.
 -/
 
 private structure BudgetWitness where
@@ -481,13 +481,13 @@ private def budgetWitnesses : List BudgetWitness :=
   , { name := "configured-threshold-one-over"
     , contextWindow := 10000, maxOutputTokens := 1000, thresholdBasisPoints := 7500
     , promptTokens := 7501, requestTokens := 0 }
-  , { name := "d4f-profile-safe-boundary"
+  , { name := "deepseek-v4-flash-profile-safe-boundary"
     , contextWindow := 510976, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 383232, requestTokens := 0 }
-  , { name := "d4f-profile-one-over"
+  , { name := "deepseek-v4-flash-profile-one-over"
     , contextWindow := 510976, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 383233, requestTokens := 0 }
-  , { name := "d4f-observed-provider-rejection"
+  , { name := "deepseek-v4-flash-observed-provider-rejection"
     , contextWindow := 512000, maxOutputTokens := 393216, thresholdBasisPoints := 7500
     , promptTokens := 118785, requestTokens := 0 }
   , { name := "incoming-request-crosses-boundary"

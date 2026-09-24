@@ -11,11 +11,10 @@
 //! (`Proofs/EditMatch/`) and conformance-fenced; this pins the
 //! model-facing contract end to end.
 //!
-//! Gated on `GENTS_D4F_LIVE=1` (same gate and backend as
-//! `steward_loop_live.rs`). Run with:
+//! Runs against the inference target named by `GENTS_EVAL_TARGET`:
 //!
 //! ```bash
-//! GENTS_D4F_LIVE=1 cargo test --test e2e_live \
+//! GENTS_EVAL_TARGET=workstation-1 cargo test --test e2e_live \
 //!   edit_file_live_model_lands_drifted_edit_without_write_file \
 //!   -- --ignored --test-threads=1 --nocapture
 //! ```
@@ -33,14 +32,10 @@ use gents::AgentIdentity;
 
 use crate::support::fixtures::{configure_behavior_tools, test_identity};
 use crate::support::interrupt::{create_runtime_request, wait_for_runtime_ready, BootedAgent};
-use crate::support::live_inference::{bind_d4f_backend, wait_for_request_terminal};
+use crate::support::live_inference::{bind_target, live_target, wait_for_request_terminal};
 use crate::support::test_db;
 
-fn d4f_enabled() -> bool {
-    std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1")
-}
-
-const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"d4f\"\r\n}\r\n";
+const SEED: &str = "{\r\n  \"max_turns\": 20,  \r\n  \"model_name\": \"fixture-model\"\r\n}\r\n";
 
 #[derive(Deserialize)]
 struct ToolCallRow {
@@ -80,12 +75,9 @@ async fn fetch_tool_calls(node: &EmbeddedNode, request_id: &str) -> Vec<ToolCall
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
+#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
-    assert!(
-        d4f_enabled(),
-        "set GENTS_D4F_LIVE=1 and pass --ignored to run the edit_file live qualification"
-    );
+    let target = live_target();
 
     let db = test_db("edit-file-live").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("edit-file-live"));
@@ -93,7 +85,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     std::fs::write(workspace.path().join("profile.json"), SEED).unwrap();
 
-    let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
+    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
 
     configure_behavior_tools(
         db.node.as_ref(),
@@ -165,7 +157,7 @@ async fn edit_file_live_model_lands_drifted_edit_without_write_file() {
         "CRLF endings must survive the edit:\n{text:?}"
     );
     assert!(
-        text.contains("  \"model_name\": \"d4f\""),
+        text.contains("  \"model_name\": \"fixture-model\""),
         "unrelated line untouched:\n{text}"
     );
 

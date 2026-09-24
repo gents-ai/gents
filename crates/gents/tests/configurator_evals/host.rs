@@ -5,11 +5,175 @@ use gents::{Collection, ConfigAccess};
 use serde_json::Value;
 
 use super::{reporting, stages};
+use crate::support::live_inference::InferenceTarget;
 
 pub(super) struct Host {
     id: String,
     pub access: ConfigAccess,
     evidence: PathBuf,
+    inference_endpoint: String,
+}
+
+/// The container runtime is provisioned with `gents init --inference-url`,
+/// which configures an unauthenticated OpenAI-compatible backend, and host
+/// credentials never enter the container.
+/// The host controller provisions the container runtime from these arguments
+/// only (`gents init` with this endpoint, model and capacity), so the container
+/// and the Rust runner use the same selected target.
+fn start_arguments(target: &InferenceTarget) -> Result<Vec<String>> {
+    require_host_target(target)?;
+    let backend = target.backend("did:key:host");
+    Ok(vec![
+        "start".into(),
+        target.endpoint().into(),
+        target.model().into(),
+        backend.effective_max_concurrent().to_string(),
+        backend.effective_max_queue_depth().to_string(),
+    ])
+}
+
+#[test]
+fn host_start_provisions_the_selected_target_model() {
+    let target = InferenceTarget::load("workstation-1").unwrap();
+    assert_eq!(
+        start_arguments(&target).unwrap(),
+        [
+            "start",
+            "http://workstation-1:8000/v1",
+            "GLM-5.3-Flash-NVFP4",
+            "4",
+            "100"
+        ]
+    );
+    assert_eq!(
+        start_arguments(&target).unwrap()[1..3],
+        [target.endpoint(), target.model()]
+    );
+    let openrouter = InferenceTarget::load("openrouter").unwrap();
+    assert!(start_arguments(&openrouter).is_err());
+}
+
+#[test]
+fn host_suites_refuse_target_settings_the_container_cannot_honor() {
+    let target = |backend: serde_json::Value, profile: serde_json::Value| {
+        let mut backend_doc = serde_json::json!({
+            "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "unauthenticated"}
+        });
+        backend_doc
+            .as_object_mut()
+            .unwrap()
+            .extend(backend.as_object().unwrap().clone());
+        let mut profile_doc =
+            serde_json::json!({"profile_id": "p", "backend_id": "b", "model_name": "m"});
+        profile_doc
+            .as_object_mut()
+            .unwrap()
+            .extend(profile.as_object().unwrap().clone());
+        InferenceTarget::decode(
+            "t".into(),
+            serde_json::json!({
+                "agent_principal": {},
+                "inference_backends": [backend_doc],
+                "inference_profiles": [profile_doc]
+            }),
+        )
+        .unwrap()
+    };
+    let none = serde_json::json!({});
+    assert!(start_arguments(&target(
+        serde_json::json!({"openai_wire_api": "chat_completions"}),
+        none.clone()
+    ))
+    .is_ok());
+    for (backend, profile, field) in [
+        (
+            serde_json::json!({"openai_wire_api": "responses"}),
+            none.clone(),
+            "openai_wire_api",
+        ),
+        (
+            serde_json::json!({"connect_timeout_secs": 5}),
+            none.clone(),
+            "connect_timeout_secs",
+        ),
+        (
+            serde_json::json!({"discovery_timeout_secs": 5}),
+            none.clone(),
+            "discovery_timeout_secs",
+        ),
+        (
+            none.clone(),
+            serde_json::json!({"context_window": 1000}),
+            "context_window",
+        ),
+        (
+            none.clone(),
+            serde_json::json!({"reasoning_effort": "high"}),
+            "reasoning_effort",
+        ),
+    ] {
+        let error = start_arguments(&target(backend, profile)).unwrap_err();
+        assert!(error.to_string().contains(field), "{field}: {error}");
+    }
+}
+
+pub(super) fn require_host_target(target: &InferenceTarget) -> Result<()> {
+    ensure!(
+        target.provider_kind() == gents::BackendProviderKind::OpenAiCompatible
+            && matches!(
+                target.auth(),
+                gents::document_config::BackendAuth::Unauthenticated
+            ),
+        "host suites support only unauthenticated OpenAI-compatible inference targets; {} is not one",
+        target.name
+    );
+    let backend = target.backend("did:key:host");
+    let mut unsupported = Vec::new();
+    if backend
+        .openai_wire_api
+        .is_some_and(|wire| wire != gents::OpenAiWireApi::ChatCompletions)
+    {
+        unsupported.push("openai_wire_api");
+    }
+    if backend.connect_timeout_secs.is_some() {
+        unsupported.push("connect_timeout_secs");
+    }
+    if backend.discovery_timeout_secs.is_some() {
+        unsupported.push("discovery_timeout_secs");
+    }
+    ensure!(
+        unsupported.is_empty(),
+        "host suites provision the backend with gents init; target {} sets unsupported backend field(s) {}",
+        target.name,
+        unsupported.join(", ")
+    );
+    let profile = serde_json::to_value(target.profile("did:key:host"))?;
+    let unsupported = profile
+        .as_object()
+        .context("inference profile")?
+        .keys()
+        .filter(|field| {
+            !matches!(
+                field.as_str(),
+                "agent_did"
+                    | "profile_id"
+                    | "backend_id"
+                    | "model_name"
+                    | "display_name"
+                    | "description"
+                    | "tags"
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    ensure!(
+        unsupported.is_empty(),
+        "host suites provision only the model name; target {} also sets {}",
+        target.name,
+        unsupported.join(", ")
+    );
+    Ok(())
 }
 
 async fn control(args: &[&str]) -> Result<Value> {
@@ -367,9 +531,10 @@ impl Host {
             .await
     }
 
-    pub async fn start(evidence: &Path) -> Result<Self> {
-        let receipt = control(&["start"]).await?;
-        Self::from_start_receipt(evidence, receipt).await
+    pub async fn start(evidence: &Path, target: &InferenceTarget) -> Result<Self> {
+        let arguments = start_arguments(target)?;
+        let receipt = control(&arguments.iter().map(String::as_str).collect::<Vec<_>>()).await?;
+        Self::from_start_receipt(evidence, receipt, target.endpoint().to_owned()).await
     }
 
     pub async fn fork(&self, evidence: &Path) -> Result<Self> {
@@ -381,12 +546,17 @@ impl Host {
             snapshot
                 .to_str()
                 .context("non-UTF8 candidate snapshot path")?,
+            &self.inference_endpoint,
         ])
         .await?;
-        Self::from_start_receipt(evidence, receipt).await
+        Self::from_start_receipt(evidence, receipt, self.inference_endpoint.clone()).await
     }
 
-    async fn from_start_receipt(evidence: &Path, receipt: Value) -> Result<Self> {
+    async fn from_start_receipt(
+        evidence: &Path,
+        receipt: Value,
+        inference_endpoint: String,
+    ) -> Result<Self> {
         let id = receipt["container_id"]
             .as_str()
             .context("container ID missing")?
@@ -403,6 +573,7 @@ impl Host {
             id,
             access: ConfigAccess::Graphql(endpoint),
             evidence: evidence.into(),
+            inference_endpoint,
         })
     }
 
@@ -532,10 +703,10 @@ async fn batched_configuration_snapshot_matches_individual_reads() -> Result<()>
 }
 
 #[tokio::test]
-#[ignore = "container: requires source-built gents-eval-runtime image and explicit inference settings"]
+#[ignore = "container: requires source-built gents-eval-runtime image and GENTS_EVAL_TARGET"]
 async fn isolated_host_runtime_survives_restart_without_changing_configuration() -> Result<()> {
     let root = tempfile::tempdir()?;
-    let mut host = Host::start(root.path()).await?;
+    let mut host = Host::start(root.path(), &InferenceTarget::selected()?).await?;
     let result: Result<()> = async {
         host.configure_trial().await?;
         host.wait_for_activation().await?;

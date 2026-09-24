@@ -3,6 +3,7 @@ use super::{
     reporting,
     stages::{self, CaseId},
 };
+use crate::support::live_inference::InferenceTarget;
 use anyhow::{ensure, Context, Result};
 use serde_json::Value;
 use std::path::Path;
@@ -29,7 +30,6 @@ pub(super) fn provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "host-steward",
         "host-observations-v9-effect-boundaries",
-        std::env::var("GENTS_D4F_ENDPOINT")?,
         "engineer-eval-sampling",
         1.0,
         0.95,
@@ -373,13 +373,13 @@ pub(super) async fn prepare_monitor(host: &Host, evidence: &Path) -> Result<Prep
 }
 
 pub(super) async fn run_trial(
-    model: String,
+    target: &InferenceTarget,
     trial: usize,
     artifacts: &Path,
 ) -> Result<reporting::TrialResult> {
     let evidence = artifacts.join("evidence");
     std::fs::create_dir_all(&evidence)?;
-    let mut host = Host::start(&evidence).await?;
+    let mut host = Host::start(&evidence, target).await?;
     let result: Result<()> = async {
         let PreparedMonitor {
             owner,
@@ -577,8 +577,8 @@ pub(super) async fn run_trial(
     let result = result.and(cleanup.map_err(stages::infrastructure));
     Ok(reporting::TrialResult {
         case_id: "host-steward",
-        provider: "d4f",
-        model,
+        target: target.name.clone(),
+        model: target.model().to_owned(),
         trial,
         passed: result.is_ok(),
         trial_failure_kind: result.as_ref().err().map(|error| {

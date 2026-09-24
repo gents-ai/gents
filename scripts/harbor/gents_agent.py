@@ -466,7 +466,7 @@ install -m 0755 "$binary" {shlex.quote(self._REMOTE_BINARY)}
             # downloaded text artifacts, which can corrupt numeric JSON fields.
             "GENTS_MAX_OUTPUT": self._env("GENTS_MAX_OUTPUT", "393216") or "393216",
             "GENTS_MAX_TOTAL": max_total,
-            # Keep 53,248 tokens of provider-tokenization headroom below D4F's
+            # Keep 53,248 tokens of provider-tokenization headroom below DeepSeek V4 Flash's
             # 512K server limit. Gents dynamically clamps each turn's 384K
             # output ceiling to the context remaining after the assembled input,
             # so compaction follows the 75% input threshold instead of a fixed

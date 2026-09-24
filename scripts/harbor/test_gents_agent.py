@@ -243,7 +243,7 @@ class PersistedRequestContractTest(unittest.TestCase):
     def test_run_stays_empty_until_harbor_syncs_logs_for_post_run(self) -> None:
         agent = GentsAgent.__new__(GentsAgent)
         agent.logger = logging.getLogger("test_gents_agent")
-        agent.model_name = "d4f"
+        agent.model_name = "fixture-model"
         agent.session_id = "trial-1"
         agent.extra_env = {
             "GENTS_INFERENCE_URL": "http://127.0.0.1:8000/v1",
@@ -278,7 +278,7 @@ class PersistedRequestContractTest(unittest.TestCase):
             },
             "gents-init.json": {
                 "init": {
-                    "model_name": "d4f",
+                    "model_name": "fixture-model",
                     "endpoint": "http://127.0.0.1:8000/v1",
                 }
             },
@@ -298,7 +298,7 @@ class PersistedRequestContractTest(unittest.TestCase):
         self.assertEqual(context.n_output_tokens, 100)
         gents = ((context.metadata or {}).get("gents") or {})
         self.assertEqual(gents.get("outcome"), "token_budget_exhausted")
-        self.assertEqual(gents.get("model"), "d4f")
+        self.assertEqual(gents.get("model"), "fixture-model")
         self.assertEqual(gents.get("seed"), 1)
         # ATIF durable budget observation wins over re-reading only the
         # submit-time request payload when both are present.

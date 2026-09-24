@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { control } from "./host-control.mjs";
+import { capacity, control } from "./host-control.mjs";
 
 test(
   "candidate runtime forks an offline home without changing the original host",
@@ -45,13 +45,17 @@ test(
       const graphql = await original.provision({
         endpoint,
         model: "fixture-no-inference",
+        maxConcurrent: 1,
+        maxQueueDepth: 100,
       });
       const did = await principal(graphql);
       await original.inject("api-permission");
-      const fork = await control(
-        ["fork", original.id, join(directory, "snapshot")],
-        { GENTS_D4F_ENDPOINT: endpoint },
-      );
+      const fork = await control([
+        "fork",
+        original.id,
+        join(directory, "snapshot"),
+        endpoint,
+      ]);
       candidate = new HostEnvironment(fork.container_id);
       assert.equal(fork.original_container_id, original.id);
       await assert.rejects(
@@ -92,6 +96,8 @@ test(
       await host.provision({
         endpoint: "http://127.0.0.1:8000/v1",
         model: "fixture-no-inference",
+        maxConcurrent: 1,
+        maxQueueDepth: 100,
       });
       const archive = join(directory, "runtime");
       await host.archiveRuntime(archive);
@@ -319,3 +325,54 @@ test(
     }
   },
 );
+
+test("host start takes its inference endpoint and model from the coordinator", async () => {
+  await assert.rejects(
+    control(["start"], {}),
+    /start requires inference endpoint, model/,
+  );
+  await assert.rejects(
+    control(["start", "http://127.0.0.1:8000/v1", "model"], {}),
+    /start requires inference endpoint, model, max concurrency and max queue depth/,
+  );
+});
+
+test("host capacities reject values that are not safe integers", async () => {
+  assert.equal(capacity("4", "max concurrency", 1), 4);
+  assert.equal(capacity("0", "max queue depth", 0), 0);
+  assert.equal(
+    capacity("9007199254740991", "max queue depth", 0),
+    Number.MAX_SAFE_INTEGER,
+  );
+  for (const value of [
+    "9007199254740993",
+    "9007199254740992",
+    "1e3",
+    "-1",
+    "4.5",
+    "",
+    undefined,
+  ])
+    assert.throws(
+      () => capacity(value, "max queue depth", 0),
+      /must be a safe integer/,
+    );
+  assert.throws(() => capacity("0", "max concurrency", 1), /at least 1/);
+  await assert.rejects(
+    control(
+      ["start", "http://127.0.0.1:8000/v1", "model", "9007199254740993", "100"],
+      {},
+    ),
+    /max concurrency must be a safe integer/,
+  );
+  const host = new HostEnvironment("a".repeat(64));
+  await assert.rejects(
+    host.provision({
+      endpoint: "http://127.0.0.1:8000/v1",
+      model: "model",
+      maxConcurrent: 1,
+      maxQueueDepth: 9007199254740993,
+    }),
+    /non-negative safe integer/,
+  );
+});

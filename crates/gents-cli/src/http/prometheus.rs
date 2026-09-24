@@ -1899,7 +1899,7 @@ mod tests {
                 profile_id: "profile-1".to_string(),
                 agent_did: "did:key:zAgent".to_string(),
                 backend_id: "backend-from-profile".to_string(),
-                model_name: "d4f".to_string(),
+                model_name: "fixture-model".to_string(),
             }],
             calls: vec![
                 InferenceCallMetricRow {
@@ -1947,7 +1947,7 @@ mod tests {
             agent: "observability-steward".to_string(),
             agent_did: "did:key:zAgent".to_string(),
             backend_id: "backend-1".to_string(),
-            model: "d4f".to_string(),
+            model: "fixture-model".to_string(),
             status: "completed".to_string(),
         };
         let failed_key = InferenceRequestMetricKey {
@@ -1958,7 +1958,7 @@ mod tests {
             agent: "observability-steward".to_string(),
             agent_did: "did:key:zAgent".to_string(),
             backend_id: "backend-1".to_string(),
-            model: "d4f".to_string(),
+            model: "fixture-model".to_string(),
         };
 
         assert_eq!(families.request_totals.get(&completed_key), Some(&2));

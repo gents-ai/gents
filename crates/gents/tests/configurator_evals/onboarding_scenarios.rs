@@ -41,6 +41,7 @@ const MONITOR_EDIT: &str =
     include_str!("../fixtures/configurator_evals/onboarding/monitor_mailbox_edit.md");
 
 use super::{reporting, stages};
+use crate::support::live_inference::InferenceTarget;
 use stages::CaseId;
 
 pub(super) const MONITOR_CASES: &[CaseId] = &[
@@ -55,7 +56,6 @@ pub(super) fn monitor_provenance() -> Result<reporting::RunProvenance> {
     reporting::RunProvenance::current(
         "monitor-mailbox",
         "monitor-mailbox-v5-execution-evidence",
-        std::env::var("GENTS_D4F_ENDPOINT")?,
         SAMPLING_ID,
         1.0,
         0.95,
@@ -76,7 +76,7 @@ pub(super) fn monitor_provenance() -> Result<reporting::RunProvenance> {
 }
 
 pub(super) async fn run_monitor_trial(
-    model: String,
+    target: &InferenceTarget,
     trial_number: usize,
     artifacts: &Path,
 ) -> Result<reporting::TrialResult> {
@@ -90,12 +90,12 @@ pub(super) async fn run_monitor_trial(
         let schema = gents::config_client::preview_schema_install(&access, stages::INPUT_SCHEMA).await?;
         gents::config_client::apply_schema_install(&access, stages::INPUT_SCHEMA, &schema.artifact_digest).await?;
         let identity: Arc<dyn AgentIdentity> = Arc::new(gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?);
-        let (owner, setup) = crate::support::live_inference::bind_d4f_backend_for_model(db.node.as_ref(), identity.as_ref(), &model).await;
-        install_onboarding_profiles(db.node.as_ref(), &owner, crate::support::live_inference::D4F_BACKEND_ID, &model, super::eval_reasoning_effort()?).await?;
+        let (owner, setup) = crate::support::live_inference::bind_target(db.node.as_ref(), identity.as_ref(), target).await;
+        install_onboarding_profiles(db.node.as_ref(), &owner, target, super::eval_reasoning_effort()?).await?;
         super::install_eval_workspace_root(db.node.as_ref(), &root.to_string_lossy()).await;
         super::install_setup_configurator(db.node.as_ref(), &owner, &setup, &root.to_string_lossy()).await;
         let observer = Arc::new(stages::ActivationObserver::default());
-        let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(&db, identity,
+        let (agent, runtime) = crate::support::live_inference::boot_live_agent_with_options(&db, identity,
             gents::DocumentRuntimeOptions { tool_ceiling: gents::ToolCeiling::readwrite(&root), runtime_snapshot_observer: Some(observer.clone()), ..Default::default() }).await?;
         let activation = stages::ActivationFence::new(runtime, observer, db.node.clone());
         let outcome: Result<()> = async {
@@ -171,8 +171,8 @@ pub(super) async fn run_monitor_trial(
     db.node.shutdown().await;
     let trial = reporting::TrialResult {
         case_id: "monitor-mailbox",
-        provider: "d4f",
-        model,
+        target: target.name.clone(),
+        model: target.model().to_owned(),
         trial: trial_number,
         passed: result.is_ok(),
         trial_failure_kind: result.as_ref().err().map(|e| {
@@ -622,22 +622,12 @@ fn live_prompts_have_fixed_authority_and_acceptance_markers() {
 async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
     let db = crate::support::test_db("eval-reasoning-profiles").await;
     let identity = gents::KeyIdentity::load_or_create(db.data_path().join("agent.key"), None)?;
-    let (owner, behavior) = crate::support::live_inference::bind_d4f_backend_for_model(
-        db.node.as_ref(),
-        &identity,
-        "test-model",
-    )
-    .await;
+    let target = InferenceTarget::load("workstation-1")?;
+    let (owner, behavior) =
+        crate::support::live_inference::bind_target(db.node.as_ref(), &identity, &target).await;
     let setup = gents::default_inference_profile_id_for_behavior(&behavior);
     for effort in [Some(gents::config::ReasoningEffort::High), None] {
-        install_onboarding_profiles(
-            &db.node,
-            &owner,
-            crate::support::live_inference::D4F_BACKEND_ID,
-            "test-model",
-            effort,
-        )
-        .await?;
+        install_onboarding_profiles(&db.node, &owner, &target, effort).await?;
         for id in [
             setup.as_str(),
             "onboarding-high",
@@ -648,6 +638,8 @@ async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
                 .await?
                 .context("profile missing")?;
             assert_eq!(profile.reasoning_effort, effort);
+            assert_eq!(profile.model_name, target.model());
+            assert_eq!(profile.backend_id, target.backend_id());
             assert_eq!(profile.sampling_id.as_deref(), Some(SAMPLING_ID));
         }
     }
@@ -658,12 +650,12 @@ async fn eval_reasoning_reaches_setup_and_all_monitor_profiles() -> Result<()> {
 async fn install_onboarding_profiles(
     node: &gents::defra_node::EmbeddedNode,
     agent_did: &str,
-    backend_id: &str,
-    model: &str,
+    target: &InferenceTarget,
     reasoning_effort: Option<gents::config::ReasoningEffort>,
 ) -> Result<()> {
     use gents::config_client::{DesiredStateApplyDocument, DesiredStateApplyPlan};
 
+    let reasoning_effort = reasoning_effort.or(target.profile(agent_did).reasoning_effort);
     let sampling = InferenceSampling {
         agent_did: agent_did.to_owned(),
         sampling_id: SAMPLING_ID.to_owned(),
@@ -689,15 +681,12 @@ async fn install_onboarding_profiles(
         documents.push((
             Collection::InferenceProfile,
             serde_json::to_value(InferenceProfile {
-                agent_did: agent_did.to_owned(),
                 profile_id: profile_id.into(),
-                backend_id: backend_id.to_owned(),
-                model_name: model.to_owned(),
                 display_name: Some(display_name.into()),
                 sampling_id: Some(SAMPLING_ID.into()),
                 reasoning_effort,
                 tags: vec!["onboarding-eval".into()],
-                ..Default::default()
+                ..target.profile(agent_did)
             })?,
         ));
     }
@@ -947,7 +936,7 @@ fn retained_artifact_root() -> Result<PathBuf> {
 /// progressive runner's shared report; every stage and assertion stays under
 /// this focused test's unique evidence directory.
 #[tokio::test]
-#[ignore = "live: set GENTS_LIVE_ONBOARDING=1, GENTS_D4F_ENDPOINT, and GENTS_EVAL_ROOT"]
+#[ignore = "live: set GENTS_LIVE_ONBOARDING=1, GENTS_EVAL_TARGET, and GENTS_EVAL_ROOT"]
 async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     ensure!(
         std::env::var("GENTS_LIVE_ONBOARDING").as_deref() == Ok("1"),
@@ -983,19 +972,13 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
         db.data_path().join("agent.key"),
         None,
     )?);
-    let model = super::model_name();
+    let target = InferenceTarget::selected()?;
     let (agent_did, setup_behavior_id) =
-        crate::support::live_inference::bind_d4f_backend_for_model(
-            &db.node,
-            identity.as_ref(),
-            &model,
-        )
-        .await;
+        crate::support::live_inference::bind_target(&db.node, identity.as_ref(), &target).await;
     install_onboarding_profiles(
         db.node.as_ref(),
         &agent_did,
-        crate::support::live_inference::D4F_BACKEND_ID,
-        &model,
+        &target,
         super::eval_reasoning_effort()?,
     )
     .await?;
@@ -1010,9 +993,9 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     std::fs::write(
         artifacts.join("run-settings.json"),
         serde_json::to_vec_pretty(&serde_json::json!({
-            "provider":"d4f",
-            "endpoint":std::env::var("GENTS_D4F_ENDPOINT").unwrap_or_default(),
-            "model":model,
+            "target":target.name,
+            "endpoint":target.endpoint(),
+            "model":target.model(),
             "temperature":1.0,
             "top_p":0.95,
             "requested_reasoning_effort":super::eval_reasoning_effort()?,
@@ -1025,7 +1008,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     )?;
 
     let observer = Arc::new(super::stages::ActivationObserver::default());
-    let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(
+    let (agent, runtime) = crate::support::live_inference::boot_live_agent_with_options(
         &db,
         identity.clone(),
         gents::DocumentRuntimeOptions {
@@ -1182,7 +1165,7 @@ async fn live_onboarding_behavioral_acceptance() -> Result<()> {
     let (recovered_id, before_restart) = phase_one?;
 
     let observer = Arc::new(super::stages::ActivationObserver::default());
-    let (agent, runtime) = crate::support::live_inference::boot_d4f_agent_with_options(
+    let (agent, runtime) = crate::support::live_inference::boot_live_agent_with_options(
         &db,
         identity,
         gents::DocumentRuntimeOptions {

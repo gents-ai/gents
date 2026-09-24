@@ -256,7 +256,7 @@ export class HostEnvironment {
     return docker(["exec", "--user", "1000:1000", this.id, ...argv]);
   }
 
-  async provision({ endpoint, model }) {
+  async provision({ endpoint, model, maxConcurrent, maxQueueDepth }) {
     const url = new URL(endpoint);
     if (
       !["http:", "https:"].includes(url.protocol) ||
@@ -268,6 +268,14 @@ export class HostEnvironment {
       );
     if (!model || typeof model !== "string")
       throw new Error("Host eval model is required");
+    if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent < 1)
+      throw new Error(
+        "Host eval max concurrency must be a positive safe integer",
+      );
+    if (!Number.isSafeInteger(maxQueueDepth) || maxQueueDepth < 0)
+      throw new Error(
+        "Host eval max queue depth must be a non-negative safe integer",
+      );
     await this.exec([
       "gents",
       "init",
@@ -283,7 +291,9 @@ export class HostEnvironment {
       "--model-name",
       model,
       "--max-concurrent",
-      "1",
+      String(maxConcurrent),
+      "--max-queue-depth",
+      String(maxQueueDepth),
     ]);
     return this.startRuntime();
   }

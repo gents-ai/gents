@@ -9,7 +9,7 @@ use serde::Deserialize;
 use crate::support::fixtures::test_identity;
 use crate::support::interrupt::create_runtime_request;
 use crate::support::live_inference::{
-    bind_d4f_backend, boot_d4f_agent, wait_for_assistant_answer, wait_for_request_terminal,
+    bind_target, boot_live_agent, live_target, wait_for_assistant_answer, wait_for_request_terminal,
 };
 use crate::support::{first_optional_row, test_db};
 
@@ -58,7 +58,7 @@ async fn wait_for_goal_child(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "live: set GENTS_D4F_LIVE=1 and pass --ignored"]
+#[ignore = "live: set GENTS_EVAL_TARGET and pass --ignored"]
 async fn durable_goal_continues_with_real_inference_until_model_completes() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -67,15 +67,12 @@ async fn durable_goal_continues_with_real_inference_until_model_completes() {
         )
         .with_test_writer()
         .try_init();
-    assert!(
-        std::env::var("GENTS_D4F_LIVE").as_deref() == Ok("1"),
-        "set GENTS_D4F_LIVE=1 and pass --ignored to run the durable-goal live qualification"
-    );
+    let target = live_target();
 
     let db = test_db("durable-goal-real-inference").await;
     let identity: Arc<dyn AgentIdentity> = Arc::new(test_identity("durable-goal-real-inference"));
-    let (agent_did, behavior_id) = bind_d4f_backend(db.node.as_ref(), identity.as_ref()).await;
-    let agent = boot_d4f_agent(&db, identity)
+    let (agent_did, behavior_id) = bind_target(db.node.as_ref(), identity.as_ref(), &target).await;
+    let agent = boot_live_agent(&db, identity)
         .await
         .expect("boot real-inference goal agent");
     let session_id = "session-durable-goal-real";

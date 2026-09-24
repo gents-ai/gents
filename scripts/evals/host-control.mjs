@@ -1,15 +1,27 @@
 import { pathToFileURL } from "node:url";
 import { HostEnvironment } from "./host-environment.mjs";
 
+// Rust sends i64 capacities; values beyond 2^53 - 1 would round silently.
+export function capacity(value, name, minimum) {
+  const parsed = /^\d+$/.test(value ?? "") ? Number(value) : NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < minimum)
+    throw new Error(
+      `Host eval ${name} must be a safe integer of at least ${minimum}: ${value}`,
+    );
+  return parsed;
+}
+
 // Process boundary for the Rust eval coordinator, not a model-facing tool.
 export async function control(argv, env = process.env) {
   const [operation, id, fault] = argv;
   if (operation === "fork") {
-    if (argv.length !== 3)
-      throw new Error("fork requires container and private snapshot directory");
+    if (argv.length !== 4)
+      throw new Error(
+        "fork requires container, private snapshot directory and inference endpoint",
+      );
     const original = new HostEnvironment(id);
     const candidate = await original.forkStoppedRuntime({
-      endpoint: env.GENTS_D4F_ENDPOINT,
+      endpoint: argv[3],
       directory: fault,
     });
     try {
@@ -25,17 +37,24 @@ export async function control(argv, env = process.env) {
     }
   }
   if (operation === "start") {
-    if (argv.length !== 1)
-      throw new Error("start takes no positional arguments");
+    if (argv.length !== 5)
+      throw new Error(
+        "start requires inference endpoint, model, max concurrency and max queue depth",
+      );
+    const [, endpoint, model] = argv;
+    const maxConcurrent = capacity(argv[3], "max concurrency", 1);
+    const maxQueueDepth = capacity(argv[4], "max queue depth", 0);
     const host = await HostEnvironment.start({
       runtime: true,
-      endpoint: env.GENTS_D4F_ENDPOINT,
+      endpoint,
       runtimeImage: env.GENTS_HOST_RUNTIME_IMAGE,
     });
     try {
       const graphql = await host.provision({
-        endpoint: env.GENTS_D4F_ENDPOINT,
-        model: env.GENTS_D4F_MODEL,
+        endpoint,
+        model,
+        maxConcurrent,
+        maxQueueDepth,
       });
       return {
         container_id: host.id,

@@ -599,11 +599,12 @@ fn summary_schema_contains_only_the_model_authored_contract() {
 }
 
 #[tokio::test]
-#[ignore = "hits a live OpenAI-compatible endpoint; set GENTS_TEST_INFERENCE_URL"]
+#[ignore = "hits a live OpenAI-compatible endpoint; set GENTS_TEST_INFERENCE_URL and GENTS_TEST_MODEL"]
 async fn live_compaction_uses_rig_structured_output_end_to_end() {
     let endpoint = std::env::var("GENTS_TEST_INFERENCE_URL")
         .expect("set GENTS_TEST_INFERENCE_URL, including the /v1 suffix");
-    let model_name = std::env::var("GENTS_TEST_MODEL").unwrap_or_else(|_| "d4f".to_string());
+    let model_name =
+        std::env::var("GENTS_TEST_MODEL").expect("set GENTS_TEST_MODEL to the served model ID");
     let context_window = std::env::var("GENTS_TEST_COMPACTION_CONTEXT_WINDOW")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
