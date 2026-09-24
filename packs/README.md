@@ -236,18 +236,20 @@ and backends referenced by slot bindings are never stamped.
 
 A README must explain purpose, installation, bindings/prerequisites, tool and
 workspace authority, inputs/outputs, completion/failure semantics, validation,
-and operational history. Graphs must include a Mermaid diagram. Refresh and
-check generated topology sections with:
+and operational history. Graphs must include a Mermaid diagram. Refresh a
+graph pack's generated topology section, and check a pack the way an install
+would, with:
 
 ```sh
-node scripts/check_packs.mjs --write-diagrams
-node scripts/check_packs.mjs
+gents pack graph packs/<name> --write-readme
+gents pack check packs/<name>
 ```
 
-For compiled graphs the diagram reflects capability edges. For document-driven
-scenarios it reflects declared trigger edges; document writes and callbacks
-must additionally be explained in prose. A trigger diagram is not proof of
-runtime completion behavior.
+`gents pack check` reports missing and undeclared files, configuration and
+graph errors, event-source filters the schemas reject, and a stale README
+diagram, each by name, and writes nothing. The diagram reflects compiled
+capability edges; document writes and callbacks must additionally be explained
+in prose. A diagram is not proof of runtime completion behavior.
 
 Keep concise run summaries, reviewed outputs and issue links. Never bundle
 `runs/`, node homes, credentials, build caches or raw logs. Package embedding

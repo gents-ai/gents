@@ -319,6 +319,23 @@ pub(crate) struct PackShowArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackCheckArgs {
+    #[arg(help = "Pack directories to check; defaults to the current directory")]
+    pub(crate) dirs: Vec<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackGraphArgs {
+    #[arg(help = "Graph pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Replace the README's topology diagram instead of printing it"
+    )]
+    pub(crate) write_readme: bool,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackVerifyArgs {
     #[arg(help = "A .pack file, or sha256:<hex> for a pack in the home's store")]
     pub(crate) target: String,
@@ -334,6 +351,10 @@ pub(crate) enum PackCommand {
     Show(PackShowArgs),
     /// Check a .pack file or a stored pack against its digest.
     Verify(PackVerifyArgs),
+    /// Run every validation an install would on pack directories; writes nothing.
+    Check(PackCheckArgs),
+    /// Print a graph pack's topology diagram, or write it into its README.
+    Graph(PackGraphArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
     /// Remove superseded generated asset-cache versions without run history.

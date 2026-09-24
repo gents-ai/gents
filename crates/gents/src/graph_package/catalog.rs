@@ -113,6 +113,38 @@ pub(crate) fn load_archive_graph_package_with_environment(
     )
 }
 
+/// Loads a graph pack as an install would and compiles every graph it
+/// declares for the placeholder owner `agent_did`, writing nothing. Returns
+/// the graph ids compiled.
+pub fn check_graph_pack(
+    archive: &crate::pack_archive::PackArchive,
+    agent_did: &str,
+) -> Result<Vec<String>> {
+    let options = PackInstallOptions {
+        agent_did: agent_did.to_owned(),
+    };
+    let package = load_archive_graph_package_with_environment(archive, &options, &|_| None)?;
+    anyhow::ensure!(
+        !package.config.graph_intents.is_empty(),
+        "a graph pack declares at least one graph"
+    );
+    package
+        .config
+        .graph_intents
+        .iter()
+        .map(|intent| {
+            crate::graph_pipeline::compile_graph(
+                intent,
+                &package.config.graph_capabilities,
+                agent_did,
+                &crate::graph_pipeline::CompilerPolicy::default(),
+            )
+            .with_context(|| format!("graph {} does not compile", intent.graph_id))?;
+            Ok(intent.graph_id.clone())
+        })
+        .collect()
+}
+
 fn load_package_from_assets(
     manifest: crate::pack::PackManifest,
     package_digest: String,
