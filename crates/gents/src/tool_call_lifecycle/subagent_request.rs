@@ -301,7 +301,12 @@ async fn create_subagent_request_inner(
                 .agent_did
                 .as_deref()
                 .context("parent AgentRequest is missing agent_did")?;
-            if parent.request_id != parent_request_id || parent_agent_did != agent_did {
+            let observed_depth = u32::try_from(parent.subagent_depth.unwrap_or(0))
+                .map_err(|_| anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent))?;
+            if parent.request_id != parent_request_id
+                || parent_agent_did != agent_did
+                || observed_depth != parent_subagent_depth
+            {
                 return Err(anyhow!(IllegalToolCallTransition::ParentLinkageIncoherent));
             }
         }
@@ -573,7 +578,7 @@ async fn load_parent_request_by_doc_id(
             AgentRequest(
                 filter: {{ _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 1
-            ) {{ _docID request_id agent_did }}
+            ) {{ _docID request_id agent_did subagent_depth }}
         }}"#
     );
     let response = node.execute(&query).await;

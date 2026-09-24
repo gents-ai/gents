@@ -151,6 +151,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) queue_deadline_conformance_cases: Vec<LeanQueueDeadlineConformanceCase>,
     pub(crate) recovery_sweep_cases: Vec<LeanRecoverySweepCase>,
     pub(crate) reserved_child_materialization_cases: Vec<LeanReservedChildMaterializationCase>,
+    pub(crate) local_parent_depth_cases: Vec<LeanLocalParentDepthCase>,
     // `recovery_equivalence_cases` was deleted from the generated contract:
     // the synthetic recovery-equivalence fixtures are gone and the actual
     // recovery sweep (`recovery_sweep_cases`) is the remaining owner.
@@ -1277,6 +1278,10 @@ pub(crate) fn lean_recovery_sweep_cases() -> &'static [LeanRecoverySweepCase] {
 pub(crate) fn lean_reserved_child_materialization_cases(
 ) -> &'static [LeanReservedChildMaterializationCase] {
     &lean_contract_snapshot().reserved_child_materialization_cases
+}
+
+pub(crate) fn lean_local_parent_depth_cases() -> &'static [LeanLocalParentDepthCase] {
+    &lean_contract_snapshot().local_parent_depth_cases
 }
 
 pub(crate) fn lean_recovery_sweep_case(name: &str) -> &'static LeanRecoverySweepCase {

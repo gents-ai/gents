@@ -93,6 +93,23 @@ def reservedChildCaseJson (w : EventDelivery.SubagentSource.ReservedChildCase) :
     ++ "\"expected_decision\":" ++ jsonString (reservedChildDecisionString actual.1) ++ ","
     ++ "\"expected_count\":" ++ toString actual.2.length ++ "}"
 
+def localParentDepthCaseJson
+    (value : EventDelivery.SubagentSource.LocalParentDepthCase) : String :=
+  let observed := match value.storedParentDepth with
+    | none => "null"
+    | some depth => toString depth
+  let expected := match EventDelivery.SubagentSource.admitLocalChildDepth
+      value.suppliedParentDepth value.storedParentDepth with
+    | .ok child => "{\"kind\":\"admitted\",\"child_depth\":" ++ toString child ++ "}"
+    | .error .depthExceeded =>
+        "{\"kind\":\"rejected\",\"reason\":\"depth_exceeded\"}"
+    | .error .parentLinkageIncoherent =>
+        "{\"kind\":\"rejected\",\"reason\":\"parent_linkage_incoherent\"}"
+  "{\"name\":" ++ jsonString value.name ++
+    ",\"supplied_parent_depth\":" ++ toString value.suppliedParentDepth ++
+    ",\"stored_parent_depth\":" ++ observed ++
+    ",\"expected\":" ++ expected ++ "}"
+
 open Conformance.ContractCases
 
 def snapshotJson : String :=
@@ -297,6 +314,9 @@ def snapshotJson : String :=
     ++ "\"reserved_child_materialization_cases\":"
       ++ jsonArray
         (EventDelivery.SubagentSource.reservedChildCases.map reservedChildCaseJson) ++ ","
+    ++ "\"local_parent_depth_cases\":"
+      ++ jsonArray
+        (EventDelivery.SubagentSource.localParentDepthCases.map localParentDepthCaseJson) ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","

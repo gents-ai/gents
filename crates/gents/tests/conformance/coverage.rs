@@ -896,6 +896,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ReservedChildMaterializationCases".to_string(),
         ));
     }
+    if !snapshot.local_parent_depth_cases.is_empty() {
+        emitted.insert((
+            "local_parent_depth_cases".to_string(),
+            "LocalParentDepthCases".to_string(),
+        ));
+    }
     if !lean_restart_disposition_cases().is_empty() {
         emitted.insert((
             "restart_disposition_cases".to_string(),

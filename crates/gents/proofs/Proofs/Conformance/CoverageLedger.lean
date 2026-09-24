@@ -1060,8 +1060,14 @@ def caseCoverage : List CoverageEntry :=
   , tagged (consumerWithFollowUp
       "reserved_child_materialization_cases"
       "ReservedChildMaterializationCases"
-      "tool_call_lifecycle::admission_fixture::tests::generated_reserved_child_cases_drive_actual_transaction_owner"
+      "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_reserved_child_cases_drive_actual_transaction_owner"
       "The native consumer drives reserved-child create, replay and conflict through the transaction owner and checks physical rows. It does not prove arbitrary parent authorization or host-independent child execution.")
+      "tool-call" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "local_parent_depth_cases"
+      "LocalParentDepthCases"
+      "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_local_child_parent_depth_cases_drive_owner"
+      "The native consumer compares supplied local-child depth with a freshly loaded parent row through the creation owner. Present valid depths use canonical signed parent chains; missing or malformed depths are imported-row observations, not reachable publication witnesses (publication requires stored depth). This binds only observed local parent depth and creation result, not child execution admission, independent signed ancestry, remote bridge trust, or document ACP.")
       "tool-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
@@ -1212,7 +1218,7 @@ def caseCoverage : List CoverageEntry :=
       "delegated_child_resolution_cases"
       "DelegatedChildResolutionCases"
       "trigger_engine::subagent_source::delegated_child_tests::generated_delegated_child_cases_bind_host_receiver"
-      "Three generated cases bind the composed receive/reservation owner's depth-two inherit, depth-three rejection and read-only bind outcomes to the real SubagentSource receiver with no local parent request. Copied accepted bridge fields and peer membership are fixture inputs; this test does not establish publication provenance, P2P delivery or document ACP. The composed theorem binds parentToolDoc to the accepted call; other HostChildFacts identities and admission remain supplied observations, not independently validated parent provenance. LocalChild validation of supplied parent_subagent_depth against its local parent row remains unbound. Separate publication bindings recheck signed parent workspace provenance. Host workspace observations and argument decoding remain native premises. Provision and changed-seal cases are not covered by this receiver test; separate resolver tests cover two provision parent-seal drift cases, not full host materialization. No atomicity is claimed between workspace observation and child creation.")
+      "Three generated cases bind the composed receive/reservation owner's depth-two inherit, depth-three rejection and read-only bind outcomes to the real SubagentSource receiver with no local parent request. Copied accepted bridge fields and peer membership are fixture inputs; this test does not establish publication provenance, P2P delivery or document ACP. The composed theorem binds parentToolDoc to the accepted call; other HostChildFacts identities and admission remain supplied observations, not independently validated parent provenance. LocalChild stored-depth validation is accounted for separately by local_parent_depth_cases, not this remote receiver test. Separate publication bindings recheck signed parent workspace provenance. Host workspace observations and argument decoding remain native premises. Provision and changed-seal cases are not covered by this receiver test; separate resolver tests cover two provision parent-seal drift cases, not full host materialization. No atomicity is claimed between workspace observation and child creation.")
       "background-tools" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "descendant_graph_cases"

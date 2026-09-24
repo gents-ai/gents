@@ -322,6 +322,22 @@ pub(crate) struct LeanReservedChildMaterializationCase {
     pub(crate) expected_count: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanLocalParentDepthExpected {
+    Admitted { child_depth: u32 },
+    Rejected { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanLocalParentDepthCase {
+    pub(crate) name: String,
+    pub(crate) supplied_parent_depth: u32,
+    pub(crate) stored_parent_depth: Option<i64>,
+    pub(crate) expected: LeanLocalParentDepthExpected,
+}
+
 /// Startup restart-disposition witness (#937): the shape of one running
 /// `AgentToolCall` row and what `ToolCallLifecycle::recover_all` must do with
 /// it — terminalize with a pinned cause/terminal state (plus, for the native

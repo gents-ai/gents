@@ -525,11 +525,18 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_modeled_closure_input_selects_exact_native_manifest",
         },
         ConformanceConsumer::RustTest {
-            id: "tool_call_lifecycle::admission_fixture::tests::generated_reserved_child_cases_drive_actual_transaction_owner",
+            id: "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_reserved_child_cases_drive_actual_transaction_owner",
             package: "gents",
             source_path: "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
-            module_path: "tool_call_lifecycle::admission_fixture::tests",
+            module_path: "tool_call_lifecycle::admission_fixture::lifecycle_tests",
             function: "generated_reserved_child_cases_drive_actual_transaction_owner",
+        },
+        ConformanceConsumer::RustTest {
+            id: "tool_call_lifecycle::admission_fixture::lifecycle_tests::generated_local_child_parent_depth_cases_drive_owner",
+            package: "gents",
+            source_path: "crates/gents/src/tool_call_lifecycle/admission_fixture.rs",
+            module_path: "tool_call_lifecycle::admission_fixture::lifecycle_tests",
+            function: "generated_local_child_parent_depth_cases_drive_owner",
         },
         ConformanceConsumer::RustTest {
             id: "trigger_engine::subagent_source::delegated_child_tests::generated_delegated_child_cases_bind_host_receiver",

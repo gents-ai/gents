@@ -32,6 +32,97 @@ def ensureReservedChild (stored : List ReservedChildBinding)
       if existing == candidate then (.replayed, stored) else (.conflict, stored)
   | _ => (.conflict, stored)
 
+/-- A local child has a readable parent request row. The native request
+projection treats absent depth as root depth zero and checks that a stored
+signed value fits `u32`. This does not apply to trusted remote children, whose
+immutable depth is copied in the addressed delegated call. -/
+def normalizedLocalParentDepth : Option Int → Option Nat
+  | none => some 0
+  | some depth =>
+      if depth < 0 ∨ depth ≥ 4294967296 then none else some depth.toNat
+
+inductive LocalParentDepthError where
+  | depthExceeded
+  | parentLinkageIncoherent
+  deriving DecidableEq, Repr
+
+/-- The supplied limit check precedes the local parent-row read/coherence
+check, matching the native creation owner. All other parent identities and
+tool linkage remain separate observations of that owner. -/
+def admitLocalChildDepth (supplied : Nat) (stored : Option Int) :
+    Except LocalParentDepthError Nat :=
+  if supplied ≥ Subagent.maxSubagentDepth then .error .depthExceeded else
+  match normalizedLocalParentDepth stored with
+  | some observed =>
+      if observed = supplied then .ok (supplied + 1)
+      else .error .parentLinkageIncoherent
+  | none => .error .parentLinkageIncoherent
+
+theorem admitted_local_child_depth_matches_observed_parent
+    (supplied child : Nat) (stored : Option Int)
+    (h : admitLocalChildDepth supplied stored = .ok child) :
+    normalizedLocalParentDepth stored = some supplied ∧
+      child = supplied + 1 ∧ child ≤ Subagent.maxSubagentDepth := by
+  by_cases hcap : supplied ≥ Subagent.maxSubagentDepth
+  · simp [admitLocalChildDepth, hcap] at h
+  · have hlt : supplied < Subagent.maxSubagentDepth := by omega
+    cases hn : normalizedLocalParentDepth stored with
+    | none => simp [admitLocalChildDepth, hcap, hn] at h
+    | some observed =>
+        by_cases heq : observed = supplied
+        · simp [admitLocalChildDepth, hcap, hn, heq] at h
+          cases h
+          exact ⟨by simpa [heq] using hn, rfl, by omega⟩
+        · simp [admitLocalChildDepth, hcap, hn, heq] at h
+
+theorem missing_local_parent_depth_is_root :
+    admitLocalChildDepth 0 none = .ok 1 := rfl
+
+theorem local_depth_ceiling_precedes_parent_row
+    (supplied : Nat) (stored : Option Int)
+    (h : supplied ≥ Subagent.maxSubagentDepth) :
+    admitLocalChildDepth supplied stored = .error .depthExceeded := by
+  simp [admitLocalChildDepth, h]
+
+theorem negative_local_parent_depth_is_incoherent
+    (supplied : Nat) (stored : Int)
+    (hcap : supplied < Subagent.maxSubagentDepth) (hneg : stored < 0) :
+    admitLocalChildDepth supplied (some stored) = .error .parentLinkageIncoherent := by
+  have hnot : ¬ supplied ≥ Subagent.maxSubagentDepth := by omega
+  simp [admitLocalChildDepth, hnot, normalizedLocalParentDepth, hneg]
+
+theorem out_of_range_local_parent_depth_is_incoherent
+    (supplied : Nat) (stored : Int)
+    (hcap : supplied < Subagent.maxSubagentDepth) (hlarge : stored ≥ 4294967296) :
+    admitLocalChildDepth supplied (some stored) = .error .parentLinkageIncoherent := by
+  have hnot : ¬ supplied ≥ Subagent.maxSubagentDepth := by omega
+  simp [admitLocalChildDepth, hnot, normalizedLocalParentDepth, hlarge]
+
+structure LocalParentDepthCase where
+  name : String
+  suppliedParentDepth : Nat
+  storedParentDepth : Option Int
+  deriving Repr
+
+/-- Input cases include missing-depth normalization on an existing parent row,
+the exact local ceiling,
+and malformed or divergent persisted parent observations. Expectations are
+always computed by `admitLocalChildDepth` at export time. -/
+def localParentDepthCases : List LocalParentDepthCase :=
+  [ ⟨"missing_root_depth_admitted", 0, none⟩
+  , ⟨"stored_root_depth_admitted", 0, some 0⟩
+  , ⟨"stored_depth_one_admitted", 1, some 1⟩
+  , ⟨"stored_depth_two_at_child_bound", 2, some 2⟩
+  , ⟨"supplied_depth_three_rejected", 3, some 3⟩
+  , ⟨"ceiling_precedes_negative_parent", 3, some (-1)⟩
+  , ⟨"supplied_four_precedes_mismatch", 4, some 0⟩
+  , ⟨"stored_root_disagrees_with_supplied_one", 1, some 0⟩
+  , ⟨"stored_two_disagrees_with_supplied_one", 1, some 2⟩
+  , ⟨"missing_root_disagrees_with_supplied_one", 1, none⟩
+  , ⟨"negative_stored_parent_depth", 0, some (-1)⟩
+  , ⟨"i64_max_stored_parent_depth", 1, some 9223372036854775807⟩
+  ]
+
 /-- Physical identities are observations of the native SubagentSource owner.
 The payload and child choice come from fallible SpawnArgs parsing followed by
 the native host's workspace/placement/principal observations. The model does
