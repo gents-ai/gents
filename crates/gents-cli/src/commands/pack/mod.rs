@@ -80,6 +80,7 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Logout(args) => account::logout(args),
         PackCommand::Whoami(args) => account::whoami(args).await,
         PackCommand::Yank(args) => account::yank(args).await,
+        PackCommand::Owner(args) => account::owner(args).await,
         PackCommand::Publish(args) => registry::publish(args).await,
         PackCommand::Fetch(args) => registry::fetch(args).await,
     }

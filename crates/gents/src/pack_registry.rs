@@ -214,6 +214,27 @@ impl RegistryClient {
         Self::json_or_error(response, &url).await
     }
 
+    /// Gives a package to the account `username`; the caller must own it or
+    /// be an admin.
+    pub async fn transfer_owner(
+        &self,
+        token: &str,
+        namespace: &str,
+        name: &str,
+        username: &str,
+    ) -> Result<Value> {
+        let url = self.base_api(&format!("/packages/{namespace}/{name}/owner"));
+        let response = self
+            .http
+            .post(&url)
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "username": username }))
+            .send()
+            .await
+            .with_context(|| self.unreachable())?;
+        Self::json_or_error(response, &url).await
+    }
+
     /// Yanks a version, or restores it with `undo`.
     pub async fn yank(
         &self,

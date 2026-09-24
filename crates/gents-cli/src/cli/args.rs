@@ -581,6 +581,8 @@ pub(crate) enum PackCommand {
     Whoami(PackAccountArgs),
     /// Yank a published version so new installs skip it, or restore it.
     Yank(PackYankArgs),
+    /// Show a package's owner, or give it to another account.
+    Owner(PackOwnerArgs),
     /// Publish a built `.pack` to the pack registry.
     Publish(PackPublishArgs),
     /// Download a pack's `.pack` from the registry without installing it.
@@ -706,6 +708,30 @@ pub(crate) struct PackInfoArgs {
         help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
     )]
     pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackOwnerArgs {
+    #[arg(help = "The package, as name or namespace/name")]
+    pub(crate) package: String,
+    #[arg(
+        long,
+        value_name = "USERNAME",
+        help = "Give the package to this account"
+    )]
+    pub(crate) transfer: Option<String>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+    #[arg(
+        long,
+        help = "Registry token. Defaults to GENTS_REGISTRY_TOKEN, then your gents pack login"
+    )]
+    pub(crate) token: Option<String>,
+    #[arg(long, help = "Home holding your saved registry login")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Args)]

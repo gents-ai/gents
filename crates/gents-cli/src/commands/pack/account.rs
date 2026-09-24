@@ -13,7 +13,7 @@ use gents::pack_registry::credentials;
 use serde_json::json;
 
 use super::registry::{resolve_registry_token, resolve_registry_url, RegistryClient};
-use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackYankArgs};
+use crate::cli::{PackAccountArgs, PackInfoArgs, PackLoginArgs, PackOwnerArgs, PackYankArgs};
 
 /// The token a write to `registry` uses.
 pub(crate) fn resolve_publish_token(
@@ -97,4 +97,24 @@ pub(crate) async fn yank(args: PackYankArgs) -> Result<()> {
         .yank(&token, namespace, name, version, args.undo)
         .await?;
     crate::print_json(&response)
+}
+
+pub(crate) async fn owner(args: PackOwnerArgs) -> Result<()> {
+    let (namespace, name) = super::split_namespace(&args.package);
+    let registry = resolve_registry_url(args.registry.as_deref());
+    let client = RegistryClient::new(registry.clone());
+    let Some(username) = args.transfer else {
+        let package = client.package(namespace, name).await?;
+        return crate::print_json(&json!({
+            "package": format!("{namespace}/{name}"),
+            "owner": package["owner"],
+        }));
+    };
+    let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let token = resolve_publish_token(args.token.as_deref(), &registry, &home)?;
+    crate::print_json(
+        &client
+            .transfer_owner(&token, namespace, name, &username)
+            .await?,
+    )
 }
