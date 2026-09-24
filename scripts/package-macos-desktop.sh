@@ -82,7 +82,6 @@ NODE
 dist="$RUNNER_TEMP/gents-desktop-dist"
 mkdir -p "$dist"
 cp "${images[0]}" "$dist/gents-desktop_${RELEASE_VERSION}_aarch64.dmg"
-cp docs/macos-desktop-install.md "$dist/INSTALL-macos-desktop.md"
 (
   cd "$dist"
   shasum -a 256 "gents-desktop_${RELEASE_VERSION}_aarch64.dmg" > SHA256SUMS-desktop-macos.txt

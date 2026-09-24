@@ -102,7 +102,7 @@ jobs:
               --notes "Gents release with Linux x86_64 desktop installers." \
               || gh release view "$GITHUB_REF_NAME" >/dev/null
           fi
-          # Installers and their checksum. The install note stays in the repo docs.
+          # Installers and their checksum. Install steps live in the README.
           gh release upload "$GITHUB_REF_NAME" \
             dist/gents-desktop_*.deb \
             dist/gents-desktop_*.AppImage \
