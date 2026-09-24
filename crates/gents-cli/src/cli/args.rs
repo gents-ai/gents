@@ -318,6 +318,61 @@ pub(crate) struct PackShowArgs {
     pub(crate) registry: Option<String>,
 }
 
+/// What `gents pack new` and `init` start a pack from.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum PackTemplate {
+    /// A documents pack: one behavior, context, tools and task.
+    Minimal,
+    /// The minimal pack plus a job schema, an event source and a trigger.
+    Automation,
+    /// A graph pack: one stage from a job entry to one result.
+    Graph,
+    /// A plugins pack with one plugin, ready to build.
+    PluginTool,
+    /// A pack of files with no configuration.
+    Assets,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PackKindArg {
+    Documents,
+    Graph,
+    Assets,
+    Plugins,
+}
+
+#[derive(clap::Args, Clone, Debug)]
+pub(crate) struct PackScaffoldArgs {
+    #[arg(
+        long,
+        value_enum,
+        help = "Pack kind; picks the template when --template is absent"
+    )]
+    pub(crate) kind: Option<PackKindArg>,
+    #[arg(
+        long,
+        default_value = "gents",
+        help = "Registry namespace the pack publishes under"
+    )]
+    pub(crate) namespace: String,
+    #[arg(long, value_enum)]
+    pub(crate) template: Option<PackTemplate>,
+    #[arg(
+        long,
+        help = "Plugin language for the plugin-tool template; defaults to rust"
+    )]
+    pub(crate) language: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackNewArgs {
+    #[arg(help = "snake_case pack name; the pack is created in ./<name>")]
+    pub(crate) name: String,
+    #[command(flatten)]
+    pub(crate) options: PackScaffoldArgs,
+}
+
 #[derive(clap::Args)]
 pub(crate) struct PackCheckArgs {
     #[arg(help = "Pack directories to check; defaults to the current directory")]
@@ -351,6 +406,10 @@ pub(crate) enum PackCommand {
     Show(PackShowArgs),
     /// Check a .pack file or a stored pack against its digest.
     Verify(PackVerifyArgs),
+    /// Scaffold a new pack in ./<name> from a template.
+    New(PackNewArgs),
+    /// Scaffold a pack in the current directory, named after it.
+    Init(PackScaffoldArgs),
     /// Run every validation an install would on pack directories; writes nothing.
     Check(PackCheckArgs),
     /// Print a graph pack's topology diagram, or write it into its README.

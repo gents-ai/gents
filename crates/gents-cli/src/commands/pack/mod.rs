@@ -5,6 +5,7 @@ mod cli_process;
 mod inspect;
 mod local;
 pub(crate) mod registry;
+mod scaffold;
 mod scenario;
 mod secscan;
 mod server;
@@ -51,6 +52,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         }
         PackCommand::Show(args) => inspect::show(args).await,
         PackCommand::Verify(args) => inspect::verify(args),
+        PackCommand::New(args) => scaffold::new(args),
+        PackCommand::Init(args) => scaffold::init(args),
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,

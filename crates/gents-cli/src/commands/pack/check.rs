@@ -73,8 +73,22 @@ pub(crate) async fn check_dir(dir: &Path) -> CheckReport {
         }
     };
     report.pack = Some(manifest.name.clone());
-    check_files(dir, &manifest, &mut report.problems);
+    let unbuilt = check_files(dir, &manifest, &mut report.problems);
     if !report.problems.is_empty() {
+        return report;
+    }
+    if !unbuilt.is_empty() {
+        // `gents pack build` compiles these; the digest exists only after it.
+        if let Err(error) = gents::pack::validate_manifest(&manifest.name, &manifest) {
+            report.problems.push(format!("{error:#}"));
+        }
+        if manifest.metadata.kind != PackKind::Plugins {
+            report.problems.push(format!(
+                "build the plugins ({}) with gents pack build before checking its configuration",
+                unbuilt.join(", ")
+            ));
+        }
+        check_readme(dir, &mut report.problems);
         return report;
     }
 
@@ -120,12 +134,23 @@ fn read_manifest(dir: &Path) -> Result<PackManifest> {
 /// Declared files that are missing, and present files that are not declared.
 /// Plugin sources are built into their artifacts and never travel, and
 /// directories a pack may never carry (`runs/`, `target/`, dotfiles) are
-/// skipped.
-fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) {
+/// skipped. Returns the plugins whose artifact is missing but has a source
+/// to build it from.
+fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) -> Vec<String> {
     let declared = declared_paths(manifest);
+    let mut unbuilt = Vec::new();
     for path in &declared {
-        if !dir.join(path).is_file() {
-            problems.push(format!("declares {path}, which is missing"));
+        if dir.join(path).is_file() {
+            continue;
+        }
+        match manifest
+            .metadata
+            .plugins
+            .iter()
+            .find(|plugin| &plugin.artifact == path && plugin.source.is_some())
+        {
+            Some(plugin) => unbuilt.push(plugin.name.clone()),
+            None => problems.push(format!("declares {path}, which is missing")),
         }
     }
     let sources: Vec<String> = manifest
@@ -148,6 +173,7 @@ fn check_files(dir: &Path, manifest: &PackManifest, problems: &mut Vec<String>) 
             problems.push(format!("{path} is present but not declared in assets"));
         }
     }
+    unbuilt
 }
 
 fn walk(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
@@ -297,11 +323,18 @@ pub(crate) fn graph(args: PackGraphArgs) -> Result<()> {
         "{} is not a graph pack",
         archive.manifest().name
     );
-    let block = topology_block(&load_config(&archive)?);
     if !args.write_readme {
-        println!("{block}");
+        println!("{}", topology_block(&load_config(&archive)?));
         return Ok(());
     }
+    write_topology(&dir)
+}
+
+/// Writes the graph pack at `dir`'s topology diagram into its README, in
+/// place of the previous one or as a new section at the end.
+pub(crate) fn write_topology(dir: &Path) -> Result<()> {
+    let (bytes, _) = pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
+    let block = topology_block(&load_config(&PackArchive::from_bytes(&bytes)?)?);
     let readme = dir.join("README.md");
     let text = std::fs::read_to_string(&readme)
         .with_context(|| format!("reading {}", readme.display()))?;

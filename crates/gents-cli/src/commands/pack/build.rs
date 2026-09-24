@@ -88,7 +88,7 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
         .with_context(|| format!("parsing the pack manifest at {}", manifest_path.display()))?;
 
     for plugin in &manifest.metadata.plugins {
-        build_plugin(dir, plugin)?;
+        build_plugin(dir, &manifest, plugin)?;
     }
 
     let out_dir = match out.and_then(Path::parent) {
@@ -141,10 +141,15 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
 }
 
 /// Makes sure one plugin's artifact exists on disk before the pack is
-/// packed: compiles it from `source` through
-/// [`crate::commands::afterburner_build`] when the manifest names one,
-/// otherwise requires it to already be there.
-fn build_plugin(dir: &Path, plugin: &PackPlugin) -> Result<()> {
+/// packed: compiles it from `source` when the manifest names one, otherwise
+/// requires it to already be there.
+///
+/// A plugin's source is plain source in its language (see [`plugin_entry`]).
+/// The build copies it to `<pack>/target/plugins/<name>/`, writes the package
+/// description the compiler reads there from the manifest entry, and compiles
+/// the copy, so the author's directory holds only their code and a rebuild
+/// reuses the language toolchain's own cache in the staged copy.
+fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Result<()> {
     let artifact_path = dir.join(&plugin.artifact);
     let Some(source) = &plugin.source else {
         anyhow::ensure!(
@@ -157,8 +162,116 @@ fn build_plugin(dir: &Path, plugin: &PackPlugin) -> Result<()> {
     };
     let source_dir = dir.join(source);
     let owner = format!("plugin {:?}", plugin.name);
-    let local = afterburner_build::load_and_validate(&owner, &source_dir)?;
-    afterburner_build::compile(&owner, &source_dir, local, &artifact_path)
+    let entry = plugin_entry(&plugin.language).with_context(|| {
+        format!(
+            "{owner} declares language {:?}, which gents cannot build",
+            plugin.language
+        )
+    })?;
+    anyhow::ensure!(
+        source_dir.is_dir(),
+        "{owner} declares source {source:?}, which is not a directory"
+    );
+    anyhow::ensure!(
+        source_dir.join(entry).is_file(),
+        "{owner} has no {entry} in {}",
+        source_dir.display()
+    );
+    let staged = dir.join("target").join("plugins").join(&plugin.name);
+    mirror(&source_dir, &staged)?;
+    write_if_changed(
+        &staged.join("afb.toml"),
+        format!(
+            "[format]\nversion = \"1.0\"\n\n[package]\nname = {}\nnamespace = {}\nversion = {}\n\
+             language = {}\nentry = {}\n\n[runtime]\nmin = \"0.1.0\"\n",
+            toml_string(&plugin.name),
+            toml_string(&manifest.metadata.namespace),
+            toml_string(&manifest.version),
+            toml_string(&plugin.language),
+            toml_string(entry),
+        )
+        .as_bytes(),
+    )?;
+    let manifold = plugin.manifold.clone().unwrap_or_else(|| {
+        json!({"fs": "None", "net": "None", "env": "None", "crypto": false, "child_process": false})
+    });
+    write_if_changed(
+        &staged.join("manifold.json"),
+        &serde_json::to_vec(&manifold)?,
+    )?;
+    let local = afterburner_build::load_and_validate(&owner, &staged)?;
+    afterburner_build::compile(&owner, &staged, local, &artifact_path)
+}
+
+/// The entry file a plugin's source holds, by language: the one convention
+/// the scaffolder writes and the build compiles.
+pub(crate) fn plugin_entry(language: &str) -> Option<&'static str> {
+    Some(match language.trim().to_ascii_lowercase().as_str() {
+        "rust" => "source/main.rs",
+        "go" | "golang" => "source/main.go",
+        "c" => "source/main.c",
+        "cpp" | "c++" | "cxx" | "cc" => "source/main.cpp",
+        "js" | "javascript" => "source/main.js",
+        "ts" | "typescript" => "source/main.ts",
+        "python" | "py" => "source/main.py",
+        "ruby" | "rb" => "source/main.rb",
+        _ => return None,
+    })
+}
+
+fn toml_string(value: &str) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_owned())
+}
+
+/// Makes `to` a copy of `from`, rewriting only files whose bytes changed so a
+/// toolchain's incremental cache in `to` stays valid, and removing what
+/// `from` no longer has. The staged `target/` and the generated package
+/// description are the build's own and are kept.
+fn mirror(from: &Path, to: &Path) -> Result<()> {
+    mirror_level(from, to, true)
+}
+
+fn mirror_level(from: &Path, to: &Path, top: bool) -> Result<()> {
+    std::fs::create_dir_all(to).with_context(|| format!("creating {}", to.display()))?;
+    let mut kept = std::collections::BTreeSet::new();
+    for entry in std::fs::read_dir(from).with_context(|| format!("reading {}", from.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name == "target" || name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let (source, target) = (entry.path(), to.join(&name));
+        if entry.file_type()?.is_dir() {
+            mirror_level(&source, &target, false)?;
+        } else {
+            write_if_changed(&target, &std::fs::read(&source)?)?;
+        }
+        kept.insert(name);
+    }
+    for entry in std::fs::read_dir(to).with_context(|| format!("reading {}", to.display()))? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let generated =
+            top && matches!(name.to_str(), Some("target" | "afb.toml" | "manifold.json"));
+        if generated || kept.contains(&name) {
+            continue;
+        }
+        let path = entry.path();
+        if entry.file_type()?.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        }
+        .with_context(|| format!("removing {}", path.display()))?;
+    }
+    Ok(())
+}
+
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<()> {
+    if std::fs::read(path).is_ok_and(|current| current == bytes) {
+        return Ok(());
+    }
+    std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))
 }
 
 #[cfg(test)]
@@ -301,12 +414,11 @@ mod tests {
         let error = build_pack(&root, None).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("own Afterburner package"), "{message}");
-        assert!(message.contains("file, not a directory"), "{message}");
+        assert!(message.contains("is not a directory"), "{message}");
     }
 
     #[test]
-    fn a_plugin_source_directory_without_afb_toml_is_refused() {
+    fn a_plugin_source_without_its_entry_file_is_refused() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("shipping_plugins");
         write_plugin_pack(
@@ -327,8 +439,7 @@ mod tests {
         let error = build_pack(&root, None).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains("format_check"), "{message}");
-        assert!(message.contains("own Afterburner package"), "{message}");
-        assert!(message.contains("no afb.toml"), "{message}");
+        assert!(message.contains("has no source/main.rs"), "{message}");
     }
 
     /// The pack manifest's own `PackPlugin::validate` (exercised end to
@@ -414,19 +525,6 @@ mod tests {
         );
         let plugin_src = root.join("plugin_src");
         std::fs::create_dir_all(plugin_src.join("source")).unwrap();
-        std::fs::write(
-            plugin_src.join("afb.toml"),
-            b"[format]\nversion = \"1.0\"\n\n\
-              [package]\nname = \"format_check\"\nnamespace = \"gents\"\nversion = \"0.1.0\"\n\
-              language = \"rust\"\nentry = \"source/main.rs\"\n\n\
-              [runtime]\nmin = \"0.1.0\"\n",
-        )
-        .unwrap();
-        std::fs::write(
-            plugin_src.join("manifold.json"),
-            br#"{"fs":"None","net":"None","env":"None","crypto":false,"child_process":false}"#,
-        )
-        .unwrap();
         std::fs::write(
             plugin_src.join("Cargo.toml"),
             b"[workspace]\n\n\
