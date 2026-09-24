@@ -1,10 +1,16 @@
 //! Pure text truncation: head/tail line-and-byte clamping with no storage
-//! side effect.
-//!
-//! `gents::truncation` layers a DefraDB-backed spill (`Truncator`,
-//! `DefraSpillTruncator`) on top of this module for native tool output that
-//! overflows its budget; the loop itself only ever needs the bounded text,
-//! never the spill document, so that half stays in `gents`.
+//! side effect. The full output is retained by the canonical transcript;
+//! this only selects what the model is shown.
+
+/// Every notice `truncate` writes starts with one of these. Compaction
+/// recognizes already-truncated tool output by them, so a new notice shape
+/// must be added here.
+pub const TRUNCATION_NOTICE_PREFIXES: [&str; 4] = [
+    "[Showing lines ",
+    "[Showing first ",
+    "[Showing last ",
+    "[Output omitted: ",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TruncationMode {
@@ -298,6 +304,58 @@ mod tests {
         assert!(result.len() < 100_000);
         assert!(result.ends_with(&"x".repeat(1024)));
         assert!(result.contains("[Showing last 1024 of 100000 bytes]"));
+    }
+
+    #[test]
+    fn every_truncated_output_carries_a_notice_prefix() {
+        let many_lines = (0..50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let one_line = "x".repeat(200);
+        let cases = [
+            (
+                many_lines.as_str(),
+                TruncationLimits {
+                    max_lines: 5,
+                    max_bytes: 10_000,
+                },
+            ),
+            (
+                many_lines.as_str(),
+                TruncationLimits {
+                    max_lines: 100,
+                    max_bytes: 40,
+                },
+            ),
+            (
+                one_line.as_str(),
+                TruncationLimits {
+                    max_lines: 10,
+                    max_bytes: 50,
+                },
+            ),
+            (
+                one_line.as_str(),
+                TruncationLimits {
+                    max_lines: 10,
+                    max_bytes: 0,
+                },
+            ),
+        ];
+        for (text, limits) in &cases {
+            for mode in [TruncationMode::Head, TruncationMode::Tail] {
+                let result = truncate(text, mode, limits);
+                assert!(result.truncated);
+                assert!(
+                    TRUNCATION_NOTICE_PREFIXES
+                        .iter()
+                        .any(|prefix| result.text.contains(prefix)),
+                    "{mode:?} {limits:?}: {}",
+                    result.text
+                );
+            }
+        }
     }
 
     #[test]

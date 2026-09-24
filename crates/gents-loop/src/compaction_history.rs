@@ -580,10 +580,10 @@ const STUB_TAIL: &str = "see canonical transcript for full output]";
 const STUB_JOIN: &str = " — ";
 const STUB_TRUNCATED: &str = ", truncated";
 
-/// Markers the truncation layer itself writes (`truncation::logic`,
-/// `truncation::spill`). Matching these exactly replaces a `contains("truncated")`
-/// sniff that fired on any tool output happening to mention the word.
-const TRUNCATION_MARKERS: [&str; 2] = ["[Full output: DefraDB doc ", "[Showing lines "];
+/// Notices the truncation owner writes. Matching these exactly replaces a
+/// `contains("truncated")` sniff that fired on any tool output happening to
+/// mention the word.
+const TRUNCATION_MARKERS: [&str; 4] = crate::truncation::TRUNCATION_NOTICE_PREFIXES;
 
 /// Facts a previously written stub carries, recovered so that re-stubbing
 /// reproduces it exactly.

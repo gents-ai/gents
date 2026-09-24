@@ -2325,12 +2325,22 @@ fn strip_marks_already_truncated_output_without_sniffing_the_word() {
         "ordinary output mentioning the word must not be flagged as truncated"
     );
 
-    let messages = vec![
-        tool_call_msg("bash", r#"{"command": "echo hi"}"#),
-        tool_result_msg("call-1", "output\n[Full output: DefraDB doc bafy123]"),
-    ];
-    let (stripped, _) = strip_tool_results(messages);
-    assert!(sole_tool_result_text(&stripped[1]).contains(", truncated"));
+    for notice in [
+        "output\n\n[Showing lines 1-2 of 90 (4000 bytes total)]",
+        "{\"results\":[\n\n[Showing first 51200 of 53000 bytes]",
+        "[Showing last 51200 of 53000 bytes]\n\n]}",
+        "[Output omitted: byte limit is zero (53000 bytes total)]",
+    ] {
+        let messages = vec![
+            tool_call_msg("bash", r#"{"command": "echo hi"}"#),
+            tool_result_msg("call-1", notice),
+        ];
+        let (stripped, _) = strip_tool_results(messages);
+        assert!(
+            sole_tool_result_text(&stripped[1]).contains(", truncated"),
+            "{notice}"
+        );
+    }
 }
 
 #[test]
