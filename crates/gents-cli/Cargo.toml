@@ -79,6 +79,7 @@ tracing-opentelemetry.workspace = true
 tracing-subscriber.workspace = true
 uuid.workspace = true
 url = "2"
+semver = "1"
 tempfile = "3"
 wait-timeout = "0.2"
 

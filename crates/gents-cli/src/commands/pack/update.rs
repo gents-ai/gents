@@ -22,19 +22,67 @@ async fn outdated_packs(
     let mut report = Vec::new();
     for pack in gents::pack::list_installed_packs(&access, &owner).await? {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
-        let latest = client
-            .package(namespace, name)
-            .await
-            .ok()
-            .and_then(|package| package["latest"].as_str().map(str::to_owned));
+        let (latest, error) = match client.package(namespace, name).await {
+            Ok(package) => (package["latest"].as_str().map(str::to_owned), None),
+            Err(error) => (None, Some(format!("{error:#}"))),
+        };
         report.push(json!({
             "pack": pack.coordinate,
             "installed": pack.version,
             "latest": latest,
-            "outdated": latest.as_deref().is_some_and(|latest| latest != pack.version),
+            "outdated": latest.as_deref().and_then(|latest| is_newer(latest, &pack.version)),
+            "error": error,
         }));
     }
     Ok(report)
+}
+
+/// Whether `latest` is a strictly newer semver than `installed`; `None` when
+/// either does not parse. The registry's latest skips yanked versions, so it
+/// can be older than what is installed, and an update must never downgrade.
+fn is_newer(latest: &str, installed: &str) -> Option<bool> {
+    let latest = semver::Version::parse(latest).ok()?;
+    let installed = semver::Version::parse(installed).ok()?;
+    Some(latest > installed)
+}
+
+/// The coordinates `update` reinstalls: the named pack, or every installed
+/// one, when the registry has a strictly newer version. A registry lookup
+/// that failed for any selected pack stops the update rather than reading
+/// as "up to date".
+fn packs_to_update(packs: &[Value], package: Option<&str>) -> Result<Vec<String>> {
+    let selected: Vec<&Value> = packs
+        .iter()
+        .filter(|pack| {
+            package.is_none_or(|package| {
+                let (namespace, name) = super::split_namespace(package);
+                pack["pack"] == format!("{namespace}/{name}").as_str()
+            })
+        })
+        .collect();
+    if let Some(package) = package {
+        anyhow::ensure!(!selected.is_empty(), "{package} is not installed");
+    }
+    let failed: Vec<String> = selected
+        .iter()
+        .filter_map(|pack| {
+            Some(format!(
+                "{}: {}",
+                pack["pack"].as_str()?,
+                pack["error"].as_str()?
+            ))
+        })
+        .collect();
+    anyhow::ensure!(
+        failed.is_empty(),
+        "could not check the registry for {}",
+        failed.join("; ")
+    );
+    Ok(selected
+        .iter()
+        .filter(|pack| pack["outdated"] == true)
+        .filter_map(|pack| pack["pack"].as_str().map(str::to_owned))
+        .collect())
 }
 
 pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
@@ -44,22 +92,12 @@ pub(crate) async fn outdated(args: PackOutdatedArgs) -> Result<()> {
 
 pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
     let packs = outdated_packs(&args.scope, args.registry.as_deref()).await?;
-    let wanted: Vec<String> = packs
-        .iter()
-        .filter(|pack| pack["outdated"] == true)
-        .filter_map(|pack| pack["pack"].as_str().map(str::to_owned))
-        .filter(|coordinate| {
-            args.package.as_deref().is_none_or(|package| {
-                let (namespace, name) = super::split_namespace(package);
-                *coordinate == format!("{namespace}/{name}")
-            })
-        })
-        .collect();
+    let wanted = packs_to_update(&packs, args.package.as_deref())?;
     for coordinate in &wanted {
         super::install(PackInstallArgs {
             package: coordinate.clone(),
-            bindings: None,
-            inference_slots: Vec::new(),
+            bindings: args.bindings.clone(),
+            inference_slots: args.inference_slots.clone(),
             preview: false,
             scope: args.scope.clone(),
             output: OutputFormat::Json,
@@ -70,4 +108,51 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
         .await?;
     }
     crate::print_json(&json!({ "updated": wanted }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_newer, packs_to_update};
+    use serde_json::json;
+
+    fn row(pack: &str, outdated: Option<bool>, error: Option<&str>) -> serde_json::Value {
+        json!({ "pack": pack, "outdated": outdated, "error": error })
+    }
+
+    #[test]
+    fn a_failed_registry_lookup_stops_the_update() {
+        let packs = [
+            row("acme/a", Some(true), None),
+            row("acme/b", None, Some("the registry is unreachable")),
+        ];
+        let error = packs_to_update(&packs, None).unwrap_err().to_string();
+        assert!(
+            error.contains("acme/b: the registry is unreachable"),
+            "{error}"
+        );
+        // A named pack whose own lookup succeeded is not blocked by another's.
+        assert_eq!(packs_to_update(&packs, Some("acme/a")).unwrap(), ["acme/a"]);
+    }
+
+    #[test]
+    fn only_selected_outdated_packs_update_and_unknown_names_fail() {
+        let packs = [
+            row("acme/a", Some(true), None),
+            row("acme/b", Some(false), None),
+            row("acme/c", None, None),
+        ];
+        assert_eq!(packs_to_update(&packs, None).unwrap(), ["acme/a"]);
+        assert!(packs_to_update(&packs, Some("acme/b")).unwrap().is_empty());
+        assert!(packs_to_update(&packs, Some("acme/missing")).is_err());
+    }
+
+    #[test]
+    fn only_a_strictly_newer_registry_version_is_outdated() {
+        assert_eq!(is_newer("1.2.0", "1.1.9"), Some(true));
+        assert_eq!(is_newer("1.2.0", "1.2.0"), Some(false));
+        // Installed version yanked, or installed from an unpublished local pack.
+        assert_eq!(is_newer("1.1.0", "1.2.0"), Some(false));
+        assert_eq!(is_newer("1.10.0", "1.9.0"), Some(true));
+        assert_eq!(is_newer("latest", "1.0.0"), None);
+    }
 }

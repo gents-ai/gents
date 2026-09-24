@@ -771,6 +771,20 @@ pub(crate) struct PackOutdatedArgs {
 pub(crate) struct PackUpdateArgs {
     #[arg(help = "The installed pack to update; every outdated pack when omitted")]
     pub(crate) package: Option<String>,
+    #[arg(
+        long,
+        requires = "package",
+        help = "JSON file containing agent_did and an optional inference_slots map, as for install"
+    )]
+    pub(crate) bindings: Option<PathBuf>,
+    #[arg(
+        long = "inference-slot",
+        value_name = "NAME=PROFILE_ID",
+        action = clap::ArgAction::Append,
+        requires = "package",
+        help = "Bind a declared inference slot to an existing principal-owned profile, as for install"
+    )]
+    pub(crate) inference_slots: Vec<String>,
     #[command(flatten)]
     pub(crate) scope: GraphScopeArgs,
     #[arg(

@@ -787,13 +787,34 @@ fn pack_build_parses_dir_out_and_all() {
         }
         _ => panic!("expected pack build --all"),
     }
-    // Neither a directory nor --all is a usage error, not a silent no-op.
+    // Neither a directory nor --all builds the current directory.
     match parse_pack(&["build"]) {
         PackCommand::Build(args) => assert!(args.dir.is_none() && !args.all),
         _ => panic!("expected pack build"),
     }
     // --all and an explicit directory are mutually exclusive.
     assert!(Cli::try_parse_from(["gents", "pack", "build", "packs/mailbox", "--all"]).is_err());
+}
+
+#[test]
+fn pack_update_carries_install_bindings_for_a_named_pack() {
+    match parse_pack(&[
+        "update",
+        "acme/mailbox",
+        "--inference-slot",
+        "triage=profile-1",
+    ]) {
+        PackCommand::Update(args) => {
+            assert_eq!(args.package.as_deref(), Some("acme/mailbox"));
+            assert_eq!(args.inference_slots, ["triage=profile-1"]);
+        }
+        _ => panic!("expected pack update"),
+    }
+    // One set of bindings cannot apply to every outdated pack at once.
+    assert!(
+        Cli::try_parse_from(["gents", "pack", "update", "--inference-slot", "triage=p"]).is_err()
+    );
+    assert!(Cli::try_parse_from(["gents", "pack", "update", "--bindings", "b.json"]).is_err());
 }
 
 #[test]

@@ -203,9 +203,11 @@ fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Res
         &serde_json::to_vec(&manifold)?,
     )?;
 
-    // Unchanged source and the artifact this build last produced from it: skip.
+    // Unchanged source, compiler and the artifact this build last produced
+    // from them: skip. The compiler is linked into this binary, so its
+    // version is part of the key; an upgrade may change `.afb` output.
     let stamp = staged.join("target").join("gents-build.stamp");
-    let source_digest = tree_digest(&staged)?;
+    let source_digest = format!("{BUILDER_ID} {}", tree_digest(&staged)?);
     if let (Ok(recorded), Ok(artifact)) = (
         std::fs::read_to_string(&stamp),
         std::fs::read(&artifact_path),
@@ -222,6 +224,8 @@ fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Res
     std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact)))
         .with_context(|| format!("writing {}", stamp.display()))
 }
+
+const BUILDER_ID: &str = concat!("gents-cli/", env!("CARGO_PKG_VERSION"));
 
 /// Digest of every file under `dir` except the toolchain's `target/`, by
 /// relative path and content, in path order.
@@ -506,6 +510,16 @@ mod tests {
             first,
             "unchanged source must not be recompiled"
         );
+
+        let stamp = dir.join("target/plugins/format_check/target/gents-build.stamp");
+        let recorded = std::fs::read_to_string(&stamp).unwrap();
+        let other_builder = recorded.replacen(super::BUILDER_ID, "gents-cli/0.0.0-other", 1);
+        assert_ne!(recorded, other_builder, "the stamp records the builder");
+        std::fs::write(&stamp, other_builder).unwrap();
+        build_pack(&dir, Some(&root.path().join("b2.pack"))).unwrap();
+        let rebuilt = std::fs::metadata(&artifact).unwrap().modified().unwrap();
+        assert_ne!(rebuilt, first, "another compiler's artifact is rebuilt");
+        let first = rebuilt;
 
         let source = dir.join("plugins/format_check/source/main.rs");
         let edited = std::fs::read_to_string(&source).unwrap() + "\n// edited\n";
