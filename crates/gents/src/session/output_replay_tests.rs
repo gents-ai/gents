@@ -281,6 +281,14 @@ async fn fixture_with_provider_payload_and_scope(
     signed: bool,
     scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 ) -> ReplayFixture {
+    fixture_with_provider_payload_and_scope_and_tool(signed, scope_kind, true).await
+}
+
+async fn fixture_with_provider_payload_and_scope_and_tool(
+    signed: bool,
+    scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+    with_tool: bool,
+) -> ReplayFixture {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let now = chrono::Utc::now().to_rfc3339();
@@ -322,51 +330,56 @@ async fn fixture_with_provider_payload_and_scope(
     };
     let (runs, payload, stream_bytes) = if signed {
         let parts = ["思考", "answer", "", "{\"x\":1}"];
+        let mut runs = vec![
+            SegmentRun {
+                stream: 0,
+                bytes: parts[0].len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::Reasoning,
+                }),
+            },
+            SegmentRun {
+                stream: 1,
+                bytes: parts[1].len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 1,
+                    part_index: 0,
+                    payload: StreamPayload::Text,
+                }),
+            },
+            SegmentRun {
+                stream: 2,
+                bytes: 0,
+                declaration: Some(StreamDeclaration {
+                    block_index: 2,
+                    part_index: 0,
+                    payload: StreamPayload::Reasoning,
+                }),
+            },
+            SegmentRun {
+                stream: 3,
+                bytes: parts[3].len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 3,
+                    part_index: 0,
+                    payload: StreamPayload::ToolArguments {
+                        id: "toolu-1".into(),
+                        call_id: None,
+                        name: "echo".into(),
+                    },
+                }),
+            },
+        ];
+        if !with_tool {
+            runs.pop();
+        }
+        let selected = if with_tool { &parts[..] } else { &parts[..3] };
         (
-            vec![
-                SegmentRun {
-                    stream: 0,
-                    bytes: parts[0].len() as u32,
-                    declaration: Some(StreamDeclaration {
-                        block_index: 0,
-                        part_index: 0,
-                        payload: StreamPayload::Reasoning,
-                    }),
-                },
-                SegmentRun {
-                    stream: 1,
-                    bytes: parts[1].len() as u32,
-                    declaration: Some(StreamDeclaration {
-                        block_index: 1,
-                        part_index: 0,
-                        payload: StreamPayload::Text,
-                    }),
-                },
-                SegmentRun {
-                    stream: 2,
-                    bytes: 0,
-                    declaration: Some(StreamDeclaration {
-                        block_index: 2,
-                        part_index: 0,
-                        payload: StreamPayload::Reasoning,
-                    }),
-                },
-                SegmentRun {
-                    stream: 3,
-                    bytes: parts[3].len() as u32,
-                    declaration: Some(StreamDeclaration {
-                        block_index: 3,
-                        part_index: 0,
-                        payload: StreamPayload::ToolArguments {
-                            id: "toolu-1".into(),
-                            call_id: None,
-                            name: "echo".into(),
-                        },
-                    }),
-                },
-            ],
-            parts.concat(),
-            parts.iter().map(|part| part.len() as u64).collect(),
+            runs,
+            selected.concat(),
+            selected.iter().map(|part| part.len() as u64).collect(),
         )
     } else {
         (
@@ -439,7 +452,7 @@ async fn fixture_with_provider_payload_and_scope(
                 close_doc_id: close_doc_id.clone(),
                 stream,
             };
-            vec![
+            let mut blocks = vec![
                 MessageBlock::Reasoning {
                     id: None,
                     parts: vec![ReasoningPart::Text {
@@ -460,7 +473,9 @@ async fn fixture_with_provider_payload_and_scope(
                         signature: Some("sig-empty".into()),
                     }],
                 },
-                MessageBlock::ToolCall {
+            ];
+            if with_tool {
+                blocks.push(MessageBlock::ToolCall {
                     tool_call_doc_id: "tool-doc".into(),
                     id: "toolu-1".into(),
                     call_id: None,
@@ -468,8 +483,9 @@ async fn fixture_with_provider_payload_and_scope(
                     arguments: reference(3),
                     signature: None,
                     additional_params: None,
-                },
-            ]
+                });
+            }
+            blocks
         } else {
             vec![MessageBlock::Text {
                 text: PresentedPayload {
@@ -783,6 +799,78 @@ async fn authored_assistant_is_history_not_provider_continuation() {
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].header_doc_id, observed.header_doc_id);
     assert_eq!(candidates[0].sequence, 1);
+}
+
+#[tokio::test]
+async fn non_required_signed_history_with_wrong_provider_scope_stays_permissive() {
+    use gents_loop::loop_stream::{narrow_tagged_history, provider_view_tagged, LoopReplayInput};
+    use gents_loop::provider_input::ProviderInputProfile;
+    use gents_protocol::message::AssistantContent;
+    use gents_protocol::rendered_request::CaptureScopeKind;
+
+    // This is a complete, physically published provider assistant, not a
+    // body-only lookalike. Its OneShot close is invalid for the Inference
+    // resolver, but it has no tool call and therefore needs no current replay.
+    let fixture =
+        fixture_with_provider_payload_and_scope_and_tool(true, CaptureScopeKind::OneShot, false)
+            .await;
+    assert_eq!(fixture.candidates().await.unwrap().len(), 1);
+    let inference_scope = CanonicalReplayScope {
+        expected_scope_kind: CaptureScopeKind::Inference,
+        ..fixture.scope()
+    };
+    assert!(load_current_request_assistant_candidates(
+        &fixture.node,
+        inference_scope,
+        &fixture.boundary,
+    )
+    .await
+    .unwrap()
+    .is_empty());
+
+    let history = super::output::load_sequenced_messages(
+        &fixture.node,
+        SESSION_ID,
+        AGENT_DID,
+        None,
+        None,
+        None,
+        Some(&fixture.request_doc_id),
+        Some(ProviderInputProfile::ClaudeMessages),
+    )
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].provider_source.is_none());
+    assert!(matches!(&history[0].message,
+        Message::Assistant { content, .. }
+        if content.iter().filter(|block| matches!(block, AssistantContent::Reasoning(_))).count() == 2
+    ));
+
+    let mut replay = LoopReplayInput {
+        request_doc_id: Some(fixture.request_doc_id.clone()),
+        ..LoopReplayInput::default()
+    };
+    let tagged = crate::provider_input::replay::tag_canonical_history(
+        &history,
+        &mut replay,
+        ProviderInputProfile::ClaudeMessages,
+    );
+    assert!(replay.required.is_empty());
+    let mut projected = provider_view_tagged(ProviderInputProfile::ClaudeMessages, tagged).unwrap();
+    narrow_tagged_history(
+        ProviderInputProfile::ClaudeMessages,
+        &mut projected,
+        &mut replay,
+    )
+    .await
+    .unwrap();
+    assert_eq!(projected.len(), 1);
+    assert!(projected[0].source.is_none());
+    assert!(matches!(&projected[0].message,
+        Message::Assistant { content, .. }
+        if matches!(content.as_slice(), [AssistantContent::Text(text)] if text.text == "answer")
+    ));
 }
 
 #[tokio::test]
