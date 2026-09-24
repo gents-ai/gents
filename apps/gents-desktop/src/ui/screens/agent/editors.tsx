@@ -1,5 +1,6 @@
 /* Shared configuration editor rows plus explicit Save/Cancel actions.
    Fields only update their local draft; persistence is user-controlled. */
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ExternalLink, FolderOpen, Plus, XIcon } from "lucide-react";
 import { canPickDirectory, pickDirectory } from "@/lib/pickDirectory";
@@ -370,7 +371,8 @@ export function RefRow({
      field is invalid until another is picked (the desktop's DocumentSelection rule) */
   const shown = known ? all : [...all, { value, label: `${value} (unavailable)` }];
   const invalid = error ? true : !known && value ? true : undefined;
-  const [open, setOpen] = useState(false);
+  /* a searchable popup is a dialog: one at a time with the shell's others */
+  const popover = useExclusivePopover();
   /* a label reads "Name · summary"; the summary sits beside the name in the list */
   const labelOf = (v: string) => {
     const full = shown.find((i) => i.value === v)?.label ?? v;
@@ -396,11 +398,12 @@ export function RefRow({
           items={shown.map((i) => i.value)}
           value={value}
           onValueChange={(v) => {
-            setOpen(false);
+            popover.onOpenChange(false);
             onChange(v ?? "");
           }}
-          open={open}
-          onOpenChange={setOpen}
+          open={popover.open}
+          onOpenChange={popover.onOpenChange}
+          onOpenChangeComplete={popover.onOpenChangeComplete}
           disabled={disabled}
           itemToStringLabel={(v: string) => labelOf(v).name}
           filter={(v: string, query: string) => {
@@ -422,6 +425,7 @@ export function RefRow({
           </ComboboxTrigger>
           {/* wide, so the summary beside each name has room; searchable past a few */}
           <ComboboxContent
+            ref={popover.popupRef}
             aria-label={`Choose ${String(label).toLowerCase()}`}
             className="w-[28rem] min-w-[28rem] max-md:w-[calc(100vw-2rem)] max-md:min-w-0"
           >

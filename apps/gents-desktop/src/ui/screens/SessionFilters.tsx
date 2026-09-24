@@ -4,6 +4,7 @@
    filter. Every option stays listed whether or not it has anything right
    now, with the count it would leave behind faceted against the other two
    axes, so narrowing never hides the way back. */
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import {
   Activity,
   ChevronDown,
@@ -230,8 +231,14 @@ function BehaviorAxis({
 }) {
   const byId = new Map(behaviors.map((b) => [b.id, b]));
   const picked = behaviors.filter((b) => value.includes(b.id));
+  /* its popup is a dialog (it holds a search field), so it takes its turn
+     with the shell's other popovers: opening Sync health closes it */
+  const popover = useExclusivePopover();
   return (
     <Combobox
+      open={popover.open}
+      onOpenChange={popover.onOpenChange}
+      onOpenChangeComplete={popover.onOpenChangeComplete}
       multiple
       items={behaviors.map((b) => b.id)}
       itemToStringLabel={(id: string) => byId.get(id)?.name ?? id}
@@ -273,7 +280,11 @@ function BehaviorAxis({
           {picked.length === 1 ? picked[0].name : "Behavior"}
         </span>
       </ComboboxTrigger>
-      <ComboboxContent className="w-60" aria-label="Filter by behavior">
+      <ComboboxContent
+        ref={popover.popupRef}
+        className="w-60"
+        aria-label="Filter by behavior"
+      >
         <ComboboxInput placeholder="Find a behavior" showTrigger={false} />
         <ComboboxEmpty>No behavior by that name.</ComboboxEmpty>
         <ComboboxList>
