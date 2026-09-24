@@ -9,7 +9,8 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::llm::message::{
-    AssistantContent, Image, Message, ToolCall, ToolFunction, ToolResultContent, UserContent,
+    AssistantContent, Image, Message, ReasoningContent, ToolCall, ToolFunction, ToolResultContent,
+    UserContent,
 };
 
 /// Lean `ClaudeMap.identity` and Rust `CLAUDE_CODE_IDENTITY` are the same
@@ -523,16 +524,13 @@ async fn split_multibyte_sse_signature_retains_exact_utf8() {
     )
     .await
     .expect("bounded SSE decode");
-    assert!(events.iter().any(|event| matches!(
-        event,
-        Ok(RawStreamingChoice::Reasoning {
-            content: rig::completion::message::ReasoningContent::Text {
-                signature: Some(signature),
-                ..
-            },
-            ..
-        }) if signature == "署名"
-    )));
+    assert!(events.iter().any(|event| match event {
+        Ok(RawStreamingChoice::Reasoning { content, .. }) => matches!(
+            crate::llm::rig_compat::from_rig_reasoning_part(content),
+            ReasoningContent::Text { signature: Some(signature), .. } if signature == "署名"
+        ),
+        _ => false,
+    }));
     assert!(events.iter().all(Result::is_ok));
 }
 
@@ -760,8 +758,8 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
                         let RawStreamingChoice::Reasoning { content, .. } = event else {
                             return None;
                         };
-                        let rig::completion::message::ReasoningContent::Text { text, signature } =
-                            content
+                        let ReasoningContent::Text { text, signature } =
+                            crate::llm::rig_compat::from_rig_reasoning_part(content)
                         else {
                             panic!("{}: modeled text reasoning", case.name)
                         };
@@ -770,8 +768,8 @@ fn generated_claude_wire_start_cases_drive_native_parser() {
                             value: None,
                             parts: Some(vec![LeanClaudeReasoningPart {
                                 kind: "text".into(),
-                                payload: text.clone(),
-                                signature: signature.clone(),
+                                payload: text,
+                                signature,
                             }]),
                             id: None,
                             name: None,

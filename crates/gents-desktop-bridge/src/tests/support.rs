@@ -18,7 +18,7 @@ pub async fn seed_standalone_fixture() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = boot_core().await;
 
     let mutation = r#"mutation {
-        create_AgentRequest(input: {
+        create_AgentRequest(input: { purpose: "normal",
             request_id: "req_solo",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -45,7 +45,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     let (core, tmp) = boot_core().await;
 
     let mutation = r#"mutation {
-        create_AgentRequest(input: {
+        create_AgentRequest(input: { purpose: "normal",
             request_id: "req_root",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -65,7 +65,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
     );
 
     let child_requests = r#"mutation {
-        r_b91: create_AgentRequest(input: {
+        r_b91: create_AgentRequest(input: { purpose: "normal",
             request_id: "req_b91",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -78,7 +78,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
             caused_by_parent_request_id: "req_root",
             caused_by_parent_tool_call_id: "tc_1"
         }) { _docID }
-        r_b92: create_AgentRequest(input: {
+        r_b92: create_AgentRequest(input: { purpose: "normal",
             request_id: "req_b92",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -91,7 +91,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
             caused_by_parent_request_id: "req_root",
             caused_by_parent_tool_call_id: "tc_2"
         }) { _docID }
-        r_b93: create_AgentRequest(input: {
+        r_b93: create_AgentRequest(input: { purpose: "normal",
             request_id: "req_b93",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -104,7 +104,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
             caused_by_parent_request_id: "req_root",
             caused_by_parent_tool_call_id: "tc_3"
         }) { _docID }
-        r_c01: create_AgentRequest(input: {
+        r_c01: create_AgentRequest(input: { purpose: "normal",
             request_id: "req_c01",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -117,7 +117,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
             caused_by_parent_request_id: "req_root",
             caused_by_parent_tool_call_id: "tc_4"
         }) { _docID }
-        r_c02: create_AgentRequest(input: {
+        r_c02: create_AgentRequest(input: { purpose: "normal",
             request_id: "req_c02",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -130,7 +130,7 @@ pub async fn seed_cascade_fixture() -> (Arc<ClientCore>, TempDir) {
             caused_by_parent_request_id: "req_root",
             caused_by_parent_tool_call_id: "tc_5"
         }) { _docID }
-        r_a17: create_AgentRequest(input: {
+        r_a17: create_AgentRequest(input: { purpose: "normal",
             request_id: "req_a17_old",
             agent_did: "did:test:operator",
             behavior_id: "test-behavior",
@@ -262,7 +262,7 @@ pub async fn seed_cascade_fixture_with_foreign_request() -> (Arc<ClientCore>, Te
     let (core, tmp) = seed_cascade_fixture().await;
 
     let mutation = r#"mutation {
-        create_AgentRequest(input: {
+        create_AgentRequest(input: { purpose: "normal",
             request_id: "req_foreign",
             agent_did: "did:test:other",
             behavior_id: "other-behavior",
@@ -290,7 +290,7 @@ pub async fn seed_cascade_fixture_with_foreign_linked_child() -> (Arc<ClientCore
     let (core, tmp) = seed_cascade_fixture().await;
 
     let mutation = r#"mutation {
-        create_AgentRequest(input: {
+        create_AgentRequest(input: { purpose: "normal",
             request_id: "req_foreign_linked",
             agent_did: "did:test:other",
             behavior_id: "other-behavior",

@@ -194,6 +194,7 @@ pub(crate) async fn enqueue_task_run(args: &ConfigTaskRunArgs) -> Result<TaskRun
                 .as_ref()
                 .map(|identity| identity.retry_key.clone()),
             ..gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: request_id.clone(),
                     agent_did: agent_did.clone(),
@@ -464,6 +465,7 @@ mod tests {
 
     fn test_manual_mutation(input: RequestInput) -> String {
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "req-1",
             "did:test:test",
             "did:test:test",

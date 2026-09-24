@@ -988,6 +988,7 @@ mod overlay_tests {
     fn request(agent_did: Option<&str>, lifecycle_state: &str) -> AgentRequestRow {
         serde_json::from_value(serde_json::json!({
             "request_id": "request",
+            "purpose": "normal",
             "agent_did": agent_did,
             "session_id": "session",
             "content": "hello",

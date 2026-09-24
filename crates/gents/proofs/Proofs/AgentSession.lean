@@ -54,6 +54,7 @@ structure Document where
   deriving DecidableEq, Repr
 /-- Authoritative query projection, not another writable request/index. -/
 structure RequestFact where
+  purpose : RequestPurpose
   scope : Scope
   behavior : BehaviorId
   createdAt : Time
@@ -93,7 +94,7 @@ def newest : List RequestFact → Option RequestFact
 /-- `none` queries all requesters; `some none` queries exact absent scope. -/
 def latest (rows : List RequestFact) (agent session : Nat)
     (requester : Option (Option Nat)) : Option RequestFact :=
-  newest (rows.filter fun r => r.scope.agent == agent && r.scope.session == session &&
+  newest (rows.filter fun r => r.purpose == .normal && r.scope.agent == agent && r.scope.session == session &&
     requester.all (fun scope => r.scope.requester == scope))
 
 theorem newest_member (rows : List RequestFact) (r : RequestFact)
@@ -215,24 +216,39 @@ theorem latest_scope (rows : List RequestFact) (agent session : Nat)
     r ∈ rows ∧ r.scope.agent = agent ∧ r.scope.session = session ∧
       requester.all (fun scope => r.scope.requester == scope) = true := by
   have hm := newest_member _ r h
-  simpa [List.mem_filter, Bool.and_eq_true, and_assoc] using hm
+  simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
+  exact ⟨hm.1, hm.2.2⟩
+
+theorem latest_is_normal (rows : List RequestFact) (agent session : Nat)
+    (requester : Option (Option Nat)) (r : RequestFact)
+    (h : latest rows agent session requester = some r) : r.purpose = .normal := by
+  have hm := newest_member _ r h
+  simp only [List.mem_filter, Bool.and_eq_true, beq_iff_eq, and_assoc] at hm
+  exact hm.2.1
 
 theorem latest_maximal (rows : List RequestFact) (agent session : Nat)
     (requester : Option (Option Nat)) (r candidate : RequestFact)
     (h : latest rows agent session requester = some r)
     (hm : candidate ∈ rows) (ha : candidate.scope.agent = agent)
     (hs : candidate.scope.session = session)
+    (hp : candidate.purpose = .normal)
     (hr : requester.all (fun scope => candidate.scope.requester == scope) = true) :
     candidate.createdAt < r.createdAt ∨
       (candidate.createdAt = r.createdAt ∧ candidate.observed.requestId ≤ r.observed.requestId) := by
   apply newest_maximal _ r h candidate
-  simp [List.mem_filter, hm, ha, hs, hr]
+  simp [List.mem_filter, hm, ha, hs, hp, hr]
+
+theorem title_arrival_preserves_latest (rows : List RequestFact) (title : RequestFact)
+    (agent session : Nat) (requester : Option (Option Nat))
+    (hp : title.purpose = .titleAudit) :
+    latest (title :: rows) agent session requester = latest rows agent session requester := by
+  simp [latest, hp]
 
 theorem latest_exact_of_session_winner (rows : List RequestFact) (agent session : Nat)
     (r : RequestFact) (h : latest rows agent session none = some r) :
     latest rows agent session (some r.scope.requester) = some r := by
   have hf := newest_filter_preserves
-    (rows.filter fun row => row.scope.agent == agent && row.scope.session == session)
+    (rows.filter fun row => row.purpose == .normal && row.scope.agent == agent && row.scope.session == session)
     r (fun row => row.scope.requester == r.scope.requester) (by simpa [latest] using h) (by simp)
   simpa [latest, List.filter_filter, Bool.and_assoc, Bool.and_comm, Bool.and_left_comm] using hf
 
@@ -248,9 +264,25 @@ def advance (s : Document) (rows : List RequestFact) (r : RequestFact)
       preview := some (String.mk (preview.toList.take 240))
       latest := some r.observed } }
   else s
+theorem title_does_not_advance (s : Document) (rows : List RequestFact)
+    (r : RequestFact) (preview : String) (now : Time)
+    (hp : r.purpose = .titleAudit) : advance s rows r preview now = s := by
+  unfold advance
+  split
+  · rename_i h
+    have hn := latest_is_normal rows s.scope.agent s.scope.session
+      (some s.scope.requester) r h.2.2.2
+    simp [hp] at hn
+  · rfl
+
 /-- Missing exact rows remain unknown; never return an older local request. -/
 def observedRequest (rows : List RequestFact) (o : RequestObservation) : Option RequestFact :=
-  rows.find? (fun r => r.observed.docId == o.docId && r.observed.requestId == o.requestId)
+  rows.find? (fun r => r.purpose == .normal && r.observed.docId == o.docId && r.observed.requestId == o.requestId)
+
+theorem title_arrival_preserves_observed (rows : List RequestFact) (title : RequestFact)
+    (o : RequestObservation) (hp : title.purpose = .titleAudit) :
+    observedRequest (title :: rows) o = observedRequest rows o := by
+  simp [observedRequest, hp]
 /-- A notification supplies identity only. Resolve its current authoritative row
 inside the existing projection transaction; event payload state cannot overwrite
 newer request facts. DB snapshot freshness remains the adapter's obligation. -/

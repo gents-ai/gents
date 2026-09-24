@@ -255,6 +255,8 @@ private def claudeStreamBlockJson : PromptAssembly.ClaudeMap.StreamBlock → Str
 
 private def claudeContentStepJson (step : PromptAssembly.ClaudeMap.ContentStep) : String :=
   "{\"provisional_thinking\":" ++ jsonOptionalString step.provisionalThinking ++
+    ",\"provisional_signature\":" ++ jsonOptionalString step.provisionalSignature ++
+    ",\"provisional_redacted\":" ++ jsonOptionalString step.provisionalRedacted ++
     ",\"sealed\":" ++ jsonArray (step.sealed.map claudeStreamBlockJson) ++ "}"
 
 def promptAssemblyClaudeThinkingStreamCaseJson

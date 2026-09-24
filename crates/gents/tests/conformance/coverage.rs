@@ -1569,6 +1569,30 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "AgentRequestAdmissionCases".to_string(),
         ));
     }
+    if !snapshot.title_request_admission_cases.is_empty() {
+        emitted.insert((
+            "title_request_admission_cases".to_string(),
+            "TitleRequestAdmissionCases".to_string(),
+        ));
+    }
+    if !snapshot.title_request_purpose_wire_cases.is_empty() {
+        emitted.insert((
+            "title_request_purpose_wire_cases".to_string(),
+            "TitleRequestPurposeWireCases".to_string(),
+        ));
+    }
+    if !snapshot.title_usage_cases.is_empty() {
+        emitted.insert((
+            "title_usage_cases".to_string(),
+            "TitleUsageCases".to_string(),
+        ));
+    }
+    if !snapshot.title_admission_join_cases.is_empty() {
+        emitted.insert((
+            "title_admission_join_cases".to_string(),
+            "TitleAdmissionJoinCases".to_string(),
+        ));
+    }
     assert_eq!(
         snapshot.event_group_case_count,
         snapshot.event_group_cases.len(),

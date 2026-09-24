@@ -448,6 +448,7 @@ mod tests {
     ) -> AgentRequestRow {
         AgentRequestRow {
             request_id: request_id.to_string(),
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             session_id: Some("session-1".to_string()),
             retry_root_request: root.map(ToOwned::to_owned),
             input: Some(input()),
@@ -667,6 +668,7 @@ mod tests {
         let owner = "did:test:diagnostics\"owner";
         let mut failed = serde_json::json!({
             "agent_did":owner, "requester_did":"requester-a", "request_id":"wake", "session_id":"shared-session",
+            "purpose":"normal",
             "behavior_id":"behavior", "input":input(), "execution_origin":"scheduled",
             "lifecycle_state":"failed", "created_at":"2026-08-12T00:00:00Z",
             "terminalized_at":"2026-08-12T00:00:05Z", "retry_count":0, "max_retries":3
@@ -676,6 +678,7 @@ mod tests {
             failed.clone(),
             serde_json::json!({
                 "agent_did":"foreign-owner", "requester_did":"requester-z", "request_id":"foreign-later",
+                "purpose":"normal",
                 "session_id":"shared-session", "behavior_id":"behavior", "execution_origin":"interactive",
                 "lifecycle_state":"completed", "created_at":"2026-08-14T00:00:00Z"
             }),

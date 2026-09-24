@@ -217,11 +217,10 @@ pub fn spawn_observer_with_selection(
                 let id_refs: Vec<&str> = doc_ids.iter().map(|s| s.as_str()).collect();
                 match fetch_doc_patch(node.as_ref(), collection_name, &id_refs).await {
                     Ok(patch) => {
-                        let row_count = patch.row_count();
-                        if row_count == 0 {
-                            // An empty doc-id patch is authoritative delete
-                            // evidence. Reload and replace the selected scope so
-                            // the removed row cannot remain visible until restart.
+                        let row_count = patch.observed_documents;
+                        if row_count < id_refs.len() {
+                            // Missing documents require replacement, including
+                            // batches that also contain surviving rows.
                             let scope = selected_agent_did_rx.borrow().clone();
                             let peers = configured_peers.records();
                             let reload = match scope.as_deref() {
@@ -261,8 +260,8 @@ pub fn spawn_observer_with_selection(
                                     );
                                 }
                             }
-                        } else {
-                            let rows = patch.to_rows();
+                        } else if patch.store.row_count() > 0 {
+                            let rows = patch.store.to_rows();
                             store.merge_observer_patch_with_outcome(ClientStore::from_rows(rows));
                         }
                         metrics_for_task

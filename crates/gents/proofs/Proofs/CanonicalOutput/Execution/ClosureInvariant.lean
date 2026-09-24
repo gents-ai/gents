@@ -455,6 +455,7 @@ private theorem toolClose_preserves (before after : World) (document : DocId)
 private theorem evaluate_preserves (operation : Gate.Operation) (before after : World)
     (unique : ClosureUnique before) (h : Gate.evaluate operation before = .ok after) :
     ClosureUnique after := by
+  have h := Gate.evaluate_success_core operation before after h
   cases operation with
   | renew generation deadline =>
       exact closureUnique_of_segments_eq unique
@@ -505,7 +506,7 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
         (toolClose_preserves before closed document authority record unique hclose)
         (ToolDelivery.publishToolDelivery_preserves_segments closed after document message hdeliver)
   | compact cursor =>
-      unfold Gate.evaluate at h
+      unfold Gate.evaluateCore at h
       cases hc : Compaction.advanceCursor? before cursor with
       | none => simp [hc] at h
       | some post =>
@@ -628,6 +629,17 @@ theorem Trace.closureUnique {before after : World} (trace : Trace before after)
           exact closureUnique_of_segments_eq unique
             (by simpa using (congrArg (fun w : World => w.segments)
               (Handover.successful_claim_frame before world actor now activation hc)))
+  | activateTitle actor now activation scope budget deadline h =>
+      rename_i before after
+      unfold SessionComposition.activateTitle at h
+      cases hc : Handover.claimTitle before actor now activation with
+      | none => simp [hc] at h
+      | some world =>
+          simp [hc] at h
+          cases h
+          exact closureUnique_of_segments_eq unique
+            (by simpa using (congrArg (fun w : World => w.segments)
+              (Handover.successful_title_claim_frame before world actor now activation hc)))
   | finish actor acknowledged h =>
       rename_i before after
       unfold SessionComposition.finish at h

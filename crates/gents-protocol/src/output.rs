@@ -80,13 +80,15 @@ pub enum OutputSource {
 }
 
 impl OutputSource {
-    /// Compaction captures are request-owned audit evidence, not assistant output.
+    /// Auxiliary captures are request-owned audit evidence, not assistant output.
     pub fn is_auxiliary_audit(&self) -> bool {
         matches!(
             self,
             Self::ProviderTurn {
                 scope: CaptureScope {
-                    kind: CaptureScopeKind::Compaction | CaptureScopeKind::CompactionFallback,
+                    kind: CaptureScopeKind::Compaction
+                        | CaptureScopeKind::CompactionFallback
+                        | CaptureScopeKind::Title,
                     ..
                 },
                 ..

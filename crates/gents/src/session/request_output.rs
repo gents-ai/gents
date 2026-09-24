@@ -180,6 +180,10 @@ pub async fn observe_request_output(
     access: &ConfigAccess,
     request: &AgentRequestRow,
 ) -> Result<CanonicalRequestOutput> {
+    anyhow::ensure!(
+        request.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal),
+        "public request output requires normal purpose"
+    );
     let request_doc_id = request
         .doc_id
         .as_deref()

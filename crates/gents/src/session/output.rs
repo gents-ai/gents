@@ -871,7 +871,7 @@ async fn validate_replay_request(
     scope: CanonicalReplayScope<'_>,
 ) -> Result<BTreeSet<String>> {
     let query = format!(
-        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id agent_did requester_did }} }}"#,
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id purpose session_id agent_did requester_did }} }}"#,
         crate::graphql::escape_graphql_string(scope.request_doc_id)
     );
     let response = ReadAccess::Node(node)
@@ -886,6 +886,7 @@ async fn validate_replay_request(
     replay_ensure!(
         required_row_str(row, "_docID")? == scope.request_doc_id
             && required_row_str(row, "request_id")? == scope.request_id
+            && required_row_str(row, "purpose")? == "normal"
             && required_row_str(row, "session_id")? == scope.session_id
             && required_row_str(row, "agent_did")? == scope.agent_did
             && row.get("requester_did").is_some()

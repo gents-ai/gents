@@ -13,7 +13,8 @@ def committedQueue (before : SessionQueue.SessionQueueState)
 def commit (state : World) (actor : Gate.Actor) (now : Time)
     (document : DocId) (message : MessageEnvelope) (wake : SessionQueue.QueueEntry)
     (binding : WakeDocumentBinding) : Option World :=
-  if state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
+  if state.purpose != .normal || state.gateOwner != some actor ||
+      state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule ||
       now < state.lease.now then none
   else
@@ -28,6 +29,12 @@ def commit (state : World) (actor : Gate.Actor) (now : Time)
           gateOwner := state.gateOwner
           gateSchedule := { state.gateSchedule with phase := .releasable }
           queue := committedQueue state.queue result }
+
+theorem title_cannot_publish_wake (state : World) (actor : Gate.Actor) (now : Time)
+    (document : DocId) (message : MessageEnvelope) (wake : SessionQueue.QueueEntry)
+    (binding : WakeDocumentBinding) (h : state.purpose = .titleAudit) :
+    commit state actor now document message wake binding = none := by
+  simp [commit, h]
 
 theorem other_actor_cannot_commit (state : World) (actor : Gate.Actor) (now : Time)
     (document : DocId) (message : MessageEnvelope) (wake : SessionQueue.QueueEntry)

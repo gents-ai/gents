@@ -188,12 +188,14 @@ private def ownedTerminalHandoff? (w : World) (actor now generation : Nat)
   let terminal ← Gate.commit held actor now (.terminalize generation outcome .noMessage)
   let finishReleased ← Gate.scheduling terminal actor .release
   let finishHeld ← Gate.acquire finishReleased actor true
-  match hfinish : Handover.finishAndAcknowledge finishHeld actor with
-  | none => none
-  | some finished =>
-      if finished.outcome != outcome then none
-      else some ⟨request, finished.state, outcome,
-        (Handover.successful_finish_clears_claim_control finishHeld finished actor hfinish).2⟩
+  if hnormal : finishHeld.purpose = .normal then
+    match hfinish : Handover.finishAndAcknowledge finishHeld actor with
+    | none => none
+    | some finished =>
+        if finished.outcome != outcome then none
+        else some ⟨request, finished.state, outcome,
+          (Handover.successful_finish_clears_claim_control finishHeld finished actor hfinish).2.1 hnormal⟩
+  else none
 
 def terminateOwnedBeforePublication? (w : World) (actor now generation : Nat)
     (action : RequestContext.Action) : Option World := do

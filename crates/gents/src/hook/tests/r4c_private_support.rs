@@ -28,6 +28,7 @@ pub(super) async fn bind_accepted_request(
     .expect("ensure canonical R4C parent session");
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         did,
         did,

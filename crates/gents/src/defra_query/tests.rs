@@ -18,6 +18,7 @@ async fn seeded_node() -> Arc<defra_node::EmbeddedNode> {
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{request_id}",
+                    purpose: "normal",
                     agent_did: "did:key:z-test",
                     lifecycle_state: "{lifecycle_state}",
                     content: "hello"
@@ -47,6 +48,7 @@ async fn oversized_field_is_truncated_json_stays_valid() {
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "req-big-content",
+                purpose: "normal",
                 agent_did: "did:key:z-test",
                 lifecycle_state: "pending",
                 content: "{big_content}"

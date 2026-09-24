@@ -1104,6 +1104,7 @@ mod tests {
         let session_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             behavior.agent_did(),
             requester_did,
@@ -1156,6 +1157,7 @@ mod tests {
         )
         .await;
         let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             format!("request-{suffix}"),
             behavior.agent_did(),
             member.did(),

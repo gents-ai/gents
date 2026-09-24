@@ -29,6 +29,7 @@ fn session(id: &str, agent: &str, latest: Option<(&str, RequestLifecycleState)>)
 
 fn request(id: &str, session_id: &str, state: RequestLifecycleState) -> AgentRequestRow {
     AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(id.to_string()),
         request_id: id.to_string(),
         agent_did: Some("did:test:amy".to_string()),

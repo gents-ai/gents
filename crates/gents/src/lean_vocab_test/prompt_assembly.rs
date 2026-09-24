@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-use super::LeanCanonicalCoordinate;
+use super::{required_nullable, LeanCanonicalCoordinate};
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -255,7 +255,12 @@ pub(crate) struct LeanClaudeStreamBlock {
 
 #[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
 pub(crate) struct LeanClaudeContentStep {
+    #[serde(deserialize_with = "required_nullable")]
     pub(crate) provisional_thinking: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) provisional_signature: Option<String>,
+    #[serde(deserialize_with = "required_nullable")]
+    pub(crate) provisional_redacted: Option<String>,
     pub(crate) sealed: Vec<LeanClaudeStreamBlock>,
 }
 

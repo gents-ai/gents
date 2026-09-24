@@ -437,6 +437,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "failed-wake",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 requester_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
@@ -488,6 +489,7 @@ async fn failed_background_wake_redrive_is_bounded_and_idempotent() {
     // A newer interactive request blocks the old wake even in another scope.
     let foreign = serde_json::json!({
         "request_id":"foreign-interactive", "agent_did":agent_did,
+        "purpose":"normal",
         "requester_did":"did:test:foreign-requester", "behavior_id":AGENT_NAME,
         "session_id":"wake-redrive-session", "content":"foreign interactive",
         "lifecycle_state":"pending", "execution_origin":"interactive",
@@ -613,6 +615,7 @@ async fn failed_background_wake_without_pending_sibling_obeys_persisted_backoff(
     let terminalized_at = terminalized_at.to_rfc3339();
     let request = serde_json::json!({
         "request_id": request_id,
+        "purpose": "normal",
         "agent_did": agent_did,
         "requester_did": agent_did,
         "behavior_id": AGENT_NAME,

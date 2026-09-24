@@ -4,6 +4,51 @@ use crate::provider_audit::{
 };
 use gents_protocol::rendered_request::CaptureScope;
 
+#[derive(Debug, thiserror::Error)]
+#[error("auxiliary output persistence failed during {operation}: {source}")]
+pub struct AuxiliaryPersistenceFailure {
+    operation: &'static str,
+    #[source]
+    source: anyhow::Error,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("one-shot provider failed: {last_error}")]
+pub struct OneShotProviderFailure {
+    last_error: InferenceError,
+    #[source]
+    source: Option<anyhow::Error>,
+}
+
+fn persistence_failure(operation: &'static str, source: anyhow::Error) -> anyhow::Error {
+    AuxiliaryPersistenceFailure { operation, source }.into()
+}
+
+fn stream_failure(
+    error: StreamingError,
+    last_attempt_error: Option<InferenceError>,
+) -> anyhow::Error {
+    match last_attempt_error {
+        Some(last_error) => OneShotProviderFailure {
+            last_error,
+            source: Some(anyhow::Error::new(error)),
+        }
+        .into(),
+        None => anyhow::Error::new(error).context("one-shot loop stream error"),
+    }
+}
+
+fn missing_final_failure(last_attempt_error: Option<InferenceError>) -> anyhow::Error {
+    match last_attempt_error {
+        Some(last_error) => OneShotProviderFailure {
+            last_error,
+            source: None,
+        }
+        .into(),
+        None => anyhow::anyhow!("provider stream ended without an explicit terminal response"),
+    }
+}
+
 async fn emit_auxiliary(
     identity: (CaptureScope, usize, u32),
     event: AuxiliaryOutputEvent,
@@ -17,30 +62,36 @@ async fn emit_auxiliary(
     match crate::rendered_request::scope::emit_auxiliary_output(observation).await {
         Ok(()) => Ok(()),
         Err(error) => {
+            let error = persistence_failure("observation", error);
             match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
                 Ok(_) => Err(error),
-                Err(close_error) => Err(error.context(format!(
-                    "failed to retain received auxiliary output after sink error: {close_error:#}"
-                ))),
+                Err(close_error) => Err(persistence_failure(
+                    "observation cleanup",
+                    close_error.context(format!("original auxiliary error: {error:#}")),
+                )),
             }
         }
     }
 }
 
 async fn close_received_auxiliary() -> anyhow::Result<()> {
-    anyhow::ensure!(
-        crate::rendered_request::scope::flush_received_auxiliary_partial().await?,
-        "active auxiliary output could not be closed"
-    );
-    Ok(())
+    match crate::rendered_request::scope::flush_received_auxiliary_partial().await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(persistence_failure(
+            "close",
+            anyhow::anyhow!("active auxiliary output could not be closed"),
+        )),
+        Err(error) => Err(persistence_failure("close", error)),
+    }
 }
 
 async fn close_received_auxiliary_after_error(error: anyhow::Error) -> anyhow::Error {
     match close_received_auxiliary().await {
         Ok(()) => error,
-        Err(close_error) => error.context(format!(
-            "failed to retain received auxiliary output during error: {close_error:#}"
-        )),
+        Err(close_error) => persistence_failure(
+            "error cleanup",
+            close_error.context(format!("original one-shot error: {error:#}")),
+        ),
     }
 }
 
@@ -50,7 +101,11 @@ async fn flush_auxiliary_at_deadline(
 ) -> anyhow::Result<()> {
     match (sink.flush_pending)(identity.0, identity.1, identity.2).await {
         Ok(()) => Ok(()),
-        Err(error) => Err(close_received_auxiliary_after_error(error).await),
+        Err(error) => Err(close_received_auxiliary_after_error(persistence_failure(
+            "deadline flush",
+            error,
+        ))
+        .await),
     }
 }
 
@@ -94,7 +149,13 @@ where
             (Some((scope, turn, attempt)), Some(sink)) => {
                 match (sink.next_flush_deadline)(scope, turn, attempt).await {
                     Ok(deadline) => deadline,
-                    Err(error) => return Err(close_received_auxiliary_after_error(error).await),
+                    Err(error) => {
+                        return Err(close_received_auxiliary_after_error(persistence_failure(
+                            "next flush deadline",
+                            error,
+                        ))
+                        .await)
+                    }
                 }
             }
             _ => None,
@@ -123,13 +184,7 @@ where
         let item = match item {
             Ok(item) => item,
             Err(error) => {
-                let error = anyhow::Error::new(error);
-                let error = match last_attempt_error.as_ref() {
-                    Some(last_error) => error.context(format!(
-                        "one-shot loop stream error after retry failure ({last_error})"
-                    )),
-                    None => error.context("one-shot loop stream error"),
-                };
+                let error = stream_failure(error, last_attempt_error.take());
                 return Err(if active_auxiliary.is_some() {
                     close_received_auxiliary_after_error(error).await
                 } else {
@@ -171,6 +226,7 @@ where
                 attempt,
                 capture_scope,
             } => {
+                last_attempt_error = None;
                 auxiliary_enabled = OutputSource::ProviderTurn {
                     scope: capture_scope,
                     turn_index: u32::try_from(turn)?,
@@ -345,9 +401,7 @@ where
     if active_auxiliary.is_some() {
         close_received_auxiliary().await?;
     }
-    final_text.ok_or_else(|| {
-        anyhow::anyhow!("provider stream ended without an explicit terminal response")
-    })
+    final_text.ok_or_else(|| missing_final_failure(last_attempt_error))
 }
 
 /// Runs a typed completion without surrendering the runtime's owned-loop
@@ -460,6 +514,9 @@ mod tests {
             .expect("bounded flush failure cleanup")
             .expect_err("mock flush fails");
             assert!(error.to_string().contains("mock flush failure"));
+            assert!(error
+                .downcast_ref::<AuxiliaryPersistenceFailure>()
+                .is_some());
             let events = captured
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -475,6 +532,86 @@ mod tests {
             assert!(matches!(events[3], AuxiliaryOutputEvent::ClosePartial));
             drop(events);
             assert!(!flush_received_auxiliary_partial().await.unwrap());
+        })
+        .await;
+    }
+
+    #[test]
+    fn only_observed_attempt_failure_classifies_provider_error() {
+        let stream_error =
+            || StreamingError::Completion(CompletionError::ProviderError("stream failed".into()));
+        let provider = stream_failure(
+            stream_error(),
+            Some(InferenceError::TransientFailure {
+                reason: "provider failed".into(),
+            }),
+        );
+        assert!(provider.downcast_ref::<OneShotProviderFailure>().is_some());
+        assert!(stream_failure(stream_error(), None)
+            .downcast_ref::<OneShotProviderFailure>()
+            .is_none());
+        assert!(
+            missing_final_failure(Some(InferenceError::PermanentFailure {
+                reason: "provider failed".into(),
+            }))
+            .downcast_ref::<OneShotProviderFailure>()
+            .is_some()
+        );
+        assert!(missing_final_failure(None)
+            .downcast_ref::<OneShotProviderFailure>()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_auxiliary_cleanup_dominates_provider_error() {
+        let sink = AuxiliaryOutputSink {
+            observe: Arc::new(|observation| {
+                Box::pin(async move {
+                    if matches!(observation.event, AuxiliaryOutputEvent::ClosePartial) {
+                        anyhow::bail!("mock close failure");
+                    }
+                    Ok(())
+                })
+            }),
+            next_flush_deadline: Arc::new(|_, _, _| Box::pin(async { Ok(None) })),
+            flush_pending: Arc::new(|_, _, _| Box::pin(async { Ok(()) })),
+        };
+        let capture_sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+        let mut scope = RequestCaptureScope::new(
+            RenderedRequestContext {
+                request_doc_id: "doc-cleanup".into(),
+                request_commit_cid: "bafy-cleanup".into(),
+                request_id: "req-cleanup".into(),
+                agent_did: "did:key:agent".into(),
+                requester_did: String::new(),
+                behavior_id: "behavior".into(),
+                session_id: "session".into(),
+                model_name: "claude".into(),
+            },
+            capture_sink,
+        );
+        scope.set_auxiliary_output_sink(sink);
+        scope_request(Arc::new(scope), async {
+            let label = arm(
+                CaptureScopeKind::Compaction,
+                0,
+                0,
+                AssemblyTrace::from_effective_messages(AssemblyBuildPath::Budgeted, Vec::new()),
+            )
+            .unwrap();
+            claim_pending().expect("armed auxiliary attempt");
+            let identity = (label.parse().expect("capture scope"), 0, 0);
+            emit_auxiliary(identity, AuxiliaryOutputEvent::AttemptStarted)
+                .await
+                .unwrap();
+            let provider = missing_final_failure(Some(InferenceError::TransientFailure {
+                reason: "provider failed".into(),
+            }));
+            let error = close_received_auxiliary_after_error(provider).await;
+            assert!(error
+                .downcast_ref::<AuxiliaryPersistenceFailure>()
+                .is_some());
+            assert!(format!("{error:#}").contains("mock close failure"));
         })
         .await;
     }

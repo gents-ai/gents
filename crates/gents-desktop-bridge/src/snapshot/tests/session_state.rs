@@ -38,6 +38,7 @@ fn session(requester_did: Option<&str>) -> AgentSession {
 
 fn request(id: &str, state: RequestLifecycleState) -> AgentRequestRow {
     AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some(id.into()),
         request_id: id.into(),
         agent_did: Some("did:test:amy".into()),
@@ -105,6 +106,7 @@ fn client_shell_contract_store(case: &lean_vocab_test::LeanClientShellCase) -> C
     }
     if let Some(request_id) = request_id {
         rows.requests.push(AgentRequestRow {
+            purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
             doc_id: Some(request_id.clone()),
             request_id,
             agent_did: Some("did:test:contract-agent".into()),
@@ -304,6 +306,7 @@ fn session_snapshot_does_not_report_unobserved_preferred_request() {
         lifecycle_state: RequestLifecycleState::Processing,
     });
     let old = AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-old".into()),
         request_id: "req-old".into(),
         agent_did: Some("did:test:amy".into()),

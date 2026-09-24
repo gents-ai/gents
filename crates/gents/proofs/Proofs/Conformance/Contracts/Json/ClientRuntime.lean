@@ -65,7 +65,8 @@ private def sourceJson : CanonicalOutput.Source → String
   | .auxiliary kind scope turn attempt => tagged "auxiliary"
       (",\"auxiliary_kind\":" ++ jsonString (match kind with
         | .compaction => "compaction"
-        | .compactionFallback => "compaction_fallback") ++
+        | .compactionFallback => "compaction_fallback"
+        | .title => "title") ++
        ",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
        ",\"attempt\":" ++ toString attempt)
   | .tool call => tagged "tool" (",\"call\":" ++ toString call)

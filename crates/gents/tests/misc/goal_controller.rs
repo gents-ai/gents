@@ -512,6 +512,7 @@ async fn goal_continuation_preserves_nested_workspace_lineage() {
     let did = db.node_identity.did();
     let admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did);
     let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "parent-nested-workspace",
         did,
         did,
@@ -818,7 +819,7 @@ async fn foreign_retry_key_collision_is_rejected_instead_of_reused() {
     );
     let mutation = format!(
         r#"mutation {{ create_AgentRequest(input: {{
-            request_id: "foreign-retry-collision", agent_did: "did:key:foreign",
+            request_id: "foreign-retry-collision", purpose: "normal", agent_did: "did:key:foreign",
             behavior_id: "foreign", session_id: "foreign-session",
             retry_root_request: "foreign-retry-collision",
             retry_key: "{}",
@@ -1202,6 +1203,7 @@ async fn signed_goal_backed_request(
     let did = db.node_identity.did();
     let admission = gents_protocol::request_admission::AgentRequestAdmissionRecord::local_self(did);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         did,
         did,
@@ -2270,6 +2272,7 @@ async fn stale_usage_refresh_preserves_completed_goal_time_accounting() {
 async fn seed_operator_resume_parent(db: &TestDb, request_id: &str) -> String {
     let did = db.node_identity.did();
     let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         did,
         did,
@@ -2927,6 +2930,7 @@ async fn seed_same_second_canonical_goal_child(
     // The generic completed-row fixture does not sign admission. This test
     // exercises authenticated ancestry, so create a real signed root first.
     let mut parent = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         parent_id,
         did,
         did,
@@ -2993,7 +2997,11 @@ async fn seed_same_second_canonical_goal_child(
         gents_protocol::request_admission::AgentRequestAdmissionRecord::runtime_local_control(
             did, parent_id,
         );
-    let mut spec = gents::RequestSpec::new(identity, admission);
+    let mut spec = gents::RequestSpec::new(
+        gents_protocol::request_admission::RequestPurpose::Normal,
+        identity,
+        admission,
+    );
     spec.trigger_lineage.trigger_id = Some(goal.goal_id.clone());
     spec.trigger_lineage.trigger_kind = Some("goal".to_owned());
     spec.subagent = Some(gents::ParentLink {

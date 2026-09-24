@@ -39,6 +39,7 @@ def evidenceValid (world : World) (request : PhysicalRequestAdmission) : ClaimEv
         request.entry.source == .goal &&
         request.entry.queuedAfter == some receipt.parentLogical &&
         request.document != receipt.parentPhysical
+  | .titleAudit _ => false
 
 def predecessorReady (world : World) : Bool :=
   match world.lease.lease with
@@ -60,7 +61,8 @@ trace never admits this intermediate result on its own. -/
 def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
     (activation : Activation) : Option World :=
   let old := state
-  if state.claimed.isSome || !predecessorReady old || activation.request.document == old.requestId ||
+  if state.purpose != .normal || state.claimed.isSome || !predecessorReady old ||
+      activation.request.document == old.requestId ||
       state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule || now < old.lease.now then none
   else if !activation.request.authenticated || !activation.routesAuthenticated ||
@@ -93,6 +95,64 @@ def claimAndActivate (state : World) (actor : Gate.Actor) (now : Time)
                 { physicalRequest := activation.request.document
                 , logicalRequest := activation.request.entry.requestId
                 , session := activation.request.session, evidence := activation.evidence } }
+
+/-- A title's own pending request is claimed under its own lease. The signed
+parent binding is authenticated before this gate and is retained as provenance;
+the parent's lifecycle and the session queue do not authorize this claim. -/
+def claimTitle (state : World) (actor : Gate.Actor) (now : Time)
+    (activation : TitleActivation) : Option World :=
+  let binding := activation.binding
+  if state.purpose != .titleAudit || state.claimed.isSome ||
+      !binding.authenticated || binding.physicalRequest != state.requestId ||
+      binding.parentPhysical == binding.physicalRequest ||
+      binding.parentLogical == binding.logicalRequest ||
+      binding.session != state.sessionId || binding.agent != state.principal ||
+      state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
+      !StorageWriteGate.pollable state.gateSchedule || now < state.lease.now then none
+  else
+    let world := Gate.atTime state now
+    match RequestExecutionLease.step? world.lease
+        (.claim .mutationWriteGate activation.generation activation.duration activation.deadline) with
+    | none => none
+    | some lease => some
+        { world with
+          lease := lease
+          gateSchedule := { state.gateSchedule with phase := .releasable }
+          claimed := some
+            { physicalRequest := binding.physicalRequest
+            , logicalRequest := binding.logicalRequest
+            , session := binding.session
+            , evidence := .titleAudit binding } }
+
+theorem successful_title_claim_frame
+    (before after : World) (actor : Gate.Actor) (now : Time)
+    (activation : TitleActivation)
+    (h : claimTitle before actor now activation = some after) :
+    after = { before with
+      lease := after.lease
+      gateSchedule := after.gateSchedule
+      claimed := after.claimed } := by
+  unfold claimTitle at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals rfl
+
+theorem successful_title_claim_binding
+    (before after : World) (actor : Gate.Actor) (now : Time)
+    (activation : TitleActivation)
+    (h : claimTitle before actor now activation = some after) :
+    after.claimed = some
+      { physicalRequest := activation.binding.physicalRequest
+      , logicalRequest := activation.binding.logicalRequest
+      , session := activation.binding.session
+      , evidence := .titleAudit activation.binding } ∧
+    after.queue = before.queue ∧ after.requestId = before.requestId := by
+  unfold claimTitle at h
+  dsimp only at h
+  repeat' first | contradiction | split at h
+  all_goals cases h
+  all_goals simp [Gate.atTime] at *
 
 theorem successful_claim_has_exact_binding
     (before after : World) (actor : Gate.Actor) (now : Time) (activation : Activation)
@@ -165,6 +225,19 @@ theorem successful_claim_preserves_nextSeq
   exact congrArg (fun transcript : Transcript.TranscriptState => transcript.nextSeq)
     (successful_claim_preserves_session_facts before after actor now activation h).2.2.1
 
+def claimReady (world : World) (claimed : ClaimedBinding) : Bool :=
+  claimed.physicalRequest == world.requestId && claimed.session == world.sessionId &&
+    match claimed.evidence with
+    | .titleAudit binding =>
+        world.purpose == .titleAudit && binding.authenticated &&
+          binding.physicalRequest == claimed.physicalRequest &&
+          binding.logicalRequest == claimed.logicalRequest &&
+          binding.session == claimed.session && binding.agent == world.principal &&
+          binding.parentPhysical != binding.physicalRequest &&
+          binding.parentLogical != binding.logicalRequest
+    | _ => world.purpose == .normal &&
+        world.queue.active == some claimed.logicalRequest
+
 def beginProcessing (state : World) (actor : Gate.Actor) (now : Time)
     (generation : Generation) : Option World :=
   match state.claimed with
@@ -172,9 +245,7 @@ def beginProcessing (state : World) (actor : Gate.Actor) (now : Time)
   | some claimed =>
     let stored := state
     let world := Gate.atTime stored now
-    if now < stored.lease.now ||
-      claimed.physicalRequest != world.requestId || claimed.session != world.sessionId ||
-      state.queue.active != some claimed.logicalRequest ||
+    if now < stored.lease.now || !claimReady world claimed ||
       state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule then none
     else match RequestExecutionLease.step? world.lease (.begin .mutationWriteGate generation) with
@@ -219,22 +290,26 @@ def finishAndAcknowledge (state : World) (actor : Gate.Actor) : Option FinishRes
     let world := state
     if state.gateOwner != some actor || state.gateSchedule.phase != .storage ||
       !StorageWriteGate.pollable state.gateSchedule ||
-      claimed.physicalRequest != world.requestId || claimed.session != world.sessionId ||
-      state.queue.active != some claimed.logicalRequest then none
+      !claimReady world claimed then none
     else match terminalOutcome? world with
     | none => none
     | some outcome =>
-      if outcome == .completed &&
+      if (world.purpose == .titleAudit && world.terminalSelection != some .noMessage) ||
+          (outcome == .completed &&
       !(match world.terminalSelection with
         | some selection => terminalSelectionValid world selection
-        | none => false) then none
-      else match SessionQueue.step? state.queue .finishActive with
+        | none => false)) then none
+      else
+      let queue? := match claimed.evidence with
+        | .titleAudit _ => some state.queue
+        | _ => SessionQueue.step? state.queue .finishActive
+      match queue? with
       | none => none
       | some queue =>
         let acknowledged := match claimed.evidence with
           | .backgroundWake snapshot =>
               if outcome == .completed then snapshot.attemptedBindings else []
-          | .ordinary | .goalChild _ => []
+          | .ordinary | .goalChild _ | .titleAudit _ => []
         some ⟨
           { state with
             gateSchedule := { state.gateSchedule with phase := .releasable }
@@ -261,11 +336,14 @@ theorem successful_finish_frame
 theorem successful_finish_clears_claim_control
     (before : World) (after : FinishResult) (actor : Gate.Actor)
     (h : finishAndAcknowledge before actor = some after) :
-    after.state.claimed = none ∧ after.state.queue.active = none := by
+    after.state.claimed = none ∧
+      (before.purpose = .normal → after.state.queue.active = none) ∧
+      (before.purpose = .titleAudit → after.state.queue = before.queue) := by
   unfold finishAndAcknowledge at h
   dsimp only at h
   repeat' first | contradiction | split at h
   all_goals cases h
-  all_goals exact ⟨rfl, finishActive_step_clears_active _ _ (by assumption)⟩
+  all_goals simp_all [claimReady]
+  all_goals exact finishActive_step_clears_active _ _ (by assumption)
 
 end CanonicalOutput.Execution.Handover

@@ -65,6 +65,48 @@ class DecoderTests(unittest.TestCase):
         self.assertEqual(self.errors(), [])
         self.assertEqual(self.errors(lambda case: case.pop("deadline")), [])
 
+    def test_required_nullable_accepts_null_but_rejects_missing(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) deadline: Option<u64>,",
+            '#[serde(deserialize_with = "crate::lean_vocab_test::required_nullable")]\n'
+            "    pub(crate) deadline: Option<u64>,"))
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(self.errors(lambda case: case.__setitem__("deadline", 5)), [])
+        self.assertIn("missing field `deadline`", "\n".join(
+            self.errors(lambda case: case.pop("deadline"))))
+        self.assertIn("expected u64", "\n".join(
+            self.errors(lambda case: case.__setitem__("deadline", "5"))))
+
+    def test_relative_required_nullable_accepts_null_but_rejects_missing(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) deadline: Option<u64>,",
+            '#[serde(deserialize_with = "required_nullable")]\n'
+            "    pub(crate) deadline: Option<u64>,"))
+        self.assertEqual(self.errors(), [])
+        self.assertIn("missing field `deadline`", "\n".join(
+            self.errors(lambda case: case.pop("deadline"))))
+
+    def test_other_nullable_helpers_remain_unsupported(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) deadline: Option<u64>,",
+            '#[serde(deserialize_with = "another::nullable")]\n'
+            "    pub(crate) deadline: Option<u64>,"))
+        self.assertIn("unsupported serde syntax", "\n".join(self.errors()))
+
+    def test_required_nullable_non_option_remains_unsupported(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) name: String,",
+            '#[serde(deserialize_with = "crate::lean_vocab_test::required_nullable")]\n'
+            "    pub(crate) name: String,"))
+        self.assertIn("required_nullable on non-Option field", "\n".join(self.errors()))
+
+    def test_relative_required_nullable_non_option_remains_unsupported(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "pub(crate) name: String,",
+            '#[serde(deserialize_with = "required_nullable")]\n'
+            "    pub(crate) name: String,"))
+        self.assertIn("required_nullable on non-Option field", "\n".join(self.errors()))
+
     def test_unknown_field_rejected(self):
         self.assertIn("unknown field `extra`", "\n".join(
             self.errors(lambda case: case.__setitem__("extra", 1))))
@@ -75,6 +117,14 @@ class DecoderTests(unittest.TestCase):
         payload["cases"][0]["steps"][0]["operation"] = "renewLease"
         self.assertEqual(decoders.validate(self.items, payload, GROUPS), [])
         self.assertIn("unknown variant `renew_lease`", "\n".join(self.errors()))
+
+    def test_explicit_variant_rename_overrides_rename_all(self):
+        self.items = decoders.parse_items(RUST.replace(
+            "    Complete,", '    #[serde(rename = "complete-now")]\n    Complete,'))
+        self.assertEqual(self.errors(), [])
+        self.assertEqual(self.errors(lambda case: case.__setitem__("outcome", "complete-now")), [])
+        self.assertIn("unknown unit variant `complete`", "\n".join(
+            self.errors(lambda case: case.__setitem__("outcome", "complete"))))
 
     def test_missing_required_field_rejected(self):
         self.assertIn("missing field `name`", "\n".join(
@@ -112,11 +162,14 @@ class DecoderTests(unittest.TestCase):
         payload["cases"][0]["steps"][0]["now"] = 2**31
         self.assertIn("expected i32", "\n".join(decoders.validate(items, payload, GROUPS)))
 
-    def test_renamed_variant_fails_closed(self):
+    def test_renamed_tagged_variant_rejects_original_name(self):
         rust = RUST.replace("RenewLease { now: u64 }",
                             '#[serde(rename = "renewed")] RenewLease { now: u64 }')
         errors = decoders.validate(decoders.parse_items(rust), VALID, GROUPS)
-        self.assertIn('rename = "renewed"', "\n".join(errors))
+        self.assertIn('unknown variant `renew_lease`', "\n".join(errors))
+        payload = copy.deepcopy(VALID)
+        payload["cases"][0]["steps"][0]["operation"] = "renewed"
+        self.assertEqual(decoders.validate(decoders.parse_items(rust), payload, GROUPS), [])
 
     def test_unsupported_reachable_serde_features_fail_closed(self):
         for attribute in ["flatten", 'deserialize_with = "decode"']:

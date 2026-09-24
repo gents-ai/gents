@@ -1951,10 +1951,14 @@ async fn schema_invalid_structured_summary_is_retracted_and_resampled() {
 /// its own capture scope so their rendered-request keys remain distinct.
 #[tokio::test(start_paused = true)]
 async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
+    use crate::identity::{AgentIdentity, KeyIdentity};
     use crate::rendered_request::scope::{
         armed_labels, scope_request, test_scope, CaptureScopeKind,
     };
-    use crate::rendered_request::{RenderedRequestCaptureSink, RenderedRequestContext};
+    use crate::rendered_request::RenderedRequestCaptureSink;
+    use gents_protocol::request_admission::{
+        AgentRequestAdmissionRecord, AgentRequestCreate, RequestPurpose,
+    };
 
     let model = ScriptedSummaryModel::new(vec![
         ScriptedSummaryModel::malformed_summary_turn(),
@@ -1972,20 +1976,87 @@ async fn the_summarizer_and_its_fallback_arm_distinct_capture_scopes() {
     ));
     let compactor = ProviderReductionEngine::new(std::sync::Arc::new(model), config);
 
+    let node = Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+    ensure_runtime_schemas(&node).await.unwrap();
+    let keys = tempfile::tempdir().unwrap();
+    let identity = KeyIdentity::load_or_create(keys.path().join("compaction.key"), None).unwrap();
+    let mut create = AgentRequestCreate::base(
+        RequestPurpose::Normal,
+        uuid::Uuid::new_v4().to_string(),
+        identity.did(),
+        identity.did(),
+        "general",
+        uuid::Uuid::new_v4().to_string(),
+        "compaction scope fixture",
+        "interactive",
+        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        AgentRequestAdmissionRecord::local_self(identity.did()),
+    );
+    crate::sign_agent_request_create(&identity, &mut create)
+        .await
+        .unwrap();
+    let created = crate::config_client::ConfigAccess::write_local_response(
+        node.as_ref(),
+        "test.compaction.capture_scope_request",
+        &create.graphql_mutation().unwrap(),
+    )
+    .await
+    .unwrap();
+    let doc_id = crate::graphql::single_mutation_document(&created, "create_AgentRequest")
+        .unwrap()
+        .unwrap()["_docID"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let loaded = crate::graphql::graphql_with_transaction_retry(
+        node.as_ref(),
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{ {} }} }}"#,
+            crate::graphql::escape_graphql_string(&doc_id),
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ),
+        "load compaction capture fixture",
+    )
+    .await
+    .unwrap();
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&loaded, "AgentRequest")
+            .unwrap()
+            .unwrap();
+    let mut lifecycle = crate::lifecycle::RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        identity.did(),
+        row.try_into().unwrap(),
+        60,
+    );
+    assert_eq!(
+        lifecycle.claim().await.unwrap(),
+        crate::lifecycle::ClaimOutcome::Claimed
+    );
+    let writer = crate::streaming::DefraStreamWriter::new(
+        node.clone(),
+        identity.did(),
+        std::time::Duration::from_millis(1),
+    );
+    lifecycle.begin_owned_execution(&writer).await.unwrap();
+
     let sink: RenderedRequestCaptureSink = std::sync::Arc::new(|_| Box::pin(async { Ok(()) }));
-    let scope = test_scope(
-        RenderedRequestContext {
-            request_doc_id: "doc-1".to_string(),
-            request_commit_cid: "bafy-request-commit".to_string(),
-            request_id: "req-1".to_string(),
-            agent_did: "did:key:agent".to_string(),
-            requester_did: String::new(),
-            behavior_id: "behavior".to_string(),
-            session_id: "session-1".to_string(),
-            model_name: "model".to_string(),
-        },
+    let mut scope = test_scope(
+        crate::rendered_request::context_for_claimed_request(
+            lifecycle.request(),
+            lifecycle.request_commit_cid().unwrap(),
+            "model".to_string(),
+        ),
         sink,
     );
+    Arc::get_mut(&mut scope)
+        .unwrap()
+        .set_auxiliary_output_sink(writer.auxiliary_output_sink(
+            lifecycle.request().clone(),
+            lifecycle.execution_generation().unwrap().to_owned(),
+            GROUPED_PROFILE,
+        ));
 
     let labels = scope_request(scope, async move {
         compactor
@@ -2873,7 +2944,7 @@ async fn integration_compaction_persists_entry_and_prompt_builder_uses_it() {
         let request_id = crate::graphql::escape_graphql_string("request-compaction-test");
         let session_id = crate::graphql::escape_graphql_string("session-1");
         let agent_did = crate::graphql::escape_graphql_string(agent_did);
-        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", subagent_depth: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
+        let created = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "{agent_did}", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "compaction", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", subagent_depth: 0, failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3 }}) {{ _docID }} }}"#)).await;
         assert!(!created.has_errors(), "{:#?}", created.errors);
         let row = node.execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ {} }} }}"#,

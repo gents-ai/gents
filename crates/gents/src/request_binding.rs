@@ -76,6 +76,7 @@ pub(crate) async fn load_agent_request_by_doc_id(
             AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 1) {{
                 _docID
                 request_id
+                purpose
                 agent_did
                 requester_did
                 behavior_id

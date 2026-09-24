@@ -259,6 +259,7 @@ pub async fn create_request_for_agent_with_signed_fields(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{session_id}",
@@ -356,6 +357,7 @@ pub async fn create_retry_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id_escaped}",
+                purpose: "normal",
                 agent_did: "{AGENT_DID}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{session_id_escaped}",
@@ -451,6 +453,7 @@ pub fn build_request(
     created_at: String,
 ) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id,
         agent_did: AGENT_DID.into(),
@@ -1058,7 +1061,7 @@ pub async fn load_request_row_by_logical_id(
     let response = node
         .execute(&format!(
             r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}, limit: 2) {{
-                _docID request_id agent_did requester_did behavior_id session_id content input
+                _docID request_id purpose agent_did requester_did behavior_id session_id content input
                 execution_origin created_at deadline valid_until subagent_depth
                 caused_by_parent_request_id caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id lifecycle_state

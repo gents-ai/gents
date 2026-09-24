@@ -33,6 +33,7 @@ fn indexed_session(requester: Option<&str>) -> AgentSession {
 
 fn indexed_request(requester: Option<&str>) -> AgentRequestRow {
     AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("physical-head".into()),
         request_id: "logical-head".into(),
         agent_did: Some("did:test:owner".into()),
@@ -137,6 +138,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
     let store = ClientStore::from_rows(ClientStoreRows {
         requests: vec![
             AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some("doc-mini-1".into()),
                 request_id: "req-mini-1".into(),
                 agent_did: Some("did:test:mini-1".into()),
@@ -147,6 +149,7 @@ fn task_run_history_is_agent_scoped_when_trigger_ids_match() {
                 ..Default::default()
             },
             AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some("doc-mini-2".into()),
                 request_id: "req-mini-2".into(),
                 agent_did: Some("did:test:mini-2".into()),
@@ -260,6 +263,7 @@ fn task_recent_runs_view_consumes_generated_trigger_dispatch_lineage_contract_ca
         }];
         let store = ClientStore::from_rows(ClientStoreRows {
             requests: vec![AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 request_id: request_id.clone(),
                 agent_did: Some("did:test:contract-agent".to_string()),
                 requester_did: None,

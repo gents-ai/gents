@@ -27,6 +27,7 @@ fn stale_session(state: RequestLifecycleState) -> AgentSession {
 
 fn stale_request(state: RequestLifecycleState) -> AgentRequestRow {
     AgentRequestRow {
+        purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
         doc_id: Some("req-1".into()),
         request_id: "req-1".into(),
         agent_did: Some("did:test:amy".into()),
@@ -169,6 +170,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
         requests: vec![
             stale_request(RequestLifecycleState::Completed),
             AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some("req-2".into()),
                 request_id: "req-2".into(),
                 agent_did: Some("did:test:amy".into()),
@@ -178,6 +180,7 @@ fn session_snapshot_stays_renderable_across_three_turns_with_stale_conversation_
                 ..Default::default()
             },
             AgentRequestRow {
+                purpose: Some(gents_protocol::request_admission::RequestPurpose::Normal),
                 doc_id: Some("req-3".into()),
                 request_id: "req-3".into(),
                 agent_did: Some("did:test:amy".into()),

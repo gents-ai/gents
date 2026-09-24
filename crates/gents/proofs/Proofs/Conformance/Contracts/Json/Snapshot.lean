@@ -33,6 +33,8 @@ import Proofs.Conformance.Contracts.Json.Goal
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.Contracts.Json.PairingReconcile
 import Proofs.Conformance.Contracts.Json.Enrollment
+import Proofs.Conformance.TitleUsage
+import Proofs.Conformance.TitleAdmission
 import Proofs.Conformance.Contracts.Json.PromptAssembly
 import Proofs.Conformance.Contracts.Json.RenderedCapture
 import Proofs.Conformance.Contracts.Json.DurableReduction
@@ -225,6 +227,14 @@ def snapshotJson : String :=
     ++ "\"request_input_cases\":" ++ requestInputCasesJson ++ ","
     ++ "\"agent_request_admission_cases\":"
       ++ agentRequestAdmissionCasesJson ++ ","
+    ++ "\"title_request_admission_cases\":"
+      ++ titleRequestAdmissionCasesJson ++ ","
+    ++ "\"title_request_purpose_wire_cases\":"
+      ++ titlePurposeWireCasesJson ++ ","
+    ++ "\"title_usage_cases\":"
+      ++ Conformance.TitleUsage.casesJson ++ ","
+    ++ "\"title_admission_join_cases\":"
+      ++ Conformance.TitleAdmission.casesJson ++ ","
     ++ "\"frontend_client_shell_case_count\":"
       ++ toString Conformance.ClientShellContracts.frontendClientShellCaseCount ++ ","
     ++ "\"frontend_client_shell_cases\":"

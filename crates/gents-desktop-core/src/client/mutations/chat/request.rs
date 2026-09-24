@@ -213,6 +213,7 @@ async fn build_request_submission(
             },
             retry_key: options.retry_key,
             ..RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
                     request_id: request_id.clone(),
                     agent_did: agent_did.to_string(),
@@ -448,6 +449,7 @@ async fn retry_request_in_txn(
             // sampling/metadata scalars exist on the canonical request.
             input: parent.input.clone().unwrap_or_default(),
             ..RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 RequestIdentity {
                     request_id: candidate_request_id.to_string(),
                     agent_did: agent_did.to_string(),

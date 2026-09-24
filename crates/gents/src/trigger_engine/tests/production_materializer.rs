@@ -298,6 +298,7 @@ async fn goal_task_recovery_rejects_foreign_principal_using_expected_request_id(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{}",
+                purpose: "normal",
                 agent_did: "did:key:foreign-task-owner",
                 behavior_id: "general",
                 session_id: "{}",
@@ -346,6 +347,7 @@ async fn create_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "general",
                 session_id: "{request_id}",

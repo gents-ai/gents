@@ -4,6 +4,12 @@ namespace StreamingResponse
 
 open CanonicalOutput
 
+theorem auxiliary_audit_is_never_public (observation : Observation)
+    (kind : AuxiliaryKind) (scope turn attempt : Nat)
+    (h : observation.target.coordinate.source = .auxiliary kind scope turn attempt) :
+    project observation = .absent := by
+  simp [project, h, Source.isAuxiliary]
+
 theorem messageScoped_implies_scopeResult_ok {observation : Observation}
     {message : MessageEnvelope} (h : messageScoped observation message = true) :
     messageScopeResult observation message = .ok () := by

@@ -989,6 +989,7 @@ async fn create_parent_request_with_extra_fields(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "{behavior_id}",
                 session_id: "{session_id}",

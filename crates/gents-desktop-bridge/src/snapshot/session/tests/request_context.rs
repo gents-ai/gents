@@ -74,7 +74,7 @@ async fn shared_snapshot_keeps_previous_accounting_until_new_request_dispatches(
     ] {
         let mutation = format!(
             r#"mutation {{
-                create_AgentRequest(input: {{
+                create_AgentRequest(input: {{ purpose: "normal",
                     request_id: "{request_id}",
                     agent_did: "{agent_did}",
                     behavior_id: "default",

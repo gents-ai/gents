@@ -241,13 +241,19 @@ async fn fork_in_txn(
     let snapshot = txn
         .execute(&format!(
             r#"{{
-                AgentRequest(filter: {{ {scope} }}) {{ lifecycle_state }}
+                AgentRequest(filter: {{ {scope} }}) {{ purpose lifecycle_state }}
                 AgentMessage(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }}
                 CompactionEntry(filter: {{ {scope} }}, order: {{ sequence: ASC }}) {{ _docID compaction_key session_id agent_did requester_did request_id request_doc_id sequence summary files_read files_modified messages_compacted compacted_through_sequence original_tokens compacted_tokens created_at }}
             }}"#
         ))
         .await?;
     for request in rows(&snapshot, "AgentRequest")? {
+        let purpose =
+            gents_protocol::request_admission::RequestPurpose::try_from(text(&request, "purpose")?)
+                .map_err(anyhow::Error::msg)?;
+        if purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+            continue;
+        }
         if RequestLifecycleState::parse(text(&request, "lifecycle_state")?)?.is_active_runtime() {
             return Err(ForkError::ForkSourceBusy.into());
         }

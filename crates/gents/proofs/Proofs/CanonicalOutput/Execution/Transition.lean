@@ -165,9 +165,10 @@ def freshAuxiliaryExtentExact (segments : List Segment) (closing : Segment) : Bo
         data.all (fun record => record.createdAt ≤ closing.createdAt)
   | _ => false
 
-/-- A compaction or fallback capture closes under the parent request lease but
-never accepts a message or changes transcript/tool state. The native adapter
-must map the two typed capture-scope kinds injectively into this source. -/
+/-- Auxiliary capture closes under its request lease without accepting a
+message or changing transcript/tool state. Compaction and fallback use the
+parent request; title capture uses its separately admitted title request. The
+native adapter must preserve the typed capture-scope kind. -/
 def closeAuxiliaryCore (world : World) (generation : Generation)
     (closing : Segment) : Except Error World :=
   if segmentIdentityCollision world closing then .error .identityCollision

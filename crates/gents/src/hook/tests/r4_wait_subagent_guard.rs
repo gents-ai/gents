@@ -224,7 +224,7 @@ async fn uncorroborated_materialized_child_is_nonretryable_and_remains_listed() 
         .node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{child}", agent_did: "{agent}", requester_did: "{agent}",
+        request_id: "{child}", purpose: "normal", agent_did: "{agent}", requester_did: "{agent}",
         behavior_id: "{CHILD}", session_id: "{child_session}",
         retry_root_request: "{child}", content: "corrupt child",
         lifecycle_state: "processing", execution_origin: "interactive",

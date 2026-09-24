@@ -876,7 +876,7 @@ async fn claimed_authored_request(
     let created = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{request_id}", agent_did: "{escaped_agent}",
+        request_id: "{request_id}", purpose: "normal", agent_did: "{escaped_agent}",
         behavior_id: "general", session_id: "{session_id}", content: "race",
         lifecycle_state: "pending", execution_origin: "interactive", created_at: "{now}",
         retry_count: 0, max_retries: 3, subagent_depth: 0

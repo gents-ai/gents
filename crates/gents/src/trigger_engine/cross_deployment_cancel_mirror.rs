@@ -479,6 +479,7 @@ mod tests {
             &r#"mutation {
                 create_AgentRequest(input: {
                     request_id: "child-request",
+                    purpose: "normal",
                     agent_did: "did:test:child",
                     requester_did: "did:test:parent",
                     behavior_id: "child-behavior",

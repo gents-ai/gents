@@ -31,6 +31,7 @@ async fn persisted_request(
 ) -> AgentRequest {
     use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
     let mut create = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         id,
         identity.did(),
         identity.did(),
@@ -371,6 +372,7 @@ fn generated_reply_cases_drive_claim_validation() {
         let mut request = AgentRequest::try_from(
             serde_json::from_value::<gents_protocol::row::AgentRequestRow>(json!({
                 "_docID": text("request_doc_id"), "request_id": "request",
+                "purpose": "normal",
                 "agent_did": text("agent_did"), "requester_did": text("requester_did"),
                 "behavior_id": text("behavior_id"), "session_id": text("session_id"),
                 "caused_by_source_doc_id": text("source_doc_id"),

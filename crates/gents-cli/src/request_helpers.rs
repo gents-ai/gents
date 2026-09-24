@@ -350,6 +350,7 @@ pub(crate) async fn prepare_agent_request(
                 max_retries: i64::from(gents::lifecycle::DEFAULT_REQUEST_MAX_RETRIES),
             }),
             ..gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: request_id.clone(),
                     agent_did: agent_did.to_string(),
@@ -1251,6 +1252,7 @@ mod tests {
         let did = identity.did().to_string();
         let create = gents::build_signed_request(
             gents::RequestSpec::new(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 gents::RequestIdentity {
                     request_id: "stable-request-id".into(),
                     agent_did: did.clone(),
