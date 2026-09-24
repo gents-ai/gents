@@ -611,7 +611,7 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Process.lean` | Process lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/Request.lean` | Barrel for request state, transitions, executable semantics, and local properties |
 | `Proofs/RequestExecutionLease.lean` | Barrel for the #1341 execution-lease state, executable transitions, stale-owner exclusion, atomic terminal agreement, and bounded terminal effects |
-| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and serial registry handoff |
+| `Proofs/InferenceCall.lean` | Barrel for inference-call state, transitions, slot accounting, cancellation properties, controller bookkeeping, and the shared-pool registry handoff |
 | `Proofs/Persistence.lean` | Persistence lifecycle model plus executable `Action`, `step?`, and `replay?` |
 | `Proofs/StorageObservation.lean` | Daemon-visible storage observation model and persistence bridge |
 | `Proofs/CrossMachineComposed.lean` | Cross-machine composition and guards; global `WellFormed` (list-level coherence, detached persistence/linkage, unique call ids, no early tools, invFG) established at `initial` and preserved by every transition (#555) |
@@ -1490,26 +1490,28 @@ per-document writer has not been migrated; it is not an alternative formal contr
 
 ### Backend Controller Handoff
 
-`Proofs/InferenceCall/Registry.lean` refines one backend's serial controller
-handoff. Metadata-only reconciliation retains the current controller; a
-resource change retires it until its real owners release. Final release
-installs only the latest available desired configuration. Removed or
-unavailable pending configurations cannot be resurrected by a drain callback.
+`Proofs/InferenceCall/Registry.lean` refines one backend's admission capacity
+pool (#897, #1366). Metadata-only reconciliation retains the admitting
+controller; a resource change replaces it in the same step, on the same pool,
+so an available backend always admits (`rewrite_replaces_admitting_without_gap`,
+`available_desired_admits`). Calls admitted or queued under a replaced
+incarnation finish under it while their permits still count against the
+pool, and new admissions never exceed the current capacity
+(`acquire_within_capacity`, `over_capacity_blocks_acquire`). Removal or
+unavailability closes the pool (`unavailable_blocks_acquire`,
+`removed_backend_cannot_be_resurrected`); a later available configuration
+opens a fresh pool that permits of the closed one cannot affect
+(`reopened_pool_ignores_prior_permits`).
 
-The model separates actual permits from in-flight ownership, which also
-includes queued admissions. It composes the existing ControllerBookkeeping
-drain invariant and proves capacity preservation and release stuttering on
-epoch mismatch. Rust releases through the originating controller `Arc`;
-rollback can reuse an epoch, and isolation between those distinct controller
-incarnations is fenced by a real permit test outside this numeric model.
-Its finite release trace is conditional progress, not scheduler
-fairness or a wall-clock bound. Already-issued permits during downsizing
-remain bounded by their original controller's capacity until retirement.
+Rust refines the pool with a shared Tokio semaphore whose capacity decreases
+are recorded as owed permits and paid by forgetting returned ones. Epoch
+reuse on rollback creates a distinct incarnation on the same pool, fenced by
+a real permit test outside this numeric model.
 
-Eight generated traces contain 55 step observations for the real registry
-and actual AdmissionPermits. Queued-waiter reachability remains covered by
-the existing controller bookkeeping tests. This registry refinement does
-not establish durable request waiting through backend outages.
+Eight generated traces contain 57 step observations for the real registry
+and actual AdmissionPermits. Queued-waiter accounting remains covered by the
+controller bookkeeping tests. This registry refinement does not establish
+durable request waiting through backend outages.
 
 ### Interrupted Inference Calls
 

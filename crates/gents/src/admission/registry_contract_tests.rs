@@ -18,14 +18,9 @@ struct Case {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum Action {
-    Reconcile {
-        desired: Option<Desired>,
-    },
+    Reconcile { desired: Option<Desired> },
     Acquire,
-    Release {
-        generation: u64,
-        returned_permit: bool,
-    },
+    Release { pool: usize },
 }
 
 #[derive(Deserialize)]
@@ -40,36 +35,50 @@ struct Desired {
 
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 struct Observation {
-    pending_generation: Option<u64>,
-    controller_generation: Option<u64>,
+    admitting_generation: Option<u64>,
     capacity: usize,
-    in_flight: usize,
-    permits: usize,
-    is_open: bool,
+    held: usize,
+    pool: usize,
 }
 
-fn observe(registry: &AdmissionRegistry, backend_id: &str) -> Result<Observation> {
-    let state = registry.inner.state.lock().unwrap();
-    let controllers = state
-        .active
-        .get(backend_id)
-        .into_iter()
-        .chain(state.draining.get(backend_id).into_iter().flatten())
-        .collect::<Vec<_>>();
-    ensure!(
-        controllers.len() <= 1,
-        "replacement overlapped retiring ownership"
-    );
-    let controller = controllers.first();
+/// Numbers real pools in opening order, matching the model's pool counter.
+#[derive(Default)]
+struct PoolIds {
+    opened: Vec<Arc<CapacityPool>>,
+}
+
+impl PoolIds {
+    fn current(&mut self, controller: Option<&Arc<BackendAdmissionController>>) -> usize {
+        if let Some(controller) = controller {
+            if !self
+                .opened
+                .last()
+                .is_some_and(|pool| Arc::ptr_eq(pool, &controller.pool))
+            {
+                self.opened.push(controller.pool.clone());
+            }
+        }
+        self.opened.len()
+    }
+}
+
+fn observe(
+    registry: &AdmissionRegistry,
+    backend_id: &str,
+    pools: &mut PoolIds,
+) -> Result<Observation> {
+    let controller = registry.active_for_test(backend_id);
+    if let Some(controller) = &controller {
+        ensure!(
+            controller.pool.capacity_for_test() == controller.config.max_concurrent,
+            "admitting controller and its pool disagree on capacity"
+        );
+    }
     Ok(Observation {
-        pending_generation: state.pending.get(backend_id).map(|p| p.generation),
-        controller_generation: controller.map(|c| c.generation),
-        capacity: controller.map_or(0, |c| c.config.max_concurrent),
-        in_flight: controller.map_or(0, |c| c.in_flight_for_test()),
-        permits: controller.map_or(0, |c| {
-            c.config.max_concurrent - c.available_permits_for_test()
-        }),
-        is_open: controller.is_some_and(|c| !c.is_closed()),
+        admitting_generation: controller.as_ref().map(|c| c.generation),
+        capacity: controller.as_ref().map_or(0, |c| c.config.max_concurrent),
+        held: controller.as_ref().map_or(0, |c| c.pool.held_for_test()),
+        pool: pools.current(controller.as_ref()),
     })
 }
 
@@ -104,7 +113,8 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
     );
     let backend_id = format!("registry-{}", case.name);
     let registry = AdmissionRegistry::new(node);
-    let mut held: Vec<(u64, AdmissionPermit)> = Vec::new();
+    let mut pools = PoolIds::default();
+    let mut held: Vec<(usize, AdmissionPermit)> = Vec::new();
     for (index, (action, expected)) in case.actions.iter().zip(&case.expected).enumerate() {
         match action {
             Action::Reconcile { desired } => {
@@ -122,7 +132,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
                 registry.reconcile(desired.as_ref().map_or(0, |d| d.generation), &configs);
             }
             Action::Acquire => {
-                let generation = observe(&registry, &backend_id)?.controller_generation;
+                let before = observe(&registry, &backend_id, &mut pools)?;
                 if let Ok(permit) = registry
                     .acquire_for_test(
                         format!("{}-{index}", case.name),
@@ -133,27 +143,25 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
                     )
                     .await
                 {
-                    held.push((generation.context("admitted without a controller")?, permit));
+                    ensure!(
+                        Some(permit.controller_generation_for_test())
+                            == before.admitting_generation,
+                        "admitted under a controller other than the admitting one"
+                    );
+                    held.push((before.pool, permit));
                 }
             }
-            Action::Release {
-                generation,
-                returned_permit,
-            } => {
-                ensure!(
-                    *returned_permit,
-                    "queue releases belong to ControllerBookkeeping coverage"
-                );
+            Action::Release { pool } => {
                 let position = held
                     .iter()
-                    .position(|(g, _)| g == generation)
+                    .position(|(p, _)| p == pool)
                     .context("trace must release an actual owned permit")?;
                 let (_, mut permit) = held.swap_remove(position);
                 permit.finish_success(None).await?;
                 drop(permit);
             }
         }
-        let actual = observe(&registry, &backend_id)?;
+        let actual = observe(&registry, &backend_id, &mut pools)?;
         ensure!(
             actual == *expected,
             "step {index}: expected {expected:?}, got {actual:?}"
@@ -182,90 +190,11 @@ async fn generated_inference_registry_cases_drive_real_permits() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// Rollback may reuse an epoch. The restored configuration is a distinct
+/// incarnation on the same pool, so the replaced incarnation's permit still
+/// counts against capacity and its release frees the shared slot.
 #[tokio::test]
-async fn deferred_drain_callback_cannot_leave_stale_pending_configuration() {
-    let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
-    crate::schema::ensure_runtime_schemas(node.as_ref())
-        .await
-        .unwrap();
-    let registry = AdmissionRegistry::new(node);
-    let backend_id = "registry-deferred-drain";
-    let config = |generation, capacity| {
-        config_from_case(
-            backend_id,
-            &Desired {
-                key: 7,
-                generation,
-                capacity,
-                available: true,
-                name: "backend".to_owned(),
-                catalog: "model".to_owned(),
-            },
-        )
-        .unwrap()
-    };
-
-    // Defer only the registry notification, not real permit bookkeeping.
-    // In production this gap occurs after release_in_flight decrements to
-    // zero while controller_drained is waiting for the registry mutex.
-    let retiring = BackendAdmissionController::new(1, config(1, 1), std::sync::Weak::new());
-    registry
-        .inner
-        .state
-        .lock()
-        .unwrap()
-        .active
-        .insert(backend_id.to_owned(), retiring.clone());
-    let mut permit = registry
-        .acquire_for_test(
-            "deferred-drain-owner",
-            backend_id,
-            "default",
-            "did:test:registry",
-            CallKind::Inference,
-        )
-        .await
-        .unwrap();
-    registry.reconcile(2, &[(backend_id.to_owned(), config(2, 2))].into());
-    assert_eq!(
-        observe(&registry, backend_id).unwrap(),
-        Observation {
-            pending_generation: Some(2),
-            controller_generation: Some(1),
-            capacity: 1,
-            in_flight: 1,
-            permits: 1,
-            is_open: false,
-        }
-    );
-
-    permit.finish_success(None).await.unwrap();
-    drop(permit);
-    assert!(retiring.is_drained());
-    assert_eq!(retiring.available_permits_for_test(), 1);
-
-    // Reconciliation wins the mutex before the deferred callback. It must
-    // replace pending generation 2 with generation 3 and consume that entry
-    // when installing, rather than leave an active controller plus stale work.
-    registry.reconcile(3, &[(backend_id.to_owned(), config(3, 3))].into());
-    let installed = Observation {
-        pending_generation: None,
-        controller_generation: Some(3),
-        capacity: 3,
-        in_flight: 0,
-        permits: 0,
-        is_open: true,
-    };
-    assert_eq!(observe(&registry, backend_id).unwrap(), installed);
-    registry
-        .inner
-        .clone()
-        .controller_drained(backend_id.to_owned());
-    assert_eq!(observe(&registry, backend_id).unwrap(), installed);
-}
-
-#[tokio::test]
-async fn rollback_reuses_epoch_with_distinct_controller_ownership() {
+async fn rollback_reuses_epoch_with_distinct_controller_on_shared_pool() {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await
@@ -286,69 +215,40 @@ async fn rollback_reuses_epoch_with_distinct_controller_ownership() {
         )
         .unwrap()
     };
-    registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
-    let old = registry.inner.state.lock().unwrap().active[backend_id].clone();
-    let mut first = registry
-        .acquire_for_test(
-            "rollback-old-owner",
+    let acquire = |request_id: &'static str| {
+        registry.acquire_for_test(
+            request_id,
             backend_id,
             "default",
             "did:test:registry",
             CallKind::Inference,
         )
-        .await
-        .unwrap();
+    };
+    registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
+    let old = registry.active_for_test(backend_id).unwrap();
+    let mut first = acquire("rollback-old-owner").await.unwrap();
     registry.reconcile(2, &[(backend_id.to_owned(), config(2, 2))].into());
     // Failed snapshot publication restores the prior full configuration and
-    // epoch. The closed controller must still drain; rollback cannot reopen it.
+    // epoch.
     registry.reconcile(1, &[(backend_id.to_owned(), config(1, 1))].into());
-    assert_eq!(
-        observe(&registry, backend_id).unwrap(),
-        Observation {
-            pending_generation: Some(1),
-            controller_generation: Some(1),
-            capacity: 1,
-            in_flight: 1,
-            permits: 1,
-            is_open: false,
-        }
-    );
+    let restored = registry.active_for_test(backend_id).unwrap();
+    assert!(!Arc::ptr_eq(&old, &restored));
+    assert!(Arc::ptr_eq(&old.pool, &restored.pool));
+    assert_eq!(old.generation, restored.generation);
+    assert_eq!(restored.pool.held_for_test(), 1);
+    let error = match acquire("rollback-over-capacity").await {
+        Ok(_) => panic!("the replaced incarnation's permit must still count"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("QueueFull"), "{error}");
+
     first.finish_success(None).await.unwrap();
     drop(first);
-    let replacement = registry.inner.state.lock().unwrap().active[backend_id].clone();
-    assert!(!Arc::ptr_eq(&old, &replacement));
-    assert_eq!(old.generation, replacement.generation);
-    assert!(old.is_closed());
-    assert!(old.is_drained());
-    let mut second = registry
-        .acquire_for_test(
-            "rollback-new-owner",
-            backend_id,
-            "default",
-            "did:test:registry",
-            CallKind::Inference,
-        )
-        .await
-        .unwrap();
-    let held = Observation {
-        pending_generation: None,
-        controller_generation: Some(1),
-        capacity: 1,
-        in_flight: 1,
-        permits: 1,
-        is_open: true,
-    };
-    assert_eq!(observe(&registry, backend_id).unwrap(), held);
-    // Deliver a late notification for the retired incarnation. Epoch equality
-    // does not authorize it to release the replacement's real permit.
-    registry
-        .inner
-        .clone()
-        .controller_drained(backend_id.to_owned());
-    assert_eq!(observe(&registry, backend_id).unwrap(), held);
-    assert_eq!(replacement.available_permits_for_test(), 0);
+    assert_eq!(restored.pool.held_for_test(), 0);
+    let mut second = acquire("rollback-new-owner").await.unwrap();
+    assert_eq!(restored.pool.held_for_test(), 1);
     second.finish_success(None).await.unwrap();
     drop(second);
-    assert!(replacement.is_drained());
-    assert_eq!(replacement.available_permits_for_test(), 1);
+    assert_eq!(restored.pool.held_for_test(), 0);
+    assert_eq!(restored.pool.available_permits_for_test(), 1);
 }

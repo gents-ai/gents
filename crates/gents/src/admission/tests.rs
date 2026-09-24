@@ -1264,7 +1264,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
     let controller = super::controller::BackendAdmissionController::new(
         1,
         config("backend-queue-leak", 1, 1),
-        std::sync::Weak::new(),
+        super::controller::CapacityPool::new(1),
     );
 
     let held = controller
@@ -1298,7 +1298,7 @@ async fn queued_persist_failure_releases_queue_capacity() {
         "unexpected error: {error}"
     );
     assert_eq!(
-        controller.queue_waiters_for_test(),
+        controller.pool.queue_waiters_for_test(),
         0,
         "persist failure leaked a queue-waiter unit (#1001)"
     );
@@ -1321,148 +1321,209 @@ async fn queued_persist_failure_releases_queue_capacity() {
     drop(permit);
 }
 
-/// Issue #1001 defect 3. A permit assigned to a parked waiter whose task has
-/// not resumed must stay visible to drain detection; pre-fix, the in-flight
-/// count was incremented only after the acquire resumed, so
-/// `AdmissionRegistry::reconcile` could observe a closed controller as
-/// drained and install a fresh full-capacity controller while the old permit
-/// was live, briefly exceeding `max_concurrent`. Lean:
-/// `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`.
-#[tokio::test]
-async fn assigned_permit_is_visible_to_drain_detection() {
-    use std::future::Future;
-
-    let node = test_node().await;
-    let controller = super::controller::BackendAdmissionController::new(
-        1,
-        config("backend-drain-race", 1, 4),
-        std::sync::Weak::new(),
-    );
-
-    let held = controller
-        .clone()
-        .acquire(
-            node.clone(),
-            pending_call("req-drain-a", "backend-drain-race"),
-            None,
-            None,
+async fn acquire_on(
+    registry: &AdmissionRegistry,
+    request_id: &str,
+    backend_id: &str,
+) -> Result<super::permit::AdmissionPermit, rig::completion::CompletionError> {
+    registry
+        .acquire_for_test(
+            request_id,
+            backend_id,
+            "default",
+            "did:test:test",
+            CallKind::Inference,
         )
         .await
-        .expect("first admission fills the only slot");
+}
 
-    // Park a second acquire in the queue, driving it manually with a no-op
-    // waker so the runtime never resumes it: the semaphore can then hand it
-    // the released permit while its task is unpolled — the acquire→count
-    // window from #1001.
-    let mut queued = Box::pin(controller.clone().acquire(
-        node.clone(),
-        pending_call("req-drain-b", "backend-drain-race"),
-        None,
-        None,
-    ));
-    let waker = futures::task::noop_waker();
-    let mut cx = std::task::Context::from_waker(&waker);
-    let parked_deadline = tokio::time::Instant::now() + Duration::from_secs(30);
-    loop {
-        assert!(
-            queued.as_mut().poll(&mut cx).is_pending(),
-            "queued acquire cannot complete while the permit is held"
+/// #1366: rewriting a backend while a call is in flight hands new calls to
+/// the replacement controller at once. The in-flight call keeps its old
+/// controller attribution and its permit still counts against the backend's
+/// capacity until it completes. Lean:
+/// `InferenceCall.Registry.rewrite_replaces_admitting_without_gap`.
+#[tokio::test]
+async fn backend_rewrite_admits_new_calls_while_in_flight_call_drains() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-rewrite";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
+    );
+    let mut in_flight = acquire_on(&registry, "req-rewrite-old", backend)
+        .await
+        .unwrap();
+    assert_eq!(in_flight.controller_generation_for_test(), 1);
+
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 2, 0))]),
+    );
+    let mut admitted = acquire_on(&registry, "req-rewrite-new", backend)
+        .await
+        .expect("a rewritten backend must admit new calls while old calls drain");
+    assert_eq!(admitted.controller_generation_for_test(), 2);
+
+    // The draining call still occupies one of the two slots.
+    let error = match acquire_on(&registry, "req-rewrite-over", backend).await {
+        Ok(_) => panic!("capacity must count the in-flight call admitted before the rewrite"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("QueueFull"), "{error}");
+
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let mut after_drain = acquire_on(&registry, "req-rewrite-after", backend)
+        .await
+        .unwrap();
+    assert_eq!(after_drain.controller_generation_for_test(), 2);
+    admitted.finish_success(None).await.unwrap();
+    after_drain.finish_success(None).await.unwrap();
+
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(
+        call_state_for_request(&rows, "req-rewrite-old").as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        call_state_for_request(&rows, "req-rewrite-new").as_deref(),
+        Some("completed")
+    );
+    assert!(rows
+        .iter()
+        .all(|row| row["failure_reason"] != Value::from("BackendGone")));
+}
+
+/// A call queued under the replaced controller keeps waiting on the shared
+/// capacity and is admitted when the in-flight call releases, instead of
+/// failing with `BackendGone`.
+#[tokio::test]
+async fn queued_call_survives_backend_rewrite() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-rewrite-queued";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+    );
+    let mut in_flight = acquire_on(&registry, "req-queued-holder", backend)
+        .await
+        .unwrap();
+    let queued_registry = registry.clone();
+    let queued =
+        tokio::spawn(
+            async move { acquire_on(&queued_registry, "req-queued-waiter", backend).await },
         );
-        let rows = call_rows(node.as_ref()).await;
-        if call_state_for_request(&rows, "req-drain-b").as_deref() == Some("queued") {
-            break;
-        }
-        assert!(
-            tokio::time::Instant::now() < parked_deadline,
-            "queued InferenceCall row never became durable"
+    wait_for_request_call_state(node.as_ref(), "req-queued-waiter", "queued").await;
+
+    registry.reconcile(
+        2,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
+    );
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let mut waiter = tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .expect("queued call must be admitted after the rewrite")
+        .unwrap()
+        .expect("queued call must not fail with BackendGone");
+    assert_eq!(waiter.controller_generation_for_test(), 1);
+    waiter.finish_success(None).await.unwrap();
+}
+
+/// Deleting a backend closes admission: queued and new calls fail with
+/// `BackendGone`, while an already admitted call still completes.
+#[tokio::test]
+async fn backend_removal_fails_queued_and_new_calls_clearly() {
+    let node = test_node().await;
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-removed";
+    registry.reconcile(
+        1,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 1))]),
+    );
+    let mut in_flight = acquire_on(&registry, "req-removed-holder", backend)
+        .await
+        .unwrap();
+    let queued_registry = registry.clone();
+    let queued =
+        tokio::spawn(
+            async move { acquire_on(&queued_registry, "req-removed-waiter", backend).await },
         );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    // The durable write is the last await before the semaphore park; a few
-    // more polls carry the future onto the semaphore waiter list so the
-    // released permit below is assigned rather than returned to the pool.
-    // The assertions do not depend on this heuristic landing: in-flight is
-    // counted from acquisition intent, so `is_drained()` stays false either
-    // way — and pre-#1001 it reported drained either way.
-    for _ in 0..20 {
-        assert!(queued.as_mut().poll(&mut cx).is_pending());
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    wait_for_request_call_state(node.as_ref(), "req-removed-waiter", "queued").await;
 
-    // Releasing the held permit assigns it to the parked waiter without the
-    // waiter's task running.
-    drop(held);
-
+    registry.reconcile(2, &HashMap::new());
+    let queued_error = match tokio::time::timeout(Duration::from_secs(30), queued)
+        .await
+        .expect("closing the pool must wake queued calls")
+        .unwrap()
+    {
+        Ok(_) => panic!("a removed backend must not admit its queued calls"),
+        Err(error) => error,
+    };
     assert!(
-        !controller.is_drained(),
-        "controller with an assigned-but-unresumed permit reported drained (#1001)"
+        queued_error.to_string().contains("BackendGone"),
+        "{queued_error}"
+    );
+    let new_error = match acquire_on(&registry, "req-removed-new", backend).await {
+        Ok(_) => panic!("a removed backend must not admit new calls"),
+        Err(error) => error,
+    };
+    assert!(
+        new_error.to_string().contains(&format!(
+            "BackendGone: backend admission controller is not active for backend {backend}"
+        )),
+        "{new_error}"
     );
 
-    let permit = tokio::time::timeout(Duration::from_secs(30), queued)
-        .await
-        .expect("queued acquire resumes once the permit is assigned")
-        .expect("the parked waiter holds a real permit");
-    assert!(!controller.is_drained());
-    drop(permit);
-    assert!(
-        controller.is_drained(),
-        "released admission must drain the controller"
+    in_flight.finish_success(None).await.unwrap();
+    drop(in_flight);
+    let rows = call_rows(node.as_ref()).await;
+    assert_eq!(
+        call_state_for_request(&rows, "req-removed-holder").as_deref(),
+        Some("completed")
+    );
+    assert_eq!(
+        call_state_for_request(&rows, "req-removed-waiter").as_deref(),
+        Some("cancelled")
+    );
+    assert_eq!(
+        call_state_for_request(&rows, "req-removed-new").as_deref(),
+        Some("cancelled")
     );
 }
 
-/// Issue #1001 review follow-up: the drained signal must imply the semaphore
-/// permit is already returned. `release_in_flight` can synchronously install
-/// a replacement controller (`controller_drained` → `install_pending_if_ready`),
-/// so if the permit outlived the release, a fresh full-capacity controller
-/// could coexist with an outstanding old permit — and the window is unbounded
-/// because `AdmissionPermit::drop` locks the terminal-failure observer after
-/// the release. Holding that lock from the test stalls the drop mid-body
-/// deterministically. Lean:
-/// `InferenceCall.ControllerBookkeeping.drained_no_outstanding_permits`.
+/// #897: a backend that goes unavailable with a call still in flight admits
+/// new calls as soon as it is available again, even though that call never
+/// returns; its abandoned permit does not count against the reopened pool.
 #[tokio::test]
-async fn drained_signal_implies_permit_returned() {
+async fn recovered_backend_admits_without_waiting_for_abandoned_calls() {
     let node = test_node().await;
-    let controller = super::controller::BackendAdmissionController::new(
+    let registry = AdmissionRegistry::new(node.clone());
+    let backend = "backend-recovered";
+    registry.reconcile(
         1,
-        config("backend-drain-order", 1, 4),
-        std::sync::Weak::new(),
+        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
     );
-    let observer: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
-
-    let permit = controller
-        .clone()
-        .acquire(
-            node.clone(),
-            pending_call("req-drain-order-a", "backend-drain-order"),
-            None,
-            Some(observer.clone()),
-        )
+    let abandoned = acquire_on(&registry, "req-recovered-abandoned", backend)
         .await
-        .expect("admission fills the only slot");
-    controller.close();
+        .unwrap();
+    let mut unavailable = config(backend, 1, 0);
+    unavailable.measured_unhealthy = true;
+    registry.reconcile(2, &HashMap::from([(backend.to_string(), unavailable)]));
+    assert!(acquire_on(&registry, "req-recovered-down", backend)
+        .await
+        .is_err());
 
-    // Stall the drop after its in-flight release point: the drop body locks
-    // the observer before it finishes, and the permit field cannot be
-    // destroyed until the body returns.
-    let stall = observer.lock().unwrap();
-    let dropper = std::thread::spawn(move || drop(permit));
-    let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while !controller.is_drained() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "permit drop never released the in-flight unit"
-        );
-        std::thread::yield_now();
-    }
-
-    assert_eq!(
-        controller.available_permits_for_test(),
-        1,
-        "drained controller must hold no outstanding semaphore permits (#1001)"
+    registry.reconcile(
+        3,
+        &HashMap::from([(backend.to_string(), config(backend, 1, 0))]),
     );
-
-    drop(stall);
-    dropper.join().expect("permit drop thread");
-    assert_eq!(controller.available_permits_for_test(), 1);
-    assert!(controller.is_drained());
+    let mut admitted = acquire_on(&registry, "req-recovered-up", backend)
+        .await
+        .expect("recovery must not wait for calls admitted before the outage");
+    assert_eq!(admitted.controller_generation_for_test(), 3);
+    admitted.finish_success(None).await.unwrap();
+    drop(abandoned);
 }

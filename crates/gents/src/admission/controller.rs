@@ -1,5 +1,5 @@
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use defra_node::EmbeddedNode;
 use rig::completion::CompletionError;
@@ -13,58 +13,130 @@ use super::persistence::{
     persist_call_started, persist_existing_call_running, persist_existing_call_terminal,
     persist_terminal_call, spawn_persistence,
 };
-use super::registry::AdmissionRegistryInner;
+/// One backend's admission capacity, shared by every controller incarnation
+/// installed while the backend stays available (Lean
+/// `InferenceCall.Registry`). Calls admitted or queued under a replaced
+/// incarnation keep their permits and waiter units here, so a rewrite never
+/// leaves the backend without an admitting controller and never admits past
+/// the current capacity.
+pub(super) struct CapacityPool {
+    semaphore: Arc<Semaphore>,
+    ledger: Mutex<CapacityLedger>,
+    waiters: AtomicUsize,
+}
+
+/// Tokio semaphores cannot hold negative permits, so a decrease below the
+/// permits currently held is recorded as `owed` and paid by forgetting
+/// returned permits. Resizing and permit return share this lock: otherwise a
+/// permit returned between `forget_permits` and the `owed` update would be
+/// admissible while the pool is still over capacity.
+struct CapacityLedger {
+    capacity: usize,
+    owed: usize,
+}
+
+impl CapacityPool {
+    pub(super) fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(Self {
+            semaphore: Arc::new(Semaphore::new(capacity)),
+            ledger: Mutex::new(CapacityLedger { capacity, owed: 0 }),
+            waiters: AtomicUsize::new(0),
+        })
+    }
+
+    pub(super) fn resize(&self, capacity: usize) {
+        let mut ledger = self.ledger.lock().unwrap_or_else(|e| e.into_inner());
+        if capacity >= ledger.capacity {
+            let grow = capacity - ledger.capacity;
+            let repaid = grow.min(ledger.owed);
+            ledger.owed -= repaid;
+            self.semaphore.add_permits(grow - repaid);
+        } else {
+            let shrink = ledger.capacity - capacity;
+            ledger.owed += shrink - self.semaphore.forget_permits(shrink);
+        }
+        ledger.capacity = capacity;
+    }
+
+    /// Fails every queued waiter and every later acquisition with
+    /// `BackendGone`. Permits already held stay valid until they drop.
+    pub(super) fn close(&self) {
+        self.semaphore.close();
+    }
+
+    fn return_permit(&self, permit: OwnedSemaphorePermit) {
+        let mut ledger = self.ledger.lock().unwrap_or_else(|e| e.into_inner());
+        if ledger.owed > 0 {
+            ledger.owed -= 1;
+            permit.forget();
+        } else {
+            drop(permit);
+        }
+    }
+
+    fn try_enter_queue(&self, max_queue_depth: usize) -> Option<usize> {
+        loop {
+            let current = self.waiters.load(Ordering::SeqCst);
+            if current >= max_queue_depth {
+                return None;
+            }
+            if self
+                .waiters
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                return Some(current + 1);
+            }
+        }
+    }
+}
+
+/// A semaphore permit that returns through its pool's ledger on drop.
+pub(super) struct PoolPermit {
+    pool: Arc<CapacityPool>,
+    permit: Option<OwnedSemaphorePermit>,
+}
+
+impl PoolPermit {
+    fn new(pool: Arc<CapacityPool>, permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            pool,
+            permit: Some(permit),
+        }
+    }
+}
+
+impl Drop for PoolPermit {
+    fn drop(&mut self) {
+        if let Some(permit) = self.permit.take() {
+            self.pool.return_permit(permit);
+        }
+    }
+}
 
 pub(super) struct BackendAdmissionController {
     pub(super) backend_id: String,
     pub(super) generation: u64,
     pub(super) config: BackendAdmissionConfig,
-    semaphore: Arc<Semaphore>,
-    waiters: AtomicUsize,
-    /// Admissions counted from acquisition *intent* (before any semaphore
-    /// outcome) until release. Drain detection reads this counter, so a
-    /// semaphore permit — including one assigned to a parked waiter whose
-    /// task has not resumed — is never invisible to `is_drained()` (#1001;
-    /// Lean `InferenceCall.ControllerBookkeeping.permit_implies_in_flight`).
-    in_flight: AtomicUsize,
-    closed: AtomicBool,
-    registry: Weak<AdmissionRegistryInner>,
+    pub(super) pool: Arc<CapacityPool>,
 }
 
 impl BackendAdmissionController {
     pub(super) fn new(
         generation: u64,
         config: BackendAdmissionConfig,
-        registry: Weak<AdmissionRegistryInner>,
+        pool: Arc<CapacityPool>,
     ) -> Arc<Self> {
-        let max_concurrent = config.max_concurrent;
         Arc::new(Self {
             backend_id: config.backend_id.clone(),
             generation,
             config,
-            semaphore: Arc::new(Semaphore::new(max_concurrent)),
-            waiters: AtomicUsize::new(0),
-            in_flight: AtomicUsize::new(0),
-            closed: AtomicBool::new(false),
-            registry,
+            pool,
         })
     }
 
     pub(super) fn matches(&self, config: &BackendAdmissionConfig) -> bool {
-        self.config == *config && !self.is_closed()
-    }
-
-    pub(super) fn is_closed(&self) -> bool {
-        self.closed.load(Ordering::SeqCst)
-    }
-
-    pub(super) fn close(&self) {
-        self.closed.store(true, Ordering::SeqCst);
-        self.semaphore.close();
-    }
-
-    pub(super) fn is_drained(&self) -> bool {
-        self.in_flight.load(Ordering::SeqCst) == 0
+        self.config == *config
     }
 
     pub(super) async fn acquire(
@@ -74,25 +146,7 @@ impl BackendAdmissionController {
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        // Count this admission in flight before touching the semaphore, and
-        // release it on every non-admitted exit. `AdmissionRegistry::reconcile`
-        // closes and then checks `is_drained()`; the closed flag and this
-        // counter are both SeqCst, so an acquirer that missed the close is
-        // always visible to that check.
-        let in_flight = InFlightGuard::new(self.clone());
-        if self.is_closed() {
-            let call = self.call_record(pending, 0);
-            if let Err(error) =
-                persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None).await
-            {
-                tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist closed-controller inference call");
-            }
-            return Err(CompletionError::ProviderError(
-                "BackendGone: backend admission controller is draining".into(),
-            ));
-        }
-
-        match self.semaphore.clone().try_acquire_owned() {
+        match self.pool.semaphore.clone().try_acquire_owned() {
             Ok(permit) => {
                 let call = self.call_record(pending, 0);
                 return self
@@ -100,7 +154,6 @@ impl BackendAdmissionController {
                         node,
                         permit,
                         call,
-                        in_flight,
                         cancel_observer,
                         terminal_failure_observer,
                     )
@@ -111,20 +164,18 @@ impl BackendAdmissionController {
                 if let Err(error) =
                     persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None).await
                 {
-                    tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist closed-controller inference call");
+                    tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist closed-pool inference call");
                 }
-                return Err(CompletionError::ProviderError(
-                    "BackendGone: backend admission controller is draining".into(),
-                ));
+                return Err(self.backend_gone());
             }
             Err(tokio::sync::TryAcquireError::NoPermits) => {}
         }
 
-        let queue_depth = match self.try_enter_queue() {
+        let queue_depth = match self.pool.try_enter_queue(self.config.max_queue_depth) {
             Some(queue_depth) => queue_depth,
             None => {
-                let queue_depth = self.waiters.load(Ordering::SeqCst);
-                match self.semaphore.clone().try_acquire_owned() {
+                let queue_depth = self.pool.waiters.load(Ordering::SeqCst);
+                match self.pool.semaphore.clone().try_acquire_owned() {
                     Ok(permit) => {
                         let call = self.call_record(pending, queue_depth);
                         return self
@@ -132,7 +183,6 @@ impl BackendAdmissionController {
                                 node,
                                 permit,
                                 call,
-                                in_flight,
                                 cancel_observer,
                                 terminal_failure_observer,
                             )
@@ -151,9 +201,7 @@ impl BackendAdmissionController {
                         {
                             tracing::warn!(backend_id = %self.backend_id, error = %error, "failed to persist backend-gone inference call");
                         }
-                        return Err(CompletionError::ProviderError(
-                            "BackendGone: backend admission controller is draining".into(),
-                        ));
+                        return Err(self.backend_gone());
                     }
                     Err(tokio::sync::TryAcquireError::NoPermits) => {
                         let call = self.call_record(pending, queue_depth);
@@ -194,8 +242,8 @@ impl BackendAdmissionController {
                 return Err(super::persistence::completion_persistence_error(error));
             }
         };
-        let permit = match self.semaphore.clone().acquire_owned().await {
-            Ok(permit) => permit,
+        let permit = match self.pool.semaphore.clone().acquire_owned().await {
+            Ok(permit) => PoolPermit::new(self.pool.clone(), permit),
             Err(_) => {
                 drop(queued_guard.disarm());
                 if let Err(error) = persist_existing_call_terminal(
@@ -209,9 +257,7 @@ impl BackendAdmissionController {
                 {
                     tracing::warn!(backend_id = %self.backend_id, call_id = %call.call_id, error = %error, "failed to persist backend-gone queued inference call");
                 }
-                return Err(CompletionError::ProviderError(
-                    "BackendGone: backend admission controller is draining".into(),
-                ));
+                return Err(self.backend_gone());
             }
         };
         drop(queued_guard.disarm());
@@ -219,14 +265,11 @@ impl BackendAdmissionController {
         // already terminalized it, release the permit before provider dispatch.
         // Other persistence failures leave a queued row for ordered recovery.
         if let Err(error) = persist_existing_call_running(node.clone(), &call).await {
-            // Permit before in-flight release, as in `start_permit`.
             drop(permit);
             return Err(super::persistence::completion_persistence_error(error));
         }
-        in_flight.disarm();
         Ok(AdmissionPermit::new(
             node,
-            self,
             permit,
             call,
             doc_id,
@@ -240,24 +283,13 @@ impl BackendAdmissionController {
         node: Arc<EmbeddedNode>,
         permit: OwnedSemaphorePermit,
         call: InferenceCallRecord,
-        in_flight: InFlightGuard,
         cancel_observer: Option<CancellationToken>,
         terminal_failure_observer: Option<Arc<Mutex<Option<String>>>>,
     ) -> Result<AdmissionPermit, CompletionError> {
-        let doc_id = match persist_call_started(node.clone(), &call).await {
-            Ok(doc_id) => doc_id,
-            Err(error) => {
-                // Return the permit before `in_flight` drops and releases:
-                // parameters drop in reverse declaration order, which would
-                // otherwise let a drained signal precede the permit return.
-                drop(permit);
-                return Err(error);
-            }
-        };
-        in_flight.disarm();
+        let permit = PoolPermit::new(self.pool.clone(), permit);
+        let doc_id = persist_call_started(node.clone(), &call).await?;
         Ok(AdmissionPermit::new(
             node,
-            self,
             permit,
             call,
             doc_id,
@@ -266,34 +298,15 @@ impl BackendAdmissionController {
         ))
     }
 
-    fn try_enter_queue(&self) -> Option<usize> {
-        loop {
-            let current = self.waiters.load(Ordering::SeqCst);
-            if current >= self.config.max_queue_depth {
-                return None;
-            }
-            if self
-                .waiters
-                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                return Some(current + 1);
-            }
-        }
+    fn leave_queue(&self) {
+        self.pool.waiters.fetch_sub(1, Ordering::SeqCst);
     }
 
-    pub(super) fn leave_queue(&self) {
-        self.waiters.fetch_sub(1, Ordering::SeqCst);
-    }
-
-    pub(super) fn release_in_flight(&self) {
-        let previous = self.in_flight.fetch_sub(1, Ordering::SeqCst);
-        if previous == 1 && self.is_closed() {
-            if let Some(registry) = self.registry.upgrade() {
-                let backend_id = self.backend_id.clone();
-                registry.controller_drained(backend_id);
-            }
-        }
+    fn backend_gone(&self) -> CompletionError {
+        CompletionError::ProviderError(format!(
+            "BackendGone: backend {} was removed or became unavailable",
+            self.backend_id
+        ))
     }
 
     fn call_record(
@@ -320,9 +333,15 @@ impl BackendAdmissionController {
 }
 
 #[cfg(test)]
-impl BackendAdmissionController {
-    pub(super) fn in_flight_for_test(&self) -> usize {
-        self.in_flight.load(Ordering::SeqCst)
+impl CapacityPool {
+    pub(super) fn capacity_for_test(&self) -> usize {
+        self.ledger.lock().unwrap().capacity
+    }
+
+    /// Permits held by every incarnation sharing this pool.
+    pub(super) fn held_for_test(&self) -> usize {
+        let ledger = self.ledger.lock().unwrap();
+        ledger.capacity + ledger.owed - self.semaphore.available_permits()
     }
 
     pub(super) fn queue_waiters_for_test(&self) -> usize {
@@ -349,37 +368,6 @@ impl QueuedCallGuard {
     pub(super) fn disarm(mut self) -> Self {
         self.persist_on_drop = false;
         self
-    }
-}
-
-/// Holds one unit of the controller's `in_flight` count from acquisition
-/// intent until either the admission is handed to an `AdmissionPermit`
-/// (`disarm`; the permit's drop releases through `release_in_flight`) or the
-/// acquire path exits without admitting.
-struct InFlightGuard {
-    controller: Arc<BackendAdmissionController>,
-    armed: bool,
-}
-
-impl InFlightGuard {
-    fn new(controller: Arc<BackendAdmissionController>) -> Self {
-        controller.in_flight.fetch_add(1, Ordering::SeqCst);
-        Self {
-            controller,
-            armed: true,
-        }
-    }
-
-    fn disarm(mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for InFlightGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            self.controller.release_in_flight();
-        }
     }
 }
 
