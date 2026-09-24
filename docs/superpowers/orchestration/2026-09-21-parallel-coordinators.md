@@ -297,3 +297,10 @@ ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree a
   re-review clean. Runner accepts purpose `pilot`; `eval run --purpose pilot` refused; `eval checks`
   needs no home. 33 rulings in the ledger. Worktree B removed by the orchestrator. Parked minors
   ledgered with file:line.
+- 2026-09-24 CI pass over the stack: `rust-and-cli (desktop)` failed on #1654 to #1658 because the
+  committed desktop TypeScript bindings lacked the `Eval*` types (`typegen::committed_bindings_match_regeneration`);
+  `repository-guard` failed on #1716 because the `eval_author` README had no `## ` section. Fixes:
+  `31cc751a7` (bindings, on `feat/eval-contract`), `e5a9b4363` (bindings for `EvalFixtureFile`, on
+  `feat/eval-cli`), `86f1cb169` (README). Stack rebased: runner `75556ded9`, policy `b146bc35e`,
+  driver `3becb1e31`, cli `e5a9b4363`, side `a9691be48`, wizard `524843870`. Force-pushes are the
+  user's. `main` itself is red on `rust-and-cli (cli)` in four of its last five runs, unrelated.
