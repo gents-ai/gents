@@ -447,7 +447,11 @@ async fn redrive_mutation(
         }),
         input: candidate.input.clone().unwrap_or_default(),
         retry_key: Some(retry_key.to_string()),
-        ..RequestSpec::new(identity, admission)
+        ..RequestSpec::new(
+            gents_protocol::request_admission::RequestPurpose::Normal,
+            identity,
+            admission,
+        )
     };
     let create = build_signed_request(spec, RequestSigner::RegisteredTarget).await?;
     let request_fields = create.graphql_input_fields().map_err(anyhow::Error::msg)?;

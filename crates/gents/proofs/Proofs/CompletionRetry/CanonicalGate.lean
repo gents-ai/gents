@@ -57,20 +57,22 @@ def gateOperation : Operation → CanonicalOutput.Execution.Gate.Operation
   | .accept generation closing message targets admissions =>
       .accept generation closing message targets admissions
 
-def policyStep (retry : CompletionRetry.State) : Operation → Except Error CompletionRetry.State
+def policyStep (purpose : RequestPurpose) (retry : CompletionRetry.State) :
+    Operation → Except Error CompletionRetry.State
   | .retract _ closing =>
-      if !CanonicalExecution.sourceMatches retry closing then .error .source
+      if !CanonicalExecution.sourceMatches purpose retry closing then .error .source
       else match CompletionRetry.step? retry (.confirmRetraction true) with
       | some post => .ok post
       | none => if retractionReplay retry then .ok retry else .error .policy
   | .accept _ closing message _ _ =>
-      if !CanonicalExecution.sourceMatches retry closing then .error .source
+      if !CanonicalExecution.sourceMatches purpose retry closing then .error .source
       else match CompletionRetry.step? retry (.accept message.header.id) with
       | some post => .ok post
       | none => if acceptedReplay retry message then .ok retry else .error .policy
 
-theorem policyStep_preserves_now (before after : CompletionRetry.State) (operation : Operation)
-    (h : policyStep before operation = .ok after) : after.now = before.now := by
+theorem policyStep_preserves_now (purpose : RequestPurpose)
+    (before after : CompletionRetry.State) (operation : Operation)
+    (h : policyStep purpose before operation = .ok after) : after.now = before.now := by
   cases operation with
   | retract generation closing =>
       simp only [policyStep] at h
@@ -97,7 +99,7 @@ def commit (state : CanonicalOutput.Execution.World) (actor : Actor) (now : Time
   if !requestCoherent state then .error .request
   else match atTime state.retry now with
   | none => .error .clock
-  | some observedRetry => match policyStep observedRetry operation with
+  | some observedRetry => match policyStep state.purpose observedRetry operation with
     | .error error => .error error
     | .ok retry => match CanonicalOutput.Execution.Gate.commit state actor now
         (gateOperation operation) with
@@ -195,7 +197,7 @@ theorem commit_synchronizes_retry_clock {before after : CanonicalOutput.Executio
         · cases ht; rfl
         · contradiction
       simp [ht] at h
-      cases hp : policyStep observed operation with
+      cases hp : policyStep before.purpose observed operation with
       | error error => simp [hp] at h
       | ok retry =>
         cases hg : CanonicalOutput.Execution.Gate.commit before actor now
@@ -204,7 +206,7 @@ theorem commit_synchronizes_retry_clock {before after : CanonicalOutput.Executio
         | some gate =>
           simp [hp, hg] at h
           cases h
-          exact (policyStep_preserves_now observed retry operation hp).trans hnow
+          exact (policyStep_preserves_now before.purpose observed retry operation hp).trans hnow
 
 theorem stepPolicy_preserves_gate {before after : CanonicalOutput.Execution.World} (now : Time)
     (operation : PolicyOperation) (h : stepPolicy before now operation = some after) :

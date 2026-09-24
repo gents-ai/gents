@@ -12,7 +12,8 @@ use defra_node::EmbeddedNode;
 use gents_protocol::request_admission::{
     project_agent_request_admission_disposition, validate_signing_fields,
     AgentRequestAdmissionDisposition, AgentRequestAdmissionKind, AgentRequestAdmissionObservation,
-    AgentRequestAdmissionRecord, AgentRequestSigningFields, RuntimeInternalSourceKind,
+    AgentRequestAdmissionRecord, AgentRequestSigningFields, RequestPurpose,
+    RuntimeInternalSourceKind,
 };
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
@@ -151,6 +152,10 @@ pub(crate) async fn verify_fresh_local_self_request(
     target_behavior_id: &str,
 ) -> AdmissionResult<AgentRequest> {
     let row = load_signed_request(node, &request.doc_id).await?;
+    deny_if(
+        row.purpose == Some(RequestPurpose::Normal),
+        "local-self claim cannot authorize title-audit purpose",
+    )?;
     let admission = row_admission(&row).map_err(AgentRequestAdmissionError::denied)?;
     let signing_fields = row_signing_fields(&row).map_err(AgentRequestAdmissionError::denied)?;
     let verified = identity
@@ -166,6 +171,7 @@ pub(crate) async fn verify_fresh_local_self_request(
         base_admission_observation(admission.kind, RuntimeInternalSourceKind::LocalControl);
     observation.signature_valid = verified;
     observation.signed_fields_match = row.request_id == request.request_id
+        && row.purpose == Some(request.purpose)
         && row.agent_did.as_deref() == Some(request.agent_did.as_str())
         && row.behavior_id.as_deref() == Some(target_behavior_id)
         && validate_signing_fields(&signing_fields).is_ok();
@@ -334,6 +340,7 @@ impl AgentRequestAdmissionVerifier {
         let mut observation = base_admission_observation(admission.kind, runtime_source_kind);
         observation.signature_valid = signature_valid;
         observation.signed_fields_match = row.request_id == request.request_id
+            && row.purpose == Some(request.purpose)
             && row.agent_did.as_deref() == Some(request.agent_did.as_str())
             && row.behavior_id.as_deref() == Some(target_behavior_id)
             && validate_signing_fields(&signing_fields).is_ok();
@@ -347,6 +354,9 @@ impl AgentRequestAdmissionVerifier {
         {
             require_admitted_observation(observation, None)?;
             unreachable!("negative common admission evidence cannot be admitted");
+        }
+        if row.purpose == Some(RequestPurpose::TitleAudit) {
+            verify_title_request_shape(&row, &admission)?;
         }
         let mut denied = None;
         match admission.kind {
@@ -456,6 +466,9 @@ impl AgentRequestAdmissionVerifier {
                         self.node.clone(),
                         self.peer_admission.as_ref(),
                         &row,
+                        row.purpose
+                            .context("AgentRequest is missing purpose")
+                            .map_err(AgentRequestAdmissionError::denied)?,
                         source,
                         source_kind,
                         admission.runtime_bridge_author_did.as_deref(),
@@ -500,6 +513,53 @@ impl AgentRequestAdmissionVerifier {
     }
 }
 
+/// The title branch is the existing runtime-local-control admission with a
+/// parent-only signed link. Parent lifecycle and lease state are not inputs.
+fn verify_title_request_shape(
+    row: &AgentRequestRow,
+    admission: &AgentRequestAdmissionRecord,
+) -> AdmissionResult<()> {
+    let target = required_row_string(row.agent_did.as_deref(), "agent_did")?;
+    let source = required_row_string(
+        admission.runtime_source_request_id.as_deref(),
+        "runtime source request ID",
+    )?;
+    deny_if(
+        admission.kind == AgentRequestAdmissionKind::RuntimeInternal
+            && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
+            && admission.signer_did == target
+            && admission.runtime_issuer_did.as_deref() == Some(target)
+            && row.requester_did.as_deref() == Some(target),
+        "title-audit requires target-runtime local-control admission",
+    )?;
+    deny_if(
+        !source.is_empty()
+            && source != row.request_id.as_str()
+            && row.caused_by_parent_request_id.as_deref() == Some(source)
+            && row.caused_by_parent_request_doc_id.is_some()
+            && row.caused_by_parent_tool_call_id.is_none()
+            && row.caused_by_parent_tool_call_doc_id.is_none()
+            && row.subagent_depth == Some(0),
+        "title-audit requires an exact parent-only request link",
+    )?;
+    deny_if(
+        row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT) == &*DEFAULT_REQUEST_INPUT
+            && row.retry_parent_request.is_none()
+            && row.retry_parent_request_doc_id.is_none()
+            && row.retry_root_request.as_deref() == Some(row.request_id.as_str())
+            && row.retry_key.is_none()
+            && row.retry_count == Some(0)
+            && row.max_retries == Some(0)
+            && row.caused_by_trigger_id.is_none()
+            && row.caused_by_trigger_doc_id.is_none()
+            && row.caused_by_trigger_kind.is_none()
+            && row.caused_by_correlation.is_none()
+            && row.caused_by_trigger_context.is_none()
+            && row.caused_by_source_doc_id.is_none(),
+        "title-audit cannot carry input, retry, or trigger lineage",
+    )
+}
+
 /// Signed input remains subordinate to the resolved context and issuance owner.
 async fn verify_request_input(
     node: &EmbeddedNode,
@@ -508,6 +568,12 @@ async fn verify_request_input(
 ) -> AdmissionResult<()> {
     use gents_protocol::request_input::QueueSource;
     let input = row.input.as_ref().unwrap_or(&DEFAULT_REQUEST_INPUT);
+    if row.purpose == Some(RequestPurpose::TitleAudit) {
+        return deny_if(
+            input == &*DEFAULT_REQUEST_INPUT,
+            "title-audit cannot carry ordinary request input",
+        );
+    }
     let owner = required_row_string(row.agent_did.as_deref(), "agent_did")?;
     let behavior = required_row_string(row.behavior_id.as_deref(), "behavior_id")?;
     let (context, tools, _) = load_request_context(node, owner, behavior).await?;
@@ -602,6 +668,7 @@ async fn verify_runtime_source_binding(
     node: Arc<EmbeddedNode>,
     peer_admission: &dyn PeerAdmissionAuthority,
     row: &AgentRequestRow,
+    purpose: RequestPurpose,
     source: &str,
     source_kind: RuntimeInternalSourceKind,
     bridge_author_did: Option<&str>,
@@ -702,6 +769,13 @@ async fn verify_runtime_source_binding(
                 parent.request_id == source && parent.agent_did == row.agent_did,
                 "local-control parent document does not exactly own the source",
             )?;
+            if purpose == RequestPurpose::TitleAudit {
+                return deny_if(
+                    parent.session_id == row.session_id
+                        && parent.behavior_id.as_deref() == Some(target_behavior_id),
+                    "title-audit parent does not match its session and behavior",
+                );
+            }
             request_workspace(row)
                 .validate_source(&request_workspace(&parent), true)
                 .map_err(AgentRequestAdmissionError::denied)
@@ -1133,6 +1207,31 @@ pub fn verify_request_receipt_signature(row: &AgentRequestRow) -> Result<()> {
     Ok(())
 }
 
+/// Audit attribution authenticates immutable provenance, not current execution
+/// authority. A terminal parent or expired child lease cannot erase received usage.
+pub(crate) fn verify_historical_title_receipt(
+    title: &AgentRequestRow,
+    parent: &AgentRequestRow,
+) -> Result<()> {
+    verify_request_receipt_signature(title)?;
+    verify_request_receipt_signature(parent)?;
+    verify_title_request_shape(title, &row_admission(title)?)?;
+    anyhow::ensure!(
+        title.purpose == Some(RequestPurpose::TitleAudit)
+            && parent.purpose == Some(RequestPurpose::Normal)
+            && title.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+            && parent.doc_id.as_deref().is_some_and(|id| !id.is_empty())
+            && title.doc_id != parent.doc_id
+            && title.caused_by_parent_request_doc_id == parent.doc_id
+            && title.caused_by_parent_request_id.as_deref() == Some(parent.request_id.as_str())
+            && title.agent_did == parent.agent_did
+            && title.session_id == parent.session_id
+            && title.behavior_id == parent.behavior_id,
+        "title audit receipt crosses its authenticated parent scope"
+    );
+    Ok(())
+}
+
 /// Authenticate an already-authored runtime local-control receipt. This is
 /// not fresh execution admission: terminal/expired children remain receipts.
 /// The caller separately binds the exact goal, parent docID and sequence and
@@ -1145,7 +1244,8 @@ pub(crate) fn verify_runtime_local_control_receipt(
     let admission = row_admission(row)?;
     verify_request_receipt_signature(row)?;
     anyhow::ensure!(
-        admission.kind == AgentRequestAdmissionKind::RuntimeInternal
+        row.purpose == Some(RequestPurpose::Normal)
+            && admission.kind == AgentRequestAdmissionKind::RuntimeInternal
             && admission.runtime_source_kind == Some(RuntimeInternalSourceKind::LocalControl)
             && admission.signer_did == expected_target_did
             && admission.runtime_issuer_did.as_deref() == Some(expected_target_did)
@@ -1194,6 +1294,7 @@ fn row_signing_fields(row: &AgentRequestRow) -> Result<AgentRequestSigningFields
         .unwrap_or(0);
     Ok(AgentRequestSigningFields {
         request_id: &row.request_id,
+        purpose: row.purpose.context("AgentRequest is missing purpose")?,
         agent_did: row
             .agent_did
             .as_deref()
@@ -1260,7 +1361,7 @@ fn required_row_string<'a>(value: Option<&'a str>, field: &str) -> AdmissionResu
 /// and transaction-scoped historical receipt readers. Lifecycle is included
 /// for callers decoding the row, but is not part of the signed payload.
 pub const SIGNED_REQUEST_FIELDS: &str = r#"
-_docID lifecycle_state request_id agent_did requester_did behavior_id session_id
+_docID lifecycle_state request_id purpose agent_did requester_did behavior_id session_id
                 retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
                 content input max_total_tokens
                 execution_origin caused_by_trigger_id caused_by_trigger_kind caused_by_correlation
@@ -1313,6 +1414,9 @@ pub(crate) async fn load_request_for_admission_test(
 }
 
 #[cfg(test)]
+mod title_tests;
+
+#[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
@@ -1330,6 +1434,7 @@ mod tests {
         let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
         ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "rejected-request",
             identity.did(),
             identity.did(),
@@ -1426,6 +1531,7 @@ mod tests {
             ),
         ] {
             let mut create = AgentRequestCreate::base(
+                gents_protocol::request_admission::RequestPurpose::Normal,
                 format!("input-{index}"),
                 identity.did(),
                 identity.did(),
@@ -1465,6 +1571,7 @@ mod tests {
         let node = defra_node::EmbeddedNode::builder().build().await.unwrap();
         ensure_runtime_schemas(&node).await.unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "receipt-child",
             identity.did(),
             identity.did(),
@@ -1601,6 +1708,7 @@ mod tests {
         assert!(!seeded.has_errors(), "{:?}", seeded.errors);
         let request_id = uuid::Uuid::new_v4().to_string();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             identity.did(),
             identity.did(),

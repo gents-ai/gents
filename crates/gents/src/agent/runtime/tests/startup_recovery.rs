@@ -823,6 +823,33 @@ async fn run_agent_shutdown_is_prompt_while_request_waits_for_backend_capacity()
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let identity = Arc::new(test_identity("shutdown-waiting-request"));
     let mock_endpoint = MockModelEndpoint::start_blocking_chat("default").unwrap();
+    // Optional title inference shares backend capacity. Give these sessions
+    // user titles so this test isolates the two foreground permit owners.
+    for (session_id, behavior_id) in [
+        ("session-shutdown-running", "general"),
+        ("session-shutdown-waiting", "code"),
+    ] {
+        crate::session::ensure_session_with_behavior_id_and_requester_did(
+            node.as_ref(),
+            session_id,
+            "shutdown-waiting-request",
+            identity.did(),
+            behavior_id,
+            Some(identity.did()),
+        )
+        .await
+        .unwrap();
+        crate::session::update_session_title_with_source(
+            node.as_ref(),
+            identity.did(),
+            Some(identity.did()),
+            session_id,
+            "capacity shutdown test",
+            gents_protocol::session::SessionTitleSource::User,
+        )
+        .await
+        .unwrap();
+    }
     bind_default_behavior_backend_with_capacity(
         node.as_ref(),
         identity.did(),

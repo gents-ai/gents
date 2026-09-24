@@ -334,11 +334,17 @@ async fn terminalize_execution_with_time(
             let doc_id = escape_graphql_string(request_doc_id);
             let result = txn.execute_local_response(&format!(r#"{{ AgentRequest(
                 filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, limit: 1) {{
-                _docID request_id agent_did requester_did session_id lifecycle_state
+                _docID request_id purpose agent_did requester_did session_id lifecycle_state
                 execution_generation execution_lease_expires_at interrupt_requested_at terminal_output
             }} }}"#)).await?;
             let row = crate::graphql::first_row::<AgentRequestRow>(&result, "AgentRequest")?
                 .context("execution request disappeared")?;
+            let title = row.purpose.context("execution request purpose missing")?
+                == gents_protocol::request_admission::RequestPurpose::TitleAudit;
+            if title {
+                anyhow::ensure!(selection.as_ref().is_none_or(|selected| *selected == TerminalOutput::NoMessage),
+                    "title execution cannot select a transcript message");
+            }
             let owner = row.execution_generation.as_deref().context("missing execution generation")?;
             let state = row.lifecycle_state.context("missing request state")?;
             let effective_outcome = if outcome == RequestTerminalOutcome::Failed
@@ -371,6 +377,12 @@ async fn terminalize_execution_with_time(
             let headers = session::load_request_headers_in_txn(
                 txn, session_id, agent, row.requester_did.as_deref(), request_doc_id
             ).await?;
+            if title && matches!(authority, TerminalAuthority::Owner(_)) {
+                let records = super::recovery::request_segments(
+                    txn, request_doc_id, agent, session_id, row.requester_did.as_deref(),
+                ).await?;
+                validate_title_sources_decided(request_doc_id, &records)?;
+            }
             let eligible = |header: &&session::canonical_rows::TranscriptMessageRow| {
                 header.message.role == MessageRole::Assistant &&
                 matches!(header.message.publication, MessagePublication::RequestExecution { .. }
@@ -394,6 +406,8 @@ async fn terminalize_execution_with_time(
                     &selected
                 }
             };
+            anyhow::ensure!(!title || *selection == TerminalOutput::NoMessage,
+                "title execution cannot select a transcript message");
             match selection {
                 TerminalOutput::Message { message_doc_id } => {
                     let matching = headers.iter().filter(eligible)
@@ -452,7 +466,8 @@ async fn terminalize_execution_with_time(
             }
             // After the winning request CAS, but in the SAME transaction.
             // Any missing reply, lost tool CAS or validation error rolls it all back.
-            super::terminal_tools::account_tools_in_txn(
+            if !title {
+                super::terminal_tools::account_tools_in_txn(
                 txn, &row, &headers, owner,
                 effective_outcome == RequestTerminalOutcome::Completed, &timestamp,
             ).await?;
@@ -460,9 +475,90 @@ async fn terminalize_execution_with_time(
                 txn, agent, row.requester_did.as_deref(), session_id,
                 request_doc_id, &row.request_id, &timestamp,
             ).await?;
+            }
             Ok(TerminalizeResult::Won)
         }),
     ).await
+}
+
+pub(super) fn validate_title_sources_decided(
+    request_doc_id: &str,
+    records: &[crate::session::canonical_rows::OutputSegmentRow],
+) -> Result<()> {
+    use gents_protocol::output::reconstruction::ObservedSegment;
+    use gents_protocol::output::{OutputSource, SourceClose};
+    use gents_protocol::rendered_request::CaptureScopeKind;
+    let mut sources = Vec::new();
+    for record in records {
+        if record.segment.request_doc_id == request_doc_id
+            && matches!(&record.segment.source, OutputSource::ProviderTurn { scope, .. }
+                if scope.kind == CaptureScopeKind::Title)
+            && !sources.contains(&record.segment.source)
+        {
+            sources.push(record.segment.source.clone());
+        }
+    }
+    for source in sources {
+        let scoped = records
+            .iter()
+            .filter(|record| {
+                record.segment.request_doc_id == request_doc_id && record.segment.source == source
+            })
+            .collect::<Vec<_>>();
+        let closing = scoped
+            .iter()
+            .filter(|record| record.segment.close.is_some())
+            .collect::<Vec<_>>();
+        if closing.len() > 1 {
+            return Err(
+                gents_protocol::output::ReconstructionError::ConflictingClosures {
+                    request_doc_id: request_doc_id.to_owned(),
+                    source: source.clone(),
+                }
+                .into(),
+            );
+        }
+        anyhow::ensure!(closing.len() == 1, "title source has no unique closure");
+        let closing = closing[0];
+        let close = closing.segment.close.as_ref().expect("closing checked");
+        match close {
+            SourceClose::Closed { .. } => {
+                crate::streaming::canonical::validate_closed_source_extent(
+                    records,
+                    request_doc_id,
+                    &source,
+                    closing,
+                )?
+            }
+            SourceClose::Retracted => {
+                let prefix = scoped
+                    .iter()
+                    .map(|record| ObservedSegment {
+                        doc_id: &record.doc_id,
+                        segment: &record.segment,
+                    })
+                    .collect::<Vec<_>>();
+                gents_protocol::output::extent::inspect_open_source(
+                    &prefix,
+                    request_doc_id,
+                    &source,
+                    &closing.segment.writer,
+                )?;
+                if closing.segment.ordinal.is_some()
+                    || !closing.segment.runs.is_empty()
+                    || !closing.segment.payload.is_empty()
+                {
+                    return Err(
+                        gents_protocol::output::ReconstructionError::InvalidStructure {
+                            detail: "title retraction carries a data flush".to_owned(),
+                        }
+                        .into(),
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

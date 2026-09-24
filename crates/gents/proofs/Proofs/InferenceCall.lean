@@ -6,3 +6,4 @@ import Proofs.InferenceCall.SlotAccounting
 import Proofs.InferenceCall.ControllerBookkeeping
 import Proofs.InferenceCall.Registry
 import Proofs.InferenceCall.Persistence
+import Proofs.InferenceCall.UsageProjection

@@ -34,7 +34,7 @@ mod session_transcript;
 mod snapshot_loaders;
 
 pub use agent_scope::load_agent_scoped_snapshot;
-pub use document_patches::fetch_doc_patch;
+pub use document_patches::{fetch_doc_patch, DocumentPatch};
 pub(crate) use document_patches::{
     is_transcript_content_collection, supports_doc_patch_collection,
 };
@@ -90,7 +90,7 @@ pub(super) const AGENT_PRINCIPAL_FIELDS: &str =
 pub(super) const AGENT_BEHAVIOR_FIELDS: &str = "behavior_id agent_did display_name description context_id inference_profile_id enabled tags created_at";
 pub(super) const AGENT_RUNTIME_FIELDS: &str = "agent_did reconcile_phase behavior_executor_capacity behavior_executor_queue_depth behavior_executor_status_json last_reconcile_result last_reconcile_error last_reconcile_completed_at updated_at";
 pub(super) const AGENT_BEHAVIOR_READINESS_FIELDS: &str = "agent_did snapshot_json updated_at";
-pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_output terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash";
+pub(super) const AGENT_REQUEST_FIELDS: &str = "_docID request_id purpose agent_did requester_did behavior_id session_id retry_parent_request retry_root_request superseded_by_request content max_total_tokens input lifecycle_state backend_id execution_origin execution_generation execution_lease_secs execution_lease_expires_at caused_by_trigger_id caused_by_trigger_kind caused_by_correlation caused_by_trigger_context caused_by_source_doc_id caused_by_parent_request_id failure_reason terminalized_at terminal_output terminal_redrive_attempts created_at claimed_at deadline retry_count max_retries interrupt_requested_at valid_until workspace_id workspace_authority workspace_owner_agent_did workspace_seal_hash";
 pub(super) const AGENT_SESSION_FIELDS: &str = "session_id agent_did requester_did behavior_id created_at closed_at title tags provenance observation";
 pub(super) const GOAL_FIELDS: &str = "goal_id session_id agent_did creation_key objective status token_budget tokens_used active_time_seconds active_started_at consecutive_blocked_audits last_blocked_request_id last_blocked_reason last_continued_from_request_id continuation_sequence wrapup_requested wrapup_completed infrastructure_retry_count last_failure completion_evidence created_at updated_at";
 pub(super) const AGENT_TOOL_CALL_FIELDS: &str = "_docID tool_call_key agent_did session_id request_id request_doc_id requester_did message_sequence tool_name tool_call_id status lifecycle_state child_request_id await_mode cancel_policy deadline_at cancel_cause started_at completed_at selected_service_id selected_tool_name tool_failure_class denial_reason denied_argv denied_command denied_argument denied_subcommand denied_prefix policy_mode policy_network latency_ms";

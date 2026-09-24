@@ -120,6 +120,7 @@ fn source(value: &LeanCanonicalSource) -> Result<OutputSource> {
                 match auxiliary_kind {
                     LeanAuxiliaryKind::Compaction => "compaction",
                     LeanAuxiliaryKind::CompactionFallback => "compaction_fallback",
+                    LeanAuxiliaryKind::Title => "title",
                 },
                 scope
             )

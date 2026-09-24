@@ -39,6 +39,7 @@ fn modeled_scope(case: &LeanAuxiliaryOutputCase) -> (CaptureScope, usize, u32) {
     let kind = match auxiliary_kind {
         LeanAuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
         LeanAuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
+        LeanAuxiliaryKind::Title => CaptureScopeKind::Title,
     };
     (
         CaptureScope { kind, seq: *scope },
@@ -132,7 +133,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, name: &str) -> RequestLifecycle {
     let session_id = format!("session-{request_id}");
     let now = chrono::Utc::now().to_rfc3339();
     let mutation = format!(
-        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#,
+        r#"mutation {{ create_AgentRequest(input: {{ request_id: "{}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{}", retry_parent_request: "", retry_root_request: "{}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#,
         crate::graphql::escape_graphql_string(&request_id),
         crate::graphql::escape_graphql_string(&session_id),
         crate::graphql::escape_graphql_string(&request_id),
@@ -576,7 +577,10 @@ async fn generated_auxiliary_cases_drive_owned_begin_close_and_publication_guard
             let error = stale_replay.unwrap_err();
             let diagnostic = format!("{error:#}");
             assert!(
-                diagnostic.contains("provider close candidate changed immutable source identity"),
+                matches!(
+                    error.downcast_ref::<canonical::ProviderCloseRejection>(),
+                    Some(canonical::ProviderCloseRejection::WriterMismatch)
+                ),
                 "{}: stale close failed outside immutable writer check: {diagnostic}",
                 case.name
             );

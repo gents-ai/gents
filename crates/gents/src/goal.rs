@@ -1244,7 +1244,7 @@ pub enum GoalBackedRequestDisposition {
 }
 
 pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
-    request_id agent_did requester_did behavior_id session_id
+    request_id purpose agent_did requester_did behavior_id session_id
     retry_parent_request retry_parent_request_doc_id retry_root_request retry_key
     content input
     execution_origin caused_by_trigger_id caused_by_trigger_doc_id
@@ -1269,6 +1269,7 @@ pub(crate) const GOAL_BACKED_REQUEST_FINGERPRINT_FIELDS: &str = r#"
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub(crate) struct GoalBackedRequestFingerprint {
     request_id: String,
+    purpose: gents_protocol::request_admission::RequestPurpose,
     agent_did: String,
     requester_did: String,
     behavior_id: String,
@@ -1323,6 +1324,7 @@ impl GoalBackedRequestFingerprint {
         // decision about whether it belongs in the immutable retry contract.
         let gents_protocol::request_admission::AgentRequestCreate {
             request_id: _,
+            purpose: _,
             agent_did: _,
             requester_did: _,
             behavior_id: _,
@@ -1358,6 +1360,7 @@ impl GoalBackedRequestFingerprint {
         } = request;
         Ok(Self {
             request_id: request.request_id.clone(),
+            purpose: request.purpose,
             agent_did: request.agent_did.clone(),
             requester_did: request.requester_did.clone(),
             behavior_id: request.behavior_id.clone(),
@@ -2401,7 +2404,7 @@ pub async fn session_token_usage(
     let session_id = escape_graphql_string(session_id);
     let request_query = format!(
         r#"{{
-            AgentRequest(filter: {{ agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
+            AgentRequest(filter: {{ purpose: {{ _eq: "normal" }}, agent_did: {{ _eq: "{agent_did}" }}, session_id: {{ _eq: "{session_id}" }} }}) {{ request_id }}
         }}"#
     );
     let response =
@@ -2518,6 +2521,7 @@ mod tests {
     fn retry_fingerprint_compares_typed_input_but_not_regenerated_envelope() {
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
         let request = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "request",
             "did:key:owner",
             "did:key:owner",
@@ -2556,6 +2560,7 @@ mod tests {
     fn retry_fingerprint_distinguishes_workspace_owners_with_the_same_logical_id() {
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
         let mut request = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "request",
             "did:key:executor",
             "did:key:executor",

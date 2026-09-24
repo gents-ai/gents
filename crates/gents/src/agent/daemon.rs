@@ -325,6 +325,11 @@ impl<M: CompletionModel + 'static> BehaviorDaemon<M> {
                 }
             };
 
+            if request.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+                self.spawn_title_audit_request(request, shutdown.clone());
+                continue;
+            }
+
             let trace_attrs = RequestTraceAttrs::from_request(&request);
             let behavior_id = self.behavior.behavior_id.clone();
             let backend_id = self.behavior.backend_id.clone().unwrap_or_default();

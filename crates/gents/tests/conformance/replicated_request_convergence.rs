@@ -130,6 +130,7 @@ async fn create_owned_request_with_times_and_requester(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
+                purpose: "normal",
                 agent_did: "{escaped_agent_did}",
                 {requester_field}
                 behavior_id: "{AGENT_NAME}",
@@ -202,6 +203,7 @@ async fn create_queue_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
+                purpose: "normal",
                 agent_did: "{escaped_agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",

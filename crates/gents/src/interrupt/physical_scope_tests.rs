@@ -20,10 +20,10 @@ async fn physical_cancel_and_cascade_root_preserve_exact_scope() {
     };
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
-    let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","agent_did":"owner","requester_did":null,"session_id":"same-session","behavior_id":"configured","lifecycle_state":"processing"})).await;
-    let foreign = insert(&node, "AgentRequest", json!({"request_id":"parent","agent_did":"foreign","requester_did":null,"session_id":"same-session","behavior_id":"configured","lifecycle_state":"processing"})).await;
+    let parent = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","agent_did":"owner","requester_did":null,"session_id":"same-session","behavior_id":"configured","lifecycle_state":"processing"})).await;
+    let foreign = insert(&node, "AgentRequest", json!({"request_id":"parent","purpose":"normal","agent_did":"foreign","requester_did":null,"session_id":"same-session","behavior_id":"configured","lifecycle_state":"processing"})).await;
     let bridge = insert(&node, "AgentToolCall", json!({"request_id":"parent","request_doc_id":parent,"agent_did":"owner","requester_did":null,"session_id":"same-session","tool_call_id":"spawn","tool_name":"spawn_subagent","lifecycle_state":"running","cancel_policy":"cascade","child_request_id":"child","spawn_target_did":"owner"})).await;
-    let child = insert(&node, "AgentRequest", json!({"request_id":"child","agent_did":"owner","requester_did":null,"session_id":"child-session","behavior_id":"configured","lifecycle_state":"processing","caused_by_parent_request_id":"parent","caused_by_parent_request_doc_id":parent,"caused_by_parent_tool_call_id":"spawn","caused_by_parent_tool_call_doc_id":bridge})).await;
+    let child = insert(&node, "AgentRequest", json!({"request_id":"child","purpose":"normal","agent_did":"owner","requester_did":null,"session_id":"child-session","behavior_id":"configured","lifecycle_state":"processing","caused_by_parent_request_id":"parent","caused_by_parent_request_doc_id":parent,"caused_by_parent_tool_call_id":"spawn","caused_by_parent_tool_call_doc_id":bridge})).await;
     let query = DescendantQuery::all("parent");
     assert!(
         resolve_descendant_graph(DescendantGraphAccess::Local(&node), &query)
@@ -120,13 +120,13 @@ async fn colliding_logical_interrupt_fetch_rejects_ambiguity_and_binds_owner_phy
     let owner = insert(
         &node,
         "AgentRequest",
-        json!({"request_id":"shared","agent_did":"owner","requester_did":null,"session_id":"s","behavior_id":"configured","lifecycle_state":"processing"}),
+        json!({"request_id":"shared","purpose":"normal","agent_did":"owner","requester_did":null,"session_id":"s","behavior_id":"configured","lifecycle_state":"processing"}),
     )
     .await;
     let foreign = insert(
         &node,
         "AgentRequest",
-        json!({"request_id":"shared","agent_did":"foreign","requester_did":null,"session_id":"s","behavior_id":"configured","lifecycle_state":"processing"}),
+        json!({"request_id":"shared","purpose":"normal","agent_did":"foreign","requester_did":null,"session_id":"s","behavior_id":"configured","lifecycle_state":"processing"}),
     )
     .await;
 

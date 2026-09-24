@@ -906,8 +906,12 @@ private def claudeThinkingStreamCase (name : String) (surface : List String)
   match PromptAssembly.ClaudeMap.runContentTrace (surfaceOf surface) events with
   | .ok (steps, content) => { name, surface, events, outcome := "ok", steps, content }
   | .error error =>
+      let steps := match PromptAssembly.ClaudeMap.runDecodedPrefixTrace
+          (surfaceOf surface) events with
+        | .ok (steps, _) => steps
+        | .error _ => []
       { name, surface, events, outcome := PromptAssembly.ClaudeMap.errorName error,
-        steps := [], content := [] }
+        steps, content := [] }
 
 def promptAssemblyClaudeThinkingStreamCases : List PromptAssemblyClaudeThinkingStreamCase :=
   [ claudeThinkingStreamCase "unicode-fragmented-signature" []
@@ -934,8 +938,10 @@ def promptAssemblyClaudeThinkingStreamCases : List PromptAssemblyClaudeThinkingS
       [.start 1 "echo" none, .text "not-this-block"]
   , claudeThinkingStreamCase "thinking-after-signature" []
       [.thinkingStart 0 "", .signatureDelta 0 "sig", .thinkingDelta 0 "late"]
-  , claudeThinkingStreamCase "unterminated-thinking" []
+  , claudeThinkingStreamCase "abort-after-signature-delta" []
       [.thinkingStart 0 "", .signatureDelta 0 "sig"]
+  , claudeThinkingStreamCase "abort-after-redacted-start" []
+      [.redactedStart 0 "opaque"]
   ]
 
 structure PromptAssemblyClaudeReplayCase where

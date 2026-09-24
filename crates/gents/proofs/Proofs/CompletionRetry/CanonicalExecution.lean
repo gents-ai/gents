@@ -14,10 +14,13 @@ namespace CompletionRetry.CanonicalExecution
 
 open CanonicalOutput
 
-def expectedCoordinate (state : CompletionRetry.State) : Coordinate :=
-  ⟨state.request, .provider state.scope state.turn state.attempt⟩
+def expectedCoordinate (purpose : RequestPurpose) (state : CompletionRetry.State) : Coordinate :=
+  ⟨state.request, match purpose with
+    | .normal => .provider state.scope state.turn state.attempt
+    | .titleAudit => .auxiliary .title state.scope state.turn state.attempt⟩
 
-def sourceMatches (state : CompletionRetry.State) (closing : Segment) : Bool :=
-  closing.coordinate == expectedCoordinate state
+def sourceMatches (purpose : RequestPurpose) (state : CompletionRetry.State)
+    (closing : Segment) : Bool :=
+  closing.coordinate == expectedCoordinate purpose state
 
 end CompletionRetry.CanonicalExecution

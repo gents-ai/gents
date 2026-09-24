@@ -12,10 +12,10 @@ structure Case where
   deriving DecidableEq, Repr
 
 def scope : Scope := ⟨1, 1, 1⟩
-def root : Row := ⟨10, 100, 1, 1, none, none, none, 0, true, true⟩
-def child : Row := ⟨20, 200, 1, 1, some 1, some 10, some 100, 1, true, true⟩
-def grandchild : Row := ⟨30, 300, 1, 1, some 1, some 20, some 200, 2, true, true⟩
-def unrelated : Row := ⟨40, 400, 1, 1, none, none, none, 0, true, true⟩
+def root : Row := ⟨.normal, 10, 100, 1, 1, none, none, none, 0, true, true⟩
+def child : Row := ⟨.normal, 20, 200, 1, 1, some 1, some 10, some 100, 1, true, true⟩
+def grandchild : Row := ⟨.normal, 30, 300, 1, 1, some 1, some 20, some 200, 2, true, true⟩
+def unrelated : Row := ⟨.normal, 40, 400, 1, 1, none, none, none, 0, true, true⟩
 
 /-- Explicit query-order inputs and expected heads. The graph/task names label
 actual lexical order witnesses; numeric IDs are abstract physical identities. -/
@@ -35,6 +35,8 @@ def cases : List Case :=
   , ⟨"branch_leaves_keep_canonical_order", [root, child, {grandchild with parentDoc := some 10, parentRequest := some 100}], some child⟩
   , ⟨"new_goal_epoch_may_reset_sequence", [root, {child with sequence := 5}, {grandchild with sequence := 1}], some {grandchild with sequence := 1}⟩
   , ⟨"empty_session", [], none⟩
+  , ⟨"title_cannot_be_public_head", [{unrelated with purpose := .titleAudit}, root], some root⟩
+  , ⟨"title_cannot_supersede_parent", [root, {child with purpose := .titleAudit}], some root⟩
   ]
 
 -- Abstract relation only: mutually deterministic hash identities are not a
@@ -50,7 +52,7 @@ private def optionalNatJson : Option Nat → String
   | some value => toString value
 
 def rowJson (row : Row) : String :=
-  "{\"doc\":" ++ toString row.doc ++ ",\"request\":" ++ toString row.request ++
+  "{\"purpose\":" ++ jsonString row.purpose.toWire ++ ",\"doc\":" ++ toString row.doc ++ ",\"request\":" ++ toString row.request ++
   ",\"owner\":" ++ toString row.owner ++ ",\"session\":" ++ toString row.session ++
   ",\"goal\":" ++ optionalNatJson row.goal ++ ",\"parent_doc\":" ++ optionalNatJson row.parentDoc ++
   ",\"parent_request\":" ++ optionalNatJson row.parentRequest ++ ",\"sequence\":" ++ toString row.sequence ++
@@ -66,6 +68,6 @@ def caseJson (testCase : Case) : String :=
 
 def casesJson : String := jsonArray (cases.map caseJson)
 
-theorem cases_count : cases.length = 15 := by decide
+theorem cases_count : cases.length = 17 := by decide
 
 end Conformance.GoalRequestHeadContracts

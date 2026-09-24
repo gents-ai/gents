@@ -5,6 +5,14 @@ use std::sync::OnceLock;
 
 use serde::Deserialize;
 
+pub(crate) fn required_nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer)
+}
+
 pub(crate) type LeanFeatureMatrix = BTreeMap<String, BTreeMap<String, LeanFeatureMatrixCell>>;
 
 #[derive(Debug, Clone, Copy)]
@@ -101,6 +109,10 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) enrollment_encoding_cases: Vec<LeanEnrollmentEncodingCase>,
     pub(crate) enrollment_digest_cases: Vec<LeanEnrollmentDigestCase>,
     pub(crate) agent_request_admission_cases: Vec<LeanAgentRequestAdmissionCase>,
+    pub(crate) title_request_admission_cases: Vec<LeanTitleRequestAdmissionCase>,
+    pub(crate) title_request_purpose_wire_cases: Vec<LeanTitleRequestPurposeWireCase>,
+    pub(crate) title_usage_cases: Vec<LeanTitleUsageCase>,
+    pub(crate) title_admission_join_cases: Vec<LeanTitleAdmissionJoinCase>,
     pub(crate) frontend_client_shell_case_count: usize,
     pub(crate) frontend_client_shell_cases: Vec<LeanClientShellCase>,
     pub(crate) desktop_client_shell_case_count: usize,
@@ -1014,6 +1026,8 @@ mod self_config;
 mod session_documents;
 #[path = "slot_persistence_health.rs"]
 mod slot_persistence_health;
+#[path = "title.rs"]
+mod title;
 #[path = "tool_policy.rs"]
 mod tool_policy;
 #[path = "triggers_runtime_apply.rs"]
@@ -1043,6 +1057,7 @@ pub(crate) use rolling_compaction::*;
 pub(crate) use self_config::*;
 pub(crate) use session_documents::*;
 pub(crate) use slot_persistence_health::*;
+pub(crate) use title::*;
 pub(crate) use tool_policy::*;
 pub(crate) use triggers_runtime_apply::*;
 
@@ -2104,6 +2119,23 @@ pub(crate) fn lean_enrollment_digest_cases() -> &'static [LeanEnrollmentDigestCa
 
 pub(crate) fn lean_agent_request_admission_cases() -> &'static [LeanAgentRequestAdmissionCase] {
     &lean_contract_snapshot().agent_request_admission_cases
+}
+
+pub(crate) fn lean_title_request_admission_cases() -> &'static [LeanTitleRequestAdmissionCase] {
+    &lean_contract_snapshot().title_request_admission_cases
+}
+
+pub(crate) fn lean_title_request_purpose_wire_cases() -> &'static [LeanTitleRequestPurposeWireCase]
+{
+    &lean_contract_snapshot().title_request_purpose_wire_cases
+}
+
+pub(crate) fn lean_title_usage_cases() -> &'static [LeanTitleUsageCase] {
+    &lean_contract_snapshot().title_usage_cases
+}
+
+pub(crate) fn lean_title_admission_join_cases() -> &'static [LeanTitleAdmissionJoinCase] {
+    &lean_contract_snapshot().title_admission_join_cases
 }
 
 pub(crate) fn lean_trigger_dispatch_case_count() -> usize {

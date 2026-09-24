@@ -2372,7 +2372,7 @@ mod tests {
             .execute(&format!(
                 r#"mutation {{
                     request: create_AgentRequest(input: {{
-                        request_id: "unrelated-request", agent_did: "did:key:worker",
+                        request_id: "unrelated-request", purpose: "normal", agent_did: "did:key:worker",
                         requester_did: "did:key:owner", behavior_id: "operator-behavior",
                         lifecycle_state: "processing",
                         caused_by_trigger_id: "operator-trigger",
@@ -2579,6 +2579,7 @@ mod tests {
         use gents_protocol::request_admission::{AgentRequestAdmissionRecord, AgentRequestCreate};
         let identity = graph_test_identity();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             identity.did(),
             identity.did(),

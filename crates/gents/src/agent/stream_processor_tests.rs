@@ -109,6 +109,7 @@ fn fixture_agent_request(
     content: &str,
 ) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id,
         request_id: request_id.to_string(),
         agent_did: "did:test:test".to_string(),
@@ -960,6 +961,7 @@ async fn create_pending_request_with_input(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "did:test:test",
                 behavior_id: "general",
                 session_id: "{session_id}",

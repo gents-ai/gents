@@ -16,7 +16,7 @@ pub(super) async fn load_timeline_request_by_id(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ request_id: {{ _eq: "{}" }} }},
+                filter: {{ purpose: {{ _eq: "normal" }}, request_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: DESC }},
                 limit: 2
             ) {{
@@ -73,7 +73,7 @@ pub(super) async fn load_timeline_requests_for_session(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ {scope} }},
+                filter: {{ {scope}, purpose: {{ _eq: "normal" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID
@@ -118,7 +118,7 @@ pub(super) async fn load_timeline_child_requests(
     let query = format!(
         r#"{{
             AgentRequest(
-                filter: {{ caused_by_parent_request_doc_id: {{ _eq: "{}" }} }},
+                filter: {{ purpose: {{ _eq: "normal" }}, caused_by_parent_request_doc_id: {{ _eq: "{}" }} }},
                 order: {{ created_at: ASC }}
             ) {{
                 _docID

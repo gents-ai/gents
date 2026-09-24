@@ -1943,6 +1943,7 @@ async fn create_queue_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{escaped_request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 behavior_id: "{AGENT_NAME}",
                 session_id: "{escaped_session_id}",

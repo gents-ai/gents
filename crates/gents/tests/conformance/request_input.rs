@@ -69,6 +69,7 @@ fn signed_request_input_fields_match_lean_bytes() {
     for case in &lean_contract_snapshot().request_input_cases {
         let name = case["name"].as_str().unwrap();
         let mut request = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "request-1",
             "did:key:agent",
             "did:key:agent",

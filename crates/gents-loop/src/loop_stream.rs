@@ -62,7 +62,9 @@ pub use contract::{
     ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
     TurnCompactionOutcome, TurnCompactionRequest,
 };
-pub use one_shot::{run_loop_to_text, run_loop_to_typed};
+pub use one_shot::{
+    run_loop_to_text, run_loop_to_typed, AuxiliaryPersistenceFailure, OneShotProviderFailure,
+};
 pub use repeated_tool_failure::REPEATED_TOOL_FAILURE_PREFIX;
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
 pub use request_assembly::{

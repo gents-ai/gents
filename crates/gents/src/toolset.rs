@@ -18,6 +18,8 @@ mod memory;
 mod native_runner;
 pub use native_runner::enable_self_runner;
 mod session_history;
+mod title_audit_usage;
+pub use title_audit_usage::{ParentAuditUsage, ParentAuditUsageObservation};
 mod shared;
 pub(crate) use shared::is_secret_env_name;
 mod subagent;

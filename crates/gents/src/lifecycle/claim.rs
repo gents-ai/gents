@@ -124,11 +124,12 @@ where
                     .unwrap_or_default();
                 let mutation = build_mutation(&snapshot_fields);
                 let claimed = txn.execute_local_response(&mutation).await?;
-                if claimed
-                    .data
-                    .as_ref()
-                    .and_then(|data| data.get("update_AgentRequest"))
-                    .is_some_and(response_has_documents)
+                if request.purpose == gents_protocol::request_admission::RequestPurpose::Normal
+                    && claimed
+                        .data
+                        .as_ref()
+                        .and_then(|data| data.get("update_AgentRequest"))
+                        .is_some_and(response_has_documents)
                 {
                     crate::mailbox::claim_reply_in_txn(&txn, request, claimed_at).await?;
                     super::materialize::apply_request_session_projection(&txn, request, claimed_at)
@@ -230,15 +231,17 @@ impl RequestLifecycle {
                 super::TtlOutcome::NotSet => None,
                 super::TtlOutcome::Live(parsed) => Some(parsed),
             };
-        let dedup = self.check_deduplication().await?;
-        if !dedup.is_earliest {
-            tracing::info!(
-                request_id = %self.request.request_id,
-                session_id = %self.request.session_id,
-                blocking_request_id = dedup.blocking_request_id.as_deref().unwrap_or(""),
-                "request remains queued behind earlier same-session request"
-            );
-            return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued));
+        if self.request.purpose == gents_protocol::request_admission::RequestPurpose::Normal {
+            let dedup = self.check_deduplication().await?;
+            if !dedup.is_earliest {
+                tracing::info!(
+                    request_id = %self.request.request_id,
+                    session_id = %self.request.session_id,
+                    blocking_request_id = dedup.blocking_request_id.as_deref().unwrap_or(""),
+                    "request remains queued behind earlier same-session request"
+                );
+                return Ok(DurableClaimOutcome::NotClaimed(ClaimOutcome::Queued));
+            }
         }
         let (now, generation) = claim_inputs();
         Ok(DurableClaimOutcome::Claimed(
@@ -581,6 +584,7 @@ impl RequestLifecycle {
         let deadline = deadline_at.to_rfc3339();
         let doc_id = self.request.doc_id.clone();
         let escaped_doc_id = escape_graphql_string(&doc_id);
+        let escaped_purpose = escape_graphql_string(self.request.purpose.as_str());
         let escaped_claimed_at = escape_graphql_string(&claimed_at);
         let escaped_execution_generation = escape_graphql_string(&execution_generation);
         let escaped_execution_lease_expires_at =
@@ -621,6 +625,7 @@ impl RequestLifecycle {
                 update_AgentRequest(
                     filter: {{
                         _docID: {{ _eq: "{escaped_doc_id}" }},
+                        purpose: {{ _eq: "{escaped_purpose}" }},
                         lifecycle_state: {{ _eq: "pending" }},
                         execution_generation: {{ _eq: {prior_generation} }}
                     }},
@@ -646,8 +651,9 @@ impl RequestLifecycle {
             )
         };
 
-        let is_background_completion =
-            crate::lifecycle::is_background_completion_request(&self.request.input);
+        let is_background_completion = self.request.purpose
+            == gents_protocol::request_admission::RequestPurpose::Normal
+            && crate::lifecycle::is_background_completion_request(&self.request.input);
         let (resp, snapshot) = claim_request_with_projection(
             self.node.as_ref(),
             &self.request.session_id,
@@ -739,6 +745,7 @@ mod tests {
             r#"mutation {{
                 create_AgentRequest(input: {{
                     request_id: "{escaped_request_id}",
+                    purpose: "normal",
                     agent_did: "{TEST_AGENT_DID}",
                     behavior_id: "{TEST_BEHAVIOR_ID}",
                     session_id: "{escaped_session_id}",

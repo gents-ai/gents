@@ -711,6 +711,7 @@ pub(crate) async fn artifact_test_fixture(files: &[(&str, &str)]) -> ArtifactTes
     )
     .await;
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "artifact-reader",
         &did,
         &did,
@@ -1177,6 +1178,7 @@ async fn artifact_alternate_owner(
     let did = identity.did();
     let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         name,
         did,
         did,

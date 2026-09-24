@@ -4,6 +4,9 @@ use super::{ClientStore, ClientStoreRows};
 
 impl ClientStore {
     pub fn from_rows(mut rows: ClientStoreRows) -> Self {
+        rows.requests.retain(|row| {
+            row.purpose == Some(gents_protocol::request_admission::RequestPurpose::Normal)
+        });
         sort_rows_with_sources(
             &mut rows.sessions,
             &mut rows.session_source_agent_dids,

@@ -99,25 +99,13 @@ pub(crate) fn scope_from_factory(
     ))
 }
 
-/// Run `future` under a capture scope (with the native admission-join lookup
-/// installed) when one can be built, and unchanged otherwise.
-pub(crate) async fn scope_request_if_configured<T>(
-    context: RenderedRequestContext,
-    factory: Option<&RenderedRequestCaptureFactory>,
-    future: impl std::future::Future<Output = T>,
-) -> T {
-    match scope_from_factory(context, factory) {
-        Some(scope) => scope::scope_request(scope, future).await,
-        None => future.await,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn agent_request() -> crate::watcher::AgentRequest {
         crate::watcher::AgentRequest {
+            purpose: gents_protocol::request_admission::RequestPurpose::Normal,
             doc_id: "doc-1".to_string(),
             request_id: "request-1".to_string(),
             agent_did: "did:key:test".to_string(),

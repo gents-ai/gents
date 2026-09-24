@@ -424,7 +424,8 @@ theorem Compaction.advanceCursor_preserves_sequenceBound
 theorem Gate.evaluate_preserves_sequenceBound
     (operation : Operation) (before after : World) (hbound : SequenceBound before)
     (h : evaluate operation before = .ok after) : SequenceBound after := by
-  unfold evaluate at h
+  have h := evaluate_success_core operation before after h
+  unfold evaluateCore at h
   cases operation with
   | renew generation deadline =>
       exact renew_preserves_sequenceBound before after generation deadline hbound

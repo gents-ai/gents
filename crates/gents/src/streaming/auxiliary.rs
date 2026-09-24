@@ -38,7 +38,7 @@ struct State {
     audit_seen: bool,
 }
 
-/// Auxiliary output uses the parent's live generation but never publishes a
+/// Auxiliary output uses its owning request's live generation but never publishes a
 /// transcript header. A separate writer tail prevents nested compaction from
 /// replacing the main inference attempt's uncommitted prefix.
 pub(crate) fn sink(
@@ -80,7 +80,7 @@ pub(crate) fn sink(
                     attempt: observation.attempt,
                 }
                 .is_auxiliary_audit(),
-                "auxiliary output sink received a non-compaction source"
+                "auxiliary output sink received a non-audit source"
             );
             let mut state = state.lock().await;
             if matches!(observation.event, AuxiliaryOutputEvent::AttemptStarted) {

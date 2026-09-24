@@ -1,4 +1,5 @@
 import Proofs.GoalAutomation
+import Proofs.Request.State
 
 /-! Candidate-local refinement: the selector changes ordering only when a
 verified current-Goal child proves its exact physical parent superseded.
@@ -14,6 +15,7 @@ structure Scope where
   deriving DecidableEq, Repr
 
 structure Row where
+  purpose : RequestPurpose
   doc : Nat
   request : Nat
   owner : Nat
@@ -27,7 +29,8 @@ structure Row where
   deterministicIdentity : Bool
   deriving DecidableEq, Repr
 
-def inScope (s : Scope) (r : Row) : Bool := r.owner == s.owner && r.session == s.session
+def inScope (s : Scope) (r : Row) : Bool :=
+  r.purpose == .normal && r.owner == s.owner && r.session == s.session
 
 /-- Cheap qualification/binding checks precede cryptographic validation.
 The shared Goal physical-edge helper checks original parent/child signatures,
@@ -51,6 +54,10 @@ def select (s : Scope) (orderedRows : List Row) : Option Row :=
   let rows := orderedRows.filter (inScope s)
   rows.find? fun row => !superseded s rows row
 
+theorem title_arrival_preserves_head (s : Scope) (rows : List Row) (title : Row)
+    (hp : title.purpose = .titleAudit) : select s (title :: rows) = select s rows := by
+  simp [select, inScope, hp]
+
 theorem selected_is_scoped_member (s : Scope) (rows : List Row) (head : Row)
     (h : select s rows = some head) : head ∈ rows.filter (inScope s) :=
   List.mem_of_find?_eq_some h
@@ -59,6 +66,16 @@ theorem selected_has_no_verified_child (s : Scope) (rows : List Row) (head : Row
     (h : select s rows = some head) : superseded s (rows.filter (inScope s)) head = false := by
   have hp := List.find?_some h
   simpa using hp
+
+theorem selected_is_normal (s : Scope) (rows : List Row) (head : Row)
+    (h : select s rows = some head) : head.purpose = .normal := by
+  have hm := selected_is_scoped_member s rows head h
+  simp only [List.mem_filter, inScope, Bool.and_eq_true, beq_iff_eq] at hm
+  exact hm.2.1.1
+
+theorem title_child_has_no_authority (s : Scope) (parent child : Row)
+    (h : child.purpose = .titleAudit) : verifiedEdge s parent child = false := by
+  simp [verifiedEdge, inScope, h]
 
 theorem verified_child_supersedes_exact_parent (s : Scope) (rows : List Row)
     (child parent : Row) (hm : child ∈ rows) (hv : verifiedEdge s parent child = true) :

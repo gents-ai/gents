@@ -384,6 +384,15 @@ def publicationAllowsSource (header : Header) (closing : Segment) : Bool :=
       | _, _ => false
   | .fork _ => !closing.coordinate.source.isAuxiliary
 
+/-- Auxiliary audit bytes are not a public payload source under any
+publication, including a fork header with otherwise valid coordinates. -/
+theorem auxiliary_never_publication_source (header : Header) (closing : Segment)
+    (kind : AuxiliaryKind) (scope turn attempt : Nat)
+    (hsource : closing.coordinate.source = .auxiliary kind scope turn attempt) :
+    publicationAllowsSource header closing = false := by
+  cases hpub : header.publication <;>
+    simp [publicationAllowsSource, hpub, hsource, Source.isAuxiliary]
+
 def validateReferenceSource (records : List Segment) (denied : List DocId)
     (header : Header) (reference : PayloadRef) : Except MessageError Unit := do
   let closing ← (resolveClose records denied reference).mapError

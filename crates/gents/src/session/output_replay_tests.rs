@@ -295,7 +295,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
     let created = node
         .execute(&format!(
             r#"mutation {{ create_AgentRequest(input: {{
-                request_id: "{}", agent_did: "{}",
+                request_id: "{}", purpose: "normal", agent_did: "{}",
                 behavior_id: "general", session_id: "{}", content: "prompt",
                 lifecycle_state: "pending", execution_origin: "interactive",
                 created_at: "{}", retry_count: 0, max_retries: 3, subagent_depth: 0
@@ -329,7 +329,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         attempt: 0,
     };
     let (runs, payload, stream_bytes) = if signed {
-        let parts = ["思考", "answer", "", "{\"x\":1}"];
+        let parts = ["思考", "sig-α", "answer", "", "sig-empty", "{\"x\":1}"];
         let mut runs = vec![
             SegmentRun {
                 stream: 0,
@@ -344,14 +344,23 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
                 stream: 1,
                 bytes: parts[1].len() as u32,
                 declaration: Some(StreamDeclaration {
+                    block_index: 0,
+                    part_index: 0,
+                    payload: StreamPayload::ReasoningSignature,
+                }),
+            },
+            SegmentRun {
+                stream: 2,
+                bytes: parts[2].len() as u32,
+                declaration: Some(StreamDeclaration {
                     block_index: 1,
                     part_index: 0,
                     payload: StreamPayload::Text,
                 }),
             },
             SegmentRun {
-                stream: 2,
-                bytes: 0,
+                stream: 3,
+                bytes: parts[3].len() as u32,
                 declaration: Some(StreamDeclaration {
                     block_index: 2,
                     part_index: 0,
@@ -359,8 +368,17 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
                 }),
             },
             SegmentRun {
-                stream: 3,
-                bytes: parts[3].len() as u32,
+                stream: 4,
+                bytes: parts[4].len() as u32,
+                declaration: Some(StreamDeclaration {
+                    block_index: 2,
+                    part_index: 0,
+                    payload: StreamPayload::ReasoningSignature,
+                }),
+            },
+            SegmentRun {
+                stream: 5,
+                bytes: parts[5].len() as u32,
                 declaration: Some(StreamDeclaration {
                     block_index: 3,
                     part_index: 0,
@@ -375,7 +393,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
         if !with_tool {
             runs.pop();
         }
-        let selected = if with_tool { &parts[..] } else { &parts[..3] };
+        let selected = if with_tool { &parts[..] } else { &parts[..5] };
         (
             runs,
             selected.concat(),
@@ -462,14 +480,14 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
                 },
                 MessageBlock::Text {
                     text: PresentedPayload {
-                        output: reference(1),
+                        output: reference(2),
                         presentation: PayloadPresentation::Full,
                     },
                 },
                 MessageBlock::Reasoning {
                     id: None,
                     parts: vec![ReasoningPart::Text {
-                        text: reference(2),
+                        text: reference(3),
                         signature: Some("sig-empty".into()),
                     }],
                 },
@@ -480,7 +498,7 @@ async fn fixture_with_provider_payload_and_scope_and_tool(
                     id: "toolu-1".into(),
                     call_id: None,
                     name: "echo".into(),
-                    arguments: reference(3),
+                    arguments: reference(5),
                     signature: None,
                     additional_params: None,
                 });

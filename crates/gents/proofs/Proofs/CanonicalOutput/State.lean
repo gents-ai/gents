@@ -17,6 +17,7 @@ abbrev DocId := Nat
 inductive AuxiliaryKind where
   | compaction
   | compactionFallback
+  | title
   deriving DecidableEq, Repr
 
 inductive Source where

@@ -30,9 +30,12 @@ inductive Input where
   | completeForeground
   | deliverForeground
   | terminalizeCompleted
+  | terminalizeNoMessage
+  | terminalizeNoMessageAt (now : Nat)
   | recover (actor : Nat) (now fresh deadline : Nat)
   | renew (now expectedDeadline : Nat)
   | appendRaw (actor now : Nat) (record : Segment)
+  | retract (now : Nat) (record : Segment)
   | closeAuxiliary (now generation : Nat) (closing : Segment)
   | appendToolOutput (actor now document : Nat) (record : Segment)
   | recoverItems (actor now fresh deadline : Nat) (items : List RecoveryItem)
@@ -85,9 +88,12 @@ def Input.step : Input → Step
       (.toolComplete 600 (.native .complete) toolOutputClose (foregroundResultMessage 1))
   | .deliverForeground => .commit (.toolDeliver 600 (foregroundResultMessage 1))
   | .terminalizeCompleted => .commit (.terminalize 7 .completed (.message 501))
+  | .terminalizeNoMessage => .commit (.terminalize 7 .completed .noMessage)
+  | .terminalizeNoMessageAt _ => .commit (.terminalize 7 .completed .noMessage)
   | .recover _ _ fresh deadline => .commit (.recover 7 fresh 5 deadline [])
   | .renew _ expectedDeadline => .commit (.renew 7 expectedDeadline)
   | .appendRaw _ _ record => .commit (.append 7 record)
+  | .retract _ record => .commit (.retract 7 record)
   | .closeAuxiliary _ generation closing => .commit (.closeAuxiliary generation closing)
   | .appendToolOutput _ _ document record => .commit (.toolAppend document record)
   | .recoverItems _ _ fresh deadline items => .commit (.recover 7 fresh 5 deadline items)
@@ -118,10 +124,12 @@ def Input.actor : Input → Nat
   | _ => 1
 
 def Input.now : Input → Nat
+  | .terminalizeNoMessageAt now => now
   | .dispatch now => now
   | .recover _ now .. => now
   | .renew now _ => now
   | .appendRaw _ now _ => now
+  | .retract now _ => now
   | .closeAuxiliary now .. => now
   | .appendToolOutput _ now .. => now
   | .recoverItems _ now .. => now
@@ -144,9 +152,12 @@ def Input.tag : Input → String
   | .completeForeground => "complete_foreground_tool"
   | .deliverForeground => "deliver_foreground_result"
   | .terminalizeCompleted => "terminalize_completed"
+  | .terminalizeNoMessage => "terminalize_completed"
+  | .terminalizeNoMessageAt _ => "terminalize_completed"
   | .recover .. => "recover_expired_generation"
   | .renew .. => "renew_lease"
   | .appendRaw .. => "append_output"
+  | .retract .. => "retract_before_retry"
   | .closeAuxiliary .. => "close_auxiliary"
   | .appendToolOutput .. => "append_tool_output"
   | .recoverItems .. => "recover_expired_generation"
@@ -168,6 +179,7 @@ structure Observation where
   accepted : Bool
   generation : Option Nat
   terminalGeneration : Option Nat
+  terminalSelection : Option TerminalSelection
   requestState : String
   toolState : Option String
   toolStuckSince : Option Nat
@@ -197,6 +209,7 @@ def observe (document : Nat) (accepted : Bool) (world : World) : Observation :=
     terminalGeneration := match world.lease.lease with
       | .terminal generation _ => some generation
       | _ => none
+    terminalSelection := world.terminalSelection
     requestState := world.lease.request.toDefraDB
     toolState := tool.map (ToolExecution.ToolCallState.toDefraDB ·.context.state)
     toolStuckSince := tool.bind (·.stuckSince)
@@ -550,14 +563,193 @@ def auxiliaryCloseCases : List Case :=
       [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
        .closeAuxiliary 11 7
         { (AuxiliaryCases.close .compaction .complete) with createdAt := 11 }] ]
-  ++ [mkCase "auxiliary_close_replay_rejects_stale_writer" (world 5)
+  ++ [mkCase "auxiliary_close_exact_replay_across_generation" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .compaction .complete),
+       .closeAuxiliary 5 8 (AuxiliaryCases.close .compaction .complete)],
+    mkCase "auxiliary_close_fresh_writer_actor_mismatch_rejected" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
+       .closeAuxiliary 5 8 (AuxiliaryCases.close .compaction .complete)],
+    mkCase "auxiliary_close_replay_rejects_stale_writer" (world 5)
       [.appendRaw 1 5 (AuxiliaryCases.observed .compaction),
        .closeAuxiliary 5 7 (AuxiliaryCases.close .compaction .complete),
        .closeAuxiliary 5 8 (AuxiliaryCases.staleWriterClose .compaction .complete)]]
 
+private def titlePending : World :=
+  { world 0 with
+    purpose := .titleAudit
+    lease := RequestExecutionLease.initial Nat
+    gateOwner := some 1
+    gateSchedule := ⟨.storage, true, false⟩ }
+
+private def titleActivation : Handover.TitleActivation :=
+  { binding :=
+      { physicalRequest := 10, logicalRequest := 11
+      , parentPhysical := 20, parentLogical := 21
+      , agent := 1, session := 1, authenticated := true }
+  , generation := 7, duration := 5, deadline := 10 }
+
+private def titleClaimed? : Option World :=
+  SessionComposition.activateTitle titlePending 1 1 titleActivation 1
+    { transportRetries := 0, resampleRetries := 0, allowRepair := false } none
+
+private def titleClaimed : World := titleClaimed?.get (by native_decide)
+
+private def titleProcessing? : Option World := do
+  let released ← scheduling titleClaimed 1 .release
+  let held ← acquire released 1 true
+  Handover.beginProcessing held 1 2 7
+
+private def titleProcessing : World := titleProcessing?.get (by native_decide)
+
+private theorem title_claim_and_begin_are_owned :
+    titleClaimed.claimed.isSome = true ∧
+    titleClaimed.lease.request = .claimed ∧
+    titleProcessing.lease.request = .processing ∧
+    titleProcessing.claimed = titleClaimed.claimed ∧
+    titleProcessing.queue = titlePending.queue := by
+  native_decide
+
+private def titleRetraction : Segment :=
+  { AuxiliaryCases.close .title .complete with
+    close := some .retracted, createdAt := 6 }
+
+private def titleLivePartial : RecoveryItem :=
+  ⟨{ AuxiliaryCases.close .title .«partial» with createdAt := 6 }, none⟩
+
+private def titleLateOutsideExtent : Segment :=
+  { lateStaleFlush with coordinate := ⟨10, AuxiliaryCases.source .title⟩ }
+
+private def titleFutureDatedRaw : Segment :=
+  { AuxiliaryCases.observed .title with createdAt := 12 }
+
+private def titleEarlierRecoveryClose : Segment :=
+  { AuxiliaryCases.recoveryClose .title with createdAt := 11 }
+
+/-- The gate scripts start from an actual typed title claim and begin. Signed
+admission remains a separate joined fixture; the native execution initializer
+cannot yet create that request or translate the title capture scope. -/
+def titleCases : List Case :=
+  let nativeGap :=
+    "The model seed uses the real typed title claim/begin owner, but native execution initializes only a signed normal local-self request; signed title admission and title capture-scope translation are separate unbound interfaces."
+  [ mkModelCase "title_claimed_renewal_while_permit_wait" titleClaimed
+      [.renew 8 10] nativeGap
+  , mkModelCase "title_reasoning_audit_complete_no_message" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
+       .terminalizeNoMessage] nativeGap
+  , mkModelCase "title_live_partial_retains_received_reasoning" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .closePartial 6 7 titleLivePartial,
+       .terminalizeNoMessageAt 7] nativeGap
+  , mkModelCase "title_expired_headerless_recovery_no_message" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .recoverTerminal 2 20 8 .interrupted .noMessage
+         [⟨AuxiliaryCases.recoveryClose .title, none⟩]] nativeGap
+  , mkModelCase "title_recovery_accepts_closed_partial_before_future_dated_raw"
+      titleProcessing
+      [.replicate titleFutureDatedRaw,
+       .recoverTerminal 2 11 8 .interrupted .noMessage
+         [⟨titleEarlierRecoveryClose, none⟩]]
+      "A future-dated raw fact arriving by replication is outside the local append-time premise. Existing recovery permits a valid Partial closure at its own earlier observed time; native title admission remains unbound to this model seed."
+  , mkModelCase "title_retraction_keeps_observed_reasoning" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .retract 6 titleRetraction,
+       .terminalizeNoMessageAt 7] nativeGap
+  , mkModelCase "title_open_audit_blocks_ordinary_terminal" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .terminalizeNoMessageAt 6,
+       .closeAuxiliary 7 7 { (AuxiliaryCases.close .title .«partial») with createdAt := 7 },
+       .terminalizeNoMessageAt 8] nativeGap
+  , mkModelCase "title_closed_extent_allows_terminal_after_late_raw" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .closePartial 6 7 titleLivePartial,
+       .replicate titleLateOutsideExtent,
+       .terminalizeNoMessageAt 7] nativeGap
+  , mkModelCase "title_terminal_replay_ignores_late_raw" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .closePartial 6 7 titleLivePartial,
+       .terminalizeNoMessageAt 7,
+       .replicate titleLateOutsideExtent,
+       .terminalizeNoMessageAt 8] nativeGap
+  , mkModelCase "title_rejects_publication_and_tool_dispatch" titleProcessing
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .acceptTurn (AuxiliaryCases.nativePublicationClose .title)
+         AuxiliaryCases.nativePublicationMessage [],
+       .dispatchCall 5 600,
+       .publishAuthored authored compactionBoundary,
+       .terminalizeCompleted,
+       .closeAuxiliary 5 7 (AuxiliaryCases.close .title .complete),
+       .terminalizeNoMessage] nativeGap
+  , mkModelCase "normal_request_rejects_title_source" (world 5)
+      [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+       .retract 6 titleRetraction,
+       .appendRaw 1 6 (raw 102 0 0 6)]
+      "The native execution seed initializer cannot expose a title-source record under a normal request until the title-source protocol adapter is bound to this fixture." ]
+
+example : titleCases.map (fun value => value.expected.map (List.map (·.accepted))) =
+    [some [true], some [true, true, true], some [true, true, true],
+      some [true, true], some [true, true], some [true, true, true],
+      some [true, false, true, true],
+      some [true, true, true, true], some [true, true, true, true, true],
+      some [true, false, false, false, false, true, true],
+      some [false, false, true]] := by native_decide
+
+example : ((run titleProcessing 600
+    [.replicate titleFutureDatedRaw,
+     .recoverTerminal 2 11 8 .interrupted .noMessage
+       [⟨titleEarlierRecoveryClose, none⟩]]).bind List.getLast?).map
+      (fun observation =>
+        observation.accepted && observation.requestState == "interrupted" &&
+          observation.terminalSelection == some .noMessage &&
+          observation.segments.any (fun segment =>
+            segment == titleEarlierRecoveryClose &&
+              titleFutureDatedRaw.createdAt > segment.createdAt)) = some true := by
+  native_decide
+
+private def purposeRejected : Except Gate.Error World → Bool
+  | .error .purposeRejected => true
+  | _ => false
+
+example :
+    purposeRejected (Gate.evaluate (.accept 7
+      (AuxiliaryCases.nativePublicationClose .title)
+      AuxiliaryCases.nativePublicationMessage [] []) titleProcessing) = true ∧
+    purposeRejected (Gate.evaluate (.dispatch 7 ⟨600, true, true⟩)
+      titleProcessing) = true ∧
+    purposeRejected (Gate.evaluate (.retract 7 titleRetraction)
+      (world 6)) = true := by native_decide
+
+private def titleAuditExact (inputs : List Input) : Bool :=
+  match run titleProcessing 600 inputs with
+  | none => false
+  | some observations =>
+      match observations.getLast? with
+      | none => false
+      | some last =>
+          match StreamingResponse.reconstructAuditPrefix
+              (AuxiliaryCases.observation .title last.segments) none with
+          | .error _ => false
+          | .ok streams => streams == StreamingResponse.ReasoningAudit.exactAudit
+
+example :
+    titleAuditExact [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+      .closePartial 6 7 titleLivePartial, .terminalizeNoMessageAt 7] = true ∧
+    titleAuditExact [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+      .recoverTerminal 2 20 8 .interrupted .noMessage
+        [⟨AuxiliaryCases.recoveryClose .title, none⟩]] = true ∧
+    titleAuditExact [.appendRaw 1 5 (AuxiliaryCases.observed .title),
+      .retract 6 titleRetraction, .terminalizeNoMessageAt 7] = true := by
+  native_decide
+
+example : (titleCases.take 6).all (fun value =>
+    value.expected.any (fun observations => observations.all (·.messages.isEmpty))) = true := by
+  native_decide
+
 example : (auxiliaryCloseCases.map (fun value =>
     value.expected.map (List.map (·.accepted)))) =
     [some [true, true], some [true, true], some [true, false],
+      some [true, true, true], some [true, false],
       some [true, true, false]] := by native_decide
 
 /-- Write-gate scheduling premise: a suspended same-task holder publishes
@@ -570,7 +762,7 @@ def cases : List Case :=
   schedulingCases ++ toolSeamCases ++ nativeToolCompletionCases ++ leaseOrderingCases ++
     toolOutputDeadlineCases ++ terminalRecoveryCases ++
     publicationCases ++ integrityCases ++
-    compactionCases ++ auxiliaryCloseCases ++ livePartialCases
+    compactionCases ++ auxiliaryCloseCases ++ titleCases ++ livePartialCases
 
 def contextFieldsJson (context : ToolExecution.ToolCallContext) : String :=
   "\"call_id\":" ++ toString context.callId ++ ","
@@ -616,6 +808,7 @@ def targetJson (value : RemoteTarget) : String :=
 
 def seedJson (value : World) : String :=
   "{" ++ "\"request_id\":" ++ toString value.requestId ++ ","
+    ++ "\"purpose\":" ++ jsonString value.purpose.toWire ++ ","
     ++ "\"session_id\":" ++ toString value.sessionId ++ ","
     ++ "\"principal\":" ++ toString value.principal ++ ","
     ++ "\"subagent_depth\":" ++ toString value.subagentDepth ++ ","
@@ -661,11 +854,13 @@ def inputJson (input : Input) : String :=
   | .toolDeliver document message =>
       common ++ ",\"document\":" ++ toString document ++ ",\"message\":" ++
         canonicalMessageJson message ++ "}"
-  | .terminalize generation outcome (.message id) =>
+  | .terminalize generation outcome selection =>
+      let selected := match selection with
+        | .noMessage => "{\"kind\":\"no_message\"}"
+        | .message id => "{\"kind\":\"message\",\"id\":" ++ toString id ++ "}"
       common ++ ",\"generation\":" ++ toString generation ++ ",\"outcome\":" ++
         jsonString (Conformance.RequestExecutionLeaseContracts.outcomeName outcome) ++
-        ",\"selection\":{\"kind\":\"message\",\"id\":" ++
-        toString id ++ "}}"
+        ",\"selection\":" ++ selected ++ "}"
   | .recover expected fresh duration deadline items =>
       common ++ ",\"expected_generation\":" ++ toString expected ++
         ",\"fresh_generation\":" ++ toString fresh ++ ",\"duration\":" ++
@@ -688,6 +883,9 @@ def inputJson (input : Input) : String :=
       common ++ ",\"generation\":" ++ toString generation ++
         ",\"expected_deadline\":" ++ toString expectedDeadline ++ "}"
   | .append generation record =>
+      common ++ ",\"generation\":" ++ toString generation ++ ",\"record\":" ++
+        canonicalSegmentJson record ++ "}"
+  | .retract generation record =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"record\":" ++
         canonicalSegmentJson record ++ "}"
   | .closeAuxiliary generation closing =>
@@ -717,9 +915,14 @@ def inputJson (input : Input) : String :=
   | _ => "null"
 
 def observationJson (value : Observation) : String :=
+  let terminalSelection := match value.terminalSelection with
+    | none => "null"
+    | some .noMessage => "{\"kind\":\"no_message\"}"
+    | some (.message id) => "{\"kind\":\"message\",\"id\":" ++ toString id ++ "}"
   "{" ++ "\"accepted\":" ++ jsonOptionalBool (some value.accepted) ++ ","
     ++ "\"generation\":" ++ jsonOptionalNat value.generation ++ ","
     ++ "\"terminal_generation\":" ++ jsonOptionalNat value.terminalGeneration ++ ","
+    ++ "\"terminal_selection\":" ++ terminalSelection ++ ","
     ++ "\"request_state\":" ++ jsonString value.requestState ++ ","
     ++ "\"tool_state\":" ++ (value.toolState.map jsonString).getD "null" ++ ","
     ++ "\"tool_stuck_since\":" ++ jsonOptionalNat value.toolStuckSince ++ ","
@@ -749,13 +952,15 @@ def casesJson : String := jsonArray (cases.map caseJson)
 example : cases.all (fun value => value.expected.isSome) = true := by native_decide
 
 /-- Collections represented as empty, plus omitted optional execution state, are
-empty in every modeled seed. -/
+empty in every native-adaptable seed. Title model-only seeds carry their real
+typed claim, which the current native initializer cannot represent. -/
 example : cases.all (fun value => value.seed.segments.isEmpty && value.seed.messages.isEmpty &&
     value.seed.transcript.messages.isEmpty && value.seed.transcript.toolCalls.isEmpty &&
     value.seed.transcript.inFlight == ∅ && value.seed.compactionCursor.isNone &&
     value.seed.toolContexts.isEmpty && value.seed.delegatedCalls.isEmpty &&
-    value.seed.terminalSelection.isNone && value.seed.gateOwner.isNone &&
-    value.seed.claimed.isNone) = true := by
+    value.seed.terminalSelection.isNone &&
+    (value.nativeGap.isSome ||
+      (value.seed.gateOwner.isNone && value.seed.claimed.isNone))) = true := by
   native_decide
 
 /-- Every script is substantive, serializable through its modeled operations,

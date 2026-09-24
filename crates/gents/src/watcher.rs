@@ -22,6 +22,7 @@ pub(crate) use query::{agent_request_from_mutation_response, AGENT_REQUEST_FIELD
 
 #[derive(Debug, Clone)]
 pub struct AgentRequest {
+    pub purpose: gents_protocol::request_admission::RequestPurpose,
     pub doc_id: String,
     pub request_id: String,
     pub agent_did: String,
@@ -84,6 +85,7 @@ impl TryFrom<gents_protocol::row::AgentRequestRow> for AgentRequest {
             other => other,
         };
         let request = Self {
+            purpose: row.purpose.context("agent request is missing purpose")?,
             doc_id: row.doc_id.context("agent request is missing _docID")?,
             request_id: row.request_id,
             agent_did: row
@@ -146,16 +148,29 @@ pub fn validate_agent_request(req: &AgentRequest) -> Result<()> {
     let has_parent_tc = req.caused_by_parent_tool_call_id.is_some();
     let has_parent_req_doc = req.caused_by_parent_request_doc_id.is_some();
     let has_parent_tc_doc = req.caused_by_parent_tool_call_doc_id.is_some();
+    let title_parent_link =
+        req.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit;
+    if title_parent_link {
+        anyhow::ensure!(
+            has_parent_req
+                && has_parent_req_doc
+                && !has_parent_tc
+                && !has_parent_tc_doc
+                && req.subagent_depth == 0,
+            "title audit requires parent-only provenance, not subagent authority"
+        );
+    }
     let request_only_control_link = has_parent_req
         && !has_parent_tc
-        && req.input.queue.as_ref().is_some_and(|queue| {
-            matches!(
-                queue.source,
-                gents_protocol::request_input::QueueSource::Steering
-                    | gents_protocol::request_input::QueueSource::Goal
-                    | gents_protocol::request_input::QueueSource::BackgroundCompletion
-            )
-        });
+        && (title_parent_link
+            || req.input.queue.as_ref().is_some_and(|queue| {
+                matches!(
+                    queue.source,
+                    gents_protocol::request_input::QueueSource::Steering
+                        | gents_protocol::request_input::QueueSource::Goal
+                        | gents_protocol::request_input::QueueSource::BackgroundCompletion
+                )
+            }));
     if has_parent_req != has_parent_req_doc || has_parent_tc != has_parent_tc_doc {
         return Err(IllegalToolCallTransition::ParentLinkageIncoherent.into());
     }

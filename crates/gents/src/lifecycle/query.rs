@@ -12,6 +12,7 @@ impl RequestLifecycle {
                 AgentRequest(
                     filter: {{
                         session_id: {{ _eq: "{escaped_session_id}" }},
+                        purpose: {{ _eq: "normal" }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]

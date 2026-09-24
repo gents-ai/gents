@@ -185,6 +185,7 @@ async fn non_deadline_request_terminalization_does_not_timeout_running_wait() {
             "running-wait-predeadline-failed"
         };
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             request_id,
             identity.did(),
             identity.did(),
@@ -274,6 +275,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let automated = case["automated_root"].as_bool().unwrap();
         let mut root = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "output-root",
             identity.did(),
             identity.did(),
@@ -335,6 +337,7 @@ async fn generated_logical_output_obligation_cases_drive_signed_requests_and_dur
         );
         let request = crate::watcher::AgentRequest::try_from(child_row.clone()).unwrap();
         let mut outsider = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "output-outsider",
             identity.did(),
             identity.did(),
@@ -512,6 +515,7 @@ async fn dynamic_count_failures_are_observed_not_defaulted() {
         let temp = tempfile::tempdir().unwrap();
         let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "request-count-fail-closed",
             identity.did(),
             identity.did(),
@@ -576,6 +580,7 @@ async fn same_tool_calls_with_conflicting_declared_counts_reject_the_gate() {
     let temp = tempfile::tempdir().unwrap();
     let identity = KeyIdentity::load_or_create(temp.path().join("owner.key"), None).unwrap();
     let mut create = AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         "request-count-conflict",
         identity.did(),
         identity.did(),

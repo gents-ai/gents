@@ -4,6 +4,7 @@ use crate::lifecycle::queue::{goal_continuation_identity, prepare_goal_continuat
 use crate::request_admission::{
     verify_request_receipt_signature, verify_runtime_local_control_receipt,
 };
+use gents_protocol::request_admission::RequestPurpose;
 use gents_protocol::row::AgentRequestRow;
 
 /// Authenticate causal ancestry independently of the current producer defaults.
@@ -17,7 +18,9 @@ pub(crate) fn verify_goal_continuation_edge(
     child: &AgentRequestRow,
 ) -> Result<(i64, bool)> {
     anyhow::ensure!(
-        parent_row.agent_did.as_deref() == Some(agent_did)
+        parent_row.purpose == Some(RequestPurpose::Normal)
+            && child.purpose == Some(RequestPurpose::Normal)
+            && parent_row.agent_did.as_deref() == Some(agent_did)
             && parent_row.session_id.as_deref() == Some(session_id)
             && child.session_id.as_deref() == Some(session_id),
         "continuation predecessor is outside the goal owner/session"
@@ -119,7 +122,9 @@ fn latest_scoped_request<'a>(
     rows: &'a [AgentRequestRow],
 ) -> Option<&'a AgentRequestRow> {
     let in_scope = |row: &&AgentRequestRow| {
-        row.agent_did.as_deref() == Some(agent_did) && row.session_id.as_deref() == Some(session_id)
+        row.purpose == Some(RequestPurpose::Normal)
+            && row.agent_did.as_deref() == Some(agent_did)
+            && row.session_id.as_deref() == Some(session_id)
     };
     rows.iter().filter(in_scope).find(|parent| {
         !rows.iter().filter(in_scope).any(|child| {
@@ -249,8 +254,10 @@ fn authenticated_entry<'a>(
 /// A continuation cannot bypass an unfinished or unrecognized request row.
 pub(crate) fn goal_session_is_idle(rows: &[AgentRequestRow]) -> bool {
     rows.iter().all(|row| {
-        row.lifecycle_state
-            .is_some_and(RequestLifecycleState::is_terminal)
+        row.purpose == Some(RequestPurpose::TitleAudit)
+            || row
+                .lifecycle_state
+                .is_some_and(RequestLifecycleState::is_terminal)
     })
 }
 

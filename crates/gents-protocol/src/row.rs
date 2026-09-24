@@ -57,6 +57,8 @@ pub struct AgentRequestRow {
     pub doc_id: Option<String>,
     pub request_id: String,
     #[serde(default)]
+    pub purpose: Option<crate::request_admission::RequestPurpose>,
+    #[serde(default)]
     pub agent_did: Option<String>,
     #[serde(default)]
     pub requester_did: Option<String>,

@@ -314,7 +314,7 @@ async fn drive_redrive(case: &LeanR6BackgroundingCase) {
         gents_protocol::graphql::graphql_input_literal(&serde_json::to_value(input).unwrap())
             .unwrap();
     let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{
-        request_id: "{}", agent_did: "{}", requester_did: "{}", behavior_id: "general",
+        request_id: "{}", purpose: "normal", agent_did: "{}", requester_did: "{}", behavior_id: "general",
         session_id: "{}", content: "background input", input: {input},
         execution_origin: "scheduled", lifecycle_state: "failed",
         failure_reason: "backend admission failed", terminalized_at: "2026-07-15T00:00:00Z",

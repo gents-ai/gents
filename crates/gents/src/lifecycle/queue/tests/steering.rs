@@ -236,6 +236,7 @@ async fn generated_owned_prepublication_terminals_retain_signed_admission_withou
         .await
         .unwrap();
         let mut parent_create = gents_protocol::request_admission::AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "parent-request",
             db.agent_did(),
             db.agent_did(),

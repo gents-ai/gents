@@ -11,6 +11,7 @@ use rows::{is_aged_background_completion_wakeup, is_pending, preclaim_signal, Pr
 pub(crate) const AGENT_REQUEST_FIELDS: &str = r#"
                     _docID
                     request_id
+                    purpose
                     agent_did
                     requester_did
                     behavior_id
@@ -211,6 +212,10 @@ impl DefraWatcher {
             PreclaimSignal::None => {}
         }
 
+        if request.purpose == gents_protocol::request_admission::RequestPurpose::TitleAudit {
+            return Ok(true);
+        }
+
         let session_id = crate::graphql::escape_graphql_string(&request.session_id);
         let owner = crate::graphql::escape_graphql_string(&request.agent_did);
         let row_doc_id = request.doc_id.as_str();
@@ -221,6 +226,7 @@ impl DefraWatcher {
                     filter: {{
                         session_id: {{ _eq: "{session_id}" }},
                         agent_did: {{ _eq: "{owner}" }},
+                        purpose: {{ _eq: "normal" }},
                         lifecycle_state: {{ _in: {active_runtime_states} }}
                     }},
                     order: [{{ created_at: ASC }}, {{ request_id: ASC }}]
@@ -332,6 +338,9 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
     // to malformed live work in the same session.
     let blocked_sessions = rows
         .iter()
+        .filter(|row| {
+            row.purpose != Some(gents_protocol::request_admission::RequestPurpose::TitleAudit)
+        })
         .filter(|row| !is_pending(row))
         .filter_map(|row| row.session_id.clone())
         .collect::<HashSet<_>>();
@@ -360,6 +369,8 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
         let session_blocked = blocked_sessions.contains(session_id);
 
         if row_is_pending {
+            let title =
+                row.purpose == Some(gents_protocol::request_admission::RequestPurpose::TitleAudit);
             match preclaim_signal(&row) {
                 PreclaimSignal::Terminal => claimable.push(row.clone()),
                 PreclaimSignal::Malformed => {
@@ -370,12 +381,14 @@ fn claimable_pending_rows_from_rows(rows: Vec<AgentRequestRow>) -> Vec<AgentRequ
                     );
                 }
                 PreclaimSignal::None => {
-                    if !session_blocked && !pending_session_seen {
+                    if title || (!session_blocked && !pending_session_seen) {
                         claimable.push(row.clone());
                     }
                 }
             }
-            seen_pending_sessions.insert(session_id.to_string());
+            if !title {
+                seen_pending_sessions.insert(session_id.to_string());
+            }
         }
     }
 
@@ -410,6 +423,7 @@ mod tests {
         serde_json::json!({
             "_docID": format!("doc-{request_id}"),
             "request_id": request_id,
+            "purpose": "normal",
             "agent_did": "did:agent:1",
             "behavior_id": "default",
             "session_id": session_id,

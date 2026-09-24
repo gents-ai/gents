@@ -86,7 +86,7 @@ async fn claimed(node: &Arc<EmbeddedNode>, request_id: &str, session_id: &str) -
     let request_id = crate::graphql::escape_graphql_string(request_id);
     let session_id = crate::graphql::escape_graphql_string(session_id);
     let now = crate::graphql::escape_graphql_string(&now);
-    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", agent_did: "did:test:test", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
+    let response = node.execute(&format!(r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request_id}", purpose: "normal", agent_did: "did:test:test", behavior_id: "general", session_id: "{session_id}", retry_parent_request: "", retry_root_request: "{request_id}", superseded_by_request: "", content: "hello", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{now}", retry_count: 0, max_retries: 3, subagent_depth: 0 }}) {{ _docID }} }}"#)).await;
     assert!(!response.has_errors(), "{:#?}", response.errors);
     let response = node
         .execute(&format!(

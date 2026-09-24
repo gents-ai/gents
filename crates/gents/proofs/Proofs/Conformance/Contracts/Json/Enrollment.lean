@@ -197,4 +197,123 @@ def enrollmentDigestCasesJson : String :=
 def agentRequestAdmissionCasesJson : String :=
   jsonArray (agentRequestAdmissionCases.map agentRequestAdmissionCaseJson)
 
+private def titleFieldsHexJson (fields : Enrollment.CanonicalFields) : String :=
+  jsonStringArray (fields.map Enrollment.utf8HexString)
+
+private def titleRequestInputJson (input : Enrollment.RequestInput) : String :=
+  "{" ++ "\"selected_skill_ids\":" ++ jsonStringArray input.selectedSkillIds ++ ","
+    ++ "\"cwd\":" ++ jsonOptionalString input.cwd ++ ","
+    ++ "\"initial_title\":" ++ (match input.initialTitle with
+      | none => "null"
+      | some title => "{\"text\":" ++ jsonString title.text ++
+          ",\"source\":" ++ jsonString title.source.toWireName ++ "}") ++ ","
+    ++ "\"queue\":" ++ (match input.queue with
+      | none => "null"
+      | some queue => "{\"source\":" ++ jsonString queue.source.toDefraDB ++
+          ",\"policy\":" ++ jsonString queue.policy.toDefraDB ++
+          ",\"key\":" ++ jsonOptionalString queue.key ++
+          ",\"queued_after_request_id\":" ++
+            jsonOptionalString queue.queuedAfterRequestId ++
+          ",\"interrupted_request_id\":" ++
+            jsonOptionalString queue.interruptedRequestId ++
+          ",\"background_completion_wake_version\":" ++
+            jsonOptionalNat queue.backgroundCompletionWakeVersion ++ "}") ++ ","
+    ++ "\"goal_continuation\":" ++ (match input.goalContinuation with
+      | none => "null"
+      | some goal => "{\"sequence\":" ++ toString goal.sequence ++
+          ",\"wrapup\":" ++ boolJson goal.wrapup ++ "}") ++ "}"
+
+private def titleParentEvidenceJson (parent : Enrollment.TitleParentEvidence) : String :=
+  "{" ++ "\"request_id\":" ++ jsonString parent.link.requestId ++ ","
+    ++ "\"document_id\":" ++ jsonString parent.link.documentId ++ ","
+    ++ "\"agent_did\":" ++ jsonString parent.agentDid ++ ","
+    ++ "\"session_id\":" ++ jsonString parent.sessionId ++ ","
+    ++ "\"behavior_id\":" ++ jsonString parent.behaviorId ++ ","
+    ++ "\"logical_binding_current\":" ++ boolJson parent.logicalBindingCurrent ++ ","
+    ++ "\"physical_binding_current\":" ++ boolJson parent.physicalBindingCurrent ++ "}"
+
+private def titleRuntimeEvidenceJson (evidence : Enrollment.RuntimeInternalEvidence) : String :=
+  "{" ++ "\"source_kind\":" ++ jsonString (match evidence.sourceKind with
+      | .localChild => "local-child"
+      | .crossPrincipalChild => "cross-principal-child"
+      | .localControl => "local-control"
+      | .automatedTrigger => "automated-trigger") ++ ","
+    ++ "\"issuer_did\":" ++ jsonString evidence.issuerDid ++ ","
+    ++ "\"source_request_id\":" ++ jsonString evidence.sourceRequestId ++ ","
+    ++ "\"bridge_author_did\":" ++ jsonString evidence.bridgeAuthorDid ++ ","
+    ++ "\"target_agent\":" ++ jsonString evidence.targetAgent ++ ","
+    ++ "\"target_runtime_attestation_valid\":" ++ boolJson evidence.targetRuntimeAttestationValid ++ ","
+    ++ "\"source_binding_current\":" ++ boolJson evidence.sourceBindingCurrent ++ ","
+    ++ "\"source_document_binding_current\":" ++ boolJson evidence.sourceDocumentBindingCurrent ++ ","
+    ++ "\"title_parent\":" ++
+      (match evidence.titleParent with
+      | none => "null"
+      | some parent => titleParentEvidenceJson parent) ++ "}"
+
+def titleRequestAdmissionCaseJson (case : TitleRequestAdmissionCase) : String :=
+  let request := case.request
+  let admission := case.admission
+  "{" ++ "\"name\":" ++ jsonString case.name ++ ","
+    ++ "\"parent_observed_state\":" ++ jsonString case.parentObservedState.toDefraDB ++ ","
+    ++ "\"observation_available\":" ++ boolJson case.observationAvailable ++ ","
+    ++ "\"branch_fields_exact\":" ++ boolJson case.branchFieldsExact ++ ","
+    ++ "\"pending_deadline_absent\":" ++ boolJson case.pendingDeadlineAbsent ++ ","
+    ++ "\"request\":{"
+    ++ "\"request_id\":" ++ jsonString request.requestId ++ ","
+    ++ "\"purpose\":" ++ jsonString request.purpose.toWire ++ ","
+    ++ "\"target_agent\":" ++ jsonString request.targetAgent ++ ","
+    ++ "\"requester_did\":" ++ jsonString request.requesterDid ++ ","
+    ++ "\"behavior_id\":" ++ jsonString request.behaviorId ++ ","
+    ++ "\"session_id\":" ++ jsonString request.sessionId ++ ","
+    ++ "\"content\":" ++ jsonString request.content ++ ","
+    ++ "\"input\":" ++ titleRequestInputJson request.input ++ ","
+    ++ "\"model_input_fields_hex\":" ++ titleFieldsHexJson (Enrollment.requestInputFields request.input) ++ ","
+    ++ "\"created_at\":" ++ jsonString request.createdAt ++ ","
+    ++ "\"trigger_config_document_id\":" ++ jsonString request.triggerConfigDocumentId ++ ","
+    ++ "\"model_retry_fields_hex\":" ++ titleFieldsHexJson request.retryFields ++ ","
+    ++ "\"model_trigger_fields_hex\":" ++ titleFieldsHexJson request.triggerFields ++ ","
+    ++ "\"model_parent_fields_hex\":" ++ titleFieldsHexJson request.parentFields ++ ","
+    ++ "\"model_workspace_fields_hex\":" ++
+      titleFieldsHexJson (Enrollment.requestWorkspaceFields request.workspace) ++ ","
+    ++ "\"model_semantic_fields_hex\":" ++
+      titleFieldsHexJson (Enrollment.agentRequestSemanticFields request) ++ "},"
+    ++ "\"admission\":{"
+    ++ "\"kind\":" ++ jsonString (match admission.kind with
+      | .enrollment => "enrollment"
+      | .localSelf => "local-self"
+      | .runtimeInternal => "runtime-internal") ++ ","
+    ++ "\"signer_did\":" ++ jsonString admission.signerDid ++ ","
+    ++ "\"issuer_did\":" ++ jsonString admission.issuerDid ++ ","
+    ++ "\"source_request_id\":" ++ jsonString admission.sourceRequestId ++ ","
+    ++ "\"runtime_source_kind\":" ++ jsonString (match admission.runtimeSourceKind with
+      | .localChild => "local-child"
+      | .crossPrincipalChild => "cross-principal-child"
+      | .localControl => "local-control"
+      | .automatedTrigger => "automated-trigger") ++ ","
+    ++ "\"bridge_author_did\":" ++ jsonString admission.bridgeAuthorDid ++ ","
+    ++ "\"signature_valid\":" ++ boolJson admission.signatureValid ++ ","
+    ++ "\"model_signed_fields_hex\":" ++ titleFieldsHexJson admission.signedFields ++ ","
+    ++ "\"model_expected_fields_hex\":" ++
+      titleFieldsHexJson (Enrollment.agentRequestAdmissionFields request admission) ++ "},"
+    ++ "\"runtime_evidence\":" ++ (match case.runtimeEvidence with
+      | none => "null"
+      | some evidence => titleRuntimeEvidenceJson evidence) ++ ","
+    ++ "\"session_behavior\":" ++ jsonString case.sessionBehavior ++ ","
+    ++ "\"expected_admitted\":" ++ boolJson case.expectedAdmitted ++ ","
+    ++ "\"expected_claimable\":" ++ boolJson case.expectedClaimable ++ ","
+    ++ "\"expected_disposition\":" ++ jsonString (match case.expectedDisposition with
+      | .admit => "admit" | .deny => "deny" | .retry => "retry") ++ ","
+    ++ "\"expected_pending_state\":" ++
+      jsonOptionalString (case.expectedPendingState.map (·.toDefraDB)) ++ "}"
+
+def titleRequestAdmissionCasesJson : String :=
+  jsonArray (titleRequestAdmissionCases.map titleRequestAdmissionCaseJson)
+
+def titlePurposeWireCasesJson : String :=
+  jsonArray (titlePurposeWireCases.map fun case =>
+    "{" ++ "\"name\":" ++ jsonString case.name ++ ","
+      ++ "\"wire\":" ++ jsonOptionalString case.wire ++ ","
+      ++ "\"expected_decoded\":" ++
+        jsonOptionalString (case.expectedDecoded.map RequestPurpose.toWire) ++ "}")
+
 end Conformance.Contracts

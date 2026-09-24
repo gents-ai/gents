@@ -158,6 +158,7 @@ async fn create_request(
         r#"mutation {{
             create_AgentRequest(input: {{
                 request_id: "{request_id}",
+                purpose: "normal",
                 agent_did: "{agent_did}",
                 requester_did: "{PEER_DID}",
                 behavior_id: "{BEHAVIOR_ID}",

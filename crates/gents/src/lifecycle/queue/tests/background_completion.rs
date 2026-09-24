@@ -21,6 +21,7 @@ async fn desktop_session_runtime_controls_preserve_owner_and_reject_foreign_ance
         .unwrap();
         let session_id = "desktop-owned-session";
         let mut create = AgentRequestCreate::base(
+            gents_protocol::request_admission::RequestPurpose::Normal,
             "desktop-parent",
             db.agent_did(),
             desktop.did(),
@@ -370,6 +371,7 @@ fn wake_agent_request(
     hints: &RequestQueue,
 ) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: doc_id.to_string(),
         request_id: request_id.to_string(),
         agent_did: parent.agent_did.clone(),

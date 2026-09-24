@@ -30,7 +30,7 @@ async fn generated_interrupt_drain_preserves_foreign_owner_and_requester_queues(
         source: Option<&str>,
     ) -> String {
         let input=source.map(|source|json!({"queue":{"source":source,"policy":if source=="background_completion" {"coalesce"} else {"append"},"key":if source=="background_completion" {Some(format!("background_completion:{session}"))}else{None}}}));
-        let value = json!({"request_id":id,"agent_did":owner,"requester_did":requester,"session_id":session,
+        let value = json!({"request_id":id,"purpose":"normal","agent_did":owner,"requester_did":requester,"session_id":session,
             "behavior_id":"configured","lifecycle_state":"pending","execution_origin":if source.is_some(){"scheduled"}else{"interactive"},"input":input,"created_at":"2026-09-01T00:00:00Z"});
         crate::config_client::ConfigAccess::transact_local(
             node, None, "test.interrupt.scope_fixture", |txn| { let value = value.clone(); Box::pin(async move {

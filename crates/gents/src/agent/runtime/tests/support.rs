@@ -38,6 +38,7 @@ pub(super) fn test_identity(name: &str) -> KeyIdentity {
 
 pub(super) fn request(behavior_id: Option<&str>, session_id: &str) -> AgentRequest {
     AgentRequest {
+        purpose: gents_protocol::request_admission::RequestPurpose::Normal,
         doc_id: "doc-1".to_string(),
         request_id: "req-1".to_string(),
         agent_did: "did:test:test".to_string(),
@@ -510,6 +511,7 @@ pub(super) async fn create_agent_request_for_behavior(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| crate::default_behavior_id_for_agent(agent_did));
     let mut create = gents_protocol::request_admission::AgentRequestCreate::base(
+        gents_protocol::request_admission::RequestPurpose::Normal,
         request_id,
         agent_did,
         agent_did,

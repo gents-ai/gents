@@ -234,7 +234,7 @@ pub(crate) async fn active_session_request(
     let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
     let response = graphql_with_transaction_retry(
         node,
-        &format!(r#"{{AgentRequest(filter:{{{scope},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#),
+        &format!(r#"{{AgentRequest(filter:{{{scope},purpose:{{_eq:"normal"}},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#),
         "active request lookup",
     )
     .await?;

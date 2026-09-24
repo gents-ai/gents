@@ -3,6 +3,32 @@ import Proofs.Persistence
 import Proofs.Scheduling
 import Proofs.ToolExecution.State
 
+/-- Immutable signed request purpose. Absence is invalid at the wire boundary;
+an audit request does not become ordinary session work by omission. -/
+inductive RequestPurpose where
+  | normal
+  | titleAudit
+  deriving DecidableEq, Repr
+
+namespace RequestPurpose
+
+def toWire : RequestPurpose → String
+  | .normal => "normal"
+  | .titleAudit => "title-audit"
+
+def fromWire? : String → Option RequestPurpose
+  | "normal" => some .normal
+  | "title-audit" => some .titleAudit
+  | _ => none
+
+theorem fromWire_toWire (purpose : RequestPurpose) :
+    fromWire? purpose.toWire = some purpose := by
+  cases purpose <;> rfl
+
+theorem missing_purpose_is_not_normal : fromWire? "" = none := by rfl
+
+end RequestPurpose
+
 inductive RequestState where
   | workspaceBindingPending
   | pending
