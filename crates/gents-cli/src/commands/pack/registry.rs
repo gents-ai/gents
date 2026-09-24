@@ -57,16 +57,20 @@ pub(crate) async fn fetch(args: PackFetchArgs) -> Result<()> {
         resolve_pack_coordinate(&client, namespace, name, args.version.as_deref()).await?;
     let bytes = download_verified_pack(&client, &coordinate).await?;
 
-    let out = args.out.unwrap_or_else(|| {
-        std::path::PathBuf::from(format!("{name}-{}.tar.gz", coordinate.version))
-    });
+    let header = gents::pack_archive::PackArchive::from_bytes(&bytes)
+        .with_context(|| format!("{namespace}/{name} from the registry is not a readable pack"))?
+        .header()
+        .clone();
+    let out = args
+        .out
+        .unwrap_or_else(|| std::path::PathBuf::from(header.file_name()));
     std::fs::write(&out, &bytes).with_context(|| format!("writing {}", out.display()))?;
 
     crate::print_json(&serde_json::json!({
         "pack": name,
         "namespace": namespace,
         "version": coordinate.version,
-        "digest": coordinate.artifact_digest,
+        "digest": header.digest,
         "size_bytes": bytes.len(),
         "out": out.display().to_string(),
     }))
@@ -272,8 +276,8 @@ mod tests {
         (format!("http://{addr}"), downloads)
     }
 
-    /// A tiny real `.tar.gz`, built the same way `gents pack build` does,
-    /// so these tests exercise the real container rather than a stand-in.
+    /// A tiny real `.pack`, built the same way `gents pack build` does, with
+    /// the digest of its bytes the registry advertises.
     fn sample_pack() -> (Vec<u8>, String) {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().join("plain_pack");
@@ -295,7 +299,23 @@ mod tests {
             serde_json::to_vec_pretty(&manifest).unwrap(),
         )
         .unwrap();
-        gents::pack_archive::pack_dir(&root).unwrap()
+        let (bytes, _) = gents::pack_archive::pack_dir(&root).unwrap();
+        let digest = {
+            use sha2::Digest;
+            format!("{:x}", sha2::Sha256::digest(&bytes))
+        };
+        (bytes, digest)
+    }
+
+    /// How many packs the home's store holds.
+    fn stored_packs(home: &std::path::Path) -> usize {
+        std::fs::read_dir(home.join("packs/store/sha256"))
+            .map(|dir| {
+                dir.filter_map(Result::ok)
+                    .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"))
+                    .count()
+            })
+            .unwrap_or(0)
     }
 
     #[test]
@@ -335,12 +355,9 @@ mod tests {
         assert_eq!(first.name, "plain_pack");
         assert_eq!(first.version, "1.0.0");
         assert_eq!(downloads.load(Ordering::SeqCst), 1);
-        assert!(home
-            .path()
-            .join("packs")
-            .join("registry-cache")
-            .join(format!("{digest}.tar.gz"))
-            .is_file());
+        assert!(gents::pack_store::PackStore::new(home.path())
+            .contains(&first.digest)
+            .unwrap());
 
         // A second fetch of the same pack reads the cache: no second download.
         let second = fetch_pack(&client, Some(home.path()), "gents", "plain_pack")
@@ -368,13 +385,8 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains(&wrong_digest), "{message}");
         assert!(message.contains("refusing to install"), "{message}");
-        // Nothing was cached under the wrong name: a refusal is not a warning.
-        assert!(!home
-            .path()
-            .join("packs")
-            .join("registry-cache")
-            .join(format!("{wrong_digest}.tar.gz"))
-            .exists());
+        // Nothing was stored: a refusal is not a warning.
+        assert_eq!(stored_packs(home.path()), 0);
     }
 
     #[tokio::test]
@@ -391,12 +403,7 @@ mod tests {
             format!("{error:#}").contains("different identity"),
             "{error:#}"
         );
-        assert!(!home
-            .path()
-            .join("packs")
-            .join("registry-cache")
-            .join(format!("{digest}.tar.gz"))
-            .exists());
+        assert_eq!(stored_packs(home.path()), 0);
     }
 
     #[tokio::test]

@@ -101,9 +101,12 @@ error is diagnostics.
 ## Building and publishing
 
 ```sh
-gents pack build packs/shipping_plugins           # compile the plugins, write one .tar.gz
-gents pack publish shipping_plugins-0.1.0.tar.gz  # push it to the registry
-gents pack install acme/shipping_plugins          # from the registry, anywhere
+gents pack build packs/shipping_plugins                # compile the plugins, write one .pack
+gents pack verify acme.shipping_plugins-0.1.0.pack     # check it against its digest
+gents pack publish acme.shipping_plugins-0.1.0.pack    # push it to the registry
+gents pack install acme/shipping_plugins               # from the registry, anywhere
+gents pack install ./acme.shipping_plugins-0.1.0.pack  # or from the file
+gents pack install sha256:<hex>                        # or from this home's store
 ```
 
 A plugin is also managed on its own, without a pack around it:
@@ -122,9 +125,14 @@ store `gents plugin install` uses, so a plugin that arrived inside a pack is
 runnable by name exactly like one installed alone. A `documents` or `graph`
 pack does not install plugins yet.
 
-A built pack is a single gzip-compressed tar: a plain container any archive
-tool can read, holding `manifest.json` and every asset the manifest declares,
-including each plugin's compiled `.afb`. The registry at
+A built pack is one `.pack` file: a gzip-compressed tar any archive tool can
+list. Its first entry, `pack.json`, states the format version, the pack digest,
+coordinate, version and kind; then come `manifest.json` and every asset the
+manifest declares, including each plugin's compiled `.afb`, in the order the
+digest is computed over. A pack is named by its digest, `sha256:<hex>`, and a
+home keeps the packs it has seen under `packs/store/sha256/`. A path is local
+only when written as one (`./dir`, `../dir`, `/abs`, or a `.pack` file); a
+bare name always means the bundled or registry pack. The registry at
 `https://packs.gents.xyz` serves both packs and plugins, so a plugin
 published on its own uses the same `.afb` a pack carries internally, and a
 pack that ships plugins is one artifact rather than an archive plus a pile of

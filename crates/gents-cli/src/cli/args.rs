@@ -307,15 +307,33 @@ pub(crate) struct GraphScopeArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackShowArgs {
+    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
     pub(crate) package: String,
+    #[arg(long, help = "Home whose pack store holds local packs")]
+    pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Pack registry base URL. Defaults to GENTS_REGISTRY, then the public registry"
+    )]
+    pub(crate) registry: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackVerifyArgs {
+    #[arg(help = "A .pack file, or sha256:<hex> for a pack in the home's store")]
+    pub(crate) target: String,
+    #[arg(long, help = "Home whose pack store to check")]
+    pub(crate) home: Option<PathBuf>,
 }
 
 #[derive(clap::Subcommand)]
 pub(crate) enum PackCommand {
     /// List all packs bundled in this binary.
     List,
-    /// Inspect a pack manifest and declared assets.
+    /// Inspect a pack: its manifest, digest and every file.
     Show(PackShowArgs),
+    /// Check a .pack file or a stored pack against its digest.
+    Verify(PackVerifyArgs),
     /// Install a pack into an initialized node; never seed or prune.
     Install(PackInstallArgs),
     /// Remove superseded generated asset-cache versions without run history.
@@ -326,13 +344,13 @@ pub(crate) enum PackCommand {
     Init(PackInitArgs),
     /// Seed an installed scenario against an already-serving node.
     Seed(PackSeedArgs),
-    /// Compile a pack's plugins and pack the whole pack into one `.tar.gz`.
+    /// Compile a pack's plugins and pack the whole pack into one `.pack`.
     Build(PackBuildArgs),
     /// Search the pack registry.
     Search(PackSearchArgs),
-    /// Publish a built `.tar.gz` to the pack registry.
+    /// Publish a built `.pack` to the pack registry.
     Publish(PackPublishArgs),
-    /// Download a pack's `.tar.gz` from the registry without installing it.
+    /// Download a pack's `.pack` from the registry without installing it.
     Fetch(PackFetchArgs),
 }
 
@@ -344,7 +362,7 @@ pub(crate) struct PackFetchArgs {
     pub(crate) version: Option<String>,
     #[arg(
         long,
-        help = "Where to write the .tar.gz; defaults to <name>-<version>.tar.gz here"
+        help = "Where to write the .pack; defaults to <namespace>.<name>-<version>.pack here"
     )]
     pub(crate) out: Option<std::path::PathBuf>,
     #[arg(
@@ -364,12 +382,12 @@ pub(crate) struct PackBuildArgs {
     #[arg(
         long,
         conflicts_with_all = ["dir", "out"],
-        help = "Build every pack under packs/ into a .tar.gz beside it, instead of one directory"
+        help = "Build every pack under packs/ into a .pack beside it, instead of one directory"
     )]
     pub(crate) all: bool,
     #[arg(
         long,
-        help = "Where to write the .tar.gz; defaults to <dir>/../<name>-<version>.tar.gz"
+        help = "Where to write the .pack; defaults to <dir>/../<namespace>.<name>-<version>.pack"
     )]
     pub(crate) out: Option<PathBuf>,
 }
@@ -387,7 +405,7 @@ pub(crate) struct PackSearchArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackPublishArgs {
-    #[arg(help = "Path to the .tar.gz file to publish")]
+    #[arg(help = "Path to the .pack file to publish")]
     pub(crate) file: PathBuf,
     #[arg(
         long,
@@ -410,6 +428,7 @@ pub(crate) struct PackPruneArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackInstallArgs {
+    #[arg(help = "A bundled or registry name, sha256:<hex>, a .pack file, or ./dir")]
     pub(crate) package: String,
     #[arg(
         long,

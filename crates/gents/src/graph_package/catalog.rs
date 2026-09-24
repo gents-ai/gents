@@ -106,7 +106,7 @@ pub(crate) fn load_archive_graph_package_with_environment(
 ) -> Result<LoadedGraphPackage> {
     load_package_from_assets(
         archive.manifest().clone(),
-        archive.digest()?,
+        archive.digest().to_owned(),
         options,
         &|path| Ok(archive.asset(path)?.to_vec()),
         environment,

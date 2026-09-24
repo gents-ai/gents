@@ -6,13 +6,14 @@
 //! may supply an explicit cache root; runtime callers that do not own a home
 //! directory resolve in memory rather than guessing one.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::pack::PackManifest;
 use crate::pack_archive::PackArchive;
+use crate::pack_store::PackStore;
 
 pub const DEFAULT_REGISTRY_URL: &str = "https://packs.gents.xyz";
 pub const REGISTRY_ENV_VAR: &str = "GENTS_REGISTRY";
@@ -294,9 +295,10 @@ pub async fn download_verified_pack(
     Ok(bytes)
 }
 
-/// Resolve the latest registry coordinate. An explicit cache root preserves
-/// the CLI's verified content-addressed cache. `None` performs the same
-/// admission entirely in memory for runtime consumers without a home owner.
+/// Resolve the latest registry coordinate and fetch that pack. With a home,
+/// the verified download goes into its [`PackStore`] and a later fetch of the
+/// same version reads the store instead of downloading again. `None` performs
+/// the same admission entirely in memory for runtime consumers without a home.
 pub async fn fetch_pack(
     client: &RegistryClient,
     cache_home: Option<&Path>,
@@ -304,48 +306,59 @@ pub async fn fetch_pack(
     name: &str,
 ) -> Result<RegistryPack> {
     let coordinate = resolve_pack_coordinate(client, namespace, name, None).await?;
-    let advertised = &coordinate.artifact_digest;
     let coordinate_label = format!(
         "{}/{}@{}",
         coordinate.namespace, coordinate.name, coordinate.version
     );
-    let cache_path = cache_home.map(|home| {
-        home.join("packs")
-            .join("registry-cache")
-            .join(format!("{advertised}.tar.gz"))
-    });
-    let cache_hit = cache_path.as_ref().is_some_and(|path| path.is_file());
-    let bytes = if let Some(path) = cache_path.as_ref().filter(|_| cache_hit) {
-        let cached = std::fs::read(path)
-            .with_context(|| format!("reading the cached pack {}", path.display()))?;
-        verify_digest(&cached, advertised, &coordinate_label)?;
-        cached
-    } else {
-        download_verified_pack(client, &coordinate).await?
+    // vertexia: the registry names a download by the digest of its bytes, so
+    // this index maps that to the pack digest the store uses; delete it once
+    // the registry advertises pack digests.
+    let advertised = format!("sha256:{}", coordinate.artifact_digest);
+    let index = cache_home
+        .map(|home| -> Result<PathBuf> {
+            let hex = crate::pack_archive::digest_hex(&advertised)
+                .context("the registry advertised a malformed digest")?;
+            Ok(home
+                .join("packs")
+                .join("store")
+                .join("by-download")
+                .join(hex))
+        })
+        .transpose()?;
+    let store = cache_home.map(PackStore::new);
+    let cached = match (&store, &index) {
+        (Some(store), Some(index)) if index.is_file() => {
+            let digest = std::fs::read_to_string(index)
+                .with_context(|| format!("reading {}", index.display()))?;
+            Some(store.open(digest.trim())?)
+        }
+        _ => None,
     };
-    let archive = PackArchive::from_bytes(&bytes)
-        .with_context(|| format!("{coordinate_label} from the registry is not a readable pack"))?;
+    let (archive, downloaded) = match cached {
+        Some(archive) => (archive, None),
+        None => {
+            let bytes = download_verified_pack(client, &coordinate).await?;
+            let archive = PackArchive::from_bytes(&bytes).with_context(|| {
+                format!("{coordinate_label} from the registry is not a readable pack")
+            })?;
+            (archive, Some(bytes))
+        }
+    };
     verify_pack_coordinate(
         archive.manifest(),
         &coordinate.namespace,
         &coordinate.name,
         &coordinate.version,
     )?;
-    if !cache_hit {
-        if let Some(path) = &cache_path {
-            let dir = path.parent().context("registry cache path has no parent")?;
-            std::fs::create_dir_all(dir).with_context(|| {
-                format!("creating the pack download cache under {}", dir.display())
-            })?;
-            stage_and_persist(dir, path, &bytes)?;
-        }
+    if let (Some(bytes), Some(store), Some(index)) = (downloaded, &store, &index) {
+        store.import(bytes.as_slice(), Some(archive.digest()))?;
+        let dir = index.parent().context("download index has no parent")?;
+        std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        stage_and_persist(dir, index, archive.digest().as_bytes())?;
     }
-    let digest = archive
-        .digest()
-        .with_context(|| format!("{coordinate_label} failed its canonical content check"))?;
     Ok(RegistryPack {
+        digest: archive.digest().to_owned(),
         archive,
-        digest,
         artifact_digest: coordinate.artifact_digest,
         namespace: coordinate.namespace,
         name: coordinate.name,
@@ -364,8 +377,7 @@ pub fn stage_and_persist(dir: &Path, dest: &Path, bytes: &[u8]) -> Result<()> {
     match staged.persist_noclobber(dest) {
         Ok(_) => Ok(()),
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(error.error)
-            .with_context(|| format!("saving the downloaded pack to {}", dest.display())),
+        Err(error) => Err(error.error).with_context(|| format!("saving {}", dest.display())),
     }
 }
 

@@ -1,6 +1,8 @@
 //! One package-facing CLI; install writes stay with their existing owners.
 mod build;
 mod cli_process;
+mod inspect;
+mod local;
 pub(crate) mod registry;
 mod scenario;
 mod secscan;
@@ -46,27 +48,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
             })).collect();
             crate::print_json(&json!({"packs":entries}))
         }
-        PackCommand::Show(args) => {
-            let pack = resolve_pack(&args.package)?;
-            let dependency_origins = pack
-                .manifest
-                .metadata
-                .dependencies
-                .iter()
-                .map(|dependency| {
-                    Ok(json!({
-                        "pack": dependency,
-                        "origin_tag": gents::pack::pack_origin_tag(dependency)?,
-                    }))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            crate::print_json(&json!({
-                "origin_tag": gents::pack::pack_origin_tag(&pack.manifest.name)?,
-                "dependency_origins": dependency_origins,
-                "manifest": pack.manifest,
-                "digest": pack.digest,
-            }))
-        }
+        PackCommand::Show(args) => inspect::show(args).await,
+        PackCommand::Verify(args) => inspect::verify(args),
         PackCommand::Install(args) => install(args).await,
         PackCommand::Prune(args) => prune(args),
         PackCommand::Run(args) => scenario::run(args).await,
@@ -86,6 +69,8 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
 enum PackSource {
     Bundled(ResolvedPack),
     Registry(registry::RegistryPack),
+    /// Named by digest or path, and opened from the home's pack store.
+    Stored(gents::pack_archive::PackArchive),
 }
 
 impl PackSource {
@@ -93,6 +78,7 @@ impl PackSource {
         match self {
             Self::Bundled(pack) => &pack.manifest,
             Self::Registry(pack) => pack.archive.manifest(),
+            Self::Stored(pack) => pack.manifest(),
         }
     }
 
@@ -102,6 +88,7 @@ impl PackSource {
         match self {
             Self::Bundled(pack) => &pack.digest,
             Self::Registry(pack) => &pack.digest,
+            Self::Stored(pack) => pack.digest(),
         }
     }
 
@@ -109,6 +96,7 @@ impl PackSource {
         match self {
             Self::Bundled(pack) => pack.asset(path),
             Self::Registry(pack) => pack.archive.asset(path),
+            Self::Stored(pack) => pack.asset(path),
         }
     }
 
@@ -116,6 +104,7 @@ impl PackSource {
         match self {
             Self::Bundled(_) => "bundled",
             Self::Registry(_) => "registry",
+            Self::Stored(_) => "local",
         }
     }
 
@@ -124,6 +113,7 @@ impl PackSource {
     fn describe(&self) -> String {
         match self {
             Self::Bundled(_) => self.label().to_owned(),
+            Self::Stored(pack) => format!("{} ({})", self.label(), pack.digest()),
             Self::Registry(pack) => format!(
                 "{} ({}/{}@{})",
                 self.label(),
@@ -142,19 +132,26 @@ pub(crate) fn split_namespace(name: &str) -> (&str, &str) {
     gents::pack_registry::split_pack_coordinate(name)
 }
 
-/// Resolves a pack compiled into this binary first; only when that fails
-/// does it fall back to the registry, downloading, verifying, and caching
-/// the result. Both failures are reported together so a real problem with
-/// the bundled lookup is never masked by a registry error.
-async fn resolve_pack_source(name: &str, registry_override: Option<&str>) -> Result<PackSource> {
+/// Resolves a pack named by digest or path from the home's store; otherwise
+/// a pack compiled into this binary first, and only when that fails the
+/// registry, downloading, verifying, and storing the result. Both bundled and
+/// registry failures are reported together so a real problem with the
+/// bundled lookup is never masked by a registry error.
+async fn resolve_pack_source(
+    name: &str,
+    registry_override: Option<&str>,
+    home: &std::path::Path,
+) -> Result<PackSource> {
+    if let Some(local) = local::classify(name) {
+        return local::open(&local, home).map(PackSource::Stored);
+    }
     match resolve_pack(name) {
         Ok(pack) => Ok(PackSource::Bundled(pack)),
         Err(bundled_error) => {
             let (namespace, pack_name) = split_namespace(name);
             let base_url = registry::resolve_registry_url(registry_override);
             let client = registry::RegistryClient::new(base_url.clone());
-            let home = crate::home_state::resolve_home_dir(None);
-            let fetched = registry::fetch_pack(&client, Some(&home), namespace, pack_name)
+            let fetched = registry::fetch_pack(&client, Some(home), namespace, pack_name)
                 .await
                 .map_err(|registry_error| {
                     anyhow::anyhow!(
@@ -342,7 +339,8 @@ fn prune(args: PackPruneArgs) -> Result<()> {
 }
 
 async fn install(args: PackInstallArgs) -> Result<()> {
-    let pack = resolve_pack_source(&args.package, args.registry.as_deref()).await?;
+    let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let pack = resolve_pack_source(&args.package, args.registry.as_deref(), &home).await?;
     tracing::info!(package = %args.package, source = %pack.describe(), "resolved pack");
     let supported_outputs: &[crate::cli::output_format::OutputFormat] =
         if pack.manifest().metadata.kind == PackKind::Graph {
@@ -827,9 +825,13 @@ mod tests {
         // An unroutable registry: if resolution incorrectly fell through to
         // it for a bundled pack, this fails fast instead of hanging on a
         // real network call or silently succeeding some other way.
-        let source = resolve_pack_source("mailbox", Some("http://127.0.0.1:1"))
-            .await
-            .expect("a bundled pack must resolve without touching the registry");
+        let source = resolve_pack_source(
+            "mailbox",
+            Some("http://127.0.0.1:1"),
+            tempfile::tempdir().unwrap().path(),
+        )
+        .await
+        .expect("a bundled pack must resolve without touching the registry");
         assert!(matches!(source, PackSource::Bundled(_)));
         assert_eq!(source.label(), "bundled");
     }
@@ -838,8 +840,12 @@ mod tests {
     async fn resolution_falls_back_to_the_registry_and_reports_both_failures() {
         // `ResolvedPack`/`PackSource` are not `Debug`, so this checks the
         // `Err` case by hand rather than via `expect_err`.
-        let result =
-            resolve_pack_source("definitely_not_a_bundled_pack", Some("http://127.0.0.1:1")).await;
+        let result = resolve_pack_source(
+            "definitely_not_a_bundled_pack",
+            Some("http://127.0.0.1:1"),
+            tempfile::tempdir().unwrap().path(),
+        )
+        .await;
         let Err(error) = result else {
             panic!("neither bundled nor registry has this pack");
         };

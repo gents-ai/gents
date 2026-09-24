@@ -554,17 +554,41 @@ pub fn digest_declared_assets<'a>(
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
 ) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
+    let mut digest = PackDigester::default();
     for path in declared_paths(manifest) {
         let bytes =
             asset(&path).with_context(|| format!("pack references missing asset {path:?}"))?;
-        hasher.update((path.len() as u64).to_be_bytes());
-        hasher.update(path.as_bytes());
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
+        digest.begin_entry(&path, bytes.len() as u64);
+        digest.update(bytes);
     }
-    Ok(format!("sha256:{:x}", hasher.finalize()))
+    Ok(digest.finish())
+}
+
+/// The pack digest, computed incrementally: each declared path in
+/// [`declared_paths`] order, as its length, its bytes, its content length and
+/// its content. The one definition every reader and writer of a pack uses,
+/// so a pack streamed through a `.pack` file and one compiled into the binary
+/// cannot hash differently.
+#[derive(Default)]
+pub struct PackDigester(sha2::Sha256);
+
+impl PackDigester {
+    /// Starts an entry whose content is `len` bytes, fed through [`Self::update`].
+    pub fn begin_entry(&mut self, path: &str, len: u64) {
+        use sha2::Digest;
+        self.0.update((path.len() as u64).to_be_bytes());
+        self.0.update(path.as_bytes());
+        self.0.update(len.to_be_bytes());
+    }
+
+    pub fn update(&mut self, bytes: &[u8]) {
+        sha2::Digest::update(&mut self.0, bytes);
+    }
+
+    /// The digest as `sha256:{hex}`.
+    pub fn finish(self) -> String {
+        format!("sha256:{:x}", sha2::Digest::finalize(self.0))
+    }
 }
 
 pub fn resolve_pack(name: &str) -> Result<ResolvedPack> {

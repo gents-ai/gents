@@ -1,8 +1,8 @@
 //! `gents pack build`: compile a pack's plugins and pack the result into
-//! one `.tar.gz`, so first-party and third-party packs alike become the
+//! one `.pack` file, so first-party and third-party packs alike become the
 //! artifact the registry serves.
 //!
-//! Compiling is this module's job; packing is [`gents::pack_archive::pack_dir`]'s.
+//! Compiling is this module's job; packing is [`gents::pack_archive::write_pack`]'s.
 //! A plugin with no `source` must already carry its compiled artifact. A
 //! plugin with a `source` must be its own Afterburner package (a directory
 //! with its own `afb.toml`), compiled through
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use gents::pack::{PackManifest, PackPlugin};
-use gents::pack_archive::{pack_dir, PackArchive};
+use gents::pack_archive::write_pack;
 use serde::Serialize;
 use serde_json::json;
 
@@ -30,9 +30,9 @@ pub(crate) struct BuildReport {
     /// is visible at build time rather than discovered at publish time.
     pub(crate) namespace: String,
     pub(crate) version: String,
-    pub(crate) artifact_digest: String,
-    pub(crate) pack_digest: String,
-    pub(crate) size_bytes: usize,
+    /// The pack digest: what installs, the store and the registry name it by.
+    pub(crate) digest: String,
+    pub(crate) size_bytes: u64,
     pub(crate) out: PathBuf,
     pub(crate) plugins: Vec<PluginReport>,
 }
@@ -56,7 +56,7 @@ pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
 }
 
 /// Builds every pack directory under `root` (any directory that carries a
-/// `manifest.json`) into a `.tar.gz` beside it, so this repository's own
+/// `manifest.json`) into a `.pack` beside it, so this repository's own
 /// packs can be published to the registry in one step.
 pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(root)
@@ -77,7 +77,9 @@ pub(crate) fn build_all(root: &Path) -> Result<Vec<BuildReport>> {
 }
 
 /// Compiles `dir`'s declared plugins onto disk, then packs the whole
-/// directory into a `.tar.gz` at `out` (or the default sibling path).
+/// directory into a `.pack` at `out`, or beside `dir` under the pack's file
+/// name. The file is written to a staging name and renamed into place, so an
+/// interrupted build never leaves a partial `.pack` behind.
 pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> {
     let manifest_path = dir.join("manifest.json");
     let manifest_bytes = std::fs::read(&manifest_path)
@@ -89,30 +91,42 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
         build_plugin(dir, plugin)?;
     }
 
-    let (bytes, artifact_digest) =
-        pack_dir(dir).with_context(|| format!("packing {}", dir.display()))?;
-    let packed =
-        PackArchive::from_bytes(&bytes).context("reading back the pack that was just built")?;
-    let pack_digest = packed
-        .digest()
-        .context("computing the pack's content digest")?;
-
+    let out_dir = match out.and_then(Path::parent) {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        Some(_) => PathBuf::from("."),
+        None => dir.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+    };
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
+    let mut staged = tempfile::Builder::new()
+        .prefix(".building-")
+        .tempfile_in(&out_dir)
+        .with_context(|| format!("staging the pack in {}", out_dir.display()))?;
+    let header = {
+        let mut writer = std::io::BufWriter::new(staged.as_file_mut());
+        let header =
+            write_pack(dir, &mut writer).with_context(|| format!("packing {}", dir.display()))?;
+        std::io::Write::flush(&mut writer).context("writing the pack")?;
+        header
+    };
+    let size_bytes = staged
+        .as_file()
+        .metadata()
+        .context("sizing the pack")?
+        .len();
     let out_path = out
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_out_path(dir, &manifest));
-    if let Some(parent) = out_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
-    }
-    std::fs::write(&out_path, &bytes).with_context(|| format!("writing {}", out_path.display()))?;
+        .unwrap_or_else(|| out_dir.join(header.file_name()));
+    staged
+        .persist(&out_path)
+        .map_err(|error| error.error)
+        .with_context(|| format!("writing {}", out_path.display()))?;
 
     Ok(BuildReport {
         pack: manifest.name.clone(),
         namespace: manifest.metadata.namespace.clone(),
         version: manifest.version.clone(),
-        artifact_digest,
-        pack_digest,
-        size_bytes: bytes.len(),
+        digest: header.digest,
+        size_bytes,
         out: out_path,
         plugins: manifest
             .metadata
@@ -124,11 +138,6 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
             })
             .collect(),
     })
-}
-
-fn default_out_path(dir: &Path, manifest: &PackManifest) -> PathBuf {
-    let parent = dir.parent().unwrap_or_else(|| Path::new("."));
-    parent.join(format!("{}-{}.tar.gz", manifest.name, manifest.version))
 }
 
 /// Makes sure one plugin's artifact exists on disk before the pack is
@@ -155,6 +164,7 @@ fn build_plugin(dir: &Path, plugin: &PackPlugin) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::pack_archive::PackArchive;
 
     /// Writes a minimal plugin-less pack (mirrors any of the 11 first-party
     /// packs' shape) so tests exercise the real manifest/asset contract
@@ -207,7 +217,7 @@ mod tests {
         let root = dir.path().join("plain_pack");
         write_plain_pack(&root, "plain_pack");
 
-        let out = dir.path().join("out.tar.gz");
+        let out = dir.path().join("out.pack");
         let report = build_pack(&root, Some(&out)).unwrap();
 
         assert_eq!(report.pack, "plain_pack");
@@ -215,13 +225,24 @@ mod tests {
         assert!(report.plugins.is_empty());
         assert_eq!(report.out, out);
         assert!(out.is_file());
-        assert_eq!(
-            report.size_bytes,
-            std::fs::metadata(&out).unwrap().len() as usize
-        );
+        assert_eq!(report.size_bytes, std::fs::metadata(&out).unwrap().len());
 
         let packed = PackArchive::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
-        assert_eq!(packed.digest().unwrap(), report.pack_digest);
+        assert_eq!(packed.digest(), report.digest);
+        let staging_left: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".building-")
+            })
+            .collect();
+        assert!(
+            staging_left.is_empty(),
+            "the staging file is renamed, not left"
+        );
     }
 
     #[test]
@@ -231,7 +252,7 @@ mod tests {
         write_plain_pack(&root, "plain_pack");
 
         let report = build_pack(&root, None).unwrap();
-        assert_eq!(report.out, dir.path().join("plain_pack-1.0.0.tar.gz"));
+        assert_eq!(report.out, dir.path().join("gents.plain_pack-1.0.0.pack"));
         assert!(report.out.is_file());
     }
 
