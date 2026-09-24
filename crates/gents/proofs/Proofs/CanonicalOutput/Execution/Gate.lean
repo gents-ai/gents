@@ -20,6 +20,7 @@ abbrev Actor := Nat
 inductive Operation where
   | renew (generation : Generation) (expectedDeadline : Time)
   | append (generation : Generation) (record : Segment)
+  | closeAuxiliary (generation : Generation) (closing : Segment)
   | retract (generation : Generation) (record : Segment)
   | accept (generation : Generation) (closing : Segment)
       (message : MessageEnvelope) (targets : List RemoteTarget)
@@ -63,6 +64,8 @@ def evaluate (operation : Operation) (world : World) : Except Error World :=
   | .renew generation expectedDeadline =>
       (Execution.renew world generation expectedDeadline).mapError .execution
   | .append generation record => (appendRaw world generation record).mapError .execution
+  | .closeAuxiliary generation closing =>
+      (Execution.closeAuxiliary world generation closing).mapError .execution
   | .retract generation record =>
       (retractBeforeRetry world generation record).mapError .execution
   | .accept generation closing message targets admissions =>
@@ -114,6 +117,9 @@ theorem evaluate_nextSequence_monotone (operation : Operation) (before after : W
   | append generation record =>
       have h' := mapError_success Error.execution _ _ h
       rw [appendRaw_preserves_nextSeq before after generation record h']
+  | closeAuxiliary generation closing =>
+      rcases closeAuxiliary_success_effect before after generation closing
+        (mapError_success Error.execution _ _ h) with rfl | ⟨_, rfl⟩ <;> simp
   | retract generation record =>
       have h' := mapError_success Error.execution _ _ h
       rw [retractBeforeRetry_preserves_nextSeq before after generation record h']
@@ -357,6 +363,9 @@ theorem evaluate_preserves_request_identity (operation : Operation) (before afte
     replace hcore := checked_core_success _ _ _ hcore
     rcases acceptAndPublishCore_success_effect before after generation closing message targets
       admissions hcore with ⟨rfl, _⟩ | ⟨_, _, _, rfl, _⟩ <;> exact ⟨rfl, rfl⟩
+  case closeAuxiliary generation closing =>
+    rcases closeAuxiliary_success_effect before after generation closing
+      (mapError_success Error.execution _ _ h) with rfl | ⟨_, rfl⟩ <;> exact ⟨rfl, rfl⟩
   case toolComplete document authority record message =>
     have hcomposed := mapError_success Error.delivery _ _ h
     obtain ⟨closed, hclose, hdeliver⟩ := ToolDelivery.completeAndDeliver_success

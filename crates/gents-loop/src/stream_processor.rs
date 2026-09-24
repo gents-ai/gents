@@ -9,8 +9,8 @@ use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 use crate::loop_stream::LoopStreamItem;
 use crate::provider_input::ProviderInputProfile;
 use crate::request_lifecycle::RequestLifecycleControl;
-use crate::session_hook::{CanonicalSessionHook, SessionHook};
-use crate::stream_writer::{CanonicalStreamWriter, StreamWriter};
+use crate::session_hook::CanonicalSessionHook;
+use crate::stream_writer::CanonicalStreamWriter;
 
 pub enum StreamAction {
     Continue,
@@ -36,6 +36,7 @@ where
     pub final_message_doc_id: Option<String>,
     pending_tool_internal_ids: Vec<String>,
     active_provider_attempt: Option<(usize, u32)>,
+    active_capture_scope: Option<gents_protocol::rendered_request::CaptureScope>,
     authored_index: u32,
     provider_profile: ProviderInputProfile,
     doc_id: &'a str,
@@ -65,6 +66,7 @@ where
             final_message_doc_id: None,
             pending_tool_internal_ids: Vec::new(),
             active_provider_attempt: None,
+            active_capture_scope: None,
             authored_index: 0,
             provider_profile,
             doc_id,
@@ -99,6 +101,25 @@ where
         item: Result<LoopStreamItem<R>, rig::agent::StreamingError>,
     ) -> Result<StreamAction> {
         match item {
+            Ok(LoopStreamItem::ProviderAudit(observation)) => {
+                anyhow::ensure!(
+                    self.active_provider_attempt == Some((observation.turn, observation.attempt))
+                        && self.active_capture_scope == Some(observation.capture_scope),
+                    "reasoning audit belongs to a different provider attempt"
+                );
+                anyhow::ensure!(
+                    self.provider_profile == ProviderInputProfile::ClaudeMessages,
+                    "Claude audit reached another provider profile"
+                );
+                if self
+                    .assistant_turn
+                    .apply_provider_audit(&observation.event)?
+                    && self.stream_writer.mark_pending_output(self.doc_id).await?
+                {
+                    self.flush_pending().await?;
+                }
+                Ok(StreamAction::Continue)
+            }
             Ok(LoopStreamItem::ProviderAttemptStarted {
                 turn,
                 attempt,
@@ -108,6 +129,7 @@ where
                     .start_provider_attempt(self.doc_id, turn, attempt, capture_scope)
                     .await;
                 self.active_provider_attempt = Some((turn, attempt));
+                self.active_capture_scope = Some(capture_scope);
                 Ok(StreamAction::Continue)
             }
             Ok(LoopStreamItem::ProviderTurnReady {
@@ -164,6 +186,7 @@ where
                     .await?;
                 self.final_message_doc_id = Some(published.message_doc_id);
                 self.active_provider_attempt = None;
+                self.active_capture_scope = None;
                 self.assistant_turn = AssistantTurnAccumulator::default();
                 self.committed_text_len = self.streamed_text.len();
                 Ok(StreamAction::Continue)
@@ -192,9 +215,8 @@ where
                 self.assistant_turn
                     .push_provider_reasoning(self.provider_profile, reasoning)?;
                 if self.provider_profile == ProviderInputProfile::ClaudeMessages {
-                    // Claude's signed final seals the preview bytes without
-                    // writing them again. The signature persists with the
-                    // final native turn publication, not a duplicate segment.
+                    // The final block must agree with the received prefix;
+                    // flushing also retains fields absent from Rig deltas.
                     self.flush_pending().await?;
                 } else if !rendered.is_empty() {
                     let flush_due = self
@@ -210,6 +232,11 @@ where
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                 StreamedAssistantContent::ReasoningDelta { reasoning, id },
             ))) => {
+                if self.provider_profile == ProviderInputProfile::ClaudeMessages
+                    && self.assistant_turn.provider_block.is_some()
+                {
+                    return Ok(StreamAction::Continue);
+                }
                 self.assistant_turn.push_provider_reasoning_delta(
                     self.provider_profile,
                     id,
@@ -265,6 +292,7 @@ where
                 Ok(StreamAction::Done)
             }
             Ok(LoopStreamItem::TurnRetracted { turn, attempt, .. }) => {
+                self.flush_pending().await?;
                 self.stream_writer
                     .close_provider_attempt(
                         self.lifecycle,
@@ -274,6 +302,7 @@ where
                     )
                     .await?;
                 self.active_provider_attempt = None;
+                self.active_capture_scope = None;
                 self.assistant_turn = AssistantTurnAccumulator::default();
                 self.streamed_text.truncate(self.committed_text_len);
                 self.stream_writer.reset_tail(self.doc_id).await?;
@@ -310,9 +339,7 @@ where
                 will_retry,
                 ..
             }) => {
-                if !will_retry {
-                    self.flush_pending().await?;
-                }
+                self.flush_pending().await?;
                 if let Some(active) = self.active_provider_attempt {
                     anyhow::ensure!(
                         active == (turn, attempt),
@@ -331,6 +358,7 @@ where
                         )
                         .await?;
                     self.active_provider_attempt = None;
+                    self.active_capture_scope = None;
                 }
                 Ok(StreamAction::Continue)
             }
@@ -353,9 +381,7 @@ where
 
     pub async fn persist_partial_turn(&mut self, context: &str) -> Result<bool> {
         self.flush_pending().await?;
-        let Some(_message) = self.assistant_turn.take_message() else {
-            return Ok(false);
-        };
+        let had_output = self.assistant_turn.take_message().is_some();
         if let Some((turn, attempt)) = self.active_provider_attempt.take() {
             self.stream_writer
                 .close_provider_attempt(
@@ -366,22 +392,141 @@ where
                 )
                 .await
                 .with_context(|| format!("{context}: closing partial provider attempt"))?;
+            self.active_capture_scope = None;
         }
         self.stream_writer
             .reset_tail(self.doc_id)
             .await
             .with_context(|| format!("{context}: resetting partial assistant tail"))?;
 
-        Ok(true)
+        Ok(had_output)
+    }
+
+    /// Persist observations already parsed by the provider before an external
+    /// cancellation drops the stream that normally delivers them.
+    pub async fn persist_received_partial_turn(&mut self, context: &str) -> Result<bool> {
+        self.validate_execution().await?;
+        let handled_auxiliary =
+            crate::rendered_request::scope::flush_received_auxiliary_partial().await?;
+        if !handled_auxiliary {
+            for observation in crate::rendered_request::scope::drain_ready_audit().await {
+                match self
+                    .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(observation)))
+                    .await?
+                {
+                    StreamAction::Continue => {}
+                    _ => anyhow::bail!("queued provider audit caused an unexpected stream action"),
+                }
+            }
+        }
+        self.persist_partial_turn(context).await
     }
 }
 
 #[derive(Clone, Default)]
 pub struct AssistantTurnAccumulator {
     content: Vec<AssistantMessageContent>,
+    next_provider_block: u32,
+    provider_block: Option<crate::provider_audit::ClaudeBlockKind>,
 }
 
 impl AssistantTurnAccumulator {
+    pub fn apply_provider_audit(
+        &mut self,
+        event: &crate::provider_audit::ClaudeAuditEvent,
+    ) -> Result<bool> {
+        use crate::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind};
+        use gents_protocol::message::ReasoningContent;
+        if let ClaudeAuditEvent::BlockStart { index, kind } = event {
+            self.begin_provider_block(*index, kind)?;
+            return Ok(!matches!(kind, ClaudeBlockKind::ToolUse { .. }));
+        }
+        let index = match event {
+            ClaudeAuditEvent::ThinkingText { index, .. }
+            | ClaudeAuditEvent::Signature { index, .. }
+            | ClaudeAuditEvent::RedactedData { index, .. }
+            | ClaudeAuditEvent::BlockStop { index } => *index,
+            ClaudeAuditEvent::BlockStart { .. } => unreachable!(),
+        };
+        anyhow::ensure!(
+            self.next_provider_block.checked_sub(1) == Some(index),
+            "audit fragment belongs to another content block"
+        );
+        if matches!(event, ClaudeAuditEvent::BlockStop { .. }) {
+            return Ok(false);
+        }
+        let Some(AssistantMessageContent::Reasoning(reasoning)) = self.content.last_mut() else {
+            anyhow::bail!("audit fragment has no reasoning declaration");
+        };
+        match (event, reasoning.content.as_mut_slice()) {
+            (
+                ClaudeAuditEvent::ThinkingText { fragment, .. },
+                [ReasoningContent::Text {
+                    text,
+                    signature: None,
+                }],
+            ) => text.push_str(fragment),
+            (
+                ClaudeAuditEvent::Signature { fragment, .. },
+                [ReasoningContent::Text { signature, .. }],
+            ) => {
+                signature.get_or_insert_with(String::new).push_str(fragment);
+            }
+            (
+                ClaudeAuditEvent::RedactedData { data, .. },
+                [ReasoningContent::Redacted { data: observed }],
+            ) => {
+                anyhow::ensure!(observed.is_empty(), "redacted audit payload repeated");
+                *observed = data.clone();
+            }
+            _ => anyhow::bail!("audit fragment changed reasoning field kind"),
+        }
+        Ok(true)
+    }
+
+    pub fn begin_provider_block(
+        &mut self,
+        index: u32,
+        kind: &crate::provider_audit::ClaudeBlockKind,
+    ) -> Result<()> {
+        use crate::provider_audit::ClaudeBlockKind;
+        use gents_protocol::message::ReasoningContent;
+        anyhow::ensure!(
+            index == self.next_provider_block,
+            "provider block order changed"
+        );
+        self.next_provider_block = index
+            .checked_add(1)
+            .context("provider block index overflow")?;
+        self.provider_block = Some(kind.clone());
+        match kind {
+            ClaudeBlockKind::Text => {
+                self.content
+                    .push(AssistantMessageContent::Text(CompletionText {
+                        text: String::new(),
+                    }))
+            }
+            ClaudeBlockKind::Thinking | ClaudeBlockKind::RedactedThinking => {
+                let part = match kind {
+                    ClaudeBlockKind::Thinking => ReasoningContent::Text {
+                        text: String::new(),
+                        signature: None,
+                    },
+                    _ => ReasoningContent::Redacted {
+                        data: String::new(),
+                    },
+                };
+                self.content
+                    .push(AssistantMessageContent::Reasoning(AssistantReasoning {
+                        id: None,
+                        content: vec![part],
+                    }));
+            }
+            ClaudeBlockKind::ToolUse { .. } => {}
+        }
+        Ok(())
+    }
+
     pub fn push_text(&mut self, text: &str) {
         match self.content.last_mut() {
             Some(AssistantMessageContent::Text(current)) => current.text.push_str(text),
@@ -472,6 +617,56 @@ impl AssistantTurnAccumulator {
         }
 
         let first = reasoning.content.first().expect("validated nonempty");
+        if matches!(
+            self.provider_block,
+            Some(crate::provider_audit::ClaudeBlockKind::Thinking)
+        ) {
+            let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() else {
+                anyhow::bail!("Claude thinking has no declared position");
+            };
+            let [ReasoningContent::Text {
+                text: observed,
+                signature: observed_signature,
+            }] = current.content.as_slice()
+            else {
+                anyhow::bail!("Claude thinking changed native kind");
+            };
+            let [ReasoningContent::Text {
+                text: completed,
+                signature: completed_signature,
+            }] = reasoning.content.as_slice()
+            else {
+                anyhow::bail!("Claude thinking completion changed native kind");
+            };
+            anyhow::ensure!(observed == completed, "Claude thinking bytes changed");
+            anyhow::ensure!(
+                observed_signature.is_none() || observed_signature == completed_signature,
+                "Claude thinking signature changed"
+            );
+            *current = reasoning;
+            return Ok(());
+        }
+        if matches!(
+            self.provider_block,
+            Some(crate::provider_audit::ClaudeBlockKind::RedactedThinking)
+        ) {
+            let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() else {
+                anyhow::bail!("Claude redacted block has no declared position");
+            };
+            let [ReasoningContent::Redacted { data: observed }] = current.content.as_slice() else {
+                anyhow::bail!("Claude redacted block changed native kind");
+            };
+            let [ReasoningContent::Redacted { data: completed }] = reasoning.content.as_slice()
+            else {
+                anyhow::bail!("Claude redacted completion changed native kind");
+            };
+            anyhow::ensure!(
+                observed.is_empty() || observed == completed,
+                "Claude redacted bytes changed"
+            );
+            *current = reasoning;
+            return Ok(());
+        }
         if let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() {
             if current.id == reasoning.id {
                 if let Some(ReasoningContent::Text {

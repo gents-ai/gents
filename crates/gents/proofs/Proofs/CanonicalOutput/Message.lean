@@ -29,6 +29,7 @@ inductive MessageError where
   | invalidPublication
   | referenceMismatch
   | metadataMismatch
+  | signatureMismatch
   | wrongSource
   | nativeOrder
   | nativePosition
@@ -381,7 +382,7 @@ def publicationAllowsSource (header : Header) (closing : Segment) : Bool :=
       | .authored _, .tool writerCall =>
           header.request == some closing.coordinate.request && writerCall == call
       | _, _ => false
-  | .fork _ => true
+  | .fork _ => !closing.coordinate.source.isAuxiliary
 
 def validateReferenceSource (records : List Segment) (denied : List DocId)
     (header : Header) (reference : PayloadRef) : Except MessageError Unit := do
@@ -416,9 +417,37 @@ def validateToolResultSource (records : List Segment) (denied : List DocId)
       if writerCall == call && publicationMatches then .ok () else .error .wrongSource
   | _, _ => .error .wrongSource
 
+/-- A published provider signature must agree with a retained signature stream
+at its reasoning-part position. Authored reasoning may carry inline signature
+metadata without a separate provider observation; unsigned provider reasoning
+without a signature stream remains valid for providers that do not sign it. -/
+def validateReasoningSignature (records : List Segment) (denied : List DocId)
+    (payload : PayloadSpec) (signature : Option String) : Except MessageError Unit := do
+  let closing ← (resolveClose records denied payload.reference).mapError
+    (fun error => MessageError.reconstruction (.lookup error))
+  let (body, _) ← (reconstructPayload records denied payload.reference).mapError
+    MessageError.reconstruction
+  let streams ← (reconstructExtent records closing).mapError
+    (fun error => MessageError.reconstruction (.extent error))
+  let signatures := streams.filter fun stream =>
+    stream.1.block == body.block && stream.1.part == body.part &&
+      stream.1.kind == .signature
+  match signatures with
+  | [] => match signature, closing.coordinate.source with
+      | none, _ | some _, .authored _ => .ok ()
+      | some _, _ => .error .signatureMismatch
+  | [(_, bytes)] => match utf8? bytes with
+      | some text =>
+          if signature == some text then .ok () else .error .signatureMismatch
+      | none => .error .invalidUtf8
+  | _ => .error .signatureMismatch
+
 def validateBlockMetadata (records : List Segment) (denied : List DocId) :
     Header → MessageBlock PayloadSpec → Except MessageError Unit
-  | _, .text _ | _, .reasoning _ _ => .ok ()
+  | _, .text _ => .ok ()
+  | _, .reasoning _ parts => parts.forM fun part => match part with
+      | .text payload signature => validateReasoningSignature records denied payload signature
+      | .encrypted _ | .redacted _ | .summary _ => .ok ()
   | _, .toolCall _ id callId name arguments _ _ => do
       let (_, declaration) ← declaredPayload records denied arguments
       if declaration.kind == .arguments &&
@@ -453,8 +482,8 @@ def reconstructBlock (resolve : List PayloadKind → Bool → PayloadSpec →
   | .reasoning id parts => do
       let parts ← parts.mapM fun part => match part with
         | .text p signature => return .text (← resolve [.reasoning] false p) signature
-        | .encrypted p => return .encrypted (← resolve [.opaque] false p)
-        | .redacted p => return .redacted (← resolve [.opaque] false p)
+        | .encrypted p => return .encrypted (← resolve [.encrypted] false p)
+        | .redacted p => return .redacted (← resolve [.redacted] false p)
         | .summary p => return .summary (← resolve [.summary] false p)
       return .reasoning id parts
   | .toolCall doc id call name args sig extra =>

@@ -6,6 +6,9 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use tokio::sync::Mutex;
 
+pub(crate) mod auxiliary;
+#[cfg(test)]
+mod auxiliary_tests;
 pub(crate) mod canonical;
 #[cfg(test)]
 mod canonical_tests;
@@ -92,6 +95,7 @@ struct StreamBufferSnapshot {
     content_bytes: usize,
     reasoning: String,
     reasoning_progress_seq: usize,
+    audit_progress_seq: usize,
 }
 
 impl StreamBufferSnapshot {
@@ -198,8 +202,21 @@ impl DefraStreamWriter {
         lifecycle: &crate::lifecycle::RequestLifecycle,
         message: &gents_protocol::message::Message,
     ) -> Result<bool> {
+        self.flush_owned_partial(
+            lifecycle.request(),
+            lifecycle.execution_generation()?,
+            message,
+        )
+        .await
+    }
+
+    pub(crate) async fn flush_owned_partial(
+        &self,
+        request: &crate::watcher::AgentRequest,
+        generation: &str,
+        message: &gents_protocol::message::Message,
+    ) -> Result<bool> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
-        let request = lifecycle.request();
         let encoded = native_encoding::encode_native_message(message)?;
         // The tail lock is held across the append so a concurrent acceptance
         // cannot commit the same prepared delta under the same ordinal.
@@ -229,7 +246,7 @@ impl DefraStreamWriter {
                 attempt,
             },
             writer: OutputWriter::RequestExecution {
-                execution_generation: lifecycle.execution_generation()?.to_owned(),
+                execution_generation: generation.to_owned(),
             },
             ordinal: Some(ordinal),
             runs: delta.runs,
@@ -237,8 +254,7 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        canonical::append_provider_segment(&self.node, lifecycle.execution_generation()?, &segment)
-            .await?;
+        canonical::append_provider_segment(&self.node, generation, &segment).await?;
         let tail = tails
             .get_mut(&request.doc_id)
             .context("provider attempt ended during flush")?;
@@ -258,8 +274,25 @@ impl DefraStreamWriter {
         attempt: u32,
         close: canonical::ProviderAttemptClose,
     ) -> Result<()> {
+        self.close_owned_attempt(
+            lifecycle.request(),
+            lifecycle.execution_generation()?,
+            turn,
+            attempt,
+            close,
+        )
+        .await
+    }
+
+    pub(crate) async fn close_owned_attempt(
+        &self,
+        request: &crate::watcher::AgentRequest,
+        generation: &str,
+        turn: usize,
+        attempt: u32,
+        close: canonical::ProviderAttemptClose,
+    ) -> Result<()> {
         use gents_protocol::output::{OutputSegment, OutputSource, OutputWriter};
-        let request = lifecycle.request();
         // Serialize closing with flushes just as complete publication does.
         // Releasing this lock after reading the scope lets another flush land
         // between choosing the closing timestamp and committing the closure.
@@ -280,7 +313,7 @@ impl DefraStreamWriter {
                 attempt,
             },
             writer: OutputWriter::RequestExecution {
-                execution_generation: lifecycle.execution_generation()?.to_owned(),
+                execution_generation: generation.to_owned(),
             },
             ordinal: None,
             runs: Vec::new(),
@@ -288,13 +321,8 @@ impl DefraStreamWriter {
             close: None,
             created_at: chrono::Utc::now().to_rfc3339(),
         };
-        let partial_message_doc_id = canonical::close_provider_attempt(
-            &self.node,
-            lifecycle.execution_generation()?,
-            &segment,
-            close,
-        )
-        .await?;
+        let partial_message_doc_id =
+            canonical::close_provider_attempt(&self.node, generation, &segment, close).await?;
         tails.remove(&request.doc_id);
         drop(tails);
         if let Some(message_doc_id) = partial_message_doc_id {
@@ -604,6 +632,24 @@ impl gents_loop::stream_writer::CanonicalStreamWriter<crate::lifecycle::RequestL
 }
 
 impl StreamWriter for DefraStreamWriter {
+    async fn mark_pending_output(&self, doc_id: &str) -> Result<bool> {
+        {
+            let mut buffers = self.buffers.lock().await;
+            let buffer = buffers
+                .get_mut(doc_id)
+                .context("no output buffer for audit")?;
+            buffer.current.audit_progress_seq = buffer
+                .current
+                .audit_progress_seq
+                .checked_add(1)
+                .context("audit batching sequence exhausted")?;
+        }
+        let Some(snapshot) = self.pending_snapshot(doc_id, false).await? else {
+            return Ok(false);
+        };
+        self.flush_snapshot(doc_id, &snapshot).await
+    }
+
     async fn write_tokens(&self, doc_id: &str, tokens: &str) -> Result<bool> {
         DefraStreamWriter::write_tokens(self, doc_id, tokens).await
     }

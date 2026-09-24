@@ -17,6 +17,9 @@ theorem Gate.evaluate_preserves_toolProjectionCoherent (operation : Gate.Operati
   | append generation record =>
     exact appendRaw_preserves_toolProjectionCoherent before after generation record coherent
       (mapError_success Gate.Error.execution _ _ h)
+  | closeAuxiliary generation closing =>
+    exact closeAuxiliary_preserves_toolProjectionCoherent before after generation closing coherent
+      (mapError_success Gate.Error.execution _ _ h)
   | retract generation record =>
     exact retractBeforeRetry_preserves_toolProjectionCoherent before after generation record coherent
       (mapError_success Gate.Error.execution _ _ h)

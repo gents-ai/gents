@@ -484,6 +484,8 @@ def recoveryTextBlock : MessageBlock PayloadSpec → Bool
 def recoveryMessageValid (world : World) (generation : Generation)
     (segments : List Segment) (closing : Segment) (streams : Streams)
     (message : Option MessageEnvelope) : Bool :=
+  if closing.coordinate.source.isAuxiliary then message.isNone
+  else
   match recoveryRefs closing.id streams with
   | .error _ => false
   | .ok expected =>

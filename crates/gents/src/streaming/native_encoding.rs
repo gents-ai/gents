@@ -305,22 +305,34 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
                 for (part, value) in reasoning.content.iter().enumerate() {
                     let part = u32::try_from(part).context("reasoning part index exceeds u32")?;
                     parts.push(match value {
-                        ReasoningContent::Text { text, signature } => ReasoningPlan::Text {
-                            stream: push_stream(
+                        ReasoningContent::Text { text, signature } => {
+                            let stream = push_stream(
                                 &mut streams,
                                 block,
                                 part,
                                 StreamPayload::Reasoning,
                                 text.clone(),
-                            ),
-                            signature: signature.clone(),
-                        },
+                            );
+                            if let Some(signature) = signature {
+                                push_stream(
+                                    &mut streams,
+                                    block,
+                                    part,
+                                    StreamPayload::ReasoningSignature,
+                                    signature.clone(),
+                                );
+                            }
+                            ReasoningPlan::Text {
+                                stream,
+                                signature: signature.clone(),
+                            }
+                        }
                         ReasoningContent::Encrypted(data) => ReasoningPlan::Encrypted {
                             stream: push_stream(
                                 &mut streams,
                                 block,
                                 part,
-                                StreamPayload::ReasoningOpaque,
+                                StreamPayload::ReasoningEncrypted,
                                 data.clone(),
                             ),
                         },
@@ -329,7 +341,7 @@ pub(crate) fn encode_native_message(message: &Message) -> Result<EncodedNativeMe
                                 &mut streams,
                                 block,
                                 part,
-                                StreamPayload::ReasoningOpaque,
+                                StreamPayload::ReasoningRedacted,
                                 data.clone(),
                             ),
                         },

@@ -66,9 +66,30 @@ pub(crate) struct LeanOutputTarget {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum LeanCanonicalSource {
-    Provider { scope: u64, turn: u64, attempt: u64 },
-    Tool { call: u64 },
-    Authored { key: u64 },
+    Provider {
+        scope: u64,
+        turn: u64,
+        attempt: u64,
+    },
+    Auxiliary {
+        auxiliary_kind: LeanAuxiliaryKind,
+        scope: u64,
+        turn: u64,
+        attempt: u64,
+    },
+    Tool {
+        call: u64,
+    },
+    Authored {
+        key: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanAuxiliaryKind {
+    Compaction,
+    CompactionFallback,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -127,11 +148,82 @@ pub(crate) struct LeanCanonicalDeclaration {
 pub(crate) enum LeanPayloadKind {
     Text,
     Reasoning,
+    Signature,
     Summary,
-    Opaque,
+    Encrypted,
+    Redacted,
     Arguments,
     ToolOutput,
     Media,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanReasoningAuditCase {
+    pub(crate) name: String,
+    pub(crate) input: LeanCanonicalOutputObservation,
+    pub(crate) expected: LeanReasoningAuditResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanReasoningAuditResult {
+    Ok { streams: Vec<LeanCanonicalStream> },
+    Loading,
+    Conflicted,
+    Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanReasoningSignatureCase {
+    pub(crate) name: String,
+    pub(crate) records: Vec<LeanCanonicalSegment>,
+    pub(crate) payload: LeanPayloadSpec,
+    pub(crate) signature: Option<String>,
+    pub(crate) accepted: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanAuxiliaryOutputCase {
+    pub(crate) name: String,
+    pub(crate) raw: LeanCanonicalSegment,
+    pub(crate) closing: LeanCanonicalSegment,
+    pub(crate) stale_closing: LeanCanonicalSegment,
+    pub(crate) recovery_closing: LeanCanonicalSegment,
+    pub(crate) authority: LeanAuxiliaryAuthority,
+    pub(crate) publication_message: LeanCanonicalMessage<LeanPayloadSpec>,
+    pub(crate) native_publication_closing: LeanCanonicalSegment,
+    pub(crate) native_publication_message: LeanCanonicalMessage<LeanPayloadSpec>,
+    pub(crate) observation: LeanCanonicalOutputObservation,
+    pub(crate) expected: LeanAuxiliaryOutputExpected,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanAuxiliaryAuthority {
+    pub(crate) claimed_request_state: String,
+    pub(crate) generation: u64,
+    pub(crate) begin_boundary: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanAuxiliaryOutputExpected {
+    pub(crate) append_accepted: bool,
+    pub(crate) claimed_append_accepted: bool,
+    pub(crate) begin_accepted: bool,
+    pub(crate) begun_append_accepted: bool,
+    pub(crate) close_accepted: bool,
+    pub(crate) stale_close_replay_accepted: bool,
+    pub(crate) recovery_accepted: bool,
+    pub(crate) recovery_with_header_accepted: bool,
+    pub(crate) publication_accepted: bool,
+    pub(crate) empty_header_accepted: bool,
+    pub(crate) native_publication_accepted: bool,
+    pub(crate) audit: LeanReasoningAuditResult,
+    pub(crate) public_view: LeanCanonicalOutputView,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

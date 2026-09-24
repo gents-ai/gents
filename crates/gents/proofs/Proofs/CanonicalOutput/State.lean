@@ -14,11 +14,21 @@ namespace CanonicalOutput
 
 abbrev DocId := Nat
 
+inductive AuxiliaryKind where
+  | compaction
+  | compactionFallback
+  deriving DecidableEq, Repr
+
 inductive Source where
   | provider (scope turn attempt : Nat)
+  | auxiliary (kind : AuxiliaryKind) (scope turn attempt : Nat)
   | tool (call : DocId)
   | authored (key : Nat)
   deriving DecidableEq, Repr
+
+def Source.isAuxiliary : Source → Bool
+  | .auxiliary _ _ _ _ => true
+  | _ => false
 
 structure Coordinate where
   request : DocId
@@ -38,8 +48,10 @@ inductive Outcome where
 inductive PayloadKind where
   | text
   | reasoning
+  | signature
   | summary
-  | opaque
+  | encrypted
+  | redacted
   | arguments
   | toolOutput
   | media
