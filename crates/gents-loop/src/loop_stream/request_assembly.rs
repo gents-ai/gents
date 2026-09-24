@@ -1,4 +1,169 @@
 use super::*;
+use crate::claude_messages_body::{
+    prepare_replay_checkpoint, restore_and_narrow_replay, TaggedAssistantRow,
+};
+use crate::provider_input::ProviderInputProfile;
+
+pub(super) fn message_values(rows: &[TaggedMessage]) -> Vec<Message> {
+    rows.iter().map(|row| row.message.clone()).collect()
+}
+
+fn replay_input_error(message: impl Into<String>) -> StreamingError {
+    StreamingError::Completion(CompletionError::RequestError(Box::new(
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into()),
+    )))
+}
+
+fn tagged_from_sourced(
+    originals: &[TaggedMessage],
+    sourced: Vec<crate::compaction::history::SourcedMessage>,
+) -> Result<Vec<TaggedMessage>, StreamingError> {
+    if originals
+        .iter()
+        .any(|row| row.source.is_some() && !matches!(row.message, Message::Assistant { .. }))
+    {
+        return Err(replay_input_error(
+            "canonical provider source was attached to a non-assistant row",
+        ));
+    }
+    let mut previous_source = None;
+    sourced
+        .into_iter()
+        .map(|item| {
+            if previous_source.is_some_and(|previous| item.source_index <= previous) {
+                return Err(replay_input_error(
+                    "provider projection reordered or duplicated a source row",
+                ));
+            }
+            previous_source = Some(item.source_index);
+            let original = originals.get(item.source_index).ok_or_else(|| {
+                replay_input_error("provider projection emitted an out-of-range source index")
+            })?;
+            if original.source.is_some() && !matches!(item.message, Message::Assistant { .. }) {
+                return Err(replay_input_error(
+                    "canonical provider source was attached to a non-assistant row",
+                ));
+            }
+            Ok(TaggedMessage {
+                message: item.message,
+                source: original.source.clone(),
+            })
+        })
+        .collect()
+}
+
+pub fn sanitize_tagged_history(
+    profile: ProviderInputProfile,
+    rows: Vec<TaggedMessage>,
+) -> Result<Vec<TaggedMessage>, StreamingError> {
+    let messages = rows.iter().map(|row| row.message.clone()).collect();
+    tagged_from_sourced(
+        &rows,
+        crate::compaction::sanitize_history_with_sources(profile, messages),
+    )
+}
+
+pub fn provider_view_tagged(
+    profile: ProviderInputProfile,
+    rows: Vec<TaggedMessage>,
+) -> Result<Vec<TaggedMessage>, StreamingError> {
+    let messages = rows.iter().map(|row| row.message.clone()).collect();
+    let (sourced, _) = crate::compaction::provider_view_with_sources(profile, messages);
+    tagged_from_sourced(&rows, sourced)
+}
+
+/// Narrow the one actual loop-owned native row list before request assembly.
+/// The selected assistant occurrence retains its independently carried tag;
+/// expected reasoning is loaded and cached from the canonical owner, never
+/// rebuilt from this mutable provider-input list.
+pub async fn narrow_tagged_history(
+    profile: ProviderInputProfile,
+    rows: &mut [TaggedMessage],
+    replay: &mut LoopReplayInput,
+) -> Result<(), StreamingError> {
+    if profile != ProviderInputProfile::ClaudeMessages {
+        if !replay.required.is_empty() {
+            return Err(replay_input_error(
+                "required Claude replay coordinates on a non-Claude provider input",
+            ));
+        }
+        return Ok(());
+    }
+    for tag in replay.required.clone() {
+        if replay.resolved.contains(&tag) {
+            continue;
+        }
+        if replay.evidence.iter().any(|row| row.tag == tag) {
+            replay.resolved.push(tag);
+            continue;
+        }
+        let resolve = replay.resolve.as_ref().ok_or_else(|| {
+            replay_input_error("required Claude replay has no canonical evidence resolver")
+        })?;
+        let evidence = resolve(tag.clone()).await.map_err(|error| {
+            StreamingError::Completion(CompletionError::ProviderError(format!(
+                "loading canonical Claude replay evidence failed: {error:#}",
+            )))
+        })?;
+        replay
+            .evidence
+            .extend(evidence.into_iter().map(|evidence| ReplayEvidenceRow {
+                tag: tag.clone(),
+                evidence,
+            }));
+        replay.resolved.push(tag);
+    }
+
+    let assistant_indices = rows
+        .iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            matches!(row.message, Message::Assistant { .. }).then_some(index)
+        })
+        .collect::<Vec<_>>();
+    let assistant_rows = assistant_indices
+        .iter()
+        .map(|index| {
+            let row = &rows[*index];
+            let Message::Assistant { id, content } = &row.message else {
+                unreachable!("assistant_indices contains only assistant rows")
+            };
+            TaggedAssistantRow {
+                source: row.source.clone(),
+                id: id.clone(),
+                content: content.clone(),
+            }
+        })
+        .collect();
+    let checkpoint = prepare_replay_checkpoint(replay.required.clone(), assistant_rows, 0)
+        .map_err(|error| replay_input_error(format!("Claude replay checkpoint: {error}")))?;
+    let narrowed = restore_and_narrow_replay(&checkpoint, |tag| {
+        replay
+            .evidence
+            .iter()
+            .filter(|row| row.tag == *tag)
+            .map(|row| row.evidence.clone())
+            .collect()
+    })
+    .map_err(|error| replay_input_error(format!("Claude replay narrowing: {error}")))?;
+    if narrowed.len() != assistant_indices.len() {
+        return Err(replay_input_error(
+            "Claude replay narrowing changed assistant row cardinality",
+        ));
+    }
+    for (index, selected) in assistant_indices.into_iter().zip(narrowed) {
+        if rows[index].source != selected.source {
+            return Err(replay_input_error(
+                "Claude replay narrowing changed assistant source association",
+            ));
+        }
+        let Message::Assistant { content, .. } = &mut rows[index].message else {
+            unreachable!("assistant_indices contains only assistant rows")
+        };
+        *content = selected.content;
+    }
+    Ok(())
+}
 
 /// Assemble the per-request message tail: an optional runtime context message
 /// rides immediately before the prompt, which is always last for rig.
@@ -7,10 +172,13 @@ use super::*;
 /// workspace context. Its local ordering is fenced by
 /// `assembles_context_immediately_before_prompt`; the generated Lean layer
 /// cases exercise the canonical prompt tail without it.
-pub fn assemble_new_messages(context_message: Option<Message>, prompt: Message) -> Vec<Message> {
-    let mut new_messages: Vec<Message> = Vec::with_capacity(2);
+pub fn assemble_new_messages(
+    context_message: Option<Message>,
+    prompt: TaggedMessage,
+) -> Vec<TaggedMessage> {
+    let mut new_messages: Vec<TaggedMessage> = Vec::with_capacity(2);
     if let Some(context_message) = context_message {
-        new_messages.push(context_message);
+        new_messages.push(TaggedMessage::unassociated(context_message));
     }
     new_messages.push(prompt);
     new_messages
@@ -47,8 +215,9 @@ pub fn is_request_context_message(message: &Message) -> bool {
 struct ProviderInputRepairError;
 
 pub fn repair_provider_input(
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
+    profile: crate::provider_input::ProviderInputProfile,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
 ) -> Result<(), StreamingError> {
     // A restored checkpoint may split one closed tool-call/result pair across
     // rig's history and prompt carriers. Repair and sanitize the canonical
@@ -56,7 +225,7 @@ pub fn repair_provider_input(
     let mut provider_messages = std::mem::take(history);
     provider_messages.append(new_messages);
     repair_messages(&mut provider_messages);
-    let mut provider_messages = crate::compaction::sanitize_history_for_provider(provider_messages);
+    let mut provider_messages = sanitize_tagged_history(profile, provider_messages)?;
     let prompt = provider_messages.pop().ok_or_else(|| {
         StreamingError::Completion(CompletionError::RequestError(Box::new(
             ProviderInputRepairError,
@@ -67,9 +236,9 @@ pub fn repair_provider_input(
     Ok(())
 }
 
-fn repair_messages(messages: &mut [Message]) {
-    for message in messages.iter_mut() {
-        let Message::Assistant { content, .. } = message else {
+fn repair_messages(messages: &mut [TaggedMessage]) {
+    for row in messages.iter_mut() {
+        let Message::Assistant { content, .. } = &mut row.message else {
             continue;
         };
         for item in content {
@@ -127,8 +296,11 @@ pub fn completion_request_input_components(
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> Result<crate::provider_input::ProviderInputProjection, StreamingError> {
     counter.project_request(request).map_err(|error| {
-        StreamingError::Completion(CompletionError::ProviderError(format!(
-            "provider_input_projection_failed: {error:#}"
+        StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("provider_input_projection_failed: {error:#}"),
+            ),
         )))
     })
 }
@@ -138,8 +310,11 @@ fn completion_request_input_tokens(
     counter: &crate::provider_input::ProviderInputCounter,
 ) -> Result<usize, StreamingError> {
     counter.estimate_request(request).map_err(|error| {
-        StreamingError::Completion(CompletionError::ProviderError(format!(
-            "provider_input_projection_failed: {error:#}"
+        StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("provider_input_projection_failed: {error:#}"),
+            ),
         )))
     })
 }
@@ -300,20 +475,37 @@ pub fn ensure_context_can_dispatch(
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn build_budgeted_request<M: CompletionModel>(
     model: &M,
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
+    replay: &mut LoopReplayInput,
     turn_index: usize,
     reduction_chain_keys: &mut Vec<String>,
     active_reduction_keys: &mut Vec<String>,
 ) -> Result<(CompletionRequest, TurnContextDecision), StreamingError> {
+    narrow_joined_input(
+        config.provider_input_counter.profile(),
+        history,
+        new_messages,
+        replay,
+    )
+    .await?;
     let current_prompt = new_messages
         .last()
-        .cloned()
+        .map(|row| row.message.clone())
         .expect("new_messages always retains at least the initial prompt");
-    let prior = &new_messages[..new_messages.len() - 1];
-    let request = build_request(model, current_prompt, history, prior, tools, config).await?;
+    let prior = message_values(&new_messages[..new_messages.len() - 1]);
+    let history_messages = message_values(history);
+    let request = build_request(
+        model,
+        current_prompt,
+        &history_messages,
+        &prior,
+        tools,
+        config,
+    )
+    .await?;
     let projection =
         completion_request_input_components(&request, config.provider_input_counter.as_ref())?;
     let before_tokens = projection.estimated_input_tokens;
@@ -347,6 +539,7 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         .collect::<Vec<_>>();
     let outcome = compactor(TurnCompactionRequest {
         messages: provider_messages,
+        required: replay.required.clone(),
         admission,
         turn_index,
         prior_reduction_keys: reduction_chain_keys.clone(),
@@ -383,19 +576,38 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
         }
     };
     let compacted_prompt = compacted.pop().ok_or_else(|| {
-        StreamingError::Completion(CompletionError::ProviderError(
-            "per-turn provider-input compaction returned no prompt".to_string(),
-        ))
+        StreamingError::Completion(CompletionError::RequestError(Box::new(
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "per-turn provider-input compaction returned no prompt",
+            ),
+        )))
     })?;
     *history = compacted;
     *new_messages = vec![compacted_prompt.clone()];
+    narrow_joined_input(
+        config.provider_input_counter.profile(),
+        history,
+        new_messages,
+        replay,
+    )
+    .await?;
     if let Some(reduction_key) = reduction_key {
         reduction_chain_keys.push(reduction_key.clone());
         active_reduction_keys.clear();
         active_reduction_keys.push(reduction_key);
     }
 
-    let rebuilt = build_request(model, compacted_prompt, history, &[], tools, config).await?;
+    let history_messages = message_values(history);
+    let rebuilt = build_request(
+        model,
+        compacted_prompt.message,
+        &history_messages,
+        &[],
+        tools,
+        config,
+    )
+    .await?;
     let rebuilt_projection =
         completion_request_input_components(&rebuilt, config.provider_input_counter.as_ref())?;
     let after_tokens = rebuilt_projection.estimated_input_tokens;
@@ -454,24 +666,52 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
 /// provider-attempt iteration must pass through `prepare_dispatch_attempt`.
 pub(super) async fn repair_and_rebuild_request<M: CompletionModel>(
     model: &M,
-    history: &mut Vec<Message>,
-    new_messages: &mut Vec<Message>,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
     tools: &[Box<dyn ToolDyn>],
     config: &LoopConfig,
+    replay: &mut LoopReplayInput,
 ) -> Result<CompletionRequest, StreamingError> {
-    repair_provider_input(history, new_messages)?;
+    repair_provider_input(
+        config.provider_input_counter.profile(),
+        history,
+        new_messages,
+    )?;
+    narrow_joined_input(
+        config.provider_input_counter.profile(),
+        history,
+        new_messages,
+        replay,
+    )
+    .await?;
     let repaired_prompt = new_messages
         .last()
-        .cloned()
+        .map(|row| row.message.clone())
         .expect("successful repair restores one prompt");
-    let repaired_prior = &new_messages[..new_messages.len() - 1];
+    let repaired_prior = message_values(&new_messages[..new_messages.len() - 1]);
+    let repaired_history = message_values(history);
     build_request(
         model,
         repaired_prompt,
-        history,
-        repaired_prior,
+        &repaired_history,
+        &repaired_prior,
         tools,
         config,
     )
     .await
+}
+
+pub(super) async fn narrow_joined_input(
+    profile: ProviderInputProfile,
+    history: &mut Vec<TaggedMessage>,
+    new_messages: &mut Vec<TaggedMessage>,
+    replay: &mut LoopReplayInput,
+) -> Result<(), StreamingError> {
+    let history_len = history.len();
+    let mut joined = std::mem::take(history);
+    joined.append(new_messages);
+    narrow_tagged_history(profile, &mut joined, replay).await?;
+    *new_messages = joined.split_off(history_len);
+    *history = joined;
+    Ok(())
 }

@@ -193,7 +193,8 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                     }
                 }
                 rig::completion::CompletionError::JsonError(_)
-                | rig::completion::CompletionError::UrlError(_) => {
+                | rig::completion::CompletionError::UrlError(_)
+                | rig::completion::CompletionError::RequestError(_) => {
                     InferenceError::PermanentFailure { reason }
                 }
                 _ => InferenceError::TransientFailure { reason },

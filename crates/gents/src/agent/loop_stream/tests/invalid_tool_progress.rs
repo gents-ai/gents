@@ -71,12 +71,19 @@ async fn generated_invalid_tool_progress_cases_drive_owned_loop() {
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
-            Message::user("exercise typed outcomes"),
+            TaggedMessage::unassociated(Message::user("exercise typed outcomes")),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
             owned_config(64),
         );
-        let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+        let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
         let name = case["name"].as_str().unwrap();
         let actions = case["composed_actions"]
             .as_array()
@@ -172,7 +179,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
-            Message::user("bound invalid batch"),
+            TaggedMessage::unassociated(Message::user("bound invalid batch")),
             Vec::new(),
             Arc::new(vec![Box::new(InvalidProgressProbe) as Box<dyn ToolDyn>]),
             owned_config(500),
@@ -184,6 +191,7 @@ async fn invalid_tool_budget_closes_eighth_result_and_cancels_accepted_ninth() {
                 &hook,
                 &writer,
                 &mut lifecycle,
+                gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
             )),
         )
         .await
@@ -286,12 +294,19 @@ async fn malformed_bash_feedback_reaches_next_request_and_corrected_argv_succeed
     let stream = run_loop_stream(
         model.clone(),
         Some(hook.clone()),
-        Message::user("inspect crates"),
+        TaggedMessage::unassociated(Message::user("inspect crates")),
         Vec::new(),
         Arc::new(tools),
         owned_config(10),
     );
-    let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+    let collected = collect_owned_scripted_stream(
+        stream,
+        &hook,
+        &writer,
+        &mut lifecycle,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    )
+    .await;
     assert!(collected.error.is_none(), "{:?}", collected.error);
     let requests = model.seen_requests().await;
     assert_eq!(requests.len(), 3);
@@ -396,12 +411,19 @@ async fn empty_bash_arguments_exhaust_owned_loop_without_side_effects() {
         let stream = run_loop_stream(
             model.clone(),
             Some(hook.clone()),
-            Message::user("inspect source"),
+            TaggedMessage::unassociated(Message::user("inspect source")),
             Vec::new(),
             Arc::new(tools),
             owned_config(500),
         );
-        let collected = collect_owned_scripted_stream(stream, &hook, &writer, &mut lifecycle).await;
+        let collected = collect_owned_scripted_stream(
+            stream,
+            &hook,
+            &writer,
+            &mut lifecycle,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        )
+        .await;
         let error = collected
             .error
             .expect("budget exhaustion must fail the loop");

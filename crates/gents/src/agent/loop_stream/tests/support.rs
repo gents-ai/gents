@@ -422,6 +422,7 @@ pub(super) fn tool_result_text(content: &ToolResultContent) -> &str {
 
 pub(super) fn config(max_turns: usize) -> LoopConfig {
     LoopConfig {
+        replay: LoopReplayInput::default(),
         provider_input_counter: std::sync::Arc::new(
             crate::provider_input::ProviderInputCounter::new(
                 crate::BackendProviderKind::OpenAiCompatible,
@@ -546,28 +547,45 @@ pub(super) async fn collect_owned_scripted_stream<S, R>(
     hook: &DefraSessionHook,
     writer: &crate::streaming::DefraStreamWriter,
     lifecycle: &mut crate::lifecycle::RequestLifecycle,
+    profile: gents_loop::provider_input::ProviderInputProfile,
 ) -> CollectedScriptedStream
 where
     S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
 {
-    let context = crate::rendered_request::context_for_claimed_request(
-        lifecycle.request(),
-        "",
-        "test-model".into(),
-    );
-    let scope = crate::rendered_request::scope::test_scope(
-        context,
-        Arc::new(|_| Box::pin(async { Ok(()) })),
-    );
+    collect_owned_scripted_stream_with_capture_scope(stream, hook, writer, lifecycle, profile, None)
+        .await
+}
+
+/// The same owned acceptance driver with an optional durable capture scope.
+/// Most scripted tests use the noop scope; the Claude transport fixture passes
+/// the real DefraDB scope so its replay resolver can verify the captured send.
+pub(super) async fn collect_owned_scripted_stream_with_capture_scope<S, R>(
+    stream: S,
+    hook: &DefraSessionHook,
+    writer: &crate::streaming::DefraStreamWriter,
+    lifecycle: &mut crate::lifecycle::RequestLifecycle,
+    profile: gents_loop::provider_input::ProviderInputProfile,
+    capture_scope: Option<Arc<crate::rendered_request::scope::RequestCaptureScope>>,
+) -> CollectedScriptedStream
+where
+    S: Stream<Item = Result<LoopStreamItem<R>, StreamingError>>,
+{
+    let scope = capture_scope.unwrap_or_else(|| {
+        let context = crate::rendered_request::context_for_claimed_request(
+            lifecycle.request(),
+            "",
+            "test-model".into(),
+        );
+        crate::rendered_request::scope::test_scope(
+            context,
+            Arc::new(|_| Box::pin(async { Ok(()) })),
+        )
+    });
     crate::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
         let mut processor = crate::agent::stream_processor::StreamProcessor::new(
-            hook,
-            writer,
-            lifecycle,
-            &doc_id,
-            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+            hook, writer, lifecycle, &doc_id, profile,
         );
         let mut collected = CollectedScriptedStream::default();
         while let Some(item) = stream.next().await {

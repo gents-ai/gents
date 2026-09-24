@@ -9,7 +9,10 @@
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use gents_protocol::output::reconstruction::{reconstruct_message, ObservedSegment};
-use gents_protocol::output::{MessagePublication, PayloadRef};
+use gents_protocol::output::{
+    MessagePublication, MessageRole, OutputOutcome, OutputSource, OutputWriter, PayloadRef,
+    SourceClose,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::canonical_rows::{
@@ -26,6 +29,43 @@ pub enum CanonicalOutputReadError {
     MissingCanonicalHeader { header_doc_id: String },
     #[error("canonical header lookup is ambiguous: {header_doc_id}")]
     AmbiguousCanonicalHeader { header_doc_id: String },
+}
+
+/// The physical request and principal scope supplied by the owned restore.
+/// Its commit CID is a historical request version, not the latest lease write.
+#[derive(Clone, Copy)]
+pub(crate) struct CanonicalReplayScope<'a> {
+    pub(crate) agent_did: &'a str,
+    pub(crate) requester_did: Option<&'a str>,
+    pub(crate) session_id: &'a str,
+    pub(crate) request_id: &'a str,
+    pub(crate) request_doc_id: &'a str,
+    pub(crate) request_commit_cid: &'a str,
+}
+
+/// One canonical current-request assistant, retaining physical identity even
+/// when another row happens to reconstruct to equal native bytes.
+pub(crate) struct CanonicalAssistantCandidate {
+    pub(crate) header_doc_id: String,
+    pub(crate) sequence: u32,
+    pub(crate) message: gents_protocol::message::Message,
+    pub(crate) origin: gents_loop::claude_messages_body::ReplayOrigin,
+    pub(crate) coordinate: CanonicalProviderCoordinate,
+}
+
+/// Exact source of a provider-owned assistant, established by its physical
+/// referenced closes rather than by message bytes or a message-key suffix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CanonicalProviderCoordinate {
+    pub(crate) scope: gents_protocol::rendered_request::CaptureScope,
+    pub(crate) turn_index: u32,
+    pub(crate) attempt: u32,
+}
+
+struct ReconstructedScopedMessage {
+    header: super::canonical_rows::TranscriptMessageRow,
+    message: gents_protocol::message::Message,
+    segments: Vec<super::canonical_rows::OutputSegmentRow>,
 }
 
 #[derive(Clone, Copy)]
@@ -503,6 +543,24 @@ async fn reconstruct_scoped_message(
     gents_protocol::output::TranscriptMessage,
     gents_protocol::message::Message,
 )> {
+    let reconstructed = reconstruct_scoped_message_with_facts(
+        access,
+        header_doc_id,
+        agent_did,
+        requester_did,
+        cache,
+    )
+    .await?;
+    Ok((reconstructed.header.message, reconstructed.message))
+}
+
+async fn reconstruct_scoped_message_with_facts(
+    access: ReadAccess<'_, '_>,
+    header_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    cache: &mut ReadCache,
+) -> Result<ReconstructedScopedMessage> {
     let header = load_header(access, header_doc_id, agent_did, requester_did, cache).await?;
     let origin = validate_origin_chain(access, &header, agent_did, requester_did, cache).await?;
     let segments =
@@ -525,7 +583,389 @@ async fn reconstruct_scoped_message(
     let message = reconstruct_message(&observed, &[], &[], &header.message)
         .map_err(anyhow::Error::new)
         .with_context(|| format!("reconstructing exact canonical message {header_doc_id}"))?;
-    Ok((header.message, message))
+    Ok(ReconstructedScopedMessage {
+        header,
+        message,
+        segments,
+    })
+}
+
+/// Resolve the physical assistant turns eligible for one restored request.
+/// A source boundary limits this read, but does not itself prove that an
+/// independently stored checkpoint was causally derived from the whole view.
+/// The caller must not select a candidate by comparing native message bytes.
+pub(crate) async fn load_current_request_assistant_candidates(
+    node: &EmbeddedNode,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::provider_context_reduction::SourceBoundary,
+) -> Result<Vec<CanonicalAssistantCandidate>> {
+    crate::provider_context_reduction::validate_source_boundary(
+        boundary,
+        scope.request_doc_id,
+        scope.request_commit_cid,
+    )?;
+    anyhow::ensure!(
+        !scope.agent_did.is_empty()
+            && !scope.session_id.is_empty()
+            && !scope.request_id.is_empty()
+            && !scope.request_doc_id.is_empty()
+            && !scope.request_commit_cid.is_empty()
+            && scope.requester_did.is_none_or(|did| !did.is_empty()),
+        "canonical replay scope is incomplete"
+    );
+    let request_commits = validate_replay_request(node, scope).await?;
+    // None records the empty canonical view at capture time. A later current
+    // read cannot turn that historical empty boundary into an unbounded scan.
+    let Some(high_water) = boundary.canonical_through.as_ref() else {
+        return Ok(Vec::new());
+    };
+    let mut cache = ReadCache::default();
+    let high_water_header = load_header(
+        ReadAccess::Node(node),
+        &high_water.doc_id,
+        scope.agent_did,
+        scope.requester_did,
+        &mut cache,
+    )
+    .await?;
+    anyhow::ensure!(
+        high_water_header.message.session_id == scope.session_id
+            && i64::from(high_water_header.message.sequence) == high_water.sequence,
+        "canonical replay high-water header disagrees with its physical scope or sequence"
+    );
+    let high_water_commit = crate::graphql::newest_document_composite_commit(
+        node,
+        &high_water.doc_id,
+        "canonical replay high-water header",
+    )
+    .await?
+    .context("canonical replay high-water header has no composite commit")?;
+    anyhow::ensure!(
+        high_water_commit.cid == high_water.commit_cid,
+        "canonical replay high-water CID is not the physical header version"
+    );
+
+    let session_filter =
+        session_scope_filter(scope.agent_did, scope.session_id, scope.requester_did);
+    let query = format!(
+        r#"{{ AgentMessage(filter: {{ {session_filter}, sequence: {{ _le: {} }} }}, order: {{ sequence: ASC }}) {{ {AGENT_MESSAGE_FIELDS} }} }}"#,
+        high_water.sequence
+    );
+    let response = ReadAccess::Node(node)
+        .query(&query, "load_canonical_replay_candidates")
+        .await?;
+    let headers = rows_value(&response, "AgentMessage")?
+        .iter()
+        .map(decode_transcript_message_row)
+        .collect::<Result<Vec<_>>>()?;
+    let mut ids = BTreeSet::new();
+    let mut sequences = BTreeSet::new();
+    let mut keys = BTreeSet::new();
+    for row in &headers {
+        anyhow::ensure!(
+            row.message.agent_did == scope.agent_did
+                && row.message.requester_did.as_deref() == scope.requester_did
+                && row.message.session_id == scope.session_id
+                && i64::from(row.message.sequence) <= high_water.sequence,
+            "canonical replay header crossed its scoped high-water view"
+        );
+        anyhow::ensure!(
+            ids.insert(row.doc_id.clone())
+                && sequences.insert(row.message.sequence)
+                && keys.insert(row.message.message_key.clone()),
+            "canonical replay header has a physical, sequence, or key twin"
+        );
+        cache.headers.insert(row.doc_id.clone(), row.clone());
+    }
+    anyhow::ensure!(
+        ids.contains(&high_water.doc_id),
+        "canonical replay high-water header is absent from its bounded view"
+    );
+
+    let mut candidates = Vec::new();
+    for row in headers.into_iter().filter(|row| {
+        row.message.request_doc_id.as_deref() == Some(scope.request_doc_id)
+            && row.message.role == MessageRole::Assistant
+            && matches!(
+                &row.message.publication,
+                MessagePublication::RequestExecution { .. }
+            )
+    }) {
+        let reconstructed = reconstruct_scoped_message_with_facts(
+            ReadAccess::Node(node),
+            &row.doc_id,
+            scope.agent_did,
+            scope.requester_did,
+            &mut cache,
+        )
+        .await?;
+        let Some(coordinate) = provider_coordinate_for_candidate(&reconstructed)? else {
+            // An authored assistant belongs in permissive history, but is not
+            // a provider continuation candidate merely because its role and
+            // publication match a provider-owned assistant.
+            continue;
+        };
+        let origin = replay_origin_for_candidate(node, scope, &request_commits, coordinate).await?;
+        candidates.push(CanonicalAssistantCandidate {
+            header_doc_id: row.doc_id,
+            sequence: row.message.sequence,
+            message: reconstructed.message,
+            origin,
+            coordinate,
+        });
+    }
+    Ok(candidates)
+}
+
+/// Resolve one carried provider tag against the same physically bounded
+/// canonical candidate view used at checkpoint restore. Keep every matching
+/// physical header: zero and multiple rows are distinct missing/ambiguous
+/// outcomes for the pure replay owner, never an arbitrary winner.
+pub(crate) async fn resolve_current_replay_tag(
+    node: &EmbeddedNode,
+    scope: CanonicalReplayScope<'_>,
+    boundary: &crate::provider_context_reduction::SourceBoundary,
+    tag: &gents_loop::claude_messages_body::ReplayTag,
+) -> Result<Vec<gents_loop::claude_messages_body::ResolvedReplayEvidence>> {
+    use gents_loop::claude_messages_body::{reasoning_witness, ResolvedReplayEvidence};
+
+    anyhow::ensure!(
+        tag.request_doc_id == scope.request_doc_id,
+        "canonical replay tag belongs to another physical request"
+    );
+    let OutputSource::ProviderTurn {
+        scope: tag_scope,
+        turn_index,
+        attempt,
+    } = &tag.source
+    else {
+        anyhow::bail!("canonical replay tag is not a provider source");
+    };
+    let candidates = load_current_request_assistant_candidates(node, scope, boundary).await?;
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate.coordinate.scope == *tag_scope
+                && candidate.coordinate.turn_index == *turn_index
+                && candidate.coordinate.attempt == *attempt
+        })
+        .map(|candidate| {
+            let gents_protocol::message::Message::Assistant { content, .. } = candidate.message
+            else {
+                anyhow::bail!("canonical replay candidate is not an assistant message");
+            };
+            Ok(ResolvedReplayEvidence {
+                origin: candidate.origin,
+                reasoning: reasoning_witness(&content),
+            })
+        })
+        .collect()
+}
+
+async fn validate_replay_request(
+    node: &EmbeddedNode,
+    scope: CanonicalReplayScope<'_>,
+) -> Result<BTreeSet<String>> {
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}, limit: 2) {{ _docID request_id session_id agent_did requester_did }} }}"#,
+        crate::graphql::escape_graphql_string(scope.request_doc_id)
+    );
+    let response = ReadAccess::Node(node)
+        .query(&query, "load_canonical_replay_request")
+        .await?;
+    let rows = rows_value(&response, "AgentRequest")?;
+    anyhow::ensure!(
+        rows.len() == 1,
+        "canonical replay request is missing or ambiguous"
+    );
+    let row = &rows[0];
+    anyhow::ensure!(
+        required_row_str(row, "_docID")? == scope.request_doc_id
+            && required_row_str(row, "request_id")? == scope.request_id
+            && required_row_str(row, "session_id")? == scope.session_id
+            && required_row_str(row, "agent_did")? == scope.agent_did
+            && row.get("requester_did").is_some()
+            && row["requester_did"].as_str() == scope.requester_did,
+        "canonical replay request crossed its physical principal/session scope"
+    );
+    let commits = crate::graphql::composite_commits(
+        node,
+        scope.request_doc_id,
+        "canonical replay request commits",
+    )
+    .await?
+    .into_iter()
+    .map(|commit| commit.cid)
+    .collect::<BTreeSet<_>>();
+    anyhow::ensure!(
+        commits.contains(scope.request_commit_cid),
+        "canonical replay request boundary CID is not a commit of its physical request"
+    );
+    Ok(commits)
+}
+
+fn required_row_str<'a>(row: &'a serde_json::Value, field: &str) -> Result<&'a str> {
+    row.get(field)
+        .and_then(serde_json::Value::as_str)
+        .with_context(|| format!("canonical replay row omitted {field}"))
+}
+
+fn provider_coordinate_for_candidate(
+    reconstructed: &ReconstructedScopedMessage,
+) -> Result<Option<CanonicalProviderCoordinate>> {
+    let header = &reconstructed.header.message;
+    let request_doc_id = header
+        .request_doc_id
+        .as_deref()
+        .context("canonical replay execution assistant has no physical request")?;
+    let MessagePublication::RequestExecution {
+        execution_generation,
+    } = &header.publication
+    else {
+        anyhow::bail!("canonical replay candidate is not an execution publication");
+    };
+    let close_ids = header
+        .payload_references()
+        .into_iter()
+        .map(|reference| reference.close_doc_id.clone())
+        .collect::<BTreeSet<_>>();
+    // An accepted empty assistant has no payload reference to a close. Its
+    // message key is not independent provider evidence; never parse it to
+    // manufacture an issuer or select a capture.
+    if close_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut provider = None;
+    let mut authored = false;
+    for close_id in close_ids {
+        let matches = reconstructed
+            .segments
+            .iter()
+            .filter(|record| record.doc_id == close_id)
+            .collect::<Vec<_>>();
+        anyhow::ensure!(
+            matches.len() == 1,
+            "canonical replay reference has a missing or conflicting physical close {close_id}"
+        );
+        let close = &matches[0].segment;
+        anyhow::ensure!(
+            close.agent_did == header.agent_did
+                && close.requester_did == header.requester_did
+                && close.session_id == header.session_id
+                && close.request_doc_id == request_doc_id
+                && matches!(&close.writer, OutputWriter::RequestExecution { execution_generation: writer } if writer == execution_generation)
+                && matches!(
+                    &close.close,
+                    Some(SourceClose::Closed {
+                        outcome: OutputOutcome::Complete,
+                        ..
+                    })
+                ),
+            "canonical replay close crossed its request execution or is not complete"
+        );
+        match &close.source {
+            OutputSource::Authored { .. } => authored = true,
+            OutputSource::ProviderTurn {
+                scope: capture_scope,
+                turn_index,
+                attempt,
+            } => {
+                anyhow::ensure!(
+                    capture_scope.kind
+                        == gents_protocol::rendered_request::CaptureScopeKind::Inference,
+                    "canonical replay assistant references a non-inference provider scope"
+                );
+                let coordinate = CanonicalProviderCoordinate {
+                    scope: *capture_scope,
+                    turn_index: *turn_index,
+                    attempt: *attempt,
+                };
+                match provider {
+                    None => provider = Some(coordinate),
+                    Some(expected) => anyhow::ensure!(
+                        expected == coordinate,
+                        "canonical replay assistant combines different provider turns"
+                    ),
+                }
+            }
+            _ => anyhow::bail!("canonical replay assistant references an invalid close source"),
+        }
+    }
+    anyhow::ensure!(
+        !(authored && provider.is_some()),
+        "canonical replay assistant combines authored and provider sources"
+    );
+    Ok(provider)
+}
+
+async fn replay_origin_for_candidate(
+    node: &EmbeddedNode,
+    scope: CanonicalReplayScope<'_>,
+    request_commits: &BTreeSet<String>,
+    coordinate: CanonicalProviderCoordinate,
+) -> Result<gents_loop::claude_messages_body::ReplayOrigin> {
+    use gents_loop::claude_messages_body::ReplayOrigin;
+
+    let CanonicalProviderCoordinate {
+        scope: capture_scope,
+        turn_index,
+        attempt,
+    } = coordinate;
+    let capture_scope_label = capture_scope.to_string();
+    let capture_key = gents_loop::rendered_request::capture_key(
+        scope.agent_did,
+        scope.session_id,
+        scope.request_doc_id,
+        &capture_scope_label,
+        usize::try_from(turn_index)?,
+        attempt,
+    )?;
+    // Query by the existing exact key, but do not filter by the remaining
+    // tuple: a contradictory row under that key must be detected, not hidden.
+    let query = format!(
+        r#"{{ RenderedRequest(filter: {{ capture_key: {{ _eq: "{}" }} }}, limit: 2) {{ capture_key capture_version request_doc_id request_commit_cid request_id session_id agent_did requester_did capture_scope turn_index attempt source }} }}"#,
+        crate::graphql::escape_graphql_string(&capture_key)
+    );
+    let response = ReadAccess::Node(node)
+        .query(&query, "load_canonical_replay_capture")
+        .await?;
+    let captures = rows_value(&response, "RenderedRequest")?;
+    let capture = match captures.as_slice() {
+        [] => return Ok(ReplayOrigin::Missing),
+        [capture] => capture,
+        _ => return Ok(ReplayOrigin::Ambiguous),
+    };
+    anyhow::ensure!(
+        required_row_str(capture, "capture_key")? == capture_key
+            && required_row_str(capture, "request_doc_id")? == scope.request_doc_id
+            && required_row_str(capture, "request_id")? == scope.request_id
+            && required_row_str(capture, "session_id")? == scope.session_id
+            && required_row_str(capture, "agent_did")? == scope.agent_did
+            && required_row_str(capture, "requester_did")? == scope.requester_did.unwrap_or("")
+            && required_row_str(capture, "capture_scope")? == capture_scope_label
+            && capture["capture_version"].as_u64()
+                == Some(u64::from(gents_protocol::rendered_request::CAPTURE_VERSION))
+            && capture["turn_index"].as_u64() == Some(u64::from(turn_index))
+            && capture["attempt"].as_u64() == Some(u64::from(attempt)),
+        "canonical replay capture disagrees with its exact provider close coordinate"
+    );
+    anyhow::ensure!(
+        request_commits.contains(required_row_str(capture, "request_commit_cid")?),
+        "canonical replay capture request CID is not a commit of its physical request"
+    );
+    let source: gents_protocol::rendered_request::RenderedRequestSource = serde_json::from_value(
+        capture
+            .get("source")
+            .cloned()
+            .context("capture has no source")?,
+    )
+    .context("canonical replay capture has malformed source")?;
+    Ok(match source {
+        gents_protocol::rendered_request::RenderedRequestSource::ClaudeCliSubscription => {
+            ReplayOrigin::ClaudeSubscription
+        }
+        _ => ReplayOrigin::Foreign,
+    })
 }
 
 /// The owned loop rebuilds context and prompt from admission input. Other
@@ -621,7 +1061,7 @@ pub(super) async fn load_sequenced_messages(
         exclude_request_doc_id.is_none_or(|id| !is_current_admission_input(&row.message, id))
     }) {
         let sequence = row.message.sequence;
-        let (_, message) = reconstruct_scoped_message(
+        let reconstructed = reconstruct_scoped_message_with_facts(
             ReadAccess::Node(node),
             &row.doc_id,
             agent_did,
@@ -635,7 +1075,35 @@ pub(super) async fn load_sequenced_messages(
                 row.doc_id
             )
         })?;
-        messages.push(SequencedMessage { sequence, message });
+        let provider_source = if reconstructed.header.message.role == MessageRole::Assistant
+            && reconstructed.header.message.outcome == OutputOutcome::Complete
+            && matches!(
+                reconstructed.header.message.publication,
+                MessagePublication::RequestExecution { .. }
+            ) {
+            provider_coordinate_for_candidate(&reconstructed)?.map(|coordinate| {
+                gents_loop::claude_messages_body::ReplayTag {
+                    request_doc_id: reconstructed
+                        .header
+                        .message
+                        .request_doc_id
+                        .clone()
+                        .expect("provider coordinate requires request document"),
+                    source: OutputSource::ProviderTurn {
+                        scope: coordinate.scope,
+                        turn_index: coordinate.turn_index,
+                        attempt: coordinate.attempt,
+                    },
+                }
+            })
+        } else {
+            None
+        };
+        messages.push(SequencedMessage {
+            provider_source,
+            sequence,
+            message: reconstructed.message,
+        });
     }
     Ok(messages)
 }

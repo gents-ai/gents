@@ -9,16 +9,15 @@ ordinary. That abstraction is deliberately blind to what sits *inside* an
 assistant message.
 
 Production is not. `sanitize_history_for_provider` (`src/compaction.rs`) is a
-composition of THREE transforms, and the outermost one — Rust
-`normalize_assistant_content_order` — reorders the items within an assistant
-message to the canonical provider order (text, then reasoning and other
-non-call content, then tool calls). Transcripts persisted before the ordering
-fix can carry text *after* tool calls, which strict providers reject on reload.
+composition of three transforms. For grouped-order providers, the outermost
+one — Rust `normalize_assistant_content_order` — reorders the items within an
+assistant message to text, then reasoning and other non-call content, then
+tool calls. Claude's native replay instead preserves the original block order:
+moving a signed thinking block changes the exact continuation witness.
 
-This file models that transform. The load-bearing result is
-`callsOf_normalize`: reordering never changes which tool calls a message
-announces, so the row abstraction above is invariant under it. Everything in
-`Proofs.PromptAssembly.Provider` rests on that.
+This file models both order modes. The load-bearing result is
+`callsOf_normalizeFor`: either choice leaves the announced tool calls
+unchanged, so the row abstraction above is invariant under it.
 -/
 
 namespace PromptAssembly.Content
@@ -75,6 +74,26 @@ Relative order *within* each bucket is preserved, because `List.filter` is
 order-preserving. -/
 def normalize (items : List Item) : List Item :=
   items.filter Item.isText ++ items.filter Item.isOther ++ items.filter Item.isCall
+
+/-- The selected provider-input order, not an inference from message contents
+or the presence of a signed string. Claude uses `nativePreserved`; the existing
+grouped-order providers use `grouped`. -/
+inductive OrderMode where
+  | grouped
+  | nativePreserved
+  deriving DecidableEq, Repr
+
+def normalizeFor : OrderMode → List Item → List Item
+  | .grouped, items => normalize items
+  | .nativePreserved, items => items
+
+@[simp] theorem normalizeFor_grouped (items : List Item) :
+    normalizeFor .grouped items = normalize items := rfl
+
+/-- Claude's native content order, including each reasoning block's position,
+is unchanged by the ordering stage. -/
+@[simp] theorem normalizeFor_nativePreserved (items : List Item) :
+    normalizeFor .nativePreserved items = items := rfl
 
 /-- The tool calls a content list announces. -/
 def callsOf (items : List Item) : Finset ToolExecution.ToolCallId :=
@@ -181,6 +200,13 @@ theorem callsOf_normalize (items : List Item) :
     callsOf_filter_isOther, callsOf_filter_isCall]
   simp
 
+/-- Both provider order modes preserve the exact set of announced calls. -/
+theorem callsOf_normalizeFor (mode : OrderMode) (items : List Item) :
+    callsOf (normalizeFor mode items) = callsOf items := by
+  cases mode with
+  | grouped => exact callsOf_normalize items
+  | nativePreserved => rfl
+
 /-- Every item lands in exactly one bucket. -/
 theorem exists_unique_bucket (item : Item) :
     (item.isText ∧ ¬ item.isOther ∧ ¬ item.isCall) ∨
@@ -275,5 +301,19 @@ theorem normalize_idempotent (items : List Item) :
   conv_lhs => rw [normalize]
   rw [filter_isText_normalize, filter_isOther_normalize, filter_isCall_normalize]
   rfl
+
+/-- Re-entering either provider-input order stage cannot change its output. -/
+theorem normalizeFor_idempotent (mode : OrderMode) (items : List Item) :
+    normalizeFor mode (normalizeFor mode items) = normalizeFor mode items := by
+  cases mode with
+  | grouped => exact normalize_idempotent items
+  | nativePreserved => rfl
+
+/-- Neither order mode drops or duplicates assistant content. -/
+theorem normalizeFor_perm (mode : OrderMode) (items : List Item) :
+    List.Perm (normalizeFor mode items) items := by
+  cases mode with
+  | grouped => exact normalize_perm items
+  | nativePreserved => exact List.Perm.refl items
 
 end PromptAssembly.Content

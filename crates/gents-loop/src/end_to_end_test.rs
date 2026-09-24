@@ -257,6 +257,7 @@ fn scripted_tool_call() -> RawStreamingChoice<()> {
 
 fn test_loop_config() -> LoopConfig {
     LoopConfig {
+        replay: crate::loop_stream::LoopReplayInput::default(),
         provider_input_counter: Arc::new(ProviderInputCounter::new(
             BackendProviderKind::OpenAiCompatible,
             OpenAiWireApi::ChatCompletions,

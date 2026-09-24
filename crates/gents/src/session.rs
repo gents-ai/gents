@@ -12,6 +12,8 @@ mod fork;
 mod history;
 mod observations;
 mod output;
+#[cfg(test)]
+mod output_replay_tests;
 mod query;
 mod request_output;
 mod rows;
@@ -49,7 +51,10 @@ pub use observations::{load_latest_request_in_txn, SessionRequestFact};
 pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };
-pub(crate) use output::{load_canonical_message_in_txn, load_request_headers_in_txn};
+pub(crate) use output::{
+    load_canonical_message_in_txn, load_current_request_assistant_candidates,
+    load_request_headers_in_txn, resolve_current_replay_tag, CanonicalReplayScope,
+};
 pub(crate) use output::{load_canonical_payload_from_node, load_canonical_payload_in_txn};
 pub use query::{decode_session_row, session_scope_filter, AGENT_SESSION_FIELDS};
 pub(crate) use query::{load_session_behavior_id, require_session};
@@ -111,6 +116,9 @@ pub(crate) struct PromptCompactionState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SequencedMessage {
+    /// Provider source derived from this header's exact reconstructed closes,
+    /// never its native bytes or provider-generated message ID.
+    pub provider_source: Option<gents_loop::claude_messages_body::ReplayTag>,
     pub sequence: u32,
     pub message: Message,
 }

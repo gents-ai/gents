@@ -1658,6 +1658,30 @@ def caseCoverage : List CoverageEntry :=
       "Reconstructs native assistant blocks and checks exact Claude body replay or fail-closed error, including empty text and unsupported assistant image. Actual HTTP transport and request budgeting are not exercised here.")
       "prompt-assembly" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeNarrowingCases"
+      "conformance::prompt_assembly::generated_claude_narrowing_cases_bind_native_evidence_and_replay"
+      "Checks supplied origin and exact reasoning witnesses through native narrowing and the strict replay codec. It does not establish the canonical closing-segment/capture join, checkpoint restoration, complete selected-row collection, or provider prefix acceptance (#1693).")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyClaudeCheckpointCases"
+      "conformance::prompt_assembly::generated_claude_checkpoint_cases_bind_selected_assistant_projection"
+      "Models source-tagged selected assistant occurrences, exact reduction split and required-reasoning survival. A native consumer remains to bind durable aligned coordinate sidecars, canonical resolution, and one prepared provider payload; this model does not prove tag issuance, complete request assembly, or provider prefix acceptance (#1693).")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyAssistantOrderCases"
+      "conformance::prompt_assembly::generated_assistant_order_cases_bind_selected_provider_order"
+      "Checks the mode-selected native assistant-content ordering helper. It does not establish that every provider dispatch selects the correct mode.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_cases"
+      "PromptAssemblyModeSanitizeCases"
+      "conformance::prompt_assembly::generated_mode_sanitize_cases_bind_composed_provider_view"
+      "Checks the composed native provider-view sanitizer on finite coherent, unique-call-id witnesses. General native reachability and arbitrary transcript premises remain outside this fence.")
+      "prompt-assembly" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
       "rendered_capture_cases"
       "RenderedCaptureCases"
       "agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send"

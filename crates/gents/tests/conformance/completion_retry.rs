@@ -5,7 +5,7 @@ use gents::agent::completion_retry::{
     failure_class, retry_wake_fits_deadline, CompletionRetryPolicy, CompletionRetryState,
     FailureClass, MidStreamDirective, PreStreamDirective, RetryKind,
 };
-use gents::error::InferenceError;
+use gents::error::{classify_completion_error, InferenceError};
 
 use crate::lean_vocab_test::{
     assert_lean_contract_vocabulary_matches, lean_completion_retry_cases, LeanCompletionRetryCase,
@@ -16,7 +16,7 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     let cases = lean_completion_retry_cases();
     assert_eq!(
         cases.len(),
-        18,
+        20,
         "Lean should emit the finite CompletionRetry witness set"
     );
     assert_failure_class_bridge_matches_vocabulary();
@@ -46,12 +46,17 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
             "retry_wake_past_deadline_is_exhausted",
             "repair_issue_consumes_its_only_capability",
             "second_repair_issue_is_rejected",
+            "local_request_build_fails_permanently_without_retry",
+            "retryable_transport_still_requires_retraction",
         ]),
         "CompletionRetry witness names drifted"
     );
 
     for case in cases {
         assert_eq!(case.domain, "completionRetry");
+        if let Some(origin) = case.failure_origin.as_deref() {
+            assert_failure_origin_bridge(case, origin);
+        }
         if case.name == "retry_wake_past_deadline_is_exhausted" {
             assert!(case.legal);
             assert_eq!(case.expected_phase.as_deref(), Some("exhausted"));
@@ -92,6 +97,57 @@ pub(super) fn completion_retry_lean_witness_cases_hold() {
     assert_retract_with_effects_illegal(native);
     assert_close_turn_with_effects_legal(native);
     assert_permanent_class_cannot_backoff(native);
+}
+
+fn assert_failure_origin_bridge(case: &LeanCompletionRetryCase, origin: &str) {
+    let error = match origin {
+        "local_request_build" => rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::RequestError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "malformed local request",
+            ))),
+        ),
+        "retryable_transport" => rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError("connection reset".into()),
+        ),
+        other => panic!("unknown modeled failure origin {other}"),
+    };
+    let classified = classify_completion_error(&error);
+    let class = failure_class(&classified, &error.to_string());
+    assert_eq!(
+        class_name(class),
+        case.classified_failure
+            .as_deref()
+            .expect("modeled failure class"),
+        "{}",
+        case.name
+    );
+    let mut state = CompletionRetryState::new(scheduled_like_policy());
+    let directive = state.on_pre_stream_failure(&classified, &error.to_string(), now(), None);
+    match case.expected_phase.as_deref() {
+        Some("failed_permanent") => {
+            assert!(
+                matches!(&directive, PreStreamDirective::Fail { .. }),
+                "{}",
+                case.name
+            );
+            assert_eq!(state.retry_count(), 0, "{}", case.name);
+        }
+        Some("retract_required") => {
+            assert!(
+                matches!(
+                    &directive,
+                    PreStreamDirective::RetryAfter {
+                        kind: RetryKind::Transport,
+                        ..
+                    }
+                ),
+                "{}: {directive:?}",
+                case.name
+            );
+        }
+        other => panic!("unexpected modeled phase for {}: {other:?}", case.name),
+    }
 }
 
 fn assert_failure_class_bridge_matches_vocabulary() {
