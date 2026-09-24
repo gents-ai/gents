@@ -279,3 +279,13 @@ ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree a
   was cold, so B uses A's shared target, one build at a time. Task 4 committed in B (`1a07834bc`)
   with a fix: its worked example had invented a check name and now uses registered checks only.
   Tasks 5 to 7 run as one dispatch in A. Minors deferred to the final review, ledgered.
+- 2026-09-24: `eval-init` Tasks 4 to 7 complete, reviews clean, `feat/eval-init-wizard` @ `6a6cec8c9`
+  (10 commits). Task 4 cherry-picked from B (`6e0c6b60c`, `7e8c82019`). Rulings: the worked example
+  uses two stages with one `captured_rows_count` each (a stage refuses a duplicate check name);
+  case sidecars are `cases/<id with - → _>.json` (loader asset names are snake_case, matching the
+  monitor pack); the dossier escapes `$` so placeholders stay markers (the loader substitutes
+  defaults, contrary to the plan); README subject line threaded in Task 8; capture filter keys are
+  held to the collection's fields; `jsonschema` is a normal gents-cli dependency. Fix round: scratch
+  node shut down on every path. Tasks 8 and 9 dispatched as one unit. Orchestrator asks the final
+  reviewer to pin the `$` escaping in the golden test and to check the filter-key message names key
+  and collection.
