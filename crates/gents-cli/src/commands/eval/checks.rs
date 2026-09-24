@@ -36,15 +36,11 @@ mod tests {
     use gents::eval::checks::CheckDescription;
 
     use super::*;
-    use crate::cli::EvalScopeArgs;
 
     #[test]
     fn json_output_is_the_builtin_catalog() {
         let registry = CheckRegistry::builtin();
-        let args = EvalChecksArgs {
-            json: true,
-            scope: EvalScopeArgs::default(),
-        };
+        let args = EvalChecksArgs { json: true };
         let mut out = Vec::new();
         checks(&registry, &args, &mut out).unwrap();
         let parsed: Vec<CheckDescription> = serde_json::from_slice(&out).unwrap();

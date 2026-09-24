@@ -69,7 +69,7 @@ pub struct RunOrigin {
     pub check_registry_version: String,
     pub source_commit: String,
     pub source_dirty: bool,
-    /// `"eval"` or `"optimization:<job_id>"`. Machine authored and constrained
+    /// `"eval"`, `"pilot"` or `"optimization:<job_id>"`. Machine authored and constrained
     /// by that convention: never operator prose and never model output.
     pub purpose: String,
     /// Consecutive infrastructure failures that stop the run. The runner

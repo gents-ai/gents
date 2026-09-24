@@ -3404,10 +3404,17 @@ impl EvalCommand {
             Self::Compare(args) => &args.scope,
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
-            Self::Checks(args) => &args.scope,
+            // `dispatch` answers `checks` before resolving any home.
+            Self::Checks(_) => &NO_SCOPE,
         }
     }
 }
+
+/// The scope of a command that reads no home.
+static NO_SCOPE: EvalScopeArgs = EvalScopeArgs {
+    home: None,
+    graphql: None,
+};
 
 #[derive(clap::Args)]
 pub(crate) struct EvalListArgs {
@@ -3552,12 +3559,11 @@ pub(crate) struct EvalGcArgs {
     pub(crate) scope: EvalScopeArgs,
 }
 
+/// No scope: the catalog is the binary's builtin registry, read with no home.
 #[derive(clap::Args)]
 pub(crate) struct EvalChecksArgs {
     #[arg(long)]
     pub(crate) json: bool,
-    #[command(flatten)]
-    pub(crate) scope: EvalScopeArgs,
 }
 
 /// `--policy defaults` or a path to a `PolicyV2` JSON document.

@@ -22,6 +22,7 @@ use crate::document_config::{
 };
 use crate::eval::checks::CHECK_REGISTRY_VERSION;
 use crate::eval::runner::executor::{Capture, InferenceBinding, Isolation};
+use crate::eval::scoring::PILOT_PURPOSE;
 use crate::eval::{
     create_run, load_run, CellSpec, DefinitionRef, RunOrigin, RunRecord, SubjectRef,
     DENOMINATOR_POLICY_V1, TAXONOMY_VERSION,
@@ -71,7 +72,7 @@ pub struct RunRequest {
     pub concurrency: u32,
     pub max_infra_retries: u32,
     pub breaker_threshold: u32,
-    /// `"eval"` or `"optimization:<job_id>"`.
+    /// `"eval"`, `"pilot"` or `"optimization:<job_id>"`.
     pub purpose: String,
     pub source_commit: String,
     pub source_dirty: bool,
@@ -332,7 +333,7 @@ pub(crate) async fn thaw(
 }
 
 fn validate_purpose(purpose: &str) -> Result<()> {
-    if purpose == "eval" {
+    if purpose == "eval" || purpose == PILOT_PURPOSE {
         return Ok(());
     }
     if purpose
@@ -342,7 +343,7 @@ fn validate_purpose(purpose: &str) -> Result<()> {
         return Ok(());
     }
     Err(refused(format!(
-        "purpose {purpose:?} must be \"eval\" or \"optimization:<job_id>\""
+        "purpose {purpose:?} must be \"eval\", \"{PILOT_PURPOSE}\" or \"optimization:<job_id>\""
     )))
 }
 
@@ -1613,7 +1614,11 @@ pub(crate) mod tests {
                 .unwrap_err();
             assert!(refusal(&error).contains(malformed), "{error:#}");
         }
-        for (run_id, purpose) in [("plain", "eval"), ("tuned", "optimization:job-1")] {
+        for (run_id, purpose) in [
+            ("plain", "eval"),
+            ("tuned", "optimization:job-1"),
+            ("draft", PILOT_PURPOSE),
+        ] {
             let mut request = launching.request(run_id, &pack);
             request.purpose = purpose.into();
             let frozen = freeze(&launching.access, &request, Isolation::Embedded)
@@ -1621,6 +1626,11 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(frozen.record.origin.purpose, purpose);
         }
+    }
+
+    #[test]
+    fn a_pilot_purpose_is_valid() {
+        validate_purpose(PILOT_PURPOSE).unwrap();
     }
 
     #[tokio::test]

@@ -81,6 +81,13 @@ pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
     if let EvalCommand::Watch(args) = &command {
         return watch_while_held(args).await.map_err(surface_refusal);
     }
+    // The catalog is the binary's own registry: no home, no node, no DID, so
+    // it answers while a run holds the store.
+    if let EvalCommand::Checks(args) = &command {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        return checks::checks(&CheckRegistry::builtin(), args, &mut out);
+    }
     let ctx = EvalContext::resolve(command.scope()).await?;
     let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
     let registry = CheckRegistry::builtin();
@@ -366,6 +373,16 @@ mod tests {
             panic!("not trial");
         };
         assert_eq!((args.cell.as_str(), args.trial_index), ("baseline", None));
+    }
+
+    /// `checks` reads no home, so it takes no scope flags.
+    #[test]
+    fn checks_takes_no_scope() {
+        let probe = Probe::try_parse_from(["probe", "checks", "--json"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(matches!(&probe.command, EvalCommand::Checks(args) if args.json));
+        assert!(probe.command.scope().home.is_none());
+        assert!(Probe::try_parse_from(["probe", "checks", "--home", "/tmp/h"]).is_err());
     }
 
     #[test]
