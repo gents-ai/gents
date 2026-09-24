@@ -98,6 +98,17 @@ pub struct RuntimeSnapshot {
     pub last_reconcile_error: String,
 }
 
+/// Routed and settled at a generation past `generation`. Judged by
+/// generation, never by the last reconcile label, which a later no-op
+/// reconcile overwrites.
+pub fn is_routed_ready_after(snapshot: &RuntimeSnapshot, generation: i64) -> bool {
+    snapshot.process_state == "ready"
+        && snapshot.reconcile_phase == "idle"
+        && snapshot.active_generation > generation
+        && snapshot.router_generation == snapshot.active_generation
+        && snapshot.last_reconcile_error.is_empty()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 struct RuntimeDiagnosticSnapshot {
     reconcile_phase: String,
