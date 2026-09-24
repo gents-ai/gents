@@ -359,3 +359,9 @@ removed first (clean, pushed) so every branch is free to check out.
   6 `69dc8cdff`, 7 `a7f807c26`. Wizard conflicts: Cargo.toml (jsonschema, async-trait as normal
   deps; main's wait-timeout and futures kept), chat visibility; `turn.rs` now reads replies through
   main's `chat_turn_text_content` and passes `verbose=false` to `stream_turn_progress`.
+- 2026-09-24 rebase COMPLETE: side branch `test/monitor-findings-eval` `a9691be48` → `7812129db`
+  (light gate; eval lib 135/0, monitor_findings 10/0, canary 10/0, ratchet 7/0). Final tips:
+  contract `5ac9d7067`, runner `b891c78d7`, policy `91f207aa3`, driver `3c609d221`, cli
+  `69dc8cdff`, wizard `a7f807c26`, side `7812129db`. Ledger
+  `.superpowers/sdd/2026-09-24-stack-rebase/`. Coordinator stood down; worktree
+  `gents-rebase` on a clean scratch branch.
