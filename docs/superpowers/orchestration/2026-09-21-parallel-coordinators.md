@@ -289,3 +289,11 @@ ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree a
   node shut down on every path. Tasks 8 and 9 dispatched as one unit. Orchestrator asks the final
   reviewer to pin the `$` escaping in the golden test and to check the filter-key message names key
   and collection.
+- 2026-09-24: `eval-init` PLAN COMPLETE. `feat/eval-init-wizard` @ `e9f3b515b`, 17 commits on
+  `cfc7eae7e`, clean, trailer-free. Gate at `e2fca53b8`: fmt clean; gents 3342/0; gents-cli 1148
+  passed + 20 known environmental; workspace check clean. Final review "with fixes": three
+  Important (prompt's reducer semantics; validation floor, a plan defect; the live smoke) and one
+  must-fix (printed commands dropped `--home`/`--graphql`), all addressed in a 3-commit fix wave;
+  re-review clean. Runner accepts purpose `pilot`; `eval run --purpose pilot` refused; `eval checks`
+  needs no home. 33 rulings in the ledger. Worktree B removed by the orchestrator. Parked minors
+  ledgered with file:line.

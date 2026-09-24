@@ -379,3 +379,58 @@ Issues: I2 #1640 · I3 #1641 · I4 #1642 · I5 #1643 · I6 #1644 · I7 #1645 · 
 I10 #1648 · I11 #1649 · I12 #1650 · I13 #1651 · I14 #1652. I1 dropped.
 PRs: 1 #1653 `feat/guarded-publication` → main · 2 #1654 → #1653 · 3 #1655 → #1654 · 4 #1656 → #1655 ·
 5 #1657 → #1656 · 6 #1658 → #1657. Side branch held, no PR.
+
+---
+
+## PR 7 — `feat/eval-init-wizard` → `feat/eval-cli` (DRAFT, not published; tip `e9f3b515b`, 17 commits)
+
+**title:** Eval authoring wizard: gents eval init interviews an author, validates the draft and pilots it
+
+**Closes#:** Part of #1515 (eval supply: the wizard is how a definition gets written without hand-copying a pack).
+
+**What**
+`gents eval init <subject> --out <dir>` turns "this behavior in this pack" into a validated eval
+definition pack through an interview with a model, the way `claude plugin eval init` does for a
+plugin. The author never touches files, documents or tools: it reads a rendered dossier of the
+subject and the check catalog, asks the operator what the behavior must get right, and answers
+with JSON. The CLI validates that draft against the contract, the registry's own parameter
+schemas and the subject's collections, proves it installs into a scratch home, and writes the
+pack. With `--pilot` it runs the pack once per split at one trial per case and gives the author
+one revision from the verdicts.
+
+**What changes**
+- `eval/checks`: `Check::describe` and `CheckRegistry::catalog`; `gents eval checks [--json]`
+  lists the catalog and needs no home.
+- `pack/loader`: an eval definition's cases may be `./cases/<id>.json` sidecars, inlined at load
+  (byte-for-byte the held side branch's `hydrate_eval_cases`; that branch drops its copy at rebase).
+- `eval/scoring`, `report`: `RunHeader.purpose`; pilot runs are not exposure; `compare` takes
+  `CompareOptions { include_pilot }` and refuses a pilot run by default; the runner's
+  `validate_purpose` accepts `pilot`; `gents eval run --purpose pilot` is refused (only init pilots).
+- `packs/eval_author`: the author behavior; its system prompt is the authoring contract (vocabulary,
+  case shape, rules, interview, draft format, what to do when the catalog cannot grade something).
+- `gents-cli/commands/eval/init/`: `dossier` (subject rendering, `$` escaped, 64 KB cap),
+  `contract` (first turn), `draft` (one fenced json block), `validate` (contract, catalog schema,
+  captures held to the collection's fields, splits and floor), `write` (stage into a temp dir, load
+  through the real loader, install into a scratch embedded home, commit to `--out`, README),
+  `turn` (`Turn` trait; live over the chat plumbing, scripted for tests), the interview loop with
+  three validation rounds, and `pilot`.
+- `cli/args`: `EvalInitArgs`, `EvalChecksArgs`, `--include-pilot` on compare, after-help with exit
+  codes and the served-home requirement.
+
+**Verification**
+Coordinator's gate at `e2fca53b8`: `cargo fmt --all --check` clean; `cargo test -p gents` 3342/0;
+`cargo test -p gents-cli` 1148 passed plus the 20 known environmental failures; workspace check
+clean. Fix wave (3 commits) re-ran the eval CLI suite (97/0, 1 ignored live), `pack::tests` and
+`eval::checks`. Orchestrator's re-run of the full gate on `e9f3b515b`: (fill in).
+
+**Notes**
+- Requires a served home: the author's requests are claimed by that runtime, as `gents chat` turns are.
+- Registry-agnostic by decision: on this branch the catalog has one check, `captured_rows_count`,
+  so a real draft against the monitor waits for the held side branch. Nothing in the wizard names a check.
+- A pilot is one run per populated split (a run covers one split); the README names all of them.
+- Rebase notes: `hydrate_eval_cases` duplicates the side branch's; `compare` gained a trailing
+  options parameter, so any later caller passes `&CompareOptions::default()`.
+- Parked, can ship (ledgered with file and line): `LiveTurn` duplicates about 25 lines of chat's
+  turn path; the dossier test asserts containment rather than golden text; `--out` with `..` after
+  a missing component errors unclearly; printed paths are unquoted; the prompt omits that a
+  NotEvidence or Unknown trial is unscored.
