@@ -248,3 +248,13 @@ build` at the eval-core and policy tips. Report: `.superpowers/sdd/mvp-chain/rep
 
 The 29 former branches are kept locally as `archive/<old name>` and deleted on the remote at push.
 Each squashed commit's body lists the subjects it folds. Report: `.superpowers/sdd/mvp-chain/squash-report.md`.
+
+## `eval-init` coordinator (spun up 2026-09-23, evening)
+
+| Workspace | Coordinator | Plan | Base | Worktree |
+|---|---|---|---|---|
+| `wB` (label `eval-init`), agent `wizard` in pane `wB:p1` | Claude, `claude --model opus` | `plans/2026-09-23-eval-init-wizard.md` (spec `specs/2026-09-23-eval-init-wizard-design.md`, brief `orchestration/2026-09-23-eval-init-wizard-brief.md`) | `feat/eval-cli` @ `cfc7eae7e` | `~/Repos/Source/gents-eval-init-wizard`, branch `feat/eval-init-wizard` |
+
+Binding rules for it: the standing rules above with rule 3 corrected (no `Co-Authored-By` trailers,
+ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree at
+`.superpowers/sdd/2026-09-23-eval-init-wizard/`. Delivers PR 7 of the stack, on #1658.
