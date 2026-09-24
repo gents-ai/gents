@@ -223,6 +223,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     // checking only that view would make this gate vacuous.
                     let canonical_prefix_is_stable =
                         compaction::safe_to_reduce(provider_profile, &durable_history);
+                    // The sourced projection below performs this same file
+                    // activity extraction before stripping tool results.
+                    let file_activity = compaction::history::extract_file_activity(&durable_history);
+                    if !file_activity.is_empty() {
+                        tracing::debug!(
+                            behavior_id = %self.behavior.behavior_id,
+                            session_id = %request.session_id,
+                            files_read = ?file_activity.files_read,
+                            files_modified = ?file_activity.files_modified,
+                            "files referenced in stripped history"
+                        );
+                    }
                     // One canonical reduction, shared with the compaction writer:
                     // `messages_compacted` is measured against this list, so the
                     // prefix drop below must index the same one (#993).

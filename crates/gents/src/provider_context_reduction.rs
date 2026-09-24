@@ -989,7 +989,12 @@ mod tests {
             retained_suffix_json: "[]".to_string(),
             pair_closed: true,
             checkpoint_messages_json: "[]".to_string(),
-            replay_associations_json: "{}".to_string(),
+            replay_associations_json: serde_json::to_string(&ReplayAssociations {
+                required: Vec::new(),
+                prefix_sources: Vec::new(),
+                retained_sources: Vec::new(),
+            })
+            .unwrap(),
             summary: String::new(),
             messages_compacted: 0,
             original_tokens: 0,
