@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -17,6 +18,7 @@ import { BridgeInvokeError } from "@source-inc/gents-desktop-client";
 import { delay, logShellEvent, timingConfig } from "./desktopShellRuntime";
 import {
   projectStartupPhaseAfterSnapshot,
+  shouldAutoStartDesktopClient,
   type DesktopStartupPhase,
 } from "../lib/loadingStatus";
 import { restoreManagedServer } from "./managedServerLifecycle";
@@ -25,7 +27,7 @@ import {
   observeManagedServerOperation,
   type ManagedServerWait,
 } from "../lib/managedServerStartup";
-import { ownsAutomaticRecovery } from "../lib/shellPlatform";
+import { isMobileTauriShell, ownsAutomaticRecovery } from "../lib/shellPlatform";
 import { createSnapshotPublicationOwner } from "./desktopSnapshotPublication";
 
 export type { DesktopStartupPhase } from "../lib/loadingStatus";
@@ -50,6 +52,13 @@ export function useDesktopClientLifecycle({
 }: ClientLifecycleOptions) {
   const autostartAttempted = useRef(false);
   const localServerAvailable = useRef<boolean | null>(null);
+  const clientAutostarts = useCallback(
+    (next: DesktopClientSnapshot) =>
+      shouldAutoStartDesktopClient(next, localServerAvailable.current, {
+        mobile: isMobileTauriShell(),
+      }),
+    [],
+  );
   const autoRestartInFlight = useRef(false);
   const lastP2PAutoRestartAt = useRef<number | null>(null);
   const lastObservedP2PHealth = useRef<P2PHealth | null>(null);
@@ -91,7 +100,7 @@ export function useDesktopClientLifecycle({
     const phase = projectStartupPhaseAfterSnapshot(
       startupPhaseRef.current,
       Boolean(next.client),
-      !next.bootstrap.clientStateExists && next.bootstrap.savedPeers.length === 0,
+      !clientAutostarts(next),
     );
     if (phase !== startupPhaseRef.current) setStartupPhase(phase);
   }
@@ -328,7 +337,7 @@ export function useDesktopClientLifecycle({
 
   return {
     autostartAttempted,
-    localServerAvailable,
+    clientAutostarts,
     autoRestartInFlight,
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,

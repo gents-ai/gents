@@ -1,5 +1,6 @@
 import type {
   DeploymentOperationalState,
+  DesktopClientSnapshot,
   DesktopSessionSnapshot,
   OperationalStatus,
 } from "@source-inc/gents-desktop-client";
@@ -14,13 +15,36 @@ export type DesktopStartupPhase =
   | "client-error"
   | "ready";
 
+/**
+ * Sole decision whether startup starts the desktop client. The autostart
+ * effect and the startup phase both read it, so startup waits on the client
+ * only when something will start it. A local-standard peer is saved before
+ * client state exists; while its runtime is not serving there is nothing to
+ * connect to, and the shell must offer setup instead of waiting.
+ */
+export function shouldAutoStartDesktopClient(
+  snapshot: DesktopClientSnapshot,
+  localServerAvailable: boolean | null,
+  options: { mobile?: boolean } = {},
+): boolean {
+  if (options.mobile) {
+    return true;
+  }
+  return (
+    snapshot.bootstrap.clientStateExists ||
+    snapshot.bootstrap.savedPeers.some(
+      (peer) => peer.source !== "local-standard" || localServerAvailable !== false,
+    )
+  );
+}
+
 export function projectStartupPhaseAfterSnapshot(
   phase: DesktopStartupPhase,
   running: boolean,
-  pristine: boolean,
+  autostartDeclined: boolean,
 ): DesktopStartupPhase {
   if (phase === "loading-configuration" || phase === "starting-client") {
-    return running || pristine ? "ready" : "starting-client";
+    return running || autostartDeclined ? "ready" : "starting-client";
   }
   return phase === "client-error" && running ? "ready" : phase;
 }

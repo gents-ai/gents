@@ -36,7 +36,7 @@ describe("generated client observation ordering", () => {
       startup: {
         phase: DesktopStartupPhase;
         running: boolean;
-        pristine: boolean;
+        autostartDeclined: boolean;
         expected: DesktopStartupPhase;
       }[];
     };
@@ -48,7 +48,7 @@ describe("generated client observation ordering", () => {
     expect(startup).toHaveLength(28);
     for (const row of startup) {
       expect(
-        projectStartupPhaseAfterSnapshot(row.phase, row.running, row.pristine),
+        projectStartupPhaseAfterSnapshot(row.phase, row.running, row.autostartDeclined),
       ).toBe(row.expected);
     }
   }, 300_000);
