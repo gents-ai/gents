@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::eval::checks::{Check, CheckVerdict};
+use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
 use crate::eval::runner::executor::{CaptureResult, StageEvidence};
 use crate::eval::OutcomeKind;
 
@@ -33,6 +33,32 @@ impl Check for CapturedRowsCount {
 
     fn version(&self) -> &'static str {
         "1"
+    }
+
+    fn describe(&self) -> CheckDescription {
+        CheckDescription {
+            name: self.name().into(),
+            version: self.version().into(),
+            summary: "Passes when a documents capture holds between min and max rows (no upper bound when max is absent).".into(),
+            params_schema: json!({
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "the capture name"},
+                    "min": {"type": "integer", "minimum": 0},
+                    "max": {"type": "integer", "minimum": 0}
+                },
+                "required": ["name", "min"],
+                "additionalProperties": false
+            }),
+            reads: vec!["capture:documents".into()],
+            reason_codes: vec![
+                ("in_range".into(), "the count satisfies min and max".into()),
+                ("below_min".into(), "fewer rows than min".into()),
+                ("above_max".into(), "more rows than max".into()),
+                ("missing_capture".into(), "grader: no documents capture of that name".into()),
+                ("bad_params".into(), "grader: params did not parse or max < min".into()),
+            ],
+        }
     }
 
     fn evaluate(&self, params: &Value, stage: &StageEvidence) -> CheckVerdict {

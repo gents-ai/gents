@@ -130,6 +130,7 @@ pub(crate) async fn execute(
             .await
         }
         EvalCommand::Gc(args) => manage::gc(ctx, &args, out).await,
+        EvalCommand::Checks(args) => checks::checks(deps.registry, &args, out),
     };
     result.map_err(surface_refusal)
 }
@@ -322,6 +323,7 @@ pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimiza
     }
 }
 
+mod checks;
 mod compare;
 mod inspect;
 pub(crate) mod manage;

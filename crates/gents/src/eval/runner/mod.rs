@@ -889,7 +889,7 @@ mod tests {
     use super::*;
     use crate::document_config::EvalFixtureDocument;
     use crate::document_config::EvalFixtureFile;
-    use crate::eval::checks::{Check, CheckVerdict};
+    use crate::eval::checks::{Check, CheckDescription, CheckVerdict};
     use crate::eval::runner::freeze::tests::{Launching, OWNER};
     use crate::eval::{
         invalidate_run, load_run, load_trials, load_verdicts, TrialRecord, VerdictRecord,
@@ -1019,6 +1019,17 @@ mod tests {
                 score_bp: Some(10_000),
                 raw: json!({"reason_code": "ok"}),
                 feedback: Some("more rows next time".into()),
+            }
+        }
+
+        fn describe(&self) -> CheckDescription {
+            CheckDescription {
+                name: self.name().into(),
+                version: self.version().into(),
+                summary: "Always passes with feedback.".into(),
+                params_schema: json!({"type": "object", "properties": {}}),
+                reads: Vec::new(),
+                reason_codes: vec![("ok".into(), "always".into())],
             }
         }
     }

@@ -9,6 +9,7 @@ pub mod captured_rows_count;
 
 use std::collections::BTreeMap;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::eval::checks::captured_rows_count::CapturedRowsCount;
@@ -30,6 +31,22 @@ pub struct CheckVerdict {
     pub feedback: Option<String>,
 }
 
+/// What a check tells an author about itself. Rendered into the catalog an
+/// eval author drafts against; never read by `evaluate`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CheckDescription {
+    pub name: String,
+    pub version: String,
+    pub summary: String,
+    /// JSON Schema (draft 2020-12) for the check ref's `params`.
+    pub params_schema: Value,
+    /// What the check reads: `"capture:documents"`, `"capture:files"`,
+    /// `"stage:terminal_state"`, or a field path such as `"rows.payload"`.
+    pub reads: Vec<String>,
+    /// `(reason_code, one line)` for every code `raw.reason_code` can carry.
+    pub reason_codes: Vec<(String, String)>,
+}
+
 pub trait Check: Send + Sync {
     fn name(&self) -> &'static str;
 
@@ -40,6 +57,9 @@ pub trait Check: Send + Sync {
     /// evidence. Never panics on either: malformed params are a grader
     /// outcome.
     fn evaluate(&self, params: &Value, stage: &StageEvidence) -> CheckVerdict;
+
+    /// The check's entry in the author-facing catalog.
+    fn describe(&self) -> CheckDescription;
 }
 
 /// The checks a definition may name, by name.
@@ -63,6 +83,11 @@ impl CheckRegistry {
     /// Every registered name, sorted.
     pub fn names(&self) -> Vec<&'static str> {
         self.checks.keys().copied().collect()
+    }
+
+    /// Every registered check's description, sorted by name.
+    pub fn catalog(&self) -> Vec<CheckDescription> {
+        self.checks.values().map(|check| check.describe()).collect()
     }
 
     /// Registers `check` over the builtin set. Test-only: the shipped
@@ -99,5 +124,37 @@ mod tests {
             ("captured_rows_count", "1")
         );
         assert!(registry.get("no_such_check").is_none());
+    }
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    use super::*;
+
+    #[test]
+    fn every_builtin_check_describes_itself_with_a_schema_and_reason_codes() {
+        let catalog = CheckRegistry::builtin().catalog();
+        assert_eq!(
+            catalog.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+            CheckRegistry::builtin().names()
+        );
+        for check in &catalog {
+            assert_eq!(check.params_schema["type"], "object", "{}", check.name);
+            assert!(!check.summary.is_empty(), "{}", check.name);
+            assert!(!check.reason_codes.is_empty(), "{}", check.name);
+        }
+    }
+
+    #[test]
+    fn captured_rows_count_schema_accepts_its_params_and_rejects_unknown_fields() {
+        let schema = CheckRegistry::builtin()
+            .get("captured_rows_count")
+            .unwrap()
+            .describe()
+            .params_schema;
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&serde_json::json!({"name": "items", "min": 1})));
+        assert!(!validator.is_valid(&serde_json::json!({"name": "items"})));
+        assert!(!validator.is_valid(&serde_json::json!({"name": "items", "min": 1, "extra": 1})));
     }
 }

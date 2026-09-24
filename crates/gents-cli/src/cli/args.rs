@@ -3384,6 +3384,10 @@ pub(crate) enum EvalCommand {
         about = "Delete the directories of old, finished runs no optimization job references; their documents stay"
     )]
     Gc(EvalGcArgs),
+    #[command(
+        about = "List the checks a definition may name, with their params schema and reason codes"
+    )]
+    Checks(EvalChecksArgs),
 }
 
 impl EvalCommand {
@@ -3400,6 +3404,7 @@ impl EvalCommand {
             Self::Compare(args) => &args.scope,
             Self::Watch(args) => &args.scope,
             Self::Gc(args) => &args.scope,
+            Self::Checks(args) => &args.scope,
         }
     }
 }
@@ -3543,6 +3548,14 @@ pub(crate) struct EvalGcArgs {
     /// definition's.
     #[arg(long)]
     pub(crate) jobs: bool,
+    #[command(flatten)]
+    pub(crate) scope: EvalScopeArgs,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct EvalChecksArgs {
+    #[arg(long)]
+    pub(crate) json: bool,
     #[command(flatten)]
     pub(crate) scope: EvalScopeArgs,
 }

@@ -39,7 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config_client::ConfigAccess;
 use crate::document_config::EvalSplit;
-use crate::eval::checks::{Check, CheckRegistry, CheckVerdict};
+use crate::eval::checks::{Check, CheckDescription, CheckRegistry, CheckVerdict};
 use crate::eval::report::load_run_rows;
 use crate::eval::runner::freeze::tests::{Launching, OWNER};
 use crate::eval::runner::{
@@ -407,6 +407,17 @@ impl Check for FeedbackCheck {
             score_bp: Some(10_000),
             raw: json!({"reason_code": "ok"}),
             feedback: Some(FEEDBACK.into()),
+        }
+    }
+
+    fn describe(&self) -> CheckDescription {
+        CheckDescription {
+            name: self.name().into(),
+            version: self.version().into(),
+            summary: "Always passes with feedback.".into(),
+            params_schema: json!({"type": "object", "properties": {}}),
+            reads: Vec::new(),
+            reason_codes: vec![("ok".into(), "always".into())],
         }
     }
 }
