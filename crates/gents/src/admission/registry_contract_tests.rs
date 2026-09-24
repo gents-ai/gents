@@ -47,7 +47,7 @@ struct Observation {
     admitted: usize,
     queue_full: usize,
     gone: usize,
-    connection_changed: usize,
+    attributed: Vec<u64>,
 }
 
 fn backend_document(
@@ -107,10 +107,12 @@ struct Harness {
     held: VecDeque<AdmissionPermit>,
     outcomes: Observation,
     started: usize,
+    slots: std::collections::HashMap<String, u64>,
 }
 
 impl Harness {
-    fn acquire(&mut self, connection: String) {
+    fn acquire(&mut self, slot: u64, connection: String) {
+        self.slots.insert(connection.clone(), slot);
         let registry = self.registry.clone();
         let backend_id = self.backend_id.clone();
         let request_id = format!("{}-{}", self.backend_id, self.started);
@@ -141,14 +143,17 @@ impl Harness {
                 match call.await? {
                     Ok(permit) => {
                         self.outcomes.admitted += 1;
+                        let Some(slot) = self.slots.get(permit.attribution_for_test()) else {
+                            bail!("admitted call is not attributed to a caller's slot");
+                        };
+                        self.outcomes.attributed.push(*slot);
+                        self.outcomes.attributed.sort_unstable();
                         self.held.push_back(permit);
                     }
                     Err(error) => {
                         let message = error.to_string();
                         if message.contains("QueueFull") {
                             self.outcomes.queue_full += 1;
-                        } else if message.contains(crate::error::BACKEND_CONNECTION_CHANGED) {
-                            self.outcomes.connection_changed += 1;
                         } else if message.contains("BackendGone") {
                             self.outcomes.gone += 1;
                         } else {
@@ -192,7 +197,10 @@ impl Harness {
             queued: pool
                 .as_ref()
                 .map_or(0, |pool| pool.queue_waiters_for_test()),
-            ..self.outcomes
+            admitted: self.outcomes.admitted,
+            queue_full: self.outcomes.queue_full,
+            gone: self.outcomes.gone,
+            attributed: self.outcomes.attributed.clone(),
         }
     }
 }
@@ -210,6 +218,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
         held: VecDeque::new(),
         outcomes: Observation::default(),
         started: 0,
+        slots: std::collections::HashMap::new(),
     };
     for (index, (action, expected)) in case.actions.iter().zip(&case.expected).enumerate() {
         match action {
@@ -230,7 +239,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
                     .reconcile(desired.as_ref().map_or(0, |d| d.generation), &configs);
             }
             Action::Acquire { slot } => {
-                harness.acquire(slot_connection(&backend_id, *slot)?);
+                harness.acquire(*slot, slot_connection(&backend_id, *slot)?);
             }
             Action::Release => {
                 let Some(mut permit) = harness.held.pop_front() else {
@@ -259,7 +268,7 @@ async fn run_case(node: Arc<EmbeddedNode>, case: &Case) -> Result<()> {
 #[tokio::test]
 async fn generated_inference_registry_cases_drive_real_permits() {
     let snapshot: Snapshot = gents_lean_contract::load_contract_snapshot().unwrap();
-    assert_eq!(snapshot.inference_registry_cases.len(), 10);
+    assert_eq!(snapshot.inference_registry_cases.len(), 11);
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::schema::ensure_runtime_schemas(node.as_ref())
         .await

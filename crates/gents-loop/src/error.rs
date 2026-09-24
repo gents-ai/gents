@@ -120,12 +120,6 @@ pub enum HookError {
     SessionNotInitialized,
 }
 
-/// Admission rejects a call whose behavior slot was built for a backend
-/// connection that has since been rewritten. The slot's provider client is
-/// fixed, and no retry owner on the completion path rebuilds it, so retrying
-/// would dispatch through the replaced endpoint or credentials.
-pub const BACKEND_CONNECTION_CHANGED: &str = "BackendConnectionChanged";
-
 pub fn classify_completion_error(error: &rig::agent::StreamingError) -> InferenceError {
     let msg = error.to_string();
 
@@ -155,9 +149,7 @@ pub fn classify_completion_error(error: &rig::agent::StreamingError) -> Inferenc
                 }
                 rig::completion::CompletionError::ProviderError(provider_msg) => {
                     let provider_msg_lower = provider_msg.to_ascii_lowercase();
-                    if provider_msg.starts_with(BACKEND_CONNECTION_CHANGED) {
-                        InferenceError::PermanentFailure { reason }
-                    } else if provider_msg_lower.contains("rate_limit")
+                    if provider_msg_lower.contains("rate_limit")
                         || provider_msg_lower.contains("rate limit")
                         || error_message_has_status(provider_msg, 429)
                     {

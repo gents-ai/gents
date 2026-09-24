@@ -13,12 +13,12 @@ every flap. Hung calls are bounded separately by the stream idle timeout.
 
 `connection` is the identity a behavior slot's provider client was built
 from: endpoint, credentials and provider/wire protocol, but not capacity or
-queue depth. A slot's client is fixed when the slot is built, so a caller is
-admitted only while its connection is the admitting one. A capacity-only
-rewrite keeps queued callers; a connection change rejects callers built for
-the old connection, whether they arrive later or are woken from the queue.
-No retry owner on that path rebuilds the client, so the rejection is terminal
-for the call rather than retried in place (`BackendConnectionChanged`).
+queue depth. Snapshot semantics (product decision on #1725): a connection
+change, such as key rotation or an endpoint move, is a new incarnation for
+new slots, while requests already in progress finish on the connection their
+slot started with, sharing the backend's pool. Admission never rejects a
+caller for its connection; a revoked credential fails at the provider. Each
+admitted call is attributed to the connection of the slot that made it.
 
 Unavailability and removal close admission: queued callers fail with
 `BackendGone` and new callers are rejected, while admitted calls keep their
@@ -40,19 +40,20 @@ structure Tally where
   admitted : Nat
   queueFull : Nat
   gone : Nat
-  connectionChanged : Nat
   deriving DecidableEq, Repr
 
 /-- `admitting` is the incarnation that admits new calls; `none` means
 admission is closed. `held` counts permits held by every call admitted since
 the pool first opened. `queue` lists the connections of parked callers in
-FIFO order. -/
+FIFO order; `attributed` lists the slot connection of every admitted call
+in admission order. -/
 structure State where
   desired : Option Config
   admitting : Option Config
   held : Nat
   queue : List Nat
   tally : Tally
+  attributed : List Nat
   deriving DecidableEq, Repr
 
 def availableDesired (desired : Option Config) : Option Config :=
@@ -67,18 +68,27 @@ def sameResources (a b : Config) : Bool :=
 def capacity (s : State) : Nat :=
   (s.admitting.map (·.capacity)).getD 0
 
-/-- FIFO hand-off of free permits to parked callers. A caller built for
-another connection is woken, rejected, and passes the permit on. -/
+def admit (s : State) (slot : Nat) : State :=
+  { s with held := s.held + 1, tally := { s.tally with admitted := s.tally.admitted + 1 },
+           attributed := s.attributed ++ [slot] }
+
+@[simp] theorem admit_held (s : State) (slot : Nat) : (admit s slot).held = s.held + 1 := rfl
+@[simp] theorem admit_attributed (s : State) (slot : Nat) :
+    (admit s slot).attributed = s.attributed ++ [slot] := rfl
+@[simp] theorem admit_queue (s : State) (slot : Nat) : (admit s slot).queue = s.queue := rfl
+@[simp] theorem admit_admitting (s : State) (slot : Nat) :
+    (admit s slot).admitting = s.admitting := rfl
+@[simp] theorem admit_desired (s : State) (slot : Nat) :
+    (admit s slot).desired = s.desired := rfl
+@[simp] theorem admit_gone (s : State) (slot : Nat) :
+    (admit s slot).tally.gone = s.tally.gone := rfl
+
+/-- FIFO hand-off of free permits to parked callers, whatever connection
+their slot was built for. -/
 def serve (c : Config) (s : State) : List Nat → State
   | [] => { s with queue := [] }
   | w :: rest =>
-      if s.held < c.capacity then
-        if w == c.connection then
-          serve c { s with held := s.held + 1,
-                           tally := { s.tally with admitted := s.tally.admitted + 1 } } rest
-        else
-          serve c { s with tally := { s.tally with
-                           connectionChanged := s.tally.connectionChanged + 1 } } rest
+      if s.held < c.capacity then serve c (admit s w) rest
       else { s with queue := w :: rest }
 
 def settle (s : State) : State :=
@@ -98,15 +108,12 @@ def reconcile (s : State) (desired : Option Config) : State :=
           else settle { s with desired := desired, admitting := some next }
       | none => settle { s with desired := desired, admitting := some next }
 
-/-- A caller built for `slot` asks for admission. -/
+/-- A caller whose slot was built for connection `slot` asks for admission. -/
 def acquire (s : State) (slot : Nat) : State :=
   match s.admitting with
   | none => { s with tally := { s.tally with gone := s.tally.gone + 1 } }
   | some c =>
-      if slot != c.connection then
-        { s with tally := { s.tally with connectionChanged := s.tally.connectionChanged + 1 } }
-      else if s.held < c.capacity then
-        { s with held := s.held + 1, tally := { s.tally with admitted := s.tally.admitted + 1 } }
+      if s.held < c.capacity then admit s slot
       else if s.queue.length < c.queueDepth then { s with queue := s.queue ++ [slot] }
       else { s with tally := { s.tally with queueFull := s.tally.queueFull + 1 } }
 
@@ -122,9 +129,7 @@ theorem serve_admitting (c : Config) (s : State) (q : List Nat) :
   | cons w rest ih =>
       simp only [serve]
       split
-      · split
-        · exact ih _
-        · exact ih _
+      · exact ih _
       · rfl
 
 theorem settle_admitting (s : State) : (settle s).admitting = s.admitting := by
@@ -165,55 +170,53 @@ theorem serve_within_capacity (c : Config) (s : State) (q : List Nat) :
       simp only [serve]
       split
       · rename_i hlt
-        split
-        · have := ih { s with held := s.held + 1,
-                              tally := { s.tally with admitted := s.tally.admitted + 1 } }
-          simp at this
-          omega
-        · exact ih _
+        have := ih (admit s w)
+        rw [admit_held] at this
+        omega
       · simp
 
-/-- A woken caller built for another connection never takes a permit. -/
-theorem serve_never_admits_stale (c : Config) (s : State) (q : List Nat)
-    (h : ∀ w ∈ q, w ≠ c.connection) : (serve c s q).held = s.held := by
+/-- Parked callers are admitted in FIFO order and each admission is
+attributed to its own slot's connection. -/
+theorem serve_attributes_fifo (c : Config) (s : State) (q : List Nat) :
+    ∃ k, (serve c s q).attributed = s.attributed ++ q.take k ∧
+      (serve c s q).queue = q.drop k := by
   induction q generalizing s with
-  | nil => rfl
+  | nil => exact ⟨0, by simp [serve]⟩
   | cons w rest ih =>
-      have hw : w ≠ c.connection := h w (by simp)
-      have hrest : ∀ v ∈ rest, v ≠ c.connection := fun v hv => h v (by simp [hv])
       simp only [serve]
       split
-      · simp only [beq_iff_eq, hw, if_false]
-        exact ih _ hrest
-      · rfl
+      · obtain ⟨k, hk, hq⟩ := ih (admit s w)
+        exact ⟨k + 1, by simp [hk, List.append_assoc], by simp [hq]⟩
+      · exact ⟨0, by simp, by simp⟩
 
-/-- Callers built for the admitting connection are never rejected as stale. -/
-theorem serve_keeps_current_waiters (c : Config) (s : State) (q : List Nat)
-    (h : ∀ w ∈ q, w = c.connection) :
-    (serve c s q).tally.connectionChanged = s.tally.connectionChanged := by
-  induction q generalizing s with
-  | nil => rfl
-  | cons w rest ih =>
-      have hw : w = c.connection := h w (by simp)
-      have hrest : ∀ v ∈ rest, v = c.connection := fun v hv => h v (by simp [hv])
-      simp only [serve]
-      split
-      · simp only [hw, beq_self_eq_true, if_true]
-        exact ih _ hrest
-      · rfl
+/-- Snapshot semantics: a rewrite to an available configuration, including a
+connection change, rejects no queued caller. -/
+theorem available_rewrite_rejects_nothing (s : State) (desired : Option Config)
+    (next : Config) (h_available : availableDesired desired = some next) :
+    (reconcile s desired).tally.gone = s.tally.gone := by
+  have hs : ∀ (c : Config) (u : State) q, (serve c u q).tally.gone = u.tally.gone := by
+    intro c u q
+    induction q generalizing u with
+    | nil => rfl
+    | cons w rest ih =>
+        simp only [serve]
+        split
+        · rw [ih]; rfl
+        · rfl
+  unfold reconcile
+  simp only [h_available]
+  split
+  · split
+    · rfl
+    · simp only [settle]; exact hs _ _ _
+  · simp only [settle]; exact hs _ _ _
 
-/-- A capacity-only rewrite keeps every parked caller of the current
-connection: none of them is rejected. -/
-theorem capacity_only_rewrite_keeps_queue (s : State) (desired : Option Config)
-    (current next : Config) (h_admitting : s.admitting = some current)
-    (h_available : availableDesired desired = some next)
-    (h_connection : next.connection = current.connection)
-    (h_queue : ∀ w ∈ s.queue, w = current.connection) :
-    (reconcile s desired).tally.connectionChanged = s.tally.connectionChanged := by
-  cases hs : sameResources current next
-  · simp only [reconcile, h_available, h_admitting, hs, settle]
-    exact serve_keeps_current_waiters next _ s.queue (by simpa [h_connection] using h_queue)
-  · simp [reconcile, h_available, h_admitting, hs]
+/-- An admitted caller is attributed to its own slot's connection, whichever
+connection is admitting. -/
+theorem acquire_attributes_slot (s : State) (slot : Nat) (c : Config)
+    (h_admitting : s.admitting = some c) (h_free : s.held < c.capacity) :
+    (acquire s slot).attributed = s.attributed ++ [slot] := by
+  simp [acquire, h_admitting, h_free, admit]
 
 /-- New admissions never raise held permits above the current capacity. -/
 theorem acquire_admits_within_capacity (s : State) (slot : Nat)
@@ -235,18 +238,8 @@ theorem over_capacity_blocks_admission (s : State) (slot : Nat)
   | none => rfl
   | some c =>
       simp [capacity, hc] at h
-      simp only
-      split
-      · rfl
-      · simp only [Nat.not_lt.mpr h, if_false]
-        split <;> rfl
-
-/-- A caller built for a replaced connection is rejected, not admitted. -/
-theorem stale_connection_rejected (s : State) (slot : Nat) (c : Config)
-    (h_admitting : s.admitting = some c) (h_stale : slot ≠ c.connection) :
-    (acquire s slot).held = s.held ∧ (acquire s slot).queue = s.queue ∧
-      (acquire s slot).tally.connectionChanged = s.tally.connectionChanged + 1 := by
-  simp [acquire, h_admitting, h_stale]
+      simp only [Nat.not_lt.mpr h, if_false]
+      split <;> rfl
 
 theorem release_within_capacity (s : State) :
     (release s).held ≤ max (s.held - 1) (capacity s) := by
@@ -294,9 +287,7 @@ theorem reconcile_retains_latest_desired (s : State) (desired : Option Config) :
       | cons w rest ih =>
           simp only [serve]
           split
-          · split
-            · exact ih _
-            · exact ih _
+          · exact ih _
           · rfl
   unfold reconcile
   split
@@ -335,10 +326,12 @@ def take (l : State) : State :=
   if 0 < l.available then { l with available := l.available - 1, transit := l.transit + 1 } else l
 
 /-- A permit taken from the semaphore is either forgotten to pay debt or
-admitted. -/
-def register (l : State) : State :=
+admitted, and only while admission is open. A permit assigned before close
+and registered after it returns to the closed semaphore. -/
+def register (l : State) (isOpen : Bool) : State :=
   if 0 < l.transit then
-    if 0 < l.owed then { l with transit := l.transit - 1, owed := l.owed - 1 }
+    if !isOpen then { l with transit := l.transit - 1, available := l.available + 1 }
+    else if 0 < l.owed then { l with transit := l.transit - 1, owed := l.owed - 1 }
     else { l with transit := l.transit - 1, held := l.held + 1 }
   else l
 
@@ -364,23 +357,29 @@ def resize (l : State) (capacity : Nat) : State :=
              owed := l.owed + (l.capacity - capacity - forgotten) }
 
 /-- Reopening after an outage starts a fresh semaphore charged with the
-permits still held. -/
+permits still held. A permit a waiter took from the retired semaphore is
+forgotten and never registers: the waiter acquires again from this one, so
+`register` is the only admission step and always runs against the current
+ledger. -/
 def reopen (held capacity : Nat) : State :=
   ⟨capacity, held - min held capacity, capacity - min held capacity, 0, held⟩
-
-/-- A permit taken from a retired semaphore just before it closed is
-registered against the current one. -/
-def registerRetired (l : State) : State :=
-  if 0 < l.available then { l with available := l.available - 1, held := l.held + 1 }
-  else { l with owed := l.owed + 1, held := l.held + 1 }
 
 theorem take_conserved (l : State) (h : conserved l) : conserved (take l) := by
   unfold take conserved at *; split <;> simp at * <;> omega
 
-theorem register_conserved (l : State) (h : conserved l) : conserved (register l) := by
-  unfold register conserved at *; split
-  · split <;> simp <;> omega
-  · exact h
+theorem register_conserved (l : State) (isOpen : Bool) (h : conserved l) :
+    conserved (register l isOpen) := by
+  unfold register conserved at *
+  split_ifs
+  all_goals (try simp only)
+  all_goals omega
+
+/-- A closed backend admits nothing, even with a permit assigned before the
+close (`unavailable_closes_admission` at the semaphore level). -/
+theorem register_closed_admits_nothing (l : State) :
+    (register l false).held = l.held := by
+  unfold register
+  split_ifs <;> simp_all
 
 theorem abandon_conserved (l : State) (h : conserved l) : conserved (abandon l) := by
   unfold abandon conserved at *; split <;> simp at * <;> omega
@@ -397,14 +396,11 @@ theorem resize_conserved (l : State) (capacity : Nat) (h : conserved l) :
 theorem reopen_conserved (held capacity : Nat) : conserved (reopen held capacity) := by
   unfold reopen conserved; simp; omega
 
-theorem registerRetired_conserved (l : State) (h : conserved l) :
-    conserved (registerRetired l) := by
-  unfold registerRetired conserved at *; split <;> simp <;> omega
-
 /-- Registration admits only without debt, so an admission leaves held
 permits within capacity. -/
-theorem register_admits_within_capacity (l : State) (h : conserved l)
-    (h_admit : l.held < (register l).held) : (register l).held ≤ l.capacity := by
+theorem register_admits_within_capacity (l : State) (isOpen : Bool) (h : conserved l)
+    (h_admit : l.held < (register l isOpen).held) :
+    (register l isOpen).held ≤ l.capacity := by
   unfold register conserved at *
   split_ifs at h_admit ⊢
   all_goals (try simp only at h_admit ⊢)

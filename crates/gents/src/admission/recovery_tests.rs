@@ -156,7 +156,7 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
             config_fingerprint: "recovery-cas".into(),
             connection_fingerprint: "recovery-cas".into(),
         },
-        super::super::controller::CapacityPool::open(1, "recovery-cas"),
+        super::super::controller::CapacityPool::open(1),
     );
     let mut holder = controller
         .clone()
@@ -278,7 +278,7 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
             config_fingerprint: "recovery-cas".into(),
             connection_fingerprint: "recovery-cas".into(),
         },
-        super::super::controller::CapacityPool::open(1, "recovery-cas"),
+        super::super::controller::CapacityPool::open(1),
     );
     let permit = controller
         .clone()

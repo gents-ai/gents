@@ -53,6 +53,11 @@ impl AdmissionPermit {
         self.call.controller_generation
     }
 
+    #[cfg(test)]
+    pub(super) fn attribution_for_test(&self) -> &str {
+        &self.call.backend_config_fingerprint
+    }
+
     pub(crate) async fn finish_success(
         &mut self,
         usage: Option<Usage>,

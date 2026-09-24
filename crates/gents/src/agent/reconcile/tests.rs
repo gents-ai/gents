@@ -815,6 +815,158 @@ async fn generation_supervisor_rotates_dispatcher_on_backend_capacity_change() {
         .unwrap();
 }
 
+/// N1: rotating only a backend API key must restage the behavior slot.
+/// `ResolvedBehavior`'s Debug redacts the key, so without the keyed
+/// connection identity the old slot would keep its old client forever.
+#[tokio::test]
+async fn generation_supervisor_restages_slot_on_api_key_rotation() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let agent_did = "did:test:reconcile-key-rotation";
+    let runtime_status = RuntimeStatusHandle::new(node.clone(), agent_did);
+
+    let mut behavior = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("rotation-general"));
+    behavior.backend_id = Some("backend-general".to_string());
+    behavior.backend_auth = crate::document_config::BackendAuth::ApiKey {
+        key: "fixture-old-key".into(),
+    };
+    let mut rotated = behavior.clone();
+    rotated.backend_auth = crate::document_config::BackendAuth::ApiKey {
+        key: "fixture-new-key".into(),
+    };
+    assert_eq!(format!("{behavior:?}"), format!("{rotated:?}"));
+    assert!(!format!("{rotated:?}").contains("fixture-new-key"));
+    let new_connection = crate::completion_factory::behavior_connection_fingerprint(&rotated);
+    assert_ne!(
+        crate::completion_factory::behavior_connection_fingerprint(&behavior),
+        new_connection
+    );
+    let admission = |connection: String| {
+        let mut config = backend_admission_config("backend-general", 1, 100);
+        config.connection_fingerprint = connection;
+        HashMap::from([("backend-general".to_string(), config)])
+    };
+    let initial_snapshot = snapshot_for_behaviors_with_admission(
+        node.as_ref(),
+        "general",
+        vec![Arc::new(behavior.clone())],
+        admission(crate::completion_factory::behavior_connection_fingerprint(
+            &behavior,
+        )),
+    )
+    .await;
+    let rotated_snapshot = snapshot_for_behaviors_with_admission(
+        node.as_ref(),
+        "general",
+        vec![Arc::new(rotated)],
+        admission(new_connection.clone()),
+    )
+    .await;
+
+    let (built_tx, mut built_rx) = mpsc::unbounded_channel::<(u64, String)>();
+    let runner = move |behavior: Arc<ResolvedBehavior>,
+                       _tool_surface: Arc<ToolSurface>,
+                       request_rx: Arc<Mutex<mpsc::Receiver<AgentRequest>>>,
+                       generation: u64,
+                       mut shutdown: watch::Receiver<bool>| {
+        let built_tx = built_tx.clone();
+        async move {
+            let key = match &behavior.backend_auth {
+                crate::document_config::BackendAuth::ApiKey { key } => key.clone(),
+                _ => String::new(),
+            };
+            let _ = built_tx.send((generation, key));
+            loop {
+                tokio::select! {
+                    _ = shutdown.changed() => return Ok(()),
+                    message = async {
+                        let mut receiver = request_rx.lock().await;
+                        receiver.recv().await
+                    } => {
+                        if message.is_none() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    let registry = crate::admission::AdmissionRegistry::new(node.clone());
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let supervisor = GenerationSupervisor::bootstrap(
+        initial_snapshot,
+        registry.clone(),
+        crate::retry::RetryPolicy {
+            max_retries: 3,
+            base_delay_ms: 5,
+            max_delay_ms: 25,
+        },
+        runner,
+        runtime_status,
+        shutdown_rx.clone(),
+        None,
+    )
+    .await
+    .unwrap();
+    let initial_dispatcher = supervisor.current_snapshot().dispatchers["general"].clone();
+    let first = tokio::time::timeout(Duration::from_secs(5), built_rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.1, "fixture-old-key");
+    let (active_tx, mut active_rx) = watch::channel(supervisor.current_snapshot());
+    let (proposal_tx, proposal_rx) = mpsc::channel(4);
+    let task = tokio::spawn(supervisor.run(active_tx, proposal_rx, shutdown_rx));
+
+    proposal_tx.send(rotated_snapshot).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(5), active_rx.changed())
+        .await
+        .expect("key rotation should publish a generation")
+        .unwrap();
+    let updated_dispatcher = active_rx.borrow().dispatchers["general"].clone();
+    assert!(
+        !initial_dispatcher.same_channel(&updated_dispatcher),
+        "a key rotation must restage the slot"
+    );
+    // Each slot starts several workers; skip the first generation's reports.
+    let rebuilt = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let built = built_rx.recv().await.unwrap();
+            if built.0 != first.0 {
+                break built;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        rebuilt.1, "fixture-new-key",
+        "the new slot builds the new client"
+    );
+
+    let mut admitted = registry
+        .acquire_with_connection_for_test(
+            "req-rotated-slot",
+            "backend-general",
+            "general",
+            agent_did,
+            crate::admission::CallKind::Inference,
+            &new_connection,
+        )
+        .await
+        .expect("calls from the rotated slot are admitted");
+    admitted.finish_success(None).await.unwrap();
+
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .expect("supervisor should stop on shutdown")
+        .unwrap()
+        .unwrap();
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct RuntimeStatusRow {
     reconcile_phase: String,

@@ -71,7 +71,7 @@ impl AdmissionRegistry {
             let entry = backends
                 .entry(backend_id.clone())
                 .or_insert_with(|| BackendAdmission {
-                    pool: CapacityPool::open(config.max_concurrent, &config.connection_fingerprint),
+                    pool: CapacityPool::open(config.max_concurrent),
                     admitting: None,
                 });
             if entry
@@ -81,9 +81,7 @@ impl AdmissionRegistry {
             {
                 continue;
             }
-            entry
-                .pool
-                .configure(config.max_concurrent, &config.connection_fingerprint);
+            entry.pool.configure(config.max_concurrent);
             tracing::info!(
                 backend_id = %backend_id,
                 from_generation = entry.admitting.as_ref().map(|current| current.generation),
@@ -205,7 +203,8 @@ impl AdmissionRegistry {
     }
 
     /// Admits one provider call issued through a client built for
-    /// `connection` (see `backend_connection_fingerprint`).
+    /// `connection` (see `backend_connection_fingerprint`), which attributes
+    /// the call.
     pub(super) async fn acquire_current_call(
         &self,
         connection: &str,

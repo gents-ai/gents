@@ -1501,21 +1501,26 @@ capacity (`acquire_admits_within_capacity`, `serve_within_capacity`,
 unavailability fails queued calls and rejects new ones
 (`unavailable_closes_admission`, `removed_backend_cannot_be_resurrected`).
 
-Each caller carries the connection its provider client was built from. A
-capacity-only rewrite keeps queued callers (`capacity_only_rewrite_keeps_queue`);
-after a connection change, callers built for the old connection are rejected
-at entry or when woken (`stale_connection_rejected`,
-`serve_never_admits_stale`). No retry owner on the completion path rebuilds
-the client, so Rust reports `BackendConnectionChanged`, which the loop
-classifies as permanent.
+Each caller carries the connection its provider client was built from. By
+the #1725 product decision (snapshot semantics), a connection change such as
+key rotation or an endpoint move never rejects in-progress or queued calls:
+they finish on their slot's connection, sharing the pool
+(`available_rewrite_rejects_nothing`), and every admission is attributed to
+its own slot's connection in FIFO order (`serve_attributes_fifo`,
+`acquire_attributes_slot`). New slots are built for the new connection;
+behavior slot identity includes the keyed connection fingerprint because
+`ResolvedBehavior`'s Debug redacts credentials.
 
 `Registry.Ledger` refines the Tokio realization: tokens are conserved across
-take, register, abandon, release, resize, reopen and retired-permit
-registration; registration pays owed permits before admitting
+take, register, abandon, release, resize and reopen. Registration is the single
+admission point: it admits only while open (`register_closed_admits_nothing`)
+and only without debt, so every admission leaves held permits within capacity
 (`register_admits_within_capacity`), because Tokio returns a permit assigned
 to a dropped waiter around the ledger (`abandon_can_expose_permit_under_debt`).
+A permit taken from a semaphore retired by an outage never registers; its
+waiter acquires again from the current semaphore.
 
-Ten generated traces, with expectations derived by `replay`, drive the real
+Eleven generated traces, with expectations derived by `replay`, drive the real
 registry and actual AdmissionPermits, including queued callers. Epoch reuse on
 rollback creates a distinct incarnation on the same pool, fenced by a real
 permit test. This refinement does not establish durable request waiting

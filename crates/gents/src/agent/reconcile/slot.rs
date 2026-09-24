@@ -65,7 +65,7 @@ impl BehaviorSlot {
         tool_surface: &Arc<ToolSurface>,
         executor_capacity: usize,
     ) -> bool {
-        self.behavior_fingerprint == format!("{behavior:?}")
+        self.behavior_fingerprint == crate::completion_factory::behavior_slot_fingerprint(behavior)
             && self.tool_surface_fingerprint == format!("{tool_surface:?}")
             && self.executor_capacity == executor_capacity
     }
@@ -294,7 +294,7 @@ where
     let (dispatcher, request_rx) = mpsc::channel(BEHAVIOR_EXECUTOR_QUEUE_CAPACITY);
     let request_rx = Arc::new(Mutex::new(request_rx));
     let (state_tx, state_rx) = watch::channel(BehaviorSlotState::Active);
-    let behavior_fingerprint = format!("{behavior:?}");
+    let behavior_fingerprint = crate::completion_factory::behavior_slot_fingerprint(&behavior);
     let tool_surface_fingerprint = format!("{tool_surface:?}");
 
     let standing = Arc::new(std::sync::Mutex::new(BuildStanding::seeded()));

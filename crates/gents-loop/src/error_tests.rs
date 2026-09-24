@@ -277,20 +277,3 @@ fn error_display_messages() {
     };
     assert!(err.to_string().contains("doc-1"));
 }
-
-#[test]
-fn backend_connection_change_is_permanent() {
-    let error =
-        rig::agent::StreamingError::Completion(rig::completion::CompletionError::ProviderError(
-            format!("{BACKEND_CONNECTION_CHANGED}: backend b connection changed; resubmit"),
-        ));
-    let classified = classify_completion_error(&error);
-    assert!(matches!(
-        classified,
-        InferenceError::PermanentFailure { .. }
-    ));
-    assert_eq!(
-        crate::completion_retry::failure_class(&classified, &error.to_string()),
-        crate::completion_retry::FailureClass::Permanent
-    );
-}

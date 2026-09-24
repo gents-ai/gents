@@ -20,17 +20,19 @@ inductive Action where
   | release
   deriving DecidableEq, Repr
 
+/-- `attributed` is order-free: Rust observes admissions as calls finish. -/
 structure Observation where
   admittingGeneration : Option Nat
   capacity : Nat
   held : Nat
   queued : Nat
   tally : Tally
+  attributed : List Nat
   deriving DecidableEq, Repr
 
 def observe (s : State) : Observation :=
   ⟨s.admitting.map (·.generation), InferenceCall.Registry.capacity s, s.held, s.queue.length,
-    s.tally⟩
+    s.tally, s.attributed.mergeSort⟩
 
 def step (s : State) : Action → State
   | .reconcile d => InferenceCall.Registry.reconcile s (d.map (·.config))
@@ -41,7 +43,7 @@ def replay (s : State) : List Action → List Observation
   | [] => []
   | action :: rest => let post := step s action; observe post :: replay post rest
 
-def initial : State := ⟨none, none, 0, [], ⟨0, 0, 0, 0⟩⟩
+def initial : State := ⟨none, none, 0, [], ⟨0, 0, 0⟩, []⟩
 
 def up (connection generation capacity queueDepth : Nat) (name := "backend") : Action :=
   .reconcile (some ⟨⟨connection, generation, capacity, queueDepth, true⟩, name, "model-a"⟩)
@@ -77,17 +79,20 @@ def cases : List Case := [
     [up 7 1 1 2, .acquire 7, .acquire 7, .acquire 7, up 7 2 2 2, .release, .release, .release]⟩,
   ⟨"shrinking_rewrite_keeps_queued_calls",
     [up 7 1 2 2, .acquire 7, .acquire 7, .acquire 7, up 7 2 1 2, .release, .release, .release]⟩,
-  ⟨"connection_change_rejects_stale_calls",
+  ⟨"connection_change_keeps_in_progress_calls",
     [up 7 1 1 2, .acquire 7, .acquire 7, up 8 2 1 2, .acquire 7, .acquire 8, .release,
-     .release]⟩
+     .release, .release]⟩,
+  ⟨"key_rotation_shares_the_pool",
+    [up 7 1 2 1, .acquire 7, up 8 2 2 1, .acquire 8, .acquire 7, .release, .release,
+     .acquire 8]⟩
   ]
 
-/-- Coverage the generated traces must keep: queueing, both rejection kinds
-and an outage are exercised. -/
-theorem cases_cover_queueing_and_rejections :
-    (cases.map fun c => (replay initial c.actions).getLast?.map (·.tally)).any
-        (fun t => t.any (fun t => 0 < t.connectionChanged)) = true ∧
-      (cases.map fun c => (replay initial c.actions).any (fun o => 0 < o.queued)).any id = true ∧
+/-- Coverage the generated traces must keep: queueing, an admission from a
+replaced connection, and closed admission are exercised. -/
+theorem cases_cover_queueing_snapshots_and_closure :
+    (cases.map fun c => (replay initial c.actions).any (fun o => 0 < o.queued)).any id = true ∧
+      (cases.any fun c => c.actions.any (· == up 8 2 1 2) &&
+        ((replay initial c.actions).getLast?.map (·.attributed)).any (·.contains 7)) = true ∧
       (cases.map fun c => (replay initial c.actions).getLast?.map (·.tally)).any
         (fun t => t.any (fun t => 0 < t.gone)) = true := by
   native_decide
@@ -116,7 +121,7 @@ def observationJson (o : Observation) : String :=
   ++ ",\"admitted\":" ++ toString o.tally.admitted
   ++ ",\"queue_full\":" ++ toString o.tally.queueFull
   ++ ",\"gone\":" ++ toString o.tally.gone
-  ++ ",\"connection_changed\":" ++ toString o.tally.connectionChanged ++ "}"
+  ++ ",\"attributed\":" ++ jsonArray (o.attributed.map toString) ++ "}"
 
 def casesJson : String := jsonArray (cases.map fun c =>
   "{\"name\":" ++ jsonString c.name ++ ",\"actions\":" ++ jsonArray (c.actions.map actionJson)
