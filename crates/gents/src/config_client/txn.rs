@@ -145,6 +145,8 @@ tokio::task_local! {
 struct SuccessfulMutationFault {
     fail_after: Option<usize>,
     count: AtomicUsize,
+    lose_receipt: bool,
+    receipt_fired: AtomicBool,
 }
 
 #[cfg(test)]
@@ -164,6 +166,26 @@ fn after_successful_mutation_for_test() -> Result<()> {
             Ok(())
         })
         .unwrap_or(Ok(()))
+}
+
+// External storage premise, test-only: an embedded commit may be durable while
+// its receipt never reaches the caller. This reuses the successful-mutation
+// fault task-local (one test-only fault owner) so a scoped future cannot carry
+// two competing fault states across awaits. The receipt-loss arm consumes
+// itself once; only the transaction owner's retry re-enters against the
+// already-committed state, and no rollback is simulated.
+#[cfg(test)]
+fn post_commit_receipt_loss_for_test() -> bool {
+    SUCCESSFUL_MUTATION_FAULT
+        .try_with(|fault| {
+            if !fault.lose_receipt {
+                return false;
+            }
+            // swap leaves the fired flag sticky; only the first call observes
+            // the previous false and actually injects the lost receipt.
+            !fault.receipt_fired.swap(true, Ordering::Relaxed)
+        })
+        .unwrap_or(false)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -489,11 +511,27 @@ impl<'a> ConfigApplyTxn<'a> {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after,
             count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_fired: AtomicBool::new(false),
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
             .await;
         (output, fault.count.load(Ordering::Relaxed))
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn with_post_commit_receipt_loss<F: Future>(future: F) -> (F::Output, bool) {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: true,
+            receipt_fired: AtomicBool::new(false),
+        });
+        let output = SUCCESSFUL_MUTATION_FAULT
+            .scope(Arc::clone(&fault), future)
+            .await;
+        (output, fault.receipt_fired.load(Ordering::Relaxed))
     }
 
     async fn begin_local_owned(
@@ -727,7 +765,24 @@ impl<'a> ConfigApplyTxn<'a> {
                         ),
                         cleanup: CommitCleanup::Required,
                     }),
-                    Ok(Ok(())) => Ok(()),
+                    Ok(Ok(())) => {
+                        // External storage premise, test-only (#1630): the
+                        // embedded commit is durable but its receipt never
+                        // reaches the caller. NotNeeded cleanup leaves committed
+                        // state untouched so only the transaction owner's
+                        // existing retry replays the callback; no rollback is
+                        // simulated.
+                        #[cfg(test)]
+                        if post_commit_receipt_loss_for_test() {
+                            return Err(CommitFailure {
+                                error: retry::transaction_storage_failure(anyhow::anyhow!(
+                                    "injected receipt loss after committed transaction"
+                                )),
+                                cleanup: CommitCleanup::NotNeeded,
+                            });
+                        }
+                        Ok(())
+                    }
                     Ok(Err(error)) => {
                         let conflict = matches!(
                             &error,

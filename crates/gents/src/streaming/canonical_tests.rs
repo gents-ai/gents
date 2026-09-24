@@ -1305,3 +1305,101 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }
+
+// External storage premise under test: the embedded commit is durable but its
+// receipt never reaches the publication owner. #1630 relies on the existing
+// idempotent transaction retry to reconstruct committed publication; no
+// rollback is simulated and no model policy changes.
+#[tokio::test]
+async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+    let (node, path, lifecycle, writer) = fixture("receipt-loss").await;
+    writer
+        .start_provider_attempt(
+            &lifecycle.request().doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let message = Message::Assistant {
+        id: Some("provider-message".into()),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "native-tool".into(),
+            call_id: Some("provider-call".into()),
+            function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
+            signature: Some("sig".into()),
+            additional_params: None,
+        })],
+    };
+    // The canonical publication owner may replay internally, so the first
+    // publish is not required to surface Err; the fault must fire exactly once
+    // at the post-commit boundary.
+    let (first, fault_fired) = crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
+        writer.publish_native_turn(&lifecycle, 0, 0, &message),
+    )
+    .await;
+    let first = first.expect("idempotent owner must reconstruct the lost receipt");
+    assert!(fault_fired, "post-commit receipt-loss fault must fire");
+    // Capture the committed state before an external replay so the comparison
+    // brackets that replay, rather than comparing two reads afterward.
+    let request = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID sequence }}
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal close }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID }}
+        }}"#
+    );
+    let before = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_before_external_replay",
+    )
+    .await
+    .expect("read committed receipt-loss publication");
+    let replay = writer
+        .publish_native_turn(&lifecycle, 0, 0, &message)
+        .await
+        .expect("external replay resolves committed publication");
+    let replayed = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_after_external_replay",
+    )
+    .await
+    .expect("read publication after external replay");
+    assert_eq!(
+        replayed.data, before.data,
+        "replay after a lost receipt must not add stored documents"
+    );
+    assert_eq!(first.message_doc_id, replay.message_doc_id);
+    assert_eq!(first.sequence, replay.sequence);
+    assert_eq!(first.accepted_tools.len(), replay.accepted_tools.len());
+    assert_eq!(first.accepted_tools.len(), 1);
+    let a = &first.accepted_tools[0];
+    let b = &replay.accepted_tools[0];
+    assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
+    assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
+    assert_eq!(a.arguments, b.arguments);
+    assert_eq!(a.id, "native-tool");
+    assert_eq!(a.call_id.as_deref(), Some("provider-call"));
+    let rows = before.data.as_ref().unwrap();
+    let message_rows = rows["AgentMessage"].as_array().unwrap();
+    assert_eq!(message_rows.len(), 1, "exactly one committed header");
+    assert_eq!(message_rows[0]["_docID"], first.message_doc_id);
+    assert_eq!(message_rows[0]["sequence"], first.sequence);
+    let segment_rows = rows["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(segment_rows.len(), 1);
+    assert_eq!(segment_rows[0]["_docID"], a.arguments.close_doc_id);
+    assert!(
+        !segment_rows[0]["close"].is_null(),
+        "publication closes its delta"
+    );
+    let tool_rows = rows["AgentToolCall"].as_array().unwrap();
+    assert_eq!(tool_rows.len(), 1);
+    assert_eq!(tool_rows[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(a.accepted_header_doc_id, first.message_doc_id);
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
+}
