@@ -124,8 +124,9 @@ per case, and a generated `README.md` with the case table and the interview summ
 
 With `--pilot`, after the pack lands: install it into the home as a directory pack, then
 `runner::freeze` and `runner::run` with one cell `pilot=<subject>[:<behavior>]` on the named
-profile, every split, `trials_per_case: 1`, `purpose: "pilot"`, run id
-`<definition_id>-pilot-<unix ms>`, the embedded executor, Ctrl-C cancelling as for `eval run`.
+profile, `trials_per_case: 1`, `purpose: "pilot"`, the embedded executor, Ctrl-C cancelling as
+for `eval run`. A run covers one split, so a pilot is one run per populated split, run ids
+`<definition_id>-pilot-<unix ms>-<split>`; the digest and the README name all of them.
 
 `purpose: "pilot"` is recorded in the origin; `eval list` shows it; the exposure count skips
 pilot runs, and `compare` refuses a pilot run unless `--include-pilot` is given. A pilot is a
