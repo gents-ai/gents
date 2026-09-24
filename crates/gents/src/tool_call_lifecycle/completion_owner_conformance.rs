@@ -608,18 +608,18 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
         TerminalizeResult::Won
     );
     let mut watcher = DefraWatcher::new(node.clone(), did);
-    let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+    let selected = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
         .await
         .expect("queued completion becomes available")
         .unwrap()
         .unwrap();
-    assert_eq!(claimed.request_id, wake.request_id);
-    assert_eq!(claimed.session_id, session);
+    assert_eq!(selected.request_id, wake.request_id);
+    assert_eq!(selected.session_id, session);
     drop(watcher);
     drop(owner);
     SelectedBackgroundWake {
         admission,
-        wake: claimed,
+        wake: selected,
         notification_text: notifications[0].1.clone(),
         wait_header,
         wait_native,
@@ -633,7 +633,7 @@ pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
 async fn generated_r6_notification_precedes_continuation_claim() {
     let SelectedBackgroundWake {
         admission,
-        wake: claimed,
+        wake: selected,
         notification_text: _,
         wait_header,
         wait_native,
@@ -641,12 +641,12 @@ async fn generated_r6_notification_precedes_continuation_claim() {
     } = selected_background_wake().await;
     let node = &admission.node;
     let did = &admission.agent_did;
-    let behavior = claimed.behavior_id.clone();
+    let behavior = selected.behavior_id.clone();
     let mut continuation = crate::lifecycle::RequestLifecycle::new_with_agent_did(
         node.clone(),
         &behavior,
         did,
-        claimed,
+        selected,
         60,
     );
     assert_eq!(

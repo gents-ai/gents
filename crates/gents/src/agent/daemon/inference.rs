@@ -673,7 +673,11 @@ mod tests {
     struct RoutedReplyModel;
 
     #[derive(Clone)]
-    struct WakeInputModel(Arc<std::sync::Mutex<Vec<String>>>, Arc<AtomicUsize>);
+    struct WakeInputModel {
+        provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
+        title_calls: Arc<AtomicUsize>,
+        title_shape_mismatches: Arc<AtomicUsize>,
+    }
 
     #[allow(refining_impl_trait)]
     impl CompletionModel for WakeInputModel {
@@ -709,17 +713,21 @@ mod tests {
             let title_preamble_present = json_contains_text(&history, &title_preamble);
             let text = match (title_shape, title_preamble_present) {
                 (true, true) => {
-                    self.1.fetch_add(1, Ordering::SeqCst);
+                    self.title_calls.fetch_add(1, Ordering::SeqCst);
                     "background-completion-review"
                 }
                 (false, false) => {
-                    self.0.lock().expect("wake provider input capture").push(
-                        serde_json::to_string(&request.chat_history)
-                            .expect("serialize provider input"),
-                    );
+                    self.provider_inputs
+                        .lock()
+                        .expect("wake provider input capture")
+                        .push(
+                            serde_json::to_string(&request.chat_history)
+                                .expect("serialize provider input"),
+                        );
                     "wake handled"
                 }
                 _ => {
+                    self.title_shape_mismatches.fetch_add(1, Ordering::SeqCst);
                     return Err(CompletionError::ProviderError(
                         "wake fixture title shape and owner preamble disagree".into(),
                     ));
@@ -746,13 +754,13 @@ mod tests {
         }
     }
 
-    async fn persisted_request_state(
+    async fn persisted_request_by_doc_id(
         node: &defra_node::EmbeddedNode,
         doc_id: &str,
-    ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
+    ) -> serde_json::Value {
         let response = node
             .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state }} }}"#,
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
                 crate::graphql::escape_graphql_string(doc_id)
             ))
             .await;
@@ -765,8 +773,16 @@ mod tests {
             .as_array()
             .unwrap();
         assert_eq!(rows.len(), 1);
+        rows[0].clone()
+    }
+
+    async fn persisted_request_state(
+        node: &defra_node::EmbeddedNode,
+        doc_id: &str,
+    ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
+        let row = persisted_request_by_doc_id(node, doc_id).await;
         gents_protocol::request_lifecycle::RequestLifecycleState::parse(
-            rows[0]["lifecycle_state"].as_str().unwrap(),
+            row["lifecycle_state"].as_str().unwrap(),
         )
         .unwrap()
     }
@@ -1225,6 +1241,21 @@ mod tests {
         let behavior = test_behavior_with_identity(identity);
         assert_eq!(behavior.agent_did(), admission.agent_did);
         assert_eq!(wake.agent_did, admission.agent_did);
+        assert_eq!(
+            wake.max_total_tokens, None,
+            "fixture allows the daemon's auxiliary title task"
+        );
+        assert!(
+            crate::session::session_needs_generated_title(
+                &node,
+                &admission.agent_did,
+                wake.requester_did.as_deref(),
+                &wake.session_id,
+            )
+            .await
+            .expect("read fixture session title"),
+            "fixture starts with a placeholder title so its auxiliary title task can be drained"
+        );
 
         let prompt_builder = LayeredPromptBuilder::for_behavior(
             &behavior.system_prompt,
@@ -1236,11 +1267,16 @@ mod tests {
         let preamble = prompt_builder.preamble().to_string();
         let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
         let title_calls = Arc::new(AtomicUsize::new(0));
+        let title_shape_mismatches = Arc::new(AtomicUsize::new(0));
         let request_identity = behavior.principal_identity().clone();
         let mut daemon = BehaviorDaemon::new(
             node.clone(),
             behavior,
-            Arc::new(WakeInputModel(provider_inputs.clone(), title_calls.clone())),
+            Arc::new(WakeInputModel {
+                provider_inputs: provider_inputs.clone(),
+                title_calls: title_calls.clone(),
+                title_shape_mismatches: title_shape_mismatches.clone(),
+            }),
             preamble,
             Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
             prompt_builder,
@@ -1264,25 +1300,43 @@ mod tests {
         let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         daemon.process_request(wake.clone(), shutdown_rx).await;
 
-        let diagnostic = node
-            .execute(&format!(
-                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
-                crate::graphql::escape_graphql_string(&wake.doc_id)
-            ))
-            .await;
-        assert!(
-            !diagnostic.has_errors(),
-            "wake diagnostic query: {:?}",
-            diagnostic.errors
-        );
+        // The title task is spawned separately by process_request. This wait
+        // observes its existing durable session-title owner before shutdown;
+        // title generation is not a background-wake acceptance condition.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if !crate::session::session_needs_generated_title(
+                    &node,
+                    &admission.agent_did,
+                    wake.requester_did.as_deref(),
+                    &wake.session_id,
+                )
+                .await
+                .expect("observe auxiliary title task")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("auxiliary title task must settle before test shutdown");
+
+        let diagnostic = persisted_request_by_doc_id(&node, &wake.doc_id).await;
         let captured = provider_inputs.lock().expect("wake provider input capture");
-        assert!(
-            !captured.is_empty(),
-            "wake must reach an actual provider turn; title_calls={}, wake={:?}",
+        assert_eq!(
+            captured.len(),
+            1,
+            "one deterministic main provider turn must run; title_calls={}, wake={:?}",
             title_calls.load(Ordering::SeqCst),
-            diagnostic.data
+            diagnostic
         );
-        assert_eq!(title_calls.load(Ordering::SeqCst), 1);
+        assert!(title_calls.load(Ordering::SeqCst) <= 1);
+        assert_eq!(
+            title_shape_mismatches.load(Ordering::SeqCst),
+            0,
+            "title errors must not be hidden by the fallback"
+        );
         let first_input: serde_json::Value =
             serde_json::from_str(&captured[0]).expect("decode first provider chat history");
         assert!(
