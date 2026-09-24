@@ -167,6 +167,7 @@ tokio::task_local! {
     static ACTIVE_EMBEDDED_TRANSACTION: &'static str;
 }
 
+/// Nested `with_*` scopes shadow the outer fault state rather than combining it.
 #[cfg(test)]
 struct SuccessfulMutationFault {
     fail_after: Option<usize>,
@@ -192,7 +193,6 @@ struct WriteGateObservation {
     queued_fired: AtomicBool,
 }
 
-/// Nested `with_*` scopes shadow the outer fault state rather than combining it.
 #[cfg(test)]
 tokio::task_local! {
     static SUCCESSFUL_MUTATION_FAULT: Arc<SuccessfulMutationFault>;
