@@ -68,7 +68,8 @@ fn run_plugin(
     let afb =
         afterburner_cloud::Afb::from_bytes(bytes).context("this is not a readable plugin .afb")?;
     let coordinate = format!("{}/{}", record.namespace, record.name);
-    let runner = PluginRunner::compile(bytes, &record.declaration)
+    // Declared authority, narrowed to what the operator granted at install.
+    let runner = PluginRunner::compile_within(bytes, &record.declaration, &record.ceiling())
         .with_context(|| format!("admitting plugin {coordinate}"))?;
     // The default budget for *this* artifact, not the generic one: a
     // plugin that has to boot an interpreter needs a memory ceiling its
@@ -130,6 +131,7 @@ mod tests {
             version: "0.1.0".to_owned(),
             digest: format!("sha256:{:x}", <sha2::Sha256 as sha2::Digest>::digest(bytes)),
             language: "rust".to_owned(),
+            granted: None,
             declaration: store::declaration_from_artifact(
                 &afterburner_cloud::Afb::from_bytes(bytes).unwrap(),
             )
@@ -166,7 +168,7 @@ mod tests {
         });
         // No declared authority: never replace this with artifact capabilities.
         declaration.manifold = None;
-        super::super::install_from_pack(home.path(), "team", "1.0.0", &declaration, &bytes)
+        super::super::install_from_pack(home.path(), "team", "1.0.0", &declaration, &bytes, false)
             .unwrap();
         let record = store::read_record(home.path(), "team", "echo").unwrap();
         assert_eq!(record.declaration, declaration);
@@ -188,7 +190,8 @@ mod tests {
             "team",
             "1.0.0",
             &invalid.declaration,
-            &bytes
+            &bytes,
+            false
         )
         .is_err());
         assert!(store::list_records(empty_home.path()).unwrap().is_empty());
@@ -225,5 +228,45 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("gents/does_not_exist"), "{message}");
         assert!(message.contains("not installed"), "{message}");
+    }
+
+    /// A plugin that asks for access is refused without consent, and the
+    /// grant is recorded with it; the same request later needs none.
+    #[test]
+    fn requested_authority_needs_consent_and_is_recorded() {
+        let bytes = build_echo_plugin();
+        let mut declaration = sample_record(&bytes).declaration;
+        declaration.manifold = Some(serde_json::json!({
+            "fs": "None", "net": {"OutboundHttp": ["api.example.com"]}, "env": "None",
+            "crypto": false, "child_process": false
+        }));
+        let home = tempfile::tempdir().unwrap();
+        let error = super::super::install_from_pack(
+            home.path(),
+            "team",
+            "1.0.0",
+            &declaration,
+            &bytes,
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            format!("{error:#}").contains("--grant-authority"),
+            "{error:#}"
+        );
+        assert!(store::list_records(home.path()).unwrap().is_empty());
+
+        let record = super::super::install_from_pack(
+            home.path(),
+            "team",
+            "1.0.0",
+            &declaration,
+            &bytes,
+            true,
+        )
+        .unwrap();
+        assert!(record.granted.is_some());
+        super::super::install_from_pack(home.path(), "team", "1.0.1", &declaration, &bytes, false)
+            .expect("the recorded grant covers the same request");
     }
 }

@@ -125,6 +125,7 @@ pub(crate) async fn update(args: PackUpdateArgs) -> Result<()> {
             force_rebind_concrete_did: false,
             registry: args.registry.clone(),
             drift: args.drift,
+            grant_authority: false,
         })
         .await?;
     }

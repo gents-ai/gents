@@ -71,7 +71,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use afterburner::afb_run::{run_afb_bytes, AfbRunOutcome, AfbRunRequest};
-use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, Manifold, NetAccess};
+use afterburner_core::manifold::{EnvAccess, FsAccess, ListenAccess, NetAccess};
 use anyhow::{Context, Result};
 
 use crate::pack::PackPlugin;
@@ -622,6 +622,11 @@ fn narrow_manifold(declared: &Manifold, ceiling: &Manifold) -> Manifold {
         },
     }
 }
+
+pub mod authority;
+
+/// A plugin's authority: files, network, environment and the rest.
+pub use afterburner_core::manifold::Manifold;
 
 #[cfg(test)]
 mod tests;

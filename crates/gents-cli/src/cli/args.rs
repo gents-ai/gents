@@ -843,6 +843,11 @@ pub(crate) struct PackInstallArgs {
     pub(crate) registry: Option<String>,
     #[command(flatten)]
     pub(crate) drift: PackDriftArgs,
+    #[arg(
+        long,
+        help = "Allow the files, network or environment the pack's plugins ask for"
+    )]
+    pub(crate) grant_authority: bool,
 }
 
 /// What to do with pack documents someone edited since the pack wrote them.
@@ -1058,6 +1063,11 @@ pub(crate) struct PluginInstallArgs {
     pub(crate) registry: Option<String>,
     #[arg(long, help = "Home to install into; defaults to ~/.gents")]
     pub(crate) home: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Allow the files, network or environment the plugin asks for"
+    )]
+    pub(crate) grant_authority: bool,
 }
 
 #[derive(clap::Args)]

@@ -107,9 +107,12 @@ pub(crate) async fn install(args: PackInstallArgs, emit_report: bool) -> Result<
             args.package
         );
         let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-        super::pack::install_pack_plugins(&home, &distribution.manifest, |path| {
-            distribution.asset(path)
-        })?;
+        super::pack::install_pack_plugins(
+            &home,
+            &distribution.manifest,
+            |path| distribution.asset(path),
+            args.grant_authority,
+        )?;
     }
     let receipt =
         install_bundled_graph_package(&access, &owner_did, &args.package, &bindings).await?;

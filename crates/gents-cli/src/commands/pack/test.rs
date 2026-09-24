@@ -99,7 +99,12 @@ pub(crate) fn run_plugin_cases(dir: &Path) -> Result<Vec<PluginCases>> {
         cases.sort();
         let artifact = std::fs::read(dir.join(&plugin.artifact))
             .with_context(|| format!("reading the built {}", plugin.artifact))?;
-        let runner = PluginRunner::compile(&artifact, plugin)?;
+        // The author's own plugin runs with the authority it declares.
+        let runner = PluginRunner::compile_within(
+            &artifact,
+            plugin,
+            &gents::plugin::authority::declared_manifold(plugin)?,
+        )?;
         let mut report = PluginCases {
             plugin: plugin.name.clone(),
             passed: 0,

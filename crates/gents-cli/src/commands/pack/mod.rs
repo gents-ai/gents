@@ -369,6 +369,7 @@ pub(crate) fn install_pack_plugins<'a>(
     home: &std::path::Path,
     manifest: &PackManifest,
     asset: impl Fn(&str) -> Result<&'a [u8]>,
+    consent: bool,
 ) -> Result<Vec<super::plugin::store::InstalledPlugin>> {
     manifest
         .metadata
@@ -381,6 +382,7 @@ pub(crate) fn install_pack_plugins<'a>(
                 &manifest.version,
                 plugin,
                 asset(&plugin.artifact)?,
+                consent,
             )
         })
         .collect()
@@ -627,6 +629,7 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                         force_rebind_concrete_did: false,
                         registry: args.registry.clone(),
                         drift: args.drift,
+                        grant_authority: args.grant_authority,
                     },
                     false,
                 )
@@ -647,7 +650,12 @@ async fn install(args: PackInstallArgs) -> Result<()> {
                     pack.manifest().name
                 );
                 let home = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
-                install_pack_plugins(&home, pack.manifest(), |path| pack.asset(path))?
+                install_pack_plugins(
+                    &home,
+                    pack.manifest(),
+                    |path| pack.asset(path),
+                    args.grant_authority,
+                )?
             };
             let identity = gents::pack::PackIdentity {
                 coordinate: format!(
@@ -719,8 +727,12 @@ async fn install(args: PackInstallArgs) -> Result<()> {
             // a plugin that arrived bundled in a pack is just as runnable
             // by name (`gents plugin run <name>`) as one installed on its
             // own.
-            let installed_plugins =
-                install_pack_plugins(&home, pack.manifest(), |path| pack.asset(path))?;
+            let installed_plugins = install_pack_plugins(
+                &home,
+                pack.manifest(),
+                |path| pack.asset(path),
+                args.grant_authority,
+            )?;
             crate::print_json(&json!({
                 "pack": pack.manifest().name,
                 "digest": pack.digest(),

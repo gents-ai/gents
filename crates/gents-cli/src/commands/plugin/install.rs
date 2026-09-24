@@ -86,6 +86,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
     // the prefixed form for a human reading `gents plugin list`, so the
     // prefix is added here rather than assumed already present.
     let home = crate::home_state::resolve_home_dir(args.home.as_deref());
+    let granted = store::grant_on_install(&home, namespace, &declaration, args.grant_authority)?;
     store::store_bytes(&home, &advertised, &bytes)?;
 
     let record = InstalledPlugin {
@@ -95,6 +96,7 @@ pub(crate) async fn install(args: PluginInstallArgs) -> Result<()> {
         digest: format!("sha256:{advertised}"),
         language: afb.manifest.package.language.clone(),
         declaration,
+        granted,
     };
     store::write_record(&home, &record)?;
 
@@ -225,6 +227,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         install(PluginInstallArgs {
+            grant_authority: false,
             name: "gents/echo".to_owned(),
             version: None,
             registry: Some(base_url),
@@ -249,6 +252,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         let error = install(PluginInstallArgs {
+            grant_authority: false,
             name: "gents/echo".to_owned(),
             version: None,
             registry: Some(base_url),
@@ -272,6 +276,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         let error = install(PluginInstallArgs {
+            grant_authority: false,
             name: "someone_else/echo".to_owned(),
             version: None,
             registry: Some(base_url),
@@ -293,6 +298,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         install(PluginInstallArgs {
+            grant_authority: false,
             name: "gents/echo".to_owned(),
             version: None,
             registry: Some(base_url),
@@ -322,6 +328,7 @@ mod tests {
         assert!(store::list_records(home.path()).unwrap().is_empty());
 
         install(PluginInstallArgs {
+            grant_authority: false,
             name: "gents/echo".to_owned(),
             version: None,
             registry: Some(base_url),

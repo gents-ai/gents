@@ -84,6 +84,33 @@ pub(crate) struct InstalledPlugin {
     /// Authored admission metadata, retained verbatim rather than reconstructed
     /// from artifact capabilities at execution time.
     pub(crate) declaration: gents::pack::PackPlugin,
+    /// The authority the operator granted at install; absent means sealed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) granted: Option<gents::plugin::Manifold>,
+}
+
+impl InstalledPlugin {
+    /// The ceiling a call runs under: the recorded grant.
+    pub(crate) fn ceiling(&self) -> gents::plugin::Manifold {
+        self.granted
+            .clone()
+            .unwrap_or_else(gents::plugin::Manifold::sealed)
+    }
+}
+
+/// The grant to record when `plugin` is installed as `namespace/name`,
+/// asking for consent only when it wants more than was granted before.
+pub(crate) fn grant_on_install(
+    home: &Path,
+    namespace: &str,
+    plugin: &gents::pack::PackPlugin,
+    consent: bool,
+) -> Result<Option<gents::plugin::Manifold>> {
+    let previous = read_record(home, namespace, &plugin.name)
+        .ok()
+        .map(|record| record.ceiling());
+    let granted = gents::plugin::authority::grant_for(plugin, previous.as_ref(), consent)?;
+    Ok((granted != gents::plugin::Manifold::sealed()).then_some(granted))
 }
 
 /// Standalone artifacts have no enclosing pack declaration. Capture their own

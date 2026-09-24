@@ -51,7 +51,9 @@ pub(crate) fn install_from_pack(
     pack_version: &str,
     plugin: &gents::pack::PackPlugin,
     artifact_bytes: &[u8],
+    consent: bool,
 ) -> Result<store::InstalledPlugin> {
+    let granted = store::grant_on_install(home, pack_namespace, plugin, consent)?;
     use sha2::{Digest, Sha256};
     gents::plugin::PluginRunner::compile(artifact_bytes, plugin)
         .with_context(|| format!("admitting pack plugin {}", plugin.name))?;
@@ -64,6 +66,7 @@ pub(crate) fn install_from_pack(
         digest: format!("sha256:{digest_hex}"),
         language: plugin.language.clone(),
         declaration: plugin.clone(),
+        granted,
     };
     store::write_record(home, &record)?;
     Ok(record)
@@ -232,6 +235,7 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
 
         install::install(PluginInstallArgs {
+            grant_authority: false,
             name: "gents/noop".to_owned(),
             version: None,
             registry: Some(base_url),
