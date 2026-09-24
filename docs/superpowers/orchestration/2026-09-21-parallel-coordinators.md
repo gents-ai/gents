@@ -347,3 +347,5 @@ removed first (clean, pushed) so every branch is free to check out.
   (conformance_consumers.rs, policy consumer kept); light gate clean including `lake build`.
 - 2026-09-24 rebase: tip 5 `feat/optimization-driver` `3becb1e31` → `8851d7803`; no conflicts;
   light gate clean.
+- 2026-09-24 rebase: tip 6 `feat/eval-cli` `e5a9b4363` → `07ac76bc6`; no conflicts; bindings
+  commit applied cleanly; light gate plus the bindings drift test clean.
