@@ -1,0 +1,28 @@
+{
+  "manifest_version": 1,
+  "name": "eval_author",
+  "version": "1.0.0",
+  "description": "The eval author: interviews an operator and drafts an eval definition for a subject behavior. Installed by gents eval init.",
+  "authors": [
+    "gents-ai contributors"
+  ],
+  "tags": [
+    "eval"
+  ],
+  "kind": "documents",
+  "assets": [
+    "README.md",
+    "agent_behaviors/eval_author/system_prompt.md",
+    "pack_config.json"
+  ],
+  "config": "pack_config.json",
+  "inference_slots": [
+    {
+      "name": "author",
+      "description": "Runs the eval author.",
+      "behaviors": [
+        "eval-author"
+      ]
+    }
+  ]
+}
