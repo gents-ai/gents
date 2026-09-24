@@ -52,6 +52,9 @@ pub enum ModeledCancelAckOutcome {
 pub struct ModeledBridgeFact {
     pub tool: String,
     pub child: String,
+    pub call_doc: u64,
+    pub parent_depth: u32,
+    pub parent_workspace: Option<ModeledWorkspaceStamp>,
     pub state: String,
 }
 
@@ -59,8 +62,47 @@ pub struct ModeledBridgeFact {
 #[serde(deny_unknown_fields)]
 pub struct ModeledChildFact {
     pub child: String,
+    pub depth: u32,
+    pub workspace: Option<ModeledWorkspaceStamp>,
     pub terminal: Option<String>,
     pub interrupt_requested: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeledWorkspaceStamp {
+    pub workspace_id: u64,
+    pub workspace_owner_agent_did: u64,
+    pub workspace_seal_hash: Option<u64>,
+    pub workspace_authority: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModeledObservedWorkspace {
+    pub workspace_id: u64,
+    pub workspace_owner_agent_did: u64,
+    pub workspace_seal_hash: Option<u64>,
+    pub state: String,
+    pub available: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ModeledChildChoice {
+    None,
+    Inherit {
+        workspace: ModeledObservedWorkspace,
+    },
+    Bind {
+        workspace: ModeledObservedWorkspace,
+        requested_authority: Option<String>,
+    },
+    Provision {
+        observed_parent: ModeledObservedWorkspace,
+        parent_path_exact: bool,
+        created_child: Option<ModeledObservedWorkspace>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +117,9 @@ pub enum ModeledAction {
         child: String,
         session: String,
         parent_depth: u32,
+        call_doc: u64,
+        parent_workspace: Option<ModeledWorkspaceStamp>,
+        accepted_arguments: Option<String>,
     },
     RejectSpawnInvocation {
         tool: String,
@@ -91,6 +136,8 @@ pub enum ModeledAction {
     MaterializeChild {
         child: String,
         tool: String,
+        payload: u64,
+        choice: ModeledChildChoice,
     },
     BeginChild {
         child: String,

@@ -1,5 +1,6 @@
 import Proofs.Conformance.ContractCases.R5Scenarios
 import Proofs.Conformance.Contracts.Json.Helpers
+import Proofs.Conformance.Contracts.Json.DelegatedChild
 
 namespace Conformance.Contracts
 
@@ -17,10 +18,17 @@ def r5AckJson (event : String × Subagent.CancelAcknowledgement.Outcome) : Strin
 def r5BridgeFactJson (bridge : R5BridgeFact) : String :=
   "{\"tool\":" ++ jsonString bridge.tool ++
   ",\"child\":" ++ jsonString bridge.child ++
+  ",\"call_doc\":" ++ toString bridge.accepted.call ++
+  ",\"parent_depth\":" ++ toString bridge.accepted.input.parentSubagentDepth ++
+  ",\"parent_workspace\":" ++
+    (bridge.accepted.workspace.map DelegatedChildContracts.stampJson).getD "null" ++
   ",\"state\":" ++ jsonString bridge.state.toDefraDB ++ "}"
 
 def r5ChildFactJson (child : R5ChildFact) : String :=
   "{\"child\":" ++ jsonString child.child ++
+  ",\"depth\":" ++ toString child.depth ++
+  ",\"workspace\":" ++
+    (child.workspace.map DelegatedChildContracts.stampJson).getD "null" ++
   ",\"terminal\":" ++ (match child.terminal with
     | none => "null"
     | some terminal => jsonString (r5TerminalString terminal)) ++
@@ -28,10 +36,23 @@ def r5ChildFactJson (child : R5ChildFact) : String :=
 
 def r5ActionJson : R5ScenarioAction → String
   | .pair node peer => "{\"op\":\"PairPrincipals\",\"node\":" ++ jsonString (r5NodeString node) ++ ",\"peer\":" ++ jsonString (r5NodeString peer) ++ "}"
-  | .acceptedBridge tool child session parentDepth => "{\"op\":\"PublishAcceptedBackgroundBridge\",\"tool\":" ++ jsonString tool ++ ",\"child\":" ++ jsonString child ++ ",\"session\":" ++ jsonString session ++ ",\"parent_depth\":" ++ toString parentDepth ++ "}"
+  | .acceptedBridge tool child session parentDepth call parentWorkspace =>
+      let accepted := CanonicalOutput.Execution.Examples.acceptedDelegatedCallFor
+        call parentDepth parentWorkspace (r5SpawnArguments call)
+      "{\"op\":\"PublishAcceptedBackgroundBridge\",\"tool\":" ++ jsonString tool ++
+      ",\"child\":" ++ jsonString child ++ ",\"session\":" ++ jsonString session ++
+      ",\"parent_depth\":" ++ toString parentDepth ++
+      ",\"call_doc\":" ++ toString call ++
+      ",\"parent_workspace\":" ++
+        (parentWorkspace.map DelegatedChildContracts.stampJson).getD "null" ++
+      ",\"accepted_arguments\":" ++
+        (accepted.map (jsonString ∘ (·.input.arguments))).getD "null" ++ "}"
   | .rejectedSpawnInvocation tool child session parentDepth => "{\"op\":\"RejectSpawnInvocation\",\"tool\":" ++ jsonString tool ++ ",\"child\":" ++ jsonString child ++ ",\"session\":" ++ jsonString session ++ ",\"parent_depth\":" ++ toString parentDepth ++ "}"
   | .replicateBridge tool source target => "{\"op\":\"ReplicateBridge\",\"tool\":" ++ jsonString tool ++ ",\"from\":" ++ jsonString (r5NodeString source) ++ ",\"to\":" ++ jsonString (r5NodeString target) ++ "}"
-  | .materializeChild child tool => "{\"op\":\"MaterializeChild\",\"child\":" ++ jsonString child ++ ",\"tool\":" ++ jsonString tool ++ "}"
+  | .materializeChild child tool payload choice =>
+      "{\"op\":\"MaterializeChild\",\"child\":" ++ jsonString child ++
+      ",\"tool\":" ++ jsonString tool ++ ",\"payload\":" ++ toString payload ++
+      ",\"choice\":" ++ DelegatedChildContracts.choiceJson choice ++ "}"
   | .beginChild child generation => "{\"op\":\"BeginChild\",\"child\":" ++ jsonString child ++ ",\"generation\":" ++ toString generation ++ "}"
   | .awaitChildExpiry child => "{\"op\":\"AwaitChildExpiry\",\"child\":" ++ jsonString child ++ "}"
   | .replicateChild child source target => "{\"op\":\"ReplicateChild\",\"child\":" ++ jsonString child ++ ",\"from\":" ++ jsonString (r5NodeString source) ++ ",\"to\":" ++ jsonString (r5NodeString target) ++ "}"

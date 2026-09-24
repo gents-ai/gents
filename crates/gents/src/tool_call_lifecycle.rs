@@ -597,6 +597,9 @@ impl ToolCallLifecycle {
     /// owner for the deadline-expiry check shared by the parent-deadline sweep
     /// (`hook.rs::timeout_expired_tool_calls`) and the held-approval sweep
     /// (`hook/persistence/approval.rs::drive_held_tool_call`).
+    /// Sweep eligibility is inclusive; fresh output admission instead follows
+    /// `ToolExecution.ToolCallContext.deadlineExceeded` (`now > deadline`).
+    /// At equality, output is admissible only until the sweep terminalizes the row.
     pub(crate) fn is_deadline_expired(&self, now: chrono::DateTime<chrono::Utc>) -> bool {
         self.deadline_at <= now
     }

@@ -1396,3 +1396,6 @@ mod delegated_workspace_tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod delegated_child_tests;

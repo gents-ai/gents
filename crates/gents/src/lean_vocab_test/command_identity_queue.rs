@@ -308,7 +308,8 @@ pub(crate) struct LeanReservedChildBinding {
     pub(crate) parent_tool: usize,
     pub(crate) parent_tool_doc: usize,
     pub(crate) payload: usize,
-    pub(crate) workspace: Option<usize>,
+    pub(crate) depth: usize,
+    pub(crate) workspace: Option<super::canonical_execution::LeanCanonicalDelegatedWorkspace>,
     pub(crate) admission: usize,
 }
 
@@ -319,6 +320,22 @@ pub(crate) struct LeanReservedChildMaterializationCase {
     pub(crate) candidate: LeanReservedChildBinding,
     pub(crate) expected_decision: String,
     pub(crate) expected_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum LeanLocalParentDepthExpected {
+    Admitted { child_depth: u32 },
+    Rejected { reason: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanLocalParentDepthCase {
+    pub(crate) name: String,
+    pub(crate) supplied_parent_depth: u32,
+    pub(crate) stored_parent_depth: Option<i64>,
+    pub(crate) expected: LeanLocalParentDepthExpected,
 }
 
 /// Startup restart-disposition witness (#937): the shape of one running

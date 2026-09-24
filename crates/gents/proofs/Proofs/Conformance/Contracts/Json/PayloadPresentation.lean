@@ -107,3 +107,53 @@ example : cases.any (fun value => value.expected.any fun s => s.presentedBytes <
     = true := by native_decide
 
 end Conformance.PayloadPresentationContracts
+
+namespace Conformance.TerminalDiagnosticContracts
+
+open CanonicalOutput Conformance.Contracts
+
+structure Case where
+  name : String
+  raw : List UInt8
+  cause : List UInt8
+  tailBudget : Nat
+
+def result (value : Case) : Except MessageError (Presentation × List UInt8) := do
+  let presentation ← terminalDiagnosticPresentation value.raw value.cause value.tailBudget
+  return (presentation, ← present value.raw presentation)
+
+def cases : List Case :=
+  [ ⟨"empty_output_retains_cause", [], [116], 16⟩
+  , ⟨"whole_prefix_then_cause", [65, 66], [116], 16⟩
+  , ⟨"bounded_ascii_tail", [65, 66, 67, 68], [116], 2⟩
+  , ⟨"zero_budget_retains_only_cause", [65, 66], [116], 0⟩
+  , ⟨"utf8_boundary_moves_forward", [65, 226, 130, 172, 66], [116], 3⟩
+  , ⟨"utf8_exact_budget_retains_codepoint", [65, 226, 130, 172, 66], [116], 4⟩
+  , ⟨"budget_smaller_than_final_codepoint", [65, 226, 130, 172], [116], 2⟩
+  , ⟨"invalid_raw_rejected", [255], [116], 16⟩
+  , ⟨"invalid_cause_rejected", [65], [255], 16⟩
+  , ⟨"multibyte_cause_preserved", [65], [226, 130, 172], 1⟩ ]
+
+def resultJson : Except MessageError (Presentation × List UInt8) → String
+  | .ok (presentation, rendered) =>
+      "{\"kind\":\"ok\",\"presentation\":" ++ presentationJson presentation ++
+      ",\"rendered\":" ++ byteArrayJson rendered ++ "}"
+  | .error .invalidUtf8 => "{\"kind\":\"invalid_utf8\"}"
+  | .error error =>
+      "{\"kind\":\"unexpected_error\",\"error\":" ++ jsonString (reprStr error) ++ "}"
+
+def caseJson (value : Case) : String :=
+  "{\"name\":" ++ jsonString value.name ++
+  ",\"raw\":" ++ byteArrayJson value.raw ++
+  ",\"cause\":" ++ byteArrayJson value.cause ++
+  ",\"tail_budget\":" ++ toString value.tailBudget ++
+  ",\"expected\":" ++ resultJson (result value) ++ "}"
+
+def casesJson : String := jsonArray (cases.map caseJson)
+
+example : (cases.map fun value => (result value).toOption.map Prod.snd) =
+    [some [116], some [65, 66, 10, 116], some [67, 68, 10, 116], some [116],
+     some [66, 10, 116], some [226, 130, 172, 66, 10, 116], some [116],
+     none, none, some [65, 10, 226, 130, 172]] := by native_decide
+
+end Conformance.TerminalDiagnosticContracts

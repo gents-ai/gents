@@ -597,6 +597,253 @@ pub async fn published_background_bridge(
     (node, path, tool)
 }
 
+#[cfg(test)]
+async fn claim_existing_request(
+    node: &Arc<EmbeddedNode>,
+    request_id: &str,
+    agent_did: &str,
+) -> RequestLifecycle {
+    let escaped = crate::graphql::escape_graphql_string(request_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 2) {{ {} }} }}"#,
+            crate::watcher::AGENT_REQUEST_FIELDS,
+        ),
+        "read local-depth fixture request",
+    )
+    .await
+    .expect("read local-depth fixture request");
+    let row: gents_protocol::row::AgentRequestRow =
+        crate::graphql::first_row(&response, "AgentRequest")
+            .expect("read fixture request")
+            .expect("fixture request exists");
+    let session_id = row.session_id.as_deref().expect("child session identity");
+    ensure_fixture_session(
+        node,
+        session_id,
+        agent_did,
+        row.requester_did.as_deref(),
+        &chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    )
+    .await;
+    let mut request = RequestLifecycle::new_with_agent_did(
+        node.clone(),
+        "general",
+        agent_did,
+        row.try_into().expect("decode fixture request"),
+        60,
+    );
+    assert_eq!(
+        request.claim().await.expect("claim fixture request"),
+        ClaimOutcome::Claimed
+    );
+    request
+}
+
+#[cfg(test)]
+async fn publish_depth_target_bridge(
+    node: &Arc<EmbeddedNode>,
+    request: &mut RequestLifecycle,
+    agent_did: &str,
+    name: &str,
+) -> ToolCallLifecycle {
+    let target_tool = "bridge-native-tool";
+    publish_accepted_on_claimed_request(
+        node.clone(),
+        request,
+        agent_did,
+        0,
+        crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+        target_tool,
+        serde_json::json!({"name":"child", "prompt":"work", "await_mode":"background"}),
+        Some(crate::streaming::SpawnAdmissionPlan {
+            tool_call_id: target_tool.into(),
+            child_request_id: format!("child-{name}"),
+            spawn_target_did: agent_did.to_owned(),
+            spawn_behavior_id: "general".into(),
+            delegated_workspace: None,
+            await_mode: AwaitMode::Background,
+        }),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        true,
+    )
+    .await
+    .expect("publish signed parent bridge")
+}
+
+/// Publish on a genuinely admitted child with its signed ancestor edges.
+#[cfg(test)]
+async fn published_background_bridge_at_parent_depth(
+    name: &str,
+    parent_depth: u32,
+) -> (Arc<EmbeddedNode>, PathBuf, ToolCallLifecycle) {
+    assert!((1..=2).contains(&parent_depth));
+    let ancestor = format!("ancestor-root-{name}");
+    let (node, path, root_bridge) = published_background_bridge(&ancestor).await;
+    let agent_did = root_bridge.agent_did().to_owned();
+    let depth_one_id = root_bridge
+        .child_request_id
+        .as_deref()
+        .expect("root bridge reserved depth-one child")
+        .to_owned();
+    crate::tool_call_lifecycle::create_subagent_request_with_request_id(
+        &node,
+        depth_one_id.clone(),
+        format!("request-{ancestor}"),
+        root_bridge
+            .request_doc_id()
+            .expect("root request doc")
+            .to_owned(),
+        root_bridge.tool_call_id().to_owned(),
+        root_bridge.doc_id().expect("root tool doc").to_owned(),
+        0,
+        agent_did.clone(),
+        "general".into(),
+        "depth-one parent".into(),
+        None,
+    )
+    .await
+    .expect("admit signed depth-one parent");
+    let mut depth_one = claim_existing_request(&node, &depth_one_id, &agent_did).await;
+    if parent_depth == 1 {
+        let bridge = publish_depth_target_bridge(&node, &mut depth_one, &agent_did, name).await;
+        return (node, path, bridge);
+    }
+    let depth_two_id = format!("request-{name}");
+    let depth_one_tool = format!("ancestor-depth-one-tool-{name}");
+    let depth_one_bridge = publish_accepted_on_claimed_request(
+        node.clone(),
+        &mut depth_one,
+        &agent_did,
+        0,
+        crate::toolset::SPAWN_SUBAGENT_TOOL_NAME,
+        &depth_one_tool,
+        serde_json::json!({"name":"child", "prompt":"depth-two parent", "await_mode":"background"}),
+        Some(crate::streaming::SpawnAdmissionPlan {
+            tool_call_id: depth_one_tool.clone(),
+            child_request_id: depth_two_id.clone(),
+            spawn_target_did: agent_did.clone(),
+            spawn_behavior_id: "general".into(),
+            delegated_workspace: None,
+            await_mode: AwaitMode::Background,
+        }),
+        AwaitMode::Background,
+        CancelPolicy::Cascade,
+        true,
+    )
+    .await
+    .expect("publish signed depth-one bridge");
+    crate::tool_call_lifecycle::create_subagent_request_with_request_id(
+        &node,
+        depth_two_id.clone(),
+        depth_one_id.clone(),
+        depth_one_bridge
+            .request_doc_id()
+            .expect("depth-one request doc")
+            .to_owned(),
+        depth_one_bridge.tool_call_id().to_owned(),
+        depth_one_bridge
+            .doc_id()
+            .expect("depth-one tool doc")
+            .to_owned(),
+        1,
+        agent_did.clone(),
+        "general".into(),
+        "depth-two parent".into(),
+        None,
+    )
+    .await
+    .expect("admit signed depth-two parent");
+    let mut depth_two = claim_existing_request(&node, &depth_two_id, &agent_did).await;
+    let target_bridge = publish_depth_target_bridge(&node, &mut depth_two, &agent_did, name).await;
+    (node, path, target_bridge)
+}
+
+#[cfg(test)]
+async fn insert_observed_parent(
+    node: &Arc<EmbeddedNode>,
+    name: &str,
+    agent_did: &str,
+    stored_depth: Option<i64>,
+) -> String {
+    let request_id = format!("request-{name}");
+    let session_id = format!("session-{name}");
+    let created_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    ensure_fixture_session(node, &session_id, agent_did, None, &created_at).await;
+    let request = crate::graphql::escape_graphql_string(&request_id);
+    let session = crate::graphql::escape_graphql_string(&session_id);
+    let agent = crate::graphql::escape_graphql_string(agent_did);
+    let created = crate::graphql::escape_graphql_string(&created_at);
+    let depth_field =
+        stored_depth.map_or_else(String::new, |depth| format!(", subagent_depth: {depth}"));
+    let response = crate::config_client::ConfigAccess::write_local(
+        node,
+        "test.local_depth_observed_parent",
+        &format!(
+            r#"mutation {{ create_AgentRequest(input: {{ request_id: "{request}", agent_did: "{agent}", behavior_id: "general", session_id: "{session}", retry_parent_request: "", retry_root_request: "{request}", superseded_by_request: "", content: "observed parent", lifecycle_state: "pending", backend_id: "", execution_origin: "interactive", failure_reason: "", created_at: "{created}", retry_count: 0, max_retries: 3{depth_field} }}) {{ _docID }} }}"#,
+        ),
+    )
+    .await
+    .expect("seed local-depth observed parent");
+    crate::graphql::created_doc_id(&response, "AgentRequest").expect("observed parent physical ID")
+}
+
+#[cfg(test)]
+async fn insert_observed_parent_tool(
+    node: &Arc<EmbeddedNode>,
+    name: &str,
+    agent_did: &str,
+    parent_doc_id: &str,
+    child_id: &str,
+) -> (String, String) {
+    let request_id = format!("request-{name}");
+    let tool_call_id = format!("observed-parent-tool-{name}");
+    let key = crate::graphql::escape_graphql_string(&format!("{request_id}:{tool_call_id}"));
+    let request = crate::graphql::escape_graphql_string(&request_id);
+    let parent_doc = crate::graphql::escape_graphql_string(parent_doc_id);
+    let session = crate::graphql::escape_graphql_string(&format!("session-{name}"));
+    let agent = crate::graphql::escape_graphql_string(agent_did);
+    let tool = crate::graphql::escape_graphql_string(&tool_call_id);
+    let child = crate::graphql::escape_graphql_string(child_id);
+    let response = crate::config_client::ConfigAccess::write_local(
+        node,
+        "test.local_depth_observed_tool",
+        &format!(
+            r#"mutation {{ create_AgentToolCall(input: {{ tool_call_key: "{key}", request_id: "{request}", request_doc_id: "{parent_doc}", session_id: "{session}", agent_did: "{agent}", message_sequence: 1, tool_name: "spawn_subagent", tool_call_id: "{tool}", lifecycle_state: "running", await_mode: "background", cancel_policy: "cascade", child_request_id: "{child}", spawn_target_did: "{agent}", spawn_behavior_id: "general" }}) {{ _docID }} }}"#,
+        ),
+    )
+    .await
+    .expect("seed imported local-depth parent tool observation");
+    let tool_doc_id = crate::graphql::created_doc_id(&response, "AgentToolCall")
+        .expect("observed parent tool physical ID");
+    (tool_call_id, tool_doc_id)
+}
+
+#[cfg(test)]
+async fn exact_parent_request_id(node: &EmbeddedNode, parent_doc_id: &str) -> String {
+    let escaped = crate::graphql::escape_graphql_string(parent_doc_id);
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
+            r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, limit: 2) {{ _docID request_id }} }}"#,
+        ),
+        "read exact local-depth parent identity",
+    )
+    .await
+    .expect("read exact local-depth parent identity");
+    let rows = response.data.expect("exact parent query data")["AgentRequest"]
+        .as_array()
+        .expect("exact parent rows")
+        .clone();
+    assert_eq!(rows.len(), 1, "exact local-depth parent is unique");
+    rows[0]["request_id"]
+        .as_str()
+        .expect("exact parent logical request ID")
+        .to_owned()
+}
+
 /// A `Pending` native parent — `from_accepted` without `start_running` — for
 /// tests that drive the pending→running transition themselves. Same physical
 /// IDs and defaults as [`published_spawn_parent`] otherwise.
@@ -701,6 +948,7 @@ mod lifecycle_tests {
         parent_request_doc_id: &str,
         parent_tool_call_id: &str,
         parent_tool_call_doc_id: &str,
+        depth: u32,
         workspace: Option<WorkspaceLineage>,
         admission: gents_protocol::request_admission::AgentRequestAdmissionRecord,
     ) {
@@ -717,7 +965,7 @@ mod lifecycle_tests {
         let spec = RequestSpec {
             workspace,
             subagent: Some(ParentLink {
-                depth: 1,
+                depth,
                 parent_request_id: parent_request_id.to_owned(),
                 parent_request_doc_id: parent_request_doc_id.to_owned(),
                 parent_tool_call_id: Some(parent_tool_call_id.to_owned()),
@@ -1277,7 +1525,8 @@ mod lifecycle_tests {
 
     #[tokio::test]
     async fn admitted_parent_creates_child_at_exact_max_depth_with_full_lineage() {
-        let (node, path, bridge) = published_background_bridge("child-depth-boundary").await;
+        let (node, path, bridge) =
+            published_background_bridge_at_parent_depth("child-depth-boundary", 2).await;
         // `from_accepted` owns the physical request coordinate but deliberately
         // does not invent a logical request ID. Use the request ID authored by
         // this fixture's canonical admission rather than treating the empty
@@ -1371,6 +1620,191 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
+    async fn generated_local_child_parent_depth_cases_drive_owner() {
+        use crate::lean_vocab_test::LeanLocalParentDepthExpected;
+        use crate::tool_call_lifecycle::IllegalToolCallTransition;
+
+        let cases = crate::lean_vocab_test::lean_local_parent_depth_cases();
+        assert_eq!(cases.len(), 12, "generated local-depth inventory changed");
+        for case in cases {
+            let name = format!("local-depth-{}", case.name);
+            let observed = case
+                .stored_parent_depth
+                .and_then(|value| u32::try_from(value).ok());
+            let (node, path, bridge, raw_observation) = match (case.stored_parent_depth, observed) {
+                (Some(_), Some(0)) => {
+                    let (node, path, bridge) = published_background_bridge(&name).await;
+                    (node, path, bridge, false)
+                }
+                (Some(_), Some(1 | 2)) => {
+                    let (node, path, bridge) =
+                        published_background_bridge_at_parent_depth(&name, observed.unwrap()).await;
+                    (node, path, bridge, false)
+                }
+                (None, _) | (Some(_), _) => {
+                    let (node, path, bridge) =
+                        published_background_bridge(&format!("unrelated-identity-{name}")).await;
+                    (node, path, bridge, true)
+                }
+            };
+            let agent_did = bridge.agent_did().to_owned();
+            let (
+                parent_request_id,
+                parent_doc_id,
+                parent_tool_call_id,
+                parent_tool_call_doc_id,
+                child_id,
+            ) = if raw_observation {
+                let parent_doc_id =
+                    insert_observed_parent(&node, &name, &agent_did, case.stored_parent_depth)
+                        .await;
+                let child_id = format!("observed-child-{name}");
+                let (tool_call_id, tool_doc_id) = insert_observed_parent_tool(
+                    &node,
+                    &name,
+                    &agent_did,
+                    &parent_doc_id,
+                    &child_id,
+                )
+                .await;
+                (
+                    format!("request-{name}"),
+                    parent_doc_id,
+                    tool_call_id,
+                    tool_doc_id,
+                    child_id,
+                )
+            } else {
+                let parent_doc_id = bridge
+                    .request_doc_id()
+                    .expect("accepted parent doc")
+                    .to_owned();
+                (
+                    exact_parent_request_id(&node, &parent_doc_id).await,
+                    parent_doc_id,
+                    bridge.tool_call_id().to_owned(),
+                    bridge.doc_id().expect("accepted tool doc").to_owned(),
+                    bridge
+                        .child_request_id
+                        .as_deref()
+                        .expect("accepted child identity")
+                        .to_owned(),
+                )
+            };
+            let child_query = format!(
+                r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}) {{ _docID request_id agent_did subagent_depth caused_by_parent_request_id caused_by_parent_request_doc_id caused_by_parent_tool_call_id caused_by_parent_tool_call_doc_id admission_kind admission_signature runtime_source_kind }} }}"#,
+                crate::graphql::escape_graphql_string(&child_id),
+            );
+            let before = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                &child_query,
+                "read child before local-depth admission",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{}: {error:#}", case.name));
+            assert_eq!(
+                before.data.unwrap()["AgentRequest"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                0
+            );
+            let result = super::super::create_subagent_request_with_request_id(
+                &node,
+                child_id.clone(),
+                parent_request_id.clone(),
+                parent_doc_id.clone(),
+                parent_tool_call_id.clone(),
+                parent_tool_call_doc_id.clone(),
+                case.supplied_parent_depth,
+                agent_did,
+                "general".into(),
+                "generated local depth".into(),
+                None,
+            )
+            .await;
+            let after = crate::graphql::graphql_with_transaction_retry(
+                &node,
+                &child_query,
+                "read child after local-depth admission",
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{}: {error:#}", case.name));
+            let rows = after.data.unwrap()["AgentRequest"]
+                .as_array()
+                .unwrap()
+                .clone();
+            match &case.expected {
+                LeanLocalParentDepthExpected::Admitted { child_depth } => {
+                    assert_eq!(
+                        result.unwrap_or_else(|error| panic!("{}: {error:#}", case.name)),
+                        child_id
+                    );
+                    assert_eq!(rows.len(), 1, "{}", case.name);
+                    let child = &rows[0];
+                    assert_eq!(
+                        child["subagent_depth"].as_u64(),
+                        Some(u64::from(*child_depth)),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        child["caused_by_parent_request_id"], parent_request_id,
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        child["caused_by_parent_request_doc_id"], parent_doc_id,
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        child["caused_by_parent_tool_call_id"], parent_tool_call_id,
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        child["caused_by_parent_tool_call_doc_id"], parent_tool_call_doc_id,
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(child["admission_kind"], "runtime-internal", "{}", case.name);
+                    assert_eq!(child["runtime_source_kind"], "local-child", "{}", case.name);
+                    assert!(
+                        child["admission_signature"]
+                            .as_str()
+                            .is_some_and(|sig| !sig.is_empty()),
+                        "{}",
+                        case.name
+                    );
+                }
+                LeanLocalParentDepthExpected::Rejected { reason } => {
+                    let error = result.expect_err("modeled local-depth rejection");
+                    let expected = match reason.as_str() {
+                        "depth_exceeded" => IllegalToolCallTransition::SubagentDepthExceeded,
+                        "parent_linkage_incoherent" => {
+                            IllegalToolCallTransition::ParentLinkageIncoherent
+                        }
+                        other => panic!("unknown generated local-depth rejection {other}"),
+                    };
+                    assert_eq!(
+                        error.downcast_ref::<IllegalToolCallTransition>(),
+                        Some(&expected),
+                        "{}: {error:#}",
+                        case.name
+                    );
+                    assert!(
+                        rows.is_empty(),
+                        "{} created child on rejection: {rows:?}",
+                        case.name
+                    );
+                }
+            }
+            teardown(node, path).await;
+        }
+    }
+
+    #[tokio::test]
     async fn generated_reserved_child_cases_drive_actual_transaction_owner() {
         use crate::lean_vocab_test::lean_reserved_child_materialization_cases;
 
@@ -1381,19 +1815,40 @@ mod lifecycle_tests {
                 format!("{prefix}-{stored}")
             }
         }
-        fn workspace(value: Option<usize>, agent_did: &str) -> Option<WorkspaceLineage> {
+        fn workspace(
+            value: Option<&crate::lean_vocab_test::LeanCanonicalDelegatedWorkspace>,
+            modeled_agent: usize,
+            agent_did: &str,
+        ) -> Option<WorkspaceLineage> {
             value.map(|value| WorkspaceLineage {
-                workspace_id: Some(format!("workspace-{value}")),
-                workspace_owner_agent_did: Some(agent_did.to_owned()),
-                workspace_authority: Some("readWrite".into()),
-                workspace_seal_hash: Some(format!("seal-{value}")),
+                workspace_id: Some(format!("workspace-{}", value.workspace_id)),
+                workspace_owner_agent_did: Some(
+                    if value.workspace_owner_agent_did
+                        == u64::try_from(modeled_agent).expect("modeled agent fits native identity")
+                    {
+                        agent_did.to_owned()
+                    } else {
+                        format!("agent-{}", value.workspace_owner_agent_did)
+                    },
+                ),
+                workspace_authority: Some(value.workspace_authority.clone()),
+                workspace_seal_hash: value.workspace_seal_hash.map(|seal| format!("seal-{seal}")),
             })
         }
 
         for case in lean_reserved_child_materialization_cases() {
             let fixture = format!("reserved-child-{}", case.name);
-            let (node, path, bridge) = published_background_bridge(&fixture).await;
             let candidate = &case.candidate;
+            let (node, path, bridge) = if candidate.depth == 3 {
+                published_background_bridge_at_parent_depth(&fixture, 2).await
+            } else {
+                published_background_bridge(&fixture).await
+            };
+            let candidate_depth =
+                u32::try_from(candidate.depth).expect("modeled child depth fits native depth");
+            let parent_depth = candidate_depth
+                .checked_sub(1)
+                .expect("modeled child has a parent depth");
             let request_id = bridge
                 .child_request_id
                 .as_deref()
@@ -1406,7 +1861,8 @@ mod lifecycle_tests {
             let parent_request_doc_id = bridge.request_doc_id().unwrap().to_owned();
             let parent_tool_call_id = bridge.tool_call_id().to_owned();
             let parent_tool_call_doc_id = bridge.doc_id().unwrap().to_owned();
-            let candidate_workspace = workspace(candidate.workspace, &agent_did);
+            let candidate_workspace =
+                workspace(candidate.workspace.as_ref(), candidate.agent, &agent_did);
             let bridge_author = bridge
                 .requester_did()
                 .unwrap_or(bridge.agent_did())
@@ -1428,7 +1884,7 @@ mod lifecycle_tests {
                 let stored_workspace = if stored.workspace == candidate.workspace {
                     candidate_workspace.clone()
                 } else {
-                    workspace(stored.workspace, &agent_did)
+                    workspace(stored.workspace.as_ref(), candidate.agent, &agent_did)
                 };
                 let stored_admission = if stored.admission == candidate.admission {
                     if candidate.admission == 7 {
@@ -1479,6 +1935,8 @@ mod lifecycle_tests {
                         &parent_tool_call_doc_id,
                         "parent-tool-doc",
                     ),
+                    u32::try_from(stored.depth)
+                        .expect("modeled stored child depth fits native depth"),
                     stored_workspace,
                     stored_admission,
                 )
@@ -1506,7 +1964,7 @@ mod lifecycle_tests {
                     parent_request_doc_id.clone(),
                     parent_tool_call_id.clone(),
                     parent_tool_call_doc_id.clone(),
-                    0,
+                    parent_depth,
                     agent_did.clone(),
                     behavior_id.into(),
                     prompt.clone(),
@@ -1522,7 +1980,7 @@ mod lifecycle_tests {
                     parent_request_doc_id.clone(),
                     parent_tool_call_id.clone(),
                     parent_tool_call_doc_id.clone(),
-                    0,
+                    parent_depth,
                     agent_did.clone(),
                     behavior_id.into(),
                     prompt.clone(),
@@ -1585,7 +2043,7 @@ mod lifecycle_tests {
                         behavior_id,
                         &prompt,
                         &gents_protocol::request_input::RequestInput::default(),
-                        1,
+                        candidate_depth,
                         &parent_request_id,
                         &parent_request_doc_id,
                         &parent_tool_call_id,
@@ -1603,7 +2061,7 @@ mod lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn admitted_parent_rejects_depth_overflow_and_empty_logical_lineage() {
+    async fn admitted_parent_rejects_empty_logical_lineage() {
         let (node, path, bridge) = published_background_bridge("child-invalid-lineage").await;
         let parent_request_doc_id = bridge.request_doc_id().unwrap().to_owned();
         let parent_tool_call_doc_id = bridge.doc_id().unwrap().to_owned();
@@ -1615,29 +2073,10 @@ mod lifecycle_tests {
             )
         };
 
-        let (request_doc, tool_doc, agent) = arguments();
-        let error = super::super::create_subagent_request(
-            &node,
-            bridge.request_id().to_owned(),
-            request_doc,
-            bridge.tool_call_id().to_owned(),
-            tool_doc,
-            super::super::MAX_SUBAGENT_DEPTH,
-            agent,
-            "general".into(),
-            "too deep".into(),
-            None,
-        )
-        .await
-        .unwrap_err();
-        assert!(matches!(
-            error.downcast_ref::<super::super::IllegalToolCallTransition>(),
-            Some(super::super::IllegalToolCallTransition::SubagentDepthExceeded)
-        ));
-
-        for (parent_request_id, parent_tool_call_id) in
-            [("", bridge.tool_call_id()), (bridge.request_id(), "")]
-        {
+        for (parent_request_id, parent_tool_call_id) in [
+            ("", bridge.tool_call_id()),
+            ("request-child-invalid-lineage", ""),
+        ] {
             let (request_doc, tool_doc, agent) = arguments();
             let error = super::super::create_subagent_request(
                 &node,

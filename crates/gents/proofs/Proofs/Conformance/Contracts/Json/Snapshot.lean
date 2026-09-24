@@ -71,7 +71,8 @@ def reservedChildDecisionString : EventDelivery.SubagentSource.MaterializationDe
   | .conflict => "conflict"
 
 def reservedChildBindingJson (binding : EventDelivery.SubagentSource.ReservedChildBinding) : String :=
-  let workspaceJson := match binding.workspace with | none => "null" | some value => toString value
+  let workspaceJson := (binding.workspace.map
+    Conformance.DelegatedChildContracts.stampJson).getD "null"
   "{" ++ "\"child\":" ++ toString binding.child ++ ","
     ++ "\"agent\":" ++ toString binding.agent ++ ","
     ++ "\"behavior\":" ++ toString binding.behavior ++ ","
@@ -80,6 +81,7 @@ def reservedChildBindingJson (binding : EventDelivery.SubagentSource.ReservedChi
     ++ "\"parent_tool\":" ++ toString binding.parentTool ++ ","
     ++ "\"parent_tool_doc\":" ++ toString binding.parentToolDoc ++ ","
     ++ "\"payload\":" ++ toString binding.payload ++ ","
+    ++ "\"depth\":" ++ toString binding.depth ++ ","
     ++ "\"workspace\":" ++ workspaceJson ++ ","
     ++ "\"admission\":" ++ toString binding.admission ++ "}"
 
@@ -90,6 +92,23 @@ def reservedChildCaseJson (w : EventDelivery.SubagentSource.ReservedChildCase) :
     ++ "\"candidate\":" ++ reservedChildBindingJson w.candidate ++ ","
     ++ "\"expected_decision\":" ++ jsonString (reservedChildDecisionString actual.1) ++ ","
     ++ "\"expected_count\":" ++ toString actual.2.length ++ "}"
+
+def localParentDepthCaseJson
+    (value : EventDelivery.SubagentSource.LocalParentDepthCase) : String :=
+  let observed := match value.storedParentDepth with
+    | none => "null"
+    | some depth => toString depth
+  let expected := match EventDelivery.SubagentSource.admitLocalChildDepth
+      value.suppliedParentDepth value.storedParentDepth with
+    | .ok child => "{\"kind\":\"admitted\",\"child_depth\":" ++ toString child ++ "}"
+    | .error .depthExceeded =>
+        "{\"kind\":\"rejected\",\"reason\":\"depth_exceeded\"}"
+    | .error .parentLinkageIncoherent =>
+        "{\"kind\":\"rejected\",\"reason\":\"parent_linkage_incoherent\"}"
+  "{\"name\":" ++ jsonString value.name ++
+    ",\"supplied_parent_depth\":" ++ toString value.suppliedParentDepth ++
+    ",\"stored_parent_depth\":" ++ observed ++
+    ",\"expected\":" ++ expected ++ "}"
 
 open Conformance.ContractCases
 
@@ -138,6 +157,8 @@ def snapshotJson : String :=
       ++ Conformance.WorkerCapacityContracts.casesJson ++ ","
     ++ "\"canonical_payload_presentation_cases\":"
       ++ Conformance.PayloadPresentationContracts.casesJson ++ ","
+    ++ "\"terminal_diagnostic_presentation_cases\":"
+      ++ Conformance.TerminalDiagnosticContracts.casesJson ++ ","
     ++ "\"inference_registry_cases\":"
       ++ Conformance.InferenceRegistry.casesJson ++ ","
     ++ "\"process_transition_cases\":"
@@ -293,6 +314,9 @@ def snapshotJson : String :=
     ++ "\"reserved_child_materialization_cases\":"
       ++ jsonArray
         (EventDelivery.SubagentSource.reservedChildCases.map reservedChildCaseJson) ++ ","
+    ++ "\"local_parent_depth_cases\":"
+      ++ jsonArray
+        (EventDelivery.SubagentSource.localParentDepthCases.map localParentDepthCaseJson) ++ ","
     ++ "\"restart_disposition_cases\":"
       ++ jsonArray
         (Recovery.restartDispositionCases.map restartDispositionCaseJson) ++ ","

@@ -519,6 +519,113 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
     let _ = std::fs::remove_dir_all(path);
 }
 
+async fn recovery_receipt_fixture(
+    name: &str,
+) -> (
+    Arc<EmbeddedNode>,
+    std::path::PathBuf,
+    RequestLifecycle,
+    DefraStreamWriter,
+    gents_protocol::row::AgentRequestRow,
+    String,
+) {
+    let (node, path, lifecycle, writer) = fixture(name).await;
+    let request = lifecycle.request();
+    crate::config_client::ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.recovery_session_observation",
+        |txn| {
+            Box::pin(async move {
+                let now = chrono::Utc::now().to_rfc3339();
+                crate::session::ensure_session_in_txn(
+                    &txn,
+                    &request.session_id,
+                    &request.agent_did,
+                    &request.behavior_id,
+                    request.requester_did.as_deref(),
+                    None,
+                    None,
+                    &now,
+                )
+                .await?;
+                let session = crate::session::load_agent_session_row_in_txn(
+                    &txn,
+                    &request.agent_did,
+                    &request.session_id,
+                    request.requester_did.as_deref(),
+                )
+                .await?
+                .expect("recovery session");
+                let facts =
+                    crate::session::load_scoped_request_facts_in_txn(&txn, &session.session, false)
+                        .await?;
+                let fact = facts
+                    .iter()
+                    .find(|fact| fact.observed.request_doc_id == request.doc_id)
+                    .expect("recovery request fact");
+                assert!(
+                    crate::session::advance_session_request_observation_in_txn(
+                        &txn,
+                        fact,
+                        &request.content,
+                        &now,
+                    )
+                    .await?
+                );
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let doc_id = &lifecycle.request().doc_id;
+    writer
+        .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    writer
+        .flush_native_partial(
+            &lifecycle,
+            &gents_protocol::message::Message::assistant("retained recovery prefix"),
+        )
+        .await
+        .unwrap();
+    let escaped = crate::graphql::escape_graphql_string(doc_id);
+    let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let expire = crate::config_client::ConfigAccess::write_local(
+        &node,
+        "test.expire_recovery_receipt_fixture",
+        &format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&expiry),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        expire["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }} }}"#,
+        crate::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "test.read_recovery_receipt_fixture",
+    )
+    .await
+    .unwrap();
+    let observed = crate::graphql::first_row(&response, "AgentRequest")
+        .unwrap()
+        .unwrap();
+    (node, path, lifecycle, writer, observed, expiry)
+}
+
 #[tokio::test]
 async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
     use crate::config_client::ConfigApplyTxn;
@@ -528,77 +635,10 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     // a fresh recovery of the same shape. No test-side recovery write script.
     let mut mutation_count = 0;
     for baseline in [true, false] {
-        let (node, path, lifecycle, writer) = fixture("recovery-mutation-rollback").await;
-        let request = lifecycle.request();
-        crate::config_client::ConfigAccess::transact_local(
-            &node,
-            None,
-            "test.recovery_session_observation",
-            |txn| {
-                Box::pin(async move {
-                    let now = chrono::Utc::now().to_rfc3339();
-                    crate::session::ensure_session_in_txn(
-                        &txn,
-                        &request.session_id,
-                        &request.agent_did,
-                        &request.behavior_id,
-                        request.requester_did.as_deref(),
-                        None,
-                        None,
-                        &now,
-                    )
-                    .await?;
-                    let session = crate::session::load_agent_session_row_in_txn(
-                        &txn,
-                        &request.agent_did,
-                        &request.session_id,
-                        request.requester_did.as_deref(),
-                    )
-                    .await?
-                    .expect("recovery session");
-                    let facts = crate::session::load_scoped_request_facts_in_txn(
-                        &txn,
-                        &session.session,
-                        false,
-                    )
-                    .await?;
-                    let fact = facts
-                        .iter()
-                        .find(|fact| fact.observed.request_doc_id == request.doc_id)
-                        .expect("recovery request fact");
-                    assert!(
-                        crate::session::advance_session_request_observation_in_txn(
-                            &txn,
-                            fact,
-                            &request.content,
-                            &now,
-                        )
-                        .await?
-                    );
-                    Ok(())
-                })
-            },
-        )
-        .await
-        .unwrap();
-        let doc_id = &lifecycle.request().doc_id;
-        writer
-            .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
-            .await;
-        writer
-            .flush_native_partial(
-                &lifecycle,
-                &gents_protocol::message::Message::assistant("retained recovery prefix"),
-            )
-            .await
-            .unwrap();
+        let (node, path, _lifecycle, _writer, observed, expiry) =
+            recovery_receipt_fixture("recovery-mutation-rollback").await;
+        let doc_id = observed.doc_id.as_deref().unwrap();
         let escaped = crate::graphql::escape_graphql_string(doc_id);
-        let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-        let expire = node.execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&expiry),
-        )).await;
-        assert!(!expire.has_errors(), "{:?}", expire.errors);
         let snapshot = || async {
             let response = node.execute(&format!(
                 r#"{{
@@ -614,10 +654,6 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
             response
         };
         let before = snapshot().await;
-        let observed: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&before, "AgentRequest")
-                .unwrap()
-                .unwrap();
         let generation = observed.execution_generation.as_deref().unwrap();
         let now = chrono::Utc::now();
         let recover = || {
@@ -686,6 +722,132 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(path);
     }
+}
+
+#[tokio::test]
+async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selection() {
+    use crate::config_client::ConfigApplyTxn;
+    use crate::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+    use gents_protocol::output::{MessagePublication, TerminalOutput};
+
+    let (node, path, _lifecycle, _writer, observed, expiry) =
+        recovery_receipt_fixture("recovery-receipt-loss").await;
+    let request_doc_id = observed.doc_id.as_deref().unwrap();
+    let old_generation = observed.execution_generation.as_deref().unwrap();
+    let fresh_generation = "recovery-receipt-loss-generation";
+    assert_ne!(old_generation, fresh_generation);
+    let observed_now = chrono::Utc::now();
+    let request = crate::graphql::escape_graphql_string(request_doc_id);
+    let query = format!(
+        r#"{{
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal source writer runs payload close created_at }}
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID message_key sequence publication outcome role blocks created_at }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID lifecycle_state }}
+            AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ {} lifecycle_state terminal_output failure_reason terminalized_at }}
+            AgentSession {{ _docID observation }}
+        }}"#,
+        crate::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let snapshot = || async {
+        crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &query,
+            "test.recovery_receipt_snapshot",
+        )
+        .await
+        .expect("read recovery physical facts")
+        .data
+        .expect("recovery query data")
+    };
+    let before = snapshot().await;
+    assert!(before["AgentMessage"].as_array().unwrap().is_empty());
+    let original_segments = before["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(original_segments.len(), 1);
+    let original = &original_segments[0];
+    assert!(original["close"].is_null());
+    let recover = || {
+        recover_expired_generation_with_facts(
+            &node,
+            &observed,
+            old_generation,
+            &expiry,
+            fresh_generation.into(),
+            observed_now,
+            None,
+            None,
+        )
+    };
+    let (first, fault_fired) = ConfigApplyTxn::with_post_commit_receipt_loss(recover()).await;
+    assert!(
+        fault_fired,
+        "the committed recovery receipt must be lost once"
+    );
+    assert_eq!(first.unwrap(), RecoveryResult::Won { published: 1 });
+
+    let committed = snapshot().await;
+    let headers = committed["AgentMessage"].as_array().unwrap();
+    assert_eq!(
+        headers.len(),
+        1,
+        "nonempty prefix must publish one recovery header"
+    );
+    assert!(
+        !headers[0]["blocks"].as_array().unwrap().is_empty(),
+        "recovery header must retain the flushed provider prefix"
+    );
+    let committed_segments = committed["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(
+        committed_segments.len(),
+        before["AgentOutputSegment"].as_array().unwrap().len() + 1,
+        "recovery must close the unclosed provider prefix"
+    );
+    assert!(
+        committed_segments.contains(original),
+        "recovery must retain the exact original flush"
+    );
+    let closing = committed_segments
+        .iter()
+        .find(|row| row["_docID"] != original["_docID"])
+        .expect("recovery creates one new closing segment");
+    assert!(!closing["close"].is_null());
+    assert_eq!(closing["source"], original["source"]);
+    assert_eq!(closing["writer"], original["writer"]);
+    let header_doc_id = headers[0]["_docID"].as_str().unwrap();
+    let publication: MessagePublication =
+        serde_json::from_value(headers[0]["publication"].clone()).unwrap();
+    assert!(matches!(
+        publication,
+        MessagePublication::RequestRecovery { execution_generation }
+            if execution_generation == fresh_generation
+    ));
+    assert_eq!(headers[0]["outcome"], "partial");
+    let request = &committed["AgentRequest"][0];
+    assert_eq!(request["lifecycle_state"], "failed");
+    assert_eq!(request["execution_generation"], fresh_generation);
+    let selection: TerminalOutput =
+        serde_json::from_value(request["terminal_output"].clone()).expect("recovery selection");
+    assert_eq!(
+        selection,
+        TerminalOutput::Message {
+            message_doc_id: header_doc_id.to_owned(),
+        }
+    );
+    assert_ne!(
+        committed["AgentSession"], before["AgentSession"],
+        "recovery must refresh the durable session observation"
+    );
+
+    let (replay, writes) =
+        ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
+    assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
+    assert_eq!(writes, 0, "same-generation replay must not mutate");
+    assert_eq!(
+        snapshot().await,
+        committed,
+        "external replay must preserve all physical IDs, request facts and session observation"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
 }
 
 #[tokio::test]

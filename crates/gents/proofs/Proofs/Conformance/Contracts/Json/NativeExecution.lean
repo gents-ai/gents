@@ -32,6 +32,7 @@ inductive Input where
   | recover (actor : Nat) (now fresh deadline : Nat)
   | renew (now expectedDeadline : Nat)
   | appendRaw (actor now : Nat) (record : Segment)
+  | appendToolOutput (actor now document : Nat) (record : Segment)
   | recoverItems (actor now fresh deadline : Nat) (items : List RecoveryItem)
   | recoverTerminal (actor now fresh : Nat)
       (outcome : RequestExecutionLease.Outcome) (selection : TerminalSelection)
@@ -85,6 +86,7 @@ def Input.step : Input → Step
   | .recover _ _ fresh deadline => .commit (.recover 7 fresh 5 deadline [])
   | .renew _ expectedDeadline => .commit (.renew 7 expectedDeadline)
   | .appendRaw _ _ record => .commit (.append 7 record)
+  | .appendToolOutput _ _ document record => .commit (.toolAppend document record)
   | .recoverItems _ _ fresh deadline items => .commit (.recover 7 fresh 5 deadline items)
   | .recoverTerminal _ _ fresh outcome selection items =>
       .commit (.recoverTerminal 7 fresh outcome selection items)
@@ -106,6 +108,7 @@ def Input.step : Input → Step
 def Input.actor : Input → Nat
   | .recover actor .. => actor
   | .appendRaw actor .. => actor
+  | .appendToolOutput actor .. => actor
   | .recoverItems actor .. => actor
   | .recoverTerminal actor .. => actor
   | .revokeDead actor .. => actor
@@ -116,6 +119,7 @@ def Input.now : Input → Nat
   | .recover _ now .. => now
   | .renew now _ => now
   | .appendRaw _ now _ => now
+  | .appendToolOutput _ now .. => now
   | .recoverItems _ now .. => now
   | .recoverTerminal _ now .. => now
   | .closePartial now .. => now
@@ -139,6 +143,7 @@ def Input.tag : Input → String
   | .recover .. => "recover_expired_generation"
   | .renew .. => "renew_lease"
   | .appendRaw .. => "append_output"
+  | .appendToolOutput .. => "append_tool_output"
   | .recoverItems .. => "recover_expired_generation"
   | .recoverTerminal .. => "recover_expired_terminal"
   | .closePartial .. => "close_partial"
@@ -349,6 +354,41 @@ def leaseOrderingCases : List Case :=
   , mkCase "real_spawn_dispatched_wait_explicitly_renews"
       (routedWorld 5) [.realSpawnAccept, .dispatch 5, .renew 8 10] ]
 
+def toolDeadlineFlush (now : Time) : Segment :=
+  { ToolDelivery.Cases.toolOutputClose with
+    id := 710, close := none, createdAt := now }
+
+/-- Fresh tool output uses the tool's strict deadline, independently of the
+parent request lease. Exact replay is checked before the fresh-write deadline
+guard and cannot allocate another physical segment. -/
+def toolOutputDeadlineCases : List Case :=
+  [ mkCase "tool_output_before_deadline"
+      (world 5) [.acceptForeground, .dispatch 5,
+        .appendToolOutput 1 19 600 (toolDeadlineFlush 19)]
+  , mkCase "tool_output_at_deadline"
+      (world 5) [.acceptForeground, .dispatch 5,
+        .appendToolOutput 1 20 600 (toolDeadlineFlush 20)]
+  , mkCase "tool_output_after_deadline"
+      (world 5) [.acceptForeground, .dispatch 5,
+        .appendToolOutput 1 21 600 (toolDeadlineFlush 21)]
+  , mkCase "tool_output_exact_replay_after_deadline"
+      (world 5) [.acceptForeground, .dispatch 5,
+        .appendToolOutput 1 19 600 (toolDeadlineFlush 19),
+        .appendToolOutput 2 21 600 (toolDeadlineFlush 19)] ]
+
+example : toolOutputDeadlineCases.map (fun value => value.expected.map
+    (List.map (·.accepted))) =
+    [some [true, true, true], some [true, true, true],
+     some [true, true, false], some [true, true, true, true]] := by
+  native_decide
+
+example : toolOutputDeadlineCases.map (fun value =>
+    (value.expected.bind List.getLast?).map
+      (fun result => (result.segments.length, result.leaseDeadline))) =
+    [some (2, some 10), some (2, some 10),
+     some (1, some 10), some (2, some 10)] := by
+  native_decide
+
 /-- Four inference sources whose insertion order and JSON spelling both
 disagree with numeric `(scope, turn, attempt)` identity order. -/
 private def numericRecoveryRawA : Segment :=
@@ -501,7 +541,8 @@ def schedulingCases : List Case :=
       (world 5) [.appendWhileSiblingWaits (raw 100 0 0 5)] ]
 
 def cases : List Case :=
-  schedulingCases ++ toolSeamCases ++ nativeToolCompletionCases ++ leaseOrderingCases ++ terminalRecoveryCases ++
+  schedulingCases ++ toolSeamCases ++ nativeToolCompletionCases ++ leaseOrderingCases ++
+    toolOutputDeadlineCases ++ terminalRecoveryCases ++
     publicationCases ++ integrityCases ++
     compactionCases ++ livePartialCases
 
@@ -622,6 +663,9 @@ def inputJson (input : Input) : String :=
         ",\"expected_deadline\":" ++ toString expectedDeadline ++ "}"
   | .append generation record =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"record\":" ++
+        canonicalSegmentJson record ++ "}"
+  | .toolAppend document record =>
+      common ++ ",\"document\":" ++ toString document ++ ",\"record\":" ++
         canonicalSegmentJson record ++ "}"
   | .toolControl generation document .background =>
       common ++ ",\"generation\":" ++ toString generation ++ ",\"document\":" ++
