@@ -303,19 +303,6 @@ export async function saveDefault(
   );
 }
 
-/* what a saved behavior still needs before it can be enabled */
-function missingToTurnOn(deployment: DeploymentView, b: BehaviorView) {
-  return [
-    ...(!b.contextId || !deployment.contexts.some((c) => c.context_id === b.contextId)
-      ? ["instructions"]
-      : []),
-    ...(!b.inferenceProfileId ||
-    !deployment.inferenceProfiles.some((p) => p.profile_id === b.inferenceProfileId)
-      ? ["a model"]
-      : []),
-  ];
-}
-
 export const DEFAULT_STAYS_ENABLED =
   "The default behavior stays enabled. Choose another default before turning it off.";
 
@@ -333,8 +320,6 @@ function RowControls({
   inEditor?: boolean;
 }) {
   const [busy, setBusy] = useState(false);
-  const missing = missingToTurnOn(deployment, behavior);
-  const blocked = !behavior.enabled && missing.length > 0;
   /* the current default is never turned off in place */
   const keptOn = behavior.enabled && behavior.isDefault;
   const toggle = async (next: boolean) => {
@@ -371,20 +356,14 @@ function RowControls({
     >
       <span
         className="flex items-center gap-2.5 px-1 text-sm"
-        title={
-          blocked
-            ? `Needs ${missing.join(" and ")} before it can be enabled`
-            : keptOn
-              ? DEFAULT_STAYS_ENABLED
-              : undefined
-        }
+        title={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
       >
         {inEditor && (behavior.enabled ? "Enabled" : "Disabled")}
         <Switch
           aria-label={`${behavior.displayName} is ${behavior.enabled ? "enabled" : "disabled"}`}
           aria-description={keptOn ? DEFAULT_STAYS_ENABLED : undefined}
           checked={behavior.enabled}
-          disabled={busy || blocked || keptOn}
+          disabled={busy || keptOn}
           onCheckedChange={(v) => void toggle(v)}
         />
       </span>
@@ -847,19 +826,13 @@ export function BehaviorEditor({
     )
       ? context
       : null;
-  /* what keeps it from being enabled, as saved */
-  const blocked = missingToTurnOn(deployment, behavior);
   const readiness = behaviorReadiness(deployment, behavior.behaviorId);
   const env = deployment.behaviorEnvironments.find(
     (e) => e.behaviorId === behavior.behaviorId,
   );
   /* said under the summary only when something needs attention */
   const attention =
-    !behavior.enabled && blocked.length
-      ? `Needs ${blocked.join(" and ")} before it can be enabled.`
-      : behavior.enabled && !readiness.ready
-        ? `It can’t run: ${readiness.reason}.`
-        : null;
+    behavior.enabled && !readiness.ready ? `It can’t run: ${readiness.reason}.` : null;
   return (
     <>
       <header

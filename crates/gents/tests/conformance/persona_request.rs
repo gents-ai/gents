@@ -510,8 +510,9 @@ fn admission_matrix_mirrors_lean_admits() {
         PersonaVerdict::Reject(_)
     ));
 
-    // Lean `default_disable_rejected`: the principal default is not disabled
-    // in place; publication would refuse the apply on every reconcile.
+    // Hand-written, not model-derived: persona admission cases are not yet
+    // generated from Lean (#1737; ledger follow-up hook
+    // PersonaRequest.default_disable_rejected).
     let mut default_catalog = cat.clone();
     default_catalog
         .behaviors
