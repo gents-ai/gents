@@ -304,3 +304,19 @@ ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree a
   `feat/eval-cli`), `86f1cb169` (README). Stack rebased: runner `75556ded9`, policy `b146bc35e`,
   driver `3becb1e31`, cli `e5a9b4363`, side `a9691be48`, wizard `524843870`. Force-pushes are the
   user's. `main` itself is red on `rust-and-cli (cli)` in four of its last five runs, unrelated.
+
+## `rebase` coordinator (spun up 2026-09-24)
+
+| Workspace | Coordinator | Brief | Worktree |
+|---|---|---|---|
+| `wC` (label `rebase`), agent `rebaser` in pane `wC:p1` | Claude, `claude --model opus` | `orchestration/2026-09-24-stack-rebase-brief.md` | `~/Repos/Source/gents-rebase` on scratch branch `rebase/stack-onto-main` from `feat/guarded-publication` @ `10f64b5bb` |
+
+Cause: a maintainer (jackzampolin) force-pushed `feat/guarded-publication` at 13:57 UTC, rebasing
+PR 1 onto `main` @ `8059b672d` (236 commits past our base). Every other branch descended from the
+old tip `00043f57d`; GitHub registered no check runs for the heads pushed today. The coordinator
+rebases contract, runner, policy, driver, cli, wizard and the side branch in order, resolves the
+known conflicts (conformance snapshot and ledger, lean vocab support, conformance consumers, test
+support, the wizard's chat visibility and Cargo.toml), regenerates desktop bindings where the
+generated commits conflict, and gates each tip against main's new CI rules. Ledger under the design
+worktree at `.superpowers/sdd/2026-09-24-stack-rebase/`. The contract and wizard worktrees were
+removed first (clean, pushed) so every branch is free to check out.
