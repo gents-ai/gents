@@ -59,7 +59,7 @@ export function useDesktopShell({
   });
   const {
     autostartAttempted,
-    localServerAvailable,
+    clientAutostarts,
     autoRestartInFlight,
     lastP2PAutoRestartAt,
     lastObservedP2PHealth,
@@ -184,7 +184,7 @@ export function useDesktopShell({
     lastObservedP2PHealth,
     lastP2PAutoRestartAt,
     localWorkflow,
-    localServerAvailable,
+    clientAutostarts,
     listenToUpdates,
     newSessionAgentRef,
     onStartClient,

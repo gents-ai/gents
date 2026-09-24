@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { shouldAutoStartDesktopClient } from "../src/hooks/desktopShellEffects";
+import {
+  projectStartupPhaseAfterSnapshot,
+  shouldAutoStartDesktopClient,
+} from "../src/lib/loadingStatus";
 import { restoreManagedServer } from "../src/hooks/managedServerLifecycle";
 import type { DesktopApiAdapter } from "@source-inc/gents-desktop-client";
 
@@ -131,4 +134,22 @@ describe("managed server launch restoration", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    [{ clientStateExists: false, savedPeers: [{ source: "local-standard" }] }, false],
+    [{ clientStateExists: false, savedPeers: [{ source: "local-standard" }] }, true],
+    [{ clientStateExists: false, savedPeers: [{ source: "local-standard" }] }, null],
+    [{ clientStateExists: true, savedPeers: [] }, false],
+    [{ clientStateExists: false, savedPeers: [{ source: "paired-remote" }] }, false],
+    [{ clientStateExists: false, savedPeers: [] }, true],
+  ])(
+    "waits on the client exactly when autostart will start it (%j, local=%s)",
+    (bootstrap, localServerAvailable) => {
+      const snapshot = { bootstrap, client: null } as never;
+      const autostarts = shouldAutoStartDesktopClient(snapshot, localServerAvailable);
+      expect(
+        projectStartupPhaseAfterSnapshot("loading-configuration", false, !autostarts),
+      ).toBe(autostarts ? "starting-client" : "ready");
+    },
+  );
 });

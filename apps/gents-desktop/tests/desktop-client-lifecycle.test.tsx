@@ -5,6 +5,7 @@ import { useDesktopClientLifecycle } from "../src/hooks/useDesktopClientLifecycl
 
 const ownership = vi.hoisted(() => ({ main: true }));
 vi.mock("../src/lib/shellPlatform", () => ({
+  isMobileTauriShell: () => false,
   ownsAutomaticRecovery: () => ownership.main,
 }));
 beforeEach(() => {

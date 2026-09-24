@@ -86,7 +86,7 @@ function useSelection(
     lastObservedP2PHealth: ref,
     lastP2PAutoRestartAt: ref,
     localWorkflow: workflow,
-    localServerAvailable: ref,
+    clientAutostarts: () => false,
     listenToUpdates: async () => () => {},
     newSessionAgentRef: route.newSessionAgentRef,
     refreshSession: async () => null,
