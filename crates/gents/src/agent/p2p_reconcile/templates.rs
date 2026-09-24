@@ -606,19 +606,21 @@ pub fn admit_app_collections(requested: BTreeSet<String>) -> Option<BTreeSet<Str
 }
 
 /// Read this node's active identity for every `client` route collection.
-/// Collections the node does not hold are omitted, so comparison fails closed.
+/// Fails unless every collection is registered, so a node that has not
+/// finished its migrations never publishes a partial schema.
 pub async fn read_client_replicated_schema(
-    access: &crate::config_client::ConfigAccess,
+    node: std::sync::Arc<defra_node::EmbeddedNode>,
 ) -> anyhow::Result<ReplicatedSchema> {
+    let access = crate::config_client::ConfigAccess::Local(node);
     let mut schema = ReplicatedSchema::new();
     for name in CLIENT_COLLECTIONS {
-        let version = access.collection_version(name).await?;
-        if let Some(identity) = version
+        let identity = access
+            .collection_version(name)
+            .await?
             .as_ref()
             .and_then(ReplicatedCollectionIdentity::from_collection_version)
-        {
-            schema.insert((*name).to_string(), identity);
-        }
+            .ok_or_else(|| anyhow::anyhow!("client route collection {name} is not registered"))?;
+        schema.insert((*name).to_string(), identity);
     }
     Ok(schema)
 }
@@ -747,6 +749,24 @@ mod tests {
                 .unwrap_err()
                 .collections,
             vec!["Task".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn client_schema_is_unreadable_until_migrations_register_every_collection() {
+        let node = std::sync::Arc::new(defra_node::EmbeddedNode::builder().build().await.unwrap());
+        let error = read_client_replicated_schema(node.clone())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("is not registered"), "{error:#}");
+
+        crate::migration::ensure_all_runtime_migrations(node.clone())
+            .await
+            .unwrap();
+        let schema = read_client_replicated_schema(node).await.unwrap();
+        assert_eq!(
+            schema.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            CLIENT_COLLECTIONS.iter().copied().collect::<BTreeSet<_>>()
         );
     }
 

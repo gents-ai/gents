@@ -31,7 +31,7 @@ use uuid::Uuid;
 
 use super::super::principal_identity::PrincipalIdentity;
 use super::route_manager::ClientRouteManager;
-use super::sync_state::ClientSyncStateOwner;
+use super::sync_state::{ClientSyncStateOwner, RuntimeSchemaObservation};
 use super::{ClientCore, P2P_OPERATION_TIMEOUT};
 
 pub(super) async fn current_local_endpoint(
@@ -73,16 +73,22 @@ struct AdminPinRow {
 }
 
 impl ClientCore {
-    /// Compare the runtime `runtime_did` serving `status` with this node's
-    /// replicated collection versions; a mismatch on a configured peer stays
-    /// visible in sync health.
-    pub async fn observe_runtime_schema(&self, runtime_did: &str, status: &Value) -> Result<()> {
+    /// Start observing runtime `runtime_did`; call before fetching its
+    /// `/status` so the observation is fenced to the current route.
+    pub fn begin_runtime_schema_observation(&self, runtime_did: &str) -> RuntimeSchemaObservation {
         self.sync_state
-            .observe_runtime_schema(
-                &gents::config_client::ConfigAccess::Local(self.node.clone()),
-                runtime_did,
-                status,
-            )
+            .begin_runtime_schema_observation(runtime_did)
+    }
+
+    /// Compare the fetched `status` with this node's replicated collection
+    /// versions; a mismatch on a configured peer stays visible in sync health.
+    pub async fn finish_runtime_schema_observation(
+        &self,
+        observation: &RuntimeSchemaObservation,
+        status: &Value,
+    ) -> Result<()> {
+        self.sync_state
+            .finish_runtime_schema_observation(&self.node, observation, status)
             .await
             .context("runtime cannot sync with this app")
     }
@@ -107,7 +113,8 @@ impl ClientCore {
             .filter(|token| !token.trim().is_empty())
             .context("server does not advertise authenticated status enrollment")?;
         let offer = decode_offer(offer_token).context("decoding server enrollment offer")?;
-        self.observe_runtime_schema(&offer.owner_agent, status)
+        self.sync_state
+            .compare_runtime_schema(&self.node, &offer.owner_agent, status)
             .await
             .context("refusing to enroll with an incompatible runtime")?;
         anyhow::ensure!(

@@ -1538,6 +1538,13 @@ async fn start_managed_runtime_pairing(
     }));
 }
 
+/// How long a just-started runtime may take to publish its replicated schema,
+/// which it does only after its migrations finish.
+const MANAGED_SCHEMA_PUBLISH_WINDOW: Duration = Duration::from_secs(30);
+
+/// Fetch the managed runtime's `/status`, retrying within
+/// [`MANAGED_SCHEMA_PUBLISH_WINDOW`] while it is unreachable or has not yet
+/// published its replicated schema.
 async fn fetch_managed_runtime_status(
     target: &ManagedPairingTarget,
 ) -> Result<serde_json::Value, String> {
@@ -1546,17 +1553,30 @@ async fn fetch_managed_runtime_status(
     status_url.set_path("/status");
     status_url.set_query(None);
     status_url.set_fragment(None);
-    fetch_runtime_connection_payload(status_url.as_str())
-        .await
-        .map_err(|error| format!("{error:#}"))
+    let deadline = tokio::time::Instant::now() + MANAGED_SCHEMA_PUBLISH_WINDOW;
+    loop {
+        let fetched = fetch_runtime_connection_payload(status_url.as_str())
+            .await
+            .map_err(|error| format!("{error:#}"));
+        let published = fetched.as_ref().is_ok_and(|status| {
+            !status
+                .get(gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD)
+                .is_some_and(serde_json::Value::is_null)
+        });
+        if published || tokio::time::Instant::now() >= deadline {
+            return fetched;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
 }
 
 async fn observe_managed_runtime_schema(
     core: &ClientCore,
     target: &ManagedPairingTarget,
 ) -> Result<(), String> {
+    let observation = core.begin_runtime_schema_observation(&target.agent_did);
     let status = fetch_managed_runtime_status(target).await?;
-    core.observe_runtime_schema(&target.agent_did, &status)
+    core.finish_runtime_schema_observation(&observation, &status)
         .await
         .map_err(|error| format!("{error:#}"))
 }
@@ -3632,14 +3652,73 @@ mod tests {
         assert_eq!(observations.load(Ordering::SeqCst), 4);
     }
 
-    #[tokio::test]
-    async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() {
-        use gents_desktop_core::client::{
-            project_sync_health, ClientCoreOptions, DesktopPaths, SyncHealthState,
-        };
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    /// Serves one fixed `/status` body. While `hold` is set, each response
+    /// waits for `release` after announcing the request on `received`.
+    struct StatusServer {
+        port: u16,
+        hold: Arc<std::sync::atomic::AtomicBool>,
+        received: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        task: tokio::task::JoinHandle<()>,
+    }
 
-        let (temp, state) = orchestration_state();
+    impl StatusServer {
+        async fn start(body: String) -> Self {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("status listener");
+            let port = listener.local_addr().expect("status address").port();
+            let hold = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let received = Arc::new(tokio::sync::Notify::new());
+            let release = Arc::new(tokio::sync::Notify::new());
+            let (task_hold, task_received, task_release) =
+                (hold.clone(), received.clone(), release.clone());
+            let task = tokio::spawn(async move {
+                loop {
+                    let Ok((mut stream, _)) = listener.accept().await else {
+                        return;
+                    };
+                    let mut request = Vec::new();
+                    let mut buffer = [0_u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match stream.read(&mut buffer).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(read) => request.extend_from_slice(&buffer[..read]),
+                        }
+                    }
+                    if task_hold.load(std::sync::atomic::Ordering::SeqCst) {
+                        task_received.notify_one();
+                        task_release.notified().await;
+                    }
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            });
+            Self {
+                port,
+                hold,
+                received,
+                release,
+                task,
+            }
+        }
+
+        fn graphql(&self) -> String {
+            format!("http://127.0.0.1:{}/api/v0/graphql", self.port)
+        }
+    }
+
+    async fn skewed_managed_runtime(
+        temp: &tempfile::TempDir,
+        agent_did: &str,
+    ) -> (Arc<ClientCore>, StatusServer) {
+        use gents_desktop_core::client::{ClientCoreOptions, DesktopPaths};
+
         let core = Arc::new(
             ClientCore::start_with_paths_and_options(
                 DesktopPaths::from_root(temp.path().join("client")),
@@ -3648,52 +3727,40 @@ mod tests {
             .await
             .expect("client core"),
         );
-        let local = gents::agent::p2p_reconcile::read_client_replicated_schema(
-            &gents::config_client::ConfigAccess::Local(core.node_arc()),
-        )
-        .await
-        .expect("local collection versions");
-        let mut next_release = local.clone();
+        let mut next_release =
+            gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
+                .await
+                .expect("local collection versions");
         next_release
             .get_mut("AgentSession")
             .expect("client route replicates AgentSession")
             .version_id = "bafy-next-release".to_string();
+        let server = StatusServer::start(
+            serde_json::json!({
+                "agent_did": agent_did,
+                gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: next_release,
+            })
+            .to_string(),
+        )
+        .await;
+        core.add_managed_enrollment_peer_for_test(
+            agent_did,
+            &server.graphql(),
+            "/tmp/managed-home",
+            1,
+        )
+        .await
+        .expect("paired managed runtime");
+        (core, server)
+    }
 
+    #[tokio::test]
+    async fn paired_managed_runtime_with_skewed_schema_projects_incompatible_sync() {
+        use gents_desktop_core::client::{project_sync_health, SyncHealthState};
+
+        let (temp, state) = orchestration_state();
         let agent_did = "did:key:managed-runtime";
-        let body = serde_json::json!({
-            "agent_did": agent_did,
-            gents_protocol::peer_schema::STATUS_REPLICATED_SCHEMA_FIELD: next_release,
-        })
-        .to_string();
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("status listener");
-        let port = listener.local_addr().expect("status address").port();
-        let server = tokio::spawn(async move {
-            loop {
-                let Ok((mut stream, _)) = listener.accept().await else {
-                    return;
-                };
-                let mut request = Vec::new();
-                let mut buffer = [0_u8; 1024];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    match stream.read(&mut buffer).await {
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => request.extend_from_slice(&buffer[..read]),
-                    }
-                }
-                let response = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes()).await;
-            }
-        });
-
-        let graphql = format!("http://127.0.0.1:{port}/api/v0/graphql");
-        core.add_managed_enrollment_peer_for_test(agent_did, &graphql, "/tmp/managed-home")
-            .await
-            .expect("paired managed runtime");
+        let (core, server) = skewed_managed_runtime(&temp, agent_did).await;
         assert!(core.peer_records().await.iter().any(|peer| {
             peer.agent_did == agent_did
                 && peer.is_enrollment()
@@ -3709,7 +3776,7 @@ mod tests {
             ManagedPairingTarget {
                 agent_name: "Managed".to_string(),
                 agent_did: agent_did.to_string(),
-                graphql,
+                graphql: server.graphql(),
             },
         )
         .await;
@@ -3734,7 +3801,55 @@ mod tests {
             .as_deref()
             .is_some_and(|error| error.contains("AgentSession")));
 
-        server.abort();
+        server.task.abort();
+        core.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn managed_schema_fetched_across_a_route_change_is_ignored() {
+        let temp = tempfile::tempdir().expect("temp");
+        let agent_did = "did:key:managed-runtime";
+        let (core, server) = skewed_managed_runtime(&temp, agent_did).await;
+        let target = ManagedPairingTarget {
+            agent_name: "Managed".to_string(),
+            agent_did: agent_did.to_string(),
+            graphql: server.graphql(),
+        };
+
+        server.hold.store(true, std::sync::atomic::Ordering::SeqCst);
+        let in_flight = tokio::spawn({
+            let core = Arc::clone(&core);
+            let target = target.clone();
+            async move { observe_managed_runtime_schema(&core, &target).await }
+        });
+        tokio::time::timeout(Duration::from_secs(10), server.received.notified())
+            .await
+            .expect("status request in flight");
+        core.add_managed_enrollment_peer_for_test(
+            agent_did,
+            &server.graphql(),
+            "/tmp/managed-home",
+            2,
+        )
+        .await
+        .expect("route generation advances");
+        server
+            .hold
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        server.release.notify_one();
+        let late = in_flight.await.expect("observation task");
+        assert!(late.is_err_and(|error| error.contains("AgentSession")));
+        assert!(
+            core.sync_state().peer_schema_skew.is_empty(),
+            "a response fetched for the replaced generation is not recorded"
+        );
+
+        observe_managed_runtime_schema(&core, &target)
+            .await
+            .unwrap_err();
+        assert_eq!(core.sync_state().peer_schema_skew.len(), 1);
+
+        server.task.abort();
         core.shutdown().await.expect("shutdown");
     }
 }

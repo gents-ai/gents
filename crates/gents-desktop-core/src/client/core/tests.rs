@@ -1095,11 +1095,10 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
         .await
         .expect("core");
-    let local: ReplicatedSchema = gents::agent::p2p_reconcile::read_client_replicated_schema(
-        &gents::config_client::ConfigAccess::Local(core.node_arc()),
-    )
-    .await
-    .expect("read local collection versions");
+    let local: ReplicatedSchema =
+        gents::agent::p2p_reconcile::read_client_replicated_schema(core.node_arc())
+            .await
+            .expect("read local collection versions");
     assert_eq!(
         local.len(),
         gents::agent::p2p_reconcile::CLIENT_COLLECTIONS.len(),
@@ -1149,7 +1148,8 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
     core.add_local_standard_peer_for_test(runtime_did)
         .await
         .expect("configured runtime peer");
-    core.observe_runtime_schema(runtime_did, &skewed)
+    let observation = core.begin_runtime_schema_observation(runtime_did);
+    core.finish_runtime_schema_observation(&observation, &skewed)
         .await
         .unwrap_err();
     let health = project_sync_health(&core.sync_state()).expect("skew is visible");
@@ -1163,7 +1163,8 @@ async fn runtime_schema_skew_refuses_enrollment_and_projects_incompatible_sync()
         "agent_did": runtime_did,
         STATUS_REPLICATED_SCHEMA_FIELD: local,
     });
-    core.observe_runtime_schema(runtime_did, &matching)
+    let observation = core.begin_runtime_schema_observation(runtime_did);
+    core.finish_runtime_schema_observation(&observation, &matching)
         .await
         .expect("same collection versions are compatible");
     assert!(core.sync_state().peer_schema_skew.is_empty());

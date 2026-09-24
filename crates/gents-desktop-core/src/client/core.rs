@@ -34,6 +34,7 @@ use super::query::{
 use crate::remote_admin::PairingErrorClass;
 
 pub use enrollment::EnrollmentRequestResult;
+pub use sync_state::RuntimeSchemaObservation;
 
 const BOOTSTRAP_OPERATION_TIMEOUT: Duration = Duration::from_secs(20);
 const PEER_ADD_OPERATION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -410,12 +411,14 @@ impl ClientCore {
 
     /// Test-fixture seam for a durably paired, chat-ready managed runtime.
     /// Product callers must establish enrollment through the signed owner.
+    #[cfg(any(test, feature = "test-fixtures"))]
     #[doc(hidden)]
     pub async fn add_managed_enrollment_peer_for_test(
         &self,
         agent_did: &str,
         graphql: &str,
         agent_home: &str,
+        authorization_sequence: u64,
     ) -> Result<()> {
         let addr =
             "127.0.0.1:56000/p2p/6fe391e1c69d66de633034ca40cda6d39ca1a3c94792f2f510add7d1421ea7bb";
@@ -433,7 +436,7 @@ impl ClientCore {
                 "request",
                 "digest",
                 agent_did,
-                1,
+                authorization_sequence,
                 "2999-01-01T00:00:00Z",
             )
             .await?;
