@@ -137,7 +137,7 @@ beyond that, inventory itself drops to path-only lines counted in
 ## Run it
 
 ```bash
-gents pack run security_scan
+gents pack scenario run security_scan
 ```
 
 Everything a run produces lands under `packs/security_scan/runs/<job_id>/`:

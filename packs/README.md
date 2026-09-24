@@ -11,7 +11,7 @@ gents pack install code_review --home <initialized-home>
 gents graph run code_review --repo . --base origin/main --head HEAD
 gents pack install mailbox --home <initialized-home>
 gents pack prune mailbox
-gents pack run pipeline --http-port 19191 --keep-home
+gents pack scenario run pipeline --http-port 19191 --keep-home
 ```
 
 ## What a pack is made of
@@ -174,7 +174,7 @@ identity checks. Review plugin declarations and host authority before
 installing untrusted content. External dependency commands are documentation,
 never automatically executed.
 
-`pack run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
+`pack scenario run`, `init`, and `seed` operate `experiment.json` scenarios. A lexically
 normalized source directory with a snake_case leaf name can be used while
 authoring; bundled names are materialized into the local pack cache when no
 source directory is selected. Run artifacts are under the resolved pack's
@@ -187,7 +187,7 @@ scenario runs. `experiment.json` may configure scenario-specific graph model
 bindings, but cannot declare another dependency list.
 
 The bundled scenario asset cache is separate from the runtime home selected
-with `pack run --home`: it lives under the default Gents home's `packs/` tree.
+with `pack scenario run --home`: it lives under the default Gents home's `packs/` tree.
 The distribution digest covers all declared assets, including documentation;
 the graph execution digest covers only the graph's referenced inputs. Both use
 the existing graph asset hashing routine. Filesystem cache names use the hex

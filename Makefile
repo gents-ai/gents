@@ -238,7 +238,7 @@ maintain:
 	GENTS_MAINTENANCE_STREAM_BATCH_MS="$(MAINTENANCE_STREAM_BATCH_MS)" \
 	GENTS_MAINTENANCE_RETRY_MAX_TRANSPORT="$(MAINTENANCE_RETRY_MAX_TRANSPORT)" \
 	GENTS_MAINTENANCE_RETRY_MAX_RESAMPLE="$(MAINTENANCE_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- pack run "$(CURDIR)/packs/repo_maintenance" \
+	$(CARGO) run -p gents-cli -- pack scenario run "$(CURDIR)/packs/repo_maintenance" \
 		--http-port "$(MAINTENANCE_PORT)" \
 		--job-id "$$maintenance_job_id" \
 		$(if $(MAINTENANCE_KEEP_HOME),--keep-home,)
@@ -273,7 +273,7 @@ defend:
 	GENTS_DEFENDING_STREAM_BATCH_MS="$(DEFENDING_STREAM_BATCH_MS)" \
 	GENTS_DEFENDING_RETRY_MAX_TRANSPORT="$(DEFENDING_RETRY_MAX_TRANSPORT)" \
 	GENTS_DEFENDING_RETRY_MAX_RESAMPLE="$(DEFENDING_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- pack run "$(CURDIR)/packs/defending_code" \
+	$(CARGO) run -p gents-cli -- pack scenario run "$(CURDIR)/packs/defending_code" \
 		--http-port "$(DEFENDING_PORT)" \
 		--job-id "$$defending_job_id" \
 		$(if $(DEFENDING_KEEP_HOME),--keep-home,)
@@ -330,7 +330,7 @@ grok-port:
 	GENTS_GROK_PORT_STREAM_BATCH_MS="$(GROK_PORT_STREAM_BATCH_MS)" \
 	GENTS_GROK_PORT_RETRY_MAX_TRANSPORT="$(GROK_PORT_RETRY_MAX_TRANSPORT)" \
 	GENTS_GROK_PORT_RETRY_MAX_RESAMPLE="$(GROK_PORT_RETRY_MAX_RESAMPLE)" \
-	$(CARGO) run -p gents-cli -- pack run "$(CURDIR)/packs/grok_tui_port" \
+	$(CARGO) run -p gents-cli -- pack scenario run "$(CURDIR)/packs/grok_tui_port" \
 		--http-port "$(GROK_PORT_PORT)" \
 		--job-id "$$grok_port_job_id" \
 		$(if $(GROK_PORT_KEEP_HOME),--keep-home,)

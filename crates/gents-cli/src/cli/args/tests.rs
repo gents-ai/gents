@@ -586,9 +586,16 @@ fn pack_catalog_and_install_parse() {
     assert!(Cli::try_parse_from(["gents", "graph", "install", "code_review"]).is_err());
     assert!(Cli::try_parse_from(["gents", "demo"]).is_err());
     assert!(Cli::try_parse_from(["gents", "demo", "run", "pipeline"]).is_err());
-    assert!(
-        Cli::try_parse_from(["gents", "pack", "seed", "pipeline", "--home", "/tmp/node"]).is_err()
-    );
+    assert!(Cli::try_parse_from([
+        "gents",
+        "pack",
+        "scenario",
+        "seed",
+        "pipeline",
+        "--home",
+        "/tmp/node"
+    ])
+    .is_err());
 
     match parse_pack(&[
         "install",
@@ -699,6 +706,7 @@ fn parse_pack(argv: &[&str]) -> PackCommand {
 #[test]
 fn pack_seed_parses_pack_port_and_page() {
     let args = parse_pack(&[
+        "scenario",
         "seed",
         "packs/pipeline",
         "--http-port",
@@ -711,7 +719,7 @@ fn pack_seed_parses_pack_port_and_page() {
         "review-1",
     ]);
     match args {
-        PackCommand::Seed(seed) => {
+        PackCommand::Scenario(PackScenarioCommand::Seed(seed)) => {
             assert_eq!(seed.pack, "packs/pipeline");
             assert_eq!(seed.http_port, 19191);
             assert_eq!(seed.page_port, Some(19190));
@@ -724,9 +732,15 @@ fn pack_seed_parses_pack_port_and_page() {
 
 #[test]
 fn pack_init_parses_pack_and_home() {
-    let args = parse_pack(&["init", "packs/pipeline", "--home", "/tmp/review-home"]);
+    let args = parse_pack(&[
+        "scenario",
+        "init",
+        "packs/pipeline",
+        "--home",
+        "/tmp/review-home",
+    ]);
     match args {
-        PackCommand::Init(init) => {
+        PackCommand::Scenario(PackScenarioCommand::Init(init)) => {
             assert_eq!(init.pack, "packs/pipeline");
             assert_eq!(init.home, std::path::PathBuf::from("/tmp/review-home"));
             assert!(!init.overwrite);

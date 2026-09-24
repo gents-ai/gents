@@ -1,4 +1,4 @@
-//! Live qualification: `gents pack run security_scan` end to end against
+//! Live qualification: `gents pack scenario run security_scan` end to end against
 //! this repository, on the pack's default GLM-5.2 backend (or whatever
 //! GENTS_SCAN_ENDPOINT / GENTS_SCAN_MODEL point at).
 //!
@@ -28,10 +28,13 @@ fn pack_run_security_scan_live() {
     let status = Command::new(env!("CARGO_BIN_EXE_gents"))
         .current_dir(&root)
         .env("GENTS_SCAN_ROOT", &root)
-        .args(["pack", "run", "security_scan"])
+        .args(["pack", "scenario", "run", "security_scan"])
         .status()
-        .expect("spawn gents pack run");
-    assert!(status.success(), "pack run security_scan exited {status}");
+        .expect("spawn gents pack scenario run");
+    assert!(
+        status.success(),
+        "pack scenario run security_scan exited {status}"
+    );
 
     // The runner writes runs/<job_id>/meta.json; the newest run must exist
     // and record a results artifact.

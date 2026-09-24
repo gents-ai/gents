@@ -20,14 +20,14 @@ another OpenAI-compatible endpoint) is reachable.
 rust-analyzer --version
 
 # From the repo root so init.tool_root `.` is this Gents tree
-gents pack run lsp_rust
+gents pack scenario run lsp_rust
 
 # Or pin an absolute workspace
 GENTS_LSP_WORKSPACE=/abs/path/to/gents \
-  gents pack run lsp_rust --keep-home
+  gents pack scenario run lsp_rust --keep-home
 ```
 
-`experiment.json` asks `gents pack run` for a **readonly** ceiling rooted
+`experiment.json` asks `gents pack scenario run` for a **readonly** ceiling rooted
 at `tool_root` and then checks persisted `AgentToolCall` rows (symbols and
 both hovers). The ignored live test loads this same pack prompt and
 lsp_config. It first runs `unscripted_prompt.md`, which gives the model no
@@ -62,7 +62,7 @@ test. The live pack and e2e point at the real Gents tree.
 # Installation
 
 Install configuration with `gents pack install lsp_rust --home <home>` or
-exercise the scenario with `gents pack run lsp_rust`. See the usage and tool
+exercise the scenario with `gents pack scenario run lsp_rust`. See the usage and tool
 requirements below before enabling compiler or shell access.
 
 ## Declared topology

@@ -338,12 +338,9 @@ pub(crate) enum PackCommand {
     Install(PackInstallArgs),
     /// Remove superseded generated asset-cache versions without run history.
     Prune(PackPruneArgs),
-    /// Exercise a scenario in a dedicated home: apply, seed, await, report.
-    Run(PackRunArgs),
-    /// Initialize a dedicated scenario home.
-    Init(PackInitArgs),
-    /// Seed an installed scenario against an already-serving node.
-    Seed(PackSeedArgs),
+    /// Run, initialize or seed a pack's experiment.json scenario.
+    #[command(subcommand)]
+    Scenario(PackScenarioCommand),
     /// Compile a pack's plugins and pack the whole pack into one `.pack`.
     Build(PackBuildArgs),
     /// Search the pack registry.
@@ -352,6 +349,16 @@ pub(crate) enum PackCommand {
     Publish(PackPublishArgs),
     /// Download a pack's `.pack` from the registry without installing it.
     Fetch(PackFetchArgs),
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PackScenarioCommand {
+    /// Exercise a scenario in a dedicated home: apply, seed, await, report.
+    Run(PackRunArgs),
+    /// Initialize a dedicated scenario home.
+    Init(PackInitArgs),
+    /// Seed an installed scenario against an already-serving node.
+    Seed(PackSeedArgs),
 }
 
 #[derive(clap::Args)]

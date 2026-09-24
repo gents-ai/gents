@@ -27,7 +27,7 @@ create BackgroundContinuationJob
 Run it with a fresh home:
 
 ```bash
-gents pack run background_continuation
+gents pack scenario run background_continuation
 ```
 
 The runner requires two completed depth-positive child requests, at least one
