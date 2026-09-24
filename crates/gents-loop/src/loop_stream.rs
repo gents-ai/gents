@@ -49,6 +49,7 @@ mod aggregate_budget;
 mod contract;
 mod invalid_tool_progress;
 mod one_shot;
+mod provider_idle;
 mod request_assembly;
 mod tool_dispatch;
 mod turn_threading;
@@ -70,6 +71,7 @@ pub use request_assembly::{
 };
 pub use tool_dispatch::dispatch_tool;
 
+use provider_idle::next_provider_item;
 use request_assembly::{
     build_budgeted_request, context_accounting_for_request, prepare_dispatch_attempt,
     repair_and_rebuild_request,
@@ -387,7 +389,9 @@ where
             let mut aggregate_budget_exhausted = false;
             let mut aggregate_usage_failure = None::<String>;
 
-            while let Some(item) = stream.next().await {
+            while let Some(item) =
+                next_provider_item(&mut stream, config.provider_idle_timeout, saw_stream_item).await
+            {
                 let item = match item {
                     Ok(item) => {
                         if !saw_stream_item {
@@ -405,10 +409,8 @@ where
                     }
                     // Dispatch begins only after this provider stream closes
                     // and its turn is accepted. No host effect exists here.
-                    Err(completion_error) => {
-                        let streaming_error = StreamingError::Completion(completion_error);
-                        let classified = crate::error::classify_completion_error(&streaming_error);
-                        let error_text = streaming_error.to_string();
+                    Err(failure) => {
+                        let (classified, error_text) = failure.classify();
                         if !saw_stream_item {
                             match retry.on_pre_stream_failure(
                                 &classified,

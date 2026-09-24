@@ -21,6 +21,11 @@ source consistency checks, not a separate runtime compatibility version.
   collections, when the managed runtime it starts differs, instead of
   accepting messages the runtime can never receive. Versions whose replicated
   collections match stay compatible.
+- A provider stream that goes silent no longer holds a request until its
+  deadline. When no output arrives within `stream_liveness_timeout_secs`
+  (default 120s), before the first item or between items, the attempt fails
+  and follows the configured completion retry policy. Tool execution is not
+  bounded by this window.
 - Desktop startup waits for a background agent that is still booting instead
   of failing, and shows how long it has waited. It fails when the service
   stops, when it keeps exiting (with the exit reason), or after five minutes,

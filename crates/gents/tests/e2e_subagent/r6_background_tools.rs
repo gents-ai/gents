@@ -134,6 +134,9 @@ async fn boot_background_turn_with_bounds(
         .expect("configure R6 execution deadline");
     }
     prepared.backend.enable_dynamic_followups(&prompt);
+    // A deadline-bounded caller must reach its request deadline before the
+    // wait tool's own timeout does.
+    let wait_timeout_secs = execution_deadline_secs.map_or(1, |deadline| deadline * 2);
     configure_behavior_tools(
         db.node.as_ref(),
         db.node_identity.did(),
@@ -151,8 +154,8 @@ async fn boot_background_turn_with_bounds(
                         "sh".to_string(),
                     ]),
                     background_enabled: true,
-                    wait_timeout_secs: Some(1),
-                    max_wait_timeout_secs: Some(1),
+                    wait_timeout_secs: Some(wait_timeout_secs),
+                    max_wait_timeout_secs: Some(wait_timeout_secs),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -1253,16 +1256,18 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         Some(15),
     )
     .await;
+    // Author the parent's follow-up before it is requested: this fixture's
+    // one-second stream_liveness_timeout fails a provider held silent.
+    finish_dynamic_turn(&turn);
     let row = wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "bash").await;
     let tool_call_id = row.tool_call_id.expect("accepted background handle");
-    finish_dynamic_turn(&turn);
     wait_for_initial_request_terminal(&turn).await;
     let prompt = "wait for process until caller deadline";
     turn.runtime.backend.enable_dynamic_followups(prompt);
     turn.runtime.backend.enqueue_response(
         prompt,
         crate::support::streaming_backend::StreamResponse::Stream(
-            crate::support::streaming_backend::StreamScript::paused_before(
+            crate::support::streaming_backend::StreamScript::streams(
                 prompt,
                 vec![StreamChunk::tool_call(
                     "meta-wait-deadline",
@@ -1287,9 +1292,10 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
         Some(&valid_until),
     )
     .await;
-    // Wait for the claim owner to synthesize and persist the configured
-    // execution deadline, then release inside its remaining budget. Admission
-    // valid_until is intentionally a different, later clock.
+    // The claim owner synthesizes and persists the configured execution
+    // deadline; the wait call must time out against it. Admission valid_until
+    // is intentionally a different, later clock. The provider is not held
+    // silent here: silence beyond stream_liveness_timeout fails the attempt.
     let request_id = escape_graphql_string("r6-background-wait-deadline-request-2");
     let persisted_deadline_at = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
@@ -1309,16 +1315,14 @@ async fn wait_tool_caller_deadline_returns_without_cancelling_background_row() {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
     }).await.expect("follow-up request was not claimed with an execution deadline");
-    let release_at = persisted_deadline_at - chrono::Duration::milliseconds(900);
-    let delay = (release_at - chrono::Utc::now())
-        .to_std()
-        .unwrap_or_default();
-    tokio::time::sleep(delay).await;
-    turn.runtime.backend.release(prompt);
     let wait_row =
         wait_for_named_tool_call(turn.db.node.as_ref(), &turn.session_id, "wait_process").await;
     let wait_tool_call_id = wait_row.tool_call_id.expect("accepted wait handle");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now()
+        + (persisted_deadline_at - chrono::Utc::now())
+            .to_std()
+            .unwrap_or_default()
+        + Duration::from_secs(3);
     loop {
         let current =
             load_tool_call(turn.db.node.as_ref(), &turn.session_id, &wait_tool_call_id).await;

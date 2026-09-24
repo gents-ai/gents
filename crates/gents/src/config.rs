@@ -20,9 +20,11 @@ pub use gents_loop::compaction::{
     DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX, DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
     MAX_COMPACTION_SUMMARY_FILE_LIST_MAX, MAX_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
 };
-/// Default execution lease duration, exposed by InferenceExecution's
-/// stream_liveness_timeout_secs field. The owned renewal task keeps live work
-/// current independently of provider output.
+/// Default for InferenceExecution's stream_liveness_timeout_secs: the owned
+/// loop's provider idle window (first item and between items) and the
+/// execution lease duration. The renewal task keeps the lease current
+/// independently of provider output, so silent tool work stays owned while a
+/// silent provider stream fails its attempt through the retry owner.
 pub const DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS: u64 = 120;
 /// Overall wall-clock budget for a claimed request. Long-running goals may
 /// legitimately work for many hours while continuing to emit model/tool data.

@@ -25,7 +25,7 @@ pub struct InferenceExecution {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stream_batch_ms: Option<i64>,
-    /// Maximum provider-stream silence. Existing default 1,800s.
+    /// Maximum provider-stream silence before the first item and between items; expiry is a retryable attempt failure. Also the execution lease duration. Default 120s.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "typescript", ts(optional = nullable))]
     pub stream_liveness_timeout_secs: Option<i64>,

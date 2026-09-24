@@ -16,7 +16,7 @@ max_total_tokens?: number | null,
  */
 stream_batch_ms?: number | null,
 /**
- * Maximum provider-stream silence. Existing default 1,800s.
+ * Maximum provider-stream silence before the first item and between items; expiry is a retryable attempt failure. Also the execution lease duration. Default 120s.
  */
 stream_liveness_timeout_secs?: number | null,
 /**
