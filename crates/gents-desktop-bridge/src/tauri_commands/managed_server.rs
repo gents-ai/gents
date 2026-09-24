@@ -1117,8 +1117,7 @@ where
                 "the native Gents service exited normally before it published runtime readiness, so it will not be restarted"
             ),
             NativeProgress::Exited(exit) => {
-                let first = *first_exit_restarts.get_or_insert(exit.restarts);
-                let restarts = exit.restarts.saturating_sub(first);
+                let restarts = restarts_since(&mut first_exit_restarts, exit.restarts);
                 if restarts >= CRASH_LOOP_RESTARTS {
                     anyhow::bail!(
                         "the native Gents service keeps exiting before it publishes runtime readiness: it {} and was restarted {restarts} times in a row",
@@ -1957,14 +1956,23 @@ fn ensure_allowed(state: &DesktopAppState) -> Result<(), BridgeError> {
 /// Tracks a crash loop across status reads: the supervisor's restart count
 /// when a failed exit was first seen, and how far it has advanced since.
 /// Returns the restarts since then once they reach the crash-loop threshold.
+/// Restarts since `baseline`. A counter below the baseline means the job was
+/// reloaded or its counter reset, so the baseline restarts from it.
+fn restarts_since(baseline: &mut Option<u64>, counter: u64) -> u64 {
+    let first = baseline
+        .filter(|first| *first <= counter)
+        .unwrap_or(counter);
+    *baseline = Some(first);
+    counter - first
+}
+
 fn observe_crash_loop(
     baseline: &mut Option<u64>,
     last_exit: Option<&gents_server::native_service::ServiceExit>,
 ) -> Option<u64> {
     match last_exit.filter(|exit| !exit.clean) {
         Some(exit) => {
-            let first = *baseline.get_or_insert(exit.restarts);
-            let restarts = exit.restarts.saturating_sub(first);
+            let restarts = restarts_since(baseline, exit.restarts);
             (restarts >= CRASH_LOOP_RESTARTS).then_some(restarts)
         }
         None => {
@@ -3547,5 +3555,52 @@ mod tests {
         assert_eq!(managed.last_error.as_deref(), Some(message.as_str()));
         drop(managed);
         assert!(ensure_no_start_waiting(&state).await.is_ok());
+    }
+
+    #[test]
+    fn a_reset_restart_counter_restarts_the_crash_loop_baseline() {
+        let mut baseline = None;
+        assert_eq!(
+            observe_crash_loop(&mut baseline, Some(&service_exit(7))),
+            None
+        );
+        assert_eq!(
+            observe_crash_loop(&mut baseline, Some(&service_exit(1))),
+            None
+        );
+        assert_eq!(baseline, Some(1), "a lower counter resets the baseline");
+        assert_eq!(
+            observe_crash_loop(&mut baseline, Some(&service_exit(2))),
+            None
+        );
+        assert_eq!(
+            observe_crash_loop(&mut baseline, Some(&service_exit(3))),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn readiness_restarts_its_baseline_when_the_counter_drops() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let observations = AtomicUsize::new(0);
+        let counters = [7, 1, 2, 3];
+        let error = await_runtime_readiness(
+            Duration::from_secs(60),
+            Duration::from_millis(1),
+            || async { Ok(PortReadiness::NotListening) },
+            || {
+                let seen = observations.fetch_add(1, Ordering::SeqCst);
+                let restarts = counters[seen.min(counters.len() - 1)];
+                async move { Ok(NativeProgress::Exited(service_exit(restarts))) }
+            },
+        )
+        .await
+        .expect_err("two restarts after the reset fail");
+        assert!(
+            error.to_string().contains("restarted 2 times in a row"),
+            "{error}"
+        );
+        assert_eq!(observations.load(Ordering::SeqCst), 4);
     }
 }
