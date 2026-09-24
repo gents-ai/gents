@@ -32,10 +32,13 @@ gents eval init <subject> [--behavior <id>] --out <dir> [--definition-id <id>]
 - `<subject>` is a pack name or a pack directory, resolved as `eval run --cell` resolves one.
   `--behavior` selects the behavior when the pack declares more than one; a single behavior is
   implied; none or an unknown id is a refusal.
-- The command opens the operator's home through `resolve_config_access`. It installs the built-in
-  `eval_author` pack into that home once, idempotently (a second install with the same digest is
-  a no-op), binding its single inference slot `author` to `--profile` or the home's default profile.
-  The pack is one behavior `eval-author` with a context and no tools.
+- The command needs the operator's home to be served: the author's requests are claimed and run
+  by that runtime, exactly as `gents chat` turns are. It resolves the GraphQL endpoint the way
+  `gents chat` does (`--graphql`, else the home's runtime state) and refuses with "start
+  `gents server` for this home" when nothing answers. It installs the built-in `eval_author` pack
+  into that home once, idempotently (re-applying the same documents changes nothing), binding its
+  single inference slot `author` to `--profile` or the home's default profile. The pack is one
+  behavior `eval-author` with a context and no tools.
 - It creates a fresh `AgentSession`, submits the first turn with `behavior_id = eval-author`: the
   subject dossier (section 2), the check catalog and the authoring contract (section 3). The
   author's first reply is its questions.
@@ -106,7 +109,9 @@ The authoring contract is fixed text in the `eval_author` context:
 6. Split shape: all three splits present, validation at the interview floor (default six), no
    duplicate case id.
 7. Loader round trip: write to a temporary directory, load through the real pack loader with the
-   sidecar rule, install the result into a scratch embedded home.
+   sidecar rule, install the result into a scratch embedded home. The stack tip's loader has no
+   eval-case sidecar hydration yet (the held side branch adds it), so this PR carries that
+   loader change; the side branch drops its copy when it rebases.
 
 Failure sends the messages back verbatim as the next turn, prefixed "The draft did not validate;
 revise and reply with a new draft." Success moves the temporary directory to `--out` (refused if
@@ -122,8 +127,9 @@ With `--pilot`, after the pack lands: install it into the home as a directory pa
 profile, every split, `trials_per_case: 1`, `purpose: "pilot"`, run id
 `<definition_id>-pilot-<unix ms>`, the embedded executor, Ctrl-C cancelling as for `eval run`.
 
-`purpose: "pilot"` is recorded in the origin; `eval list` shows it; `compare` and the exposure
-count exclude pilot runs unless asked. A pilot is a look at cases that are about to change.
+`purpose: "pilot"` is recorded in the origin; `eval list` shows it; the exposure count skips
+pilot runs, and `compare` refuses a pilot run unless `--include-pilot` is given. A pilot is a
+look at cases that are about to change.
 
 When the run ends, the report (`eval::report::build`) is folded into one turn: per case and
 stage, each check's kind, score and reason code, plus captured rows for failing stages under a
