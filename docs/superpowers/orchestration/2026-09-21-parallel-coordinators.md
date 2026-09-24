@@ -325,3 +325,14 @@ removed first (clean, pushed) so every branch is free to check out.
   which fails 3/3 on `main` @ `8059b672d` and on the maintainer's PR 1 tip too: pre-existing on
   main, not ours, not yet filed. Conflicts: Snapshot.lean (both imports kept),
   conformance_consumers.rs (main's deleted request-execution-lease consumer not restored).
+- 2026-09-24 rebase: branch 3 `feat/eval-runner` rebased (conflicts: `EmbeddedHome` takes main's
+  crash-reopen semantics and `in_tempdir(TempDir, Option<P2PConfigForPath>)`; `test_db_in` kept
+  for main's r6 recovery caller; stages.rs reads via main's `terminal_answer`). Main `8315f78d7`
+  deleted `AgentResponse`, `AgentMessage.{request_id,content,timestamp}` and
+  `AgentToolCall.{args,result}`; the runner's `embedded/observe.rs` still queried them (compiles,
+  fails at runtime). Ruling: a fix commit at tip 3 ports the evidence reads onto main's canonical
+  owners (`run_timeline_fetch`, `terminal_output` + `load_canonical_message`,
+  `AgentRequest.failure_reason`) with the contract types (`StageEvidence`, `TrialEvidence`,
+  completion `stages`/`usage`/`anchor`) unchanged, outcome kinds unchanged, the embedded canary as
+  acceptance and a query-shape unit test; Opus implementer, Opus review. Tips 4 to 7 and the side
+  branch restack onto it.
