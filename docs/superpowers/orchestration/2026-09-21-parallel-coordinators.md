@@ -258,3 +258,17 @@ Each squashed commit's body lists the subjects it folds. Report: `.superpowers/s
 Binding rules for it: the standing rules above with rule 3 corrected (no `Co-Authored-By` trailers,
 ever) and the 2026-09-23 workflow amendments. Ledger under the design worktree at
 `.superpowers/sdd/2026-09-23-eval-init-wizard/`. Delivers PR 7 of the stack, on #1658.
+
+### `eval-init` rulings relayed 2026-09-23 (evening)
+
+- R1 a pilot is one run per populated split; `PilotOutcome.run_ids`. R2 the loader round trip is
+  validation step 7: `write.rs` has `stage()` and `commit()`, and a round-trip failure returns to
+  the author as a validation round. R3 the README records pilot run ids on "keep" and notes a
+  revision. R4 an existing `--out` without `--force` is refused before the interview. R5
+  `InitOutcome` carries the assembled definition for the pilot.
+- Speed-up the coordinator reports as approved by the user in its own pane: Tasks 4 and 5 in
+  worktree B with its own target dir, in parallel with Tasks 1 to 3 in A, cherry-picked back;
+  `CARGO_BUILD_JOBS=5` per workspace; Tasks 8 and 9 as one dispatch; Task 4 without a task review.
+  Orchestrator's conditions: fall back to the shared-target amendment on any OOM, timeout or 2×
+  slowdown; the final reviewer reads the authoring contract against spec §3 line by line;
+  cherry-picks stay trailer-free.
