@@ -290,7 +290,9 @@ def outputProjectionCaseJson
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","
     ++ "\"input\":" ++ outputObservationJson witness.input ++ ","
-    ++ "\"expected\":" ++ outputViewJson witness.expected
+    ++ "\"expected\":" ++ outputViewJson witness.expected ++ ","
+    ++ "\"rendered_kinds\":" ++ jsonArray
+      ((StreamingResponse.renderedKinds witness.expected).map jsonString)
     ++ "}"
 
 def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=

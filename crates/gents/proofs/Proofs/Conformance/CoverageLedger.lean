@@ -1361,10 +1361,11 @@ def caseCoverage : List CoverageEntry :=
       "RepairedProjectionAdmissionCases"
       "Fresh provider-view admission reprojects and re-estimates supplied repaired input; generated observations cover failures, equality, over-threshold and output-capacity checks. This does not model the repair transformation or establish native consumer coverage.")
       "compaction" [Surface.agentFacing]
-  , tagged (followUpCoverage
+  , tagged (consumerWithFollowUp
       "canonical_output_projection_cases"
       "CanonicalOutputProjectionCases"
-      "Typed immutable projection, loading/conflict/denial, owner liveness and retained Partial diagnostics are executable Lean witnesses. Native projection plus ACP/genesis validation remains a bridge obligation.")
+      "gents_protocol::transcript::tests::generated_reasoning_visibility_matches_persisted_presentation"
+      "The two published mixed/all-opaque reasoning cases bind present_message and gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview to renderedKinds. This binds stateless reasoning presentation, not full streaming event delivery, projection selection, ACP or genesis validation.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (followUpCoverage
       "compaction_reducer_cases"

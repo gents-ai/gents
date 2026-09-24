@@ -11,6 +11,18 @@ pub(crate) struct LeanCanonicalOutputProjectionCase {
     pub(crate) name: String,
     pub(crate) input: LeanCanonicalOutputObservation,
     pub(crate) expected: LeanCanonicalOutputView,
+    pub(crate) rendered_kinds: Vec<LeanRenderedKind>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum LeanRenderedKind {
+    Text,
+    Reasoning,
+    Summary,
+    Arguments,
+    ToolOutput,
+    Media,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

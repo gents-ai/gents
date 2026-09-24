@@ -6,17 +6,22 @@
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Reconstruction.lean", "symbol": "CanonicalOutput.reconstructPayload" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Message.lean", "symbol": "CanonicalOutput.reconstructMessage" },
         { "file": "crates/gents/proofs/Proofs/StreamingResponse/State.lean", "symbol": "StreamingResponse.project" },
-        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" }
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.outputProjectionCases" },
+        { "file": "crates/gents/proofs/Proofs/StreamingResponse/Executable.lean", "symbol": "StreamingResponse.renderedKinds" }
       ],
       "generated_groups": ["canonical_output_projection_cases"],
       "fixture_status": "concrete_inputs",
       "native_owner_paths": [
         "crates/gents-protocol/src/output.rs",
+        "crates/gents-protocol/src/transcript.rs",
         "crates/gents/src/session/history.rs",
         "crates/gents/src/background_tools.rs",
-        "crates/gents/src/agent/stream_processor.rs"
+        "crates/gents-loop/src/stream_processor.rs"
       ],
       "consumer_paths": [
+        "crates/gents-protocol/src/transcript.rs",
+        "crates/gents-loop/src/stream_processor.rs",
+        "crates/gents-lean-contract/tests/support/rendered_reasoning.rs",
         "crates/gents/src/hook/tests/transcript_native.rs",
         "crates/gents/tests/conformance/streaming_compaction.rs",
         "crates/gents/src/background_tools.rs",
@@ -24,6 +29,7 @@
       ],
       "native_status": "pending",
       "required_cases": [
+        "Bind stateless durable and live reasoning rendering to generated renderedKinds for mixed text/summary/encrypted/redacted and all-opaque published cases; this does not establish full stream-event or projection-selection coverage.",
         "Reconstruct dense committed extents by ordinal and stream with exact declaration positions and bytes.",
         "Classify absent dependencies as loading, ACP denial as denied, distinct twins as conflicted, and malformed sealed runs as invalid.",
         "Ignore benign late flushes beyond a selected sealed extent while rejecting in-extent twins.",
