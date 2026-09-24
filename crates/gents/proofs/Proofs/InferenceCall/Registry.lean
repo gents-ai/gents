@@ -22,7 +22,9 @@ admitted call is attributed to the connection of the slot that made it.
 
 Unavailability and removal close admission: queued callers fail with
 `BackendGone` and new callers are rejected, while admitted calls keep their
-permits. `held` counts real permits, not persisted InferenceCall rows. -/
+permits. A waiter whose permit was assigned before the close but that
+registers only after a reopen acquires again on the new semaphore in Rust;
+the model conservatively counts it as failed with the close. `held` counts real permits, not persisted InferenceCall rows. -/
 namespace InferenceCall.Registry
 
 structure Config where

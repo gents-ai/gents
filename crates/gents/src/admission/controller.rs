@@ -48,7 +48,7 @@ enum Registration {
     Admitted(PoolPermit),
     /// The permit paid debt or belonged to a retired semaphore.
     Reacquire,
-    Rejected(AdmitError),
+    Closed,
 }
 
 impl CapacityPool {
@@ -118,23 +118,20 @@ impl CapacityPool {
             match self.register(semaphore, permit) {
                 Registration::Admitted(permit) => return Ok(permit),
                 Registration::Reacquire => continue,
-                Registration::Rejected(error) => return Err(error),
+                Registration::Closed => return Err(AdmitError::Closed),
             }
         }
     }
 
-    async fn admit_waiting(self: &Arc<Self>) -> Result<PoolPermit, AdmitError> {
+    /// `None` when admission closed while the call waited.
+    async fn admit_waiting(self: &Arc<Self>) -> Option<PoolPermit> {
         loop {
             let semaphore = self.ledger().semaphore.clone();
-            let permit = semaphore
-                .clone()
-                .acquire_owned()
-                .await
-                .map_err(|_| AdmitError::Closed)?;
+            let permit = semaphore.clone().acquire_owned().await.ok()?;
             match self.register(semaphore, permit) {
-                Registration::Admitted(permit) => return Ok(permit),
+                Registration::Admitted(permit) => return Some(permit),
                 Registration::Reacquire => continue,
-                Registration::Rejected(error) => return Err(error),
+                Registration::Closed => return None,
             }
         }
     }
@@ -157,7 +154,7 @@ impl CapacityPool {
         if !ledger.open {
             // Assigned before admission closed; the closed semaphore absorbs it.
             drop(permit);
-            return Registration::Rejected(AdmitError::Closed);
+            return Registration::Closed;
         }
         if ledger.owed > 0 {
             ledger.owed -= 1;
@@ -311,14 +308,14 @@ impl BackendAdmissionController {
                         self.backend_id
                     )))
                 }
-                Err(error) => {
+                Err(AdmitError::Closed) => {
                     if let Err(persist_error) =
                         persist_terminal_call(node, call, "cancelled", Some("BackendGone"), None)
                             .await
                     {
                         tracing::warn!(backend_id = %self.backend_id, error = %persist_error, "failed to persist rejected inference call");
                     }
-                    Err(self.rejection(error))
+                    Err(self.backend_gone())
                 }
             };
         }
@@ -348,8 +345,8 @@ impl BackendAdmissionController {
         let admitted = self.pool.admit_waiting().await;
         drop(queued_guard.disarm());
         let permit = match admitted {
-            Ok(permit) => permit,
-            Err(error) => {
+            Some(permit) => permit,
+            None => {
                 if let Err(persist_error) = persist_existing_call_terminal(
                     node,
                     &call,
@@ -361,7 +358,7 @@ impl BackendAdmissionController {
                 {
                     tracing::warn!(backend_id = %self.backend_id, call_id = %call.call_id, error = %persist_error, "failed to persist rejected queued inference call");
                 }
-                return Err(self.rejection(error));
+                return Err(self.backend_gone());
             }
         };
         // Only the queued row can acquire this running state. If recovery has
@@ -404,7 +401,7 @@ impl BackendAdmissionController {
         self.pool.waiters.fetch_sub(1, Ordering::SeqCst);
     }
 
-    fn rejection(&self, _error: AdmitError) -> CompletionError {
+    fn backend_gone(&self) -> CompletionError {
         CompletionError::ProviderError(format!(
             "BackendGone: backend {} was removed or became unavailable",
             self.backend_id
@@ -476,7 +473,7 @@ impl CapacityPool {
         match self.register(taken.0, taken.1) {
             Registration::Admitted(permit) => Ok(Some(permit)),
             Registration::Reacquire => Ok(None),
-            Registration::Rejected(_) => Err(()),
+            Registration::Closed => Err(()),
         }
     }
 
@@ -553,6 +550,9 @@ pub(super) struct InferenceCallRecord {
     pub(super) attempt: i64,
     pub(super) queue_depth_at_enqueue: usize,
     pub(super) controller_generation: u64,
+    /// Keyed connection fingerprint of the behavior slot that made the call;
+    /// one `controller_generation` can carry two values across a connection
+    /// change.
     pub(super) backend_config_fingerprint: String,
 }
 

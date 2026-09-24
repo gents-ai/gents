@@ -16,6 +16,10 @@ use super::persistence::persist_terminal_call;
 #[path = "registry_contract_tests.rs"]
 mod contract_tests;
 
+/// The slot connection test callers attribute their calls to.
+#[cfg(test)]
+pub(super) const TEST_SLOT_CONNECTION: &str = "test-slot-connection";
+
 #[derive(Clone)]
 pub(crate) struct AdmissionRegistry {
     inner: Arc<AdmissionRegistryInner>,
@@ -124,14 +128,13 @@ impl AdmissionRegistry {
         call_kind: CallKind,
     ) -> Result<AdmissionPermit, CompletionError> {
         let backend_id = backend_id.into();
-        let connection = self.admitting_connection_for_test(&backend_id);
         self.acquire_with_connection_for_test(
             request_id,
             backend_id,
             behavior_id,
             agent_did,
             call_kind,
-            &connection,
+            TEST_SLOT_CONNECTION,
         )
         .await
     }
@@ -167,22 +170,12 @@ impl AdmissionRegistry {
         .await
     }
 
-    /// Acquires in the ambient request scope as a caller built for the
-    /// backend's current connection.
+    /// Acquires in the ambient request scope as a test slot.
     #[cfg(test)]
     pub(crate) async fn acquire_current_call_for_test(
         &self,
     ) -> Result<AdmissionPermit, CompletionError> {
-        let backend_id = current_context()?.backend_id;
-        let connection = self.admitting_connection_for_test(&backend_id);
-        self.acquire_current_call(&connection).await
-    }
-
-    #[cfg(test)]
-    pub(super) fn admitting_connection_for_test(&self, backend_id: &str) -> String {
-        self.active_for_test(backend_id)
-            .map(|controller| controller.config.connection_fingerprint.clone())
-            .unwrap_or_default()
+        self.acquire_current_call(TEST_SLOT_CONNECTION).await
     }
 
     #[cfg(test)]

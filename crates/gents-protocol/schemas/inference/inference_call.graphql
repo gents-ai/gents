@@ -20,6 +20,9 @@ type InferenceCall @branchable {
     priority: Int
     queue_depth_at_enqueue: Int
     controller_generation: Int
+    # Keyed connection fingerprint (endpoint, credentials, provider/wire
+    # protocol) of the behavior slot that made the call. After a connection
+    # change, one controller_generation can carry the old and new values.
     backend_config_fingerprint: String
 
     prompt_tokens: Int

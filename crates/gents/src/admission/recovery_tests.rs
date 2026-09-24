@@ -154,7 +154,6 @@ async fn recovered_queued_call_cannot_acquire_provider_permit() {
             probe_status: "healthy".into(),
             measured_unhealthy: false,
             config_fingerprint: "recovery-cas".into(),
-            connection_fingerprint: "recovery-cas".into(),
         },
         super::super::controller::CapacityPool::open(1),
     );
@@ -276,7 +275,6 @@ async fn aborting_terminal_finalizer_returns_real_permit_and_repairs_call_once()
             probe_status: "healthy".into(),
             measured_unhealthy: false,
             config_fingerprint: "recovery-cas".into(),
-            connection_fingerprint: "recovery-cas".into(),
         },
         super::super::controller::CapacityPool::open(1),
     );

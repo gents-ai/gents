@@ -105,7 +105,6 @@ fn backend_admission_config(
         probe_status: crate::backend_registry::HEALTHY_PROBE_STATUS.to_string(),
         measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
-        connection_fingerprint: format!("{backend_id}:connection"),
     }
 }
 
@@ -844,7 +843,9 @@ async fn generation_supervisor_restages_slot_on_api_key_rotation() {
     );
     let admission = |connection: String| {
         let mut config = backend_admission_config("backend-general", 1, 100);
-        config.connection_fingerprint = connection;
+        // Production admission configs key their fingerprint on the
+        // credentials; mirror that so the rotated snapshot differs.
+        config.config_fingerprint = connection;
         HashMap::from([("backend-general".to_string(), config)])
     };
     let initial_snapshot = snapshot_for_behaviors_with_admission(

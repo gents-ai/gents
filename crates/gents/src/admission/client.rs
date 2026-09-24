@@ -16,7 +16,8 @@ const CANCELLED_BY_INTERRUPT_MSG: &str = "inference cancelled by request interru
 
 /// A provider client admitted through the backend it was built for.
 /// `connection` is that backend's `backend_connection_fingerprint` at build
-/// time; admission rejects its calls once the backend's connection changes.
+/// time. It only attributes calls: after a connection change, calls through
+/// this client still share the backend's pool and finish on this connection.
 #[derive(Clone)]
 pub(crate) struct AdmittedCompletionClient<C> {
     inner: C,

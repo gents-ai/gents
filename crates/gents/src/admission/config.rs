@@ -74,8 +74,6 @@ pub struct BackendAdmissionConfig {
     /// document changed.
     pub measured_unhealthy: bool,
     pub config_fingerprint: String,
-    /// [`backend_connection_fingerprint`] of this backend document.
-    pub connection_fingerprint: String,
 }
 
 impl BackendAdmissionConfig {
@@ -108,7 +106,6 @@ impl BackendAdmissionConfig {
         );
         let encoded = serde_json::to_vec(&fingerprint_inputs)?;
         let config_fingerprint = process_keyed_fingerprint(&encoded);
-        let connection_fingerprint = backend_connection_fingerprint(&fields);
         Ok(Self {
             backend_id: backend.backend_id.clone(),
             max_concurrent,
@@ -120,7 +117,6 @@ impl BackendAdmissionConfig {
                 .unwrap_or_else(|| crate::backend_registry::UNKNOWN_PROBE_STATUS.into()),
             measured_unhealthy: false,
             config_fingerprint,
-            connection_fingerprint,
         })
     }
 
@@ -227,6 +223,7 @@ mod tests {
             implicit
         );
         assert!(!implicit.config_fingerprint.contains("fixture-only-secret"));
+        let implicit_connection = backend_connection_fingerprint(&backend.backend_fields());
 
         backend.auth = crate::document_config::BackendAuth::ApiKey {
             key: "rotated-fixture-only-secret".into(),
@@ -235,10 +232,12 @@ mod tests {
         assert_ne!(implicit.config_fingerprint, rotated.config_fingerprint);
         assert!(!rotated.config_fingerprint.contains("fixture-only-secret"));
 
+        let rotated_connection = backend_connection_fingerprint(&backend.backend_fields());
         assert_ne!(
-            implicit.connection_fingerprint,
-            rotated.connection_fingerprint
+            implicit_connection, rotated_connection,
+            "a key rotation changes connection identity"
         );
+        assert!(!rotated_connection.contains("fixture-only-secret"));
 
         // Capacity and queue depth are admission resources, not connection
         // identity (Lean `Registry.Config`).
@@ -247,11 +246,7 @@ mod tests {
         let resized = BackendAdmissionConfig::from_backend(&backend, &observation).unwrap();
         assert_ne!(rotated.config_fingerprint, resized.config_fingerprint);
         assert_eq!(
-            rotated.connection_fingerprint,
-            resized.connection_fingerprint
-        );
-        assert_eq!(
-            resized.connection_fingerprint,
+            rotated_connection,
             backend_connection_fingerprint(&backend.backend_fields())
         );
     }
@@ -269,7 +264,6 @@ mod tests {
             probe_status: probe_status.to_string(),
             measured_unhealthy,
             config_fingerprint: "test".to_string(),
-            connection_fingerprint: "test".to_string(),
         }
     }
 

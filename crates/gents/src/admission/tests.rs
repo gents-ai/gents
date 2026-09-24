@@ -43,7 +43,6 @@ fn config(
         probe_status: "healthy".to_string(),
         measured_unhealthy: false,
         config_fingerprint: format!("{backend_id}:{max_concurrent}:{max_queue_depth}"),
-        connection_fingerprint: format!("{backend_id}:connection"),
     }
 }
 
@@ -1368,7 +1367,6 @@ fn rewritten_connection(
     max_queue_depth: usize,
 ) -> BackendAdmissionConfig {
     let mut rewritten = config(backend_id, max_concurrent, max_queue_depth);
-    rewritten.connection_fingerprint = format!("{backend_id}:rotated-connection");
     rewritten.config_fingerprint =
         format!("{backend_id}:rotated:{max_concurrent}:{max_queue_depth}");
     rewritten
@@ -1894,8 +1892,8 @@ async fn rotation_keeps_in_progress_calls_on_their_own_connection() {
         1,
         &HashMap::from([(backend.to_string(), config(backend, 1, 2))]),
     );
-    let old_connection = config(backend, 1, 2).connection_fingerprint;
-    let new_connection = rewritten_connection(backend, 1, 2).connection_fingerprint;
+    let old_connection = format!("{backend}:connection");
+    let new_connection = format!("{backend}:rotated-connection");
     let mut holder = acquire_on(&registry, "req-connection-holder", backend)
         .await
         .unwrap();
