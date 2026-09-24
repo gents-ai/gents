@@ -667,7 +667,7 @@ def caseCoverage : List CoverageEntry :=
   , tagged (followUpCoverage
       "queued_steering_guard_cases"
       "QueuedSteeringGuardCases"
-      "Both wrong-head claim and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. Bind each to the native queue/owned-execution rejection path before claiming native conformance.")
+      "Wrong-head claim, incoherent supplied-owner and interrupted publication guards are checked by the Lean owner and generated decoder/conformance structural tests only. Bind each to the native queue/owned-execution rejection path before claiming native conformance.")
       "request-lifecycle" [Surface.runtimeInternal]
   , tagged (consumerWithFollowUp
       "aggregate_token_budget_cases"

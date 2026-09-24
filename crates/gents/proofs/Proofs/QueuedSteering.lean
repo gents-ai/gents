@@ -68,6 +68,43 @@ def interruptBeforeClaim? (w : World) : Option World := do
   let request ← RequestContext.step? w.request .interruptBeforeClaim
   pure { w with request }
 
+/-- Mirrors native `interrupt_request_by_doc_id`: exact physical request and
+principal/requester scope, preserving an existing latch. Queue scope represents
+the admitted request's scope here; native binding must establish that correspondence.
+Terminal state does not disqualify the selected row. ACP, lookup cardinality and
+the subsequent lifecycle transition remain with their native owners. -/
+structure InterruptTarget where
+  requestDocId : Nat
+  agent : Nat
+  requester : Option Nat
+  deriving DecidableEq, Repr
+
+def currentInterruptTarget (w : World) : InterruptTarget :=
+  ⟨w.input.requestDocId, w.queue.scope.agent, w.queue.scope.requester⟩
+
+def latchInterrupt? (w : World) (target : InterruptTarget) : Option World :=
+  if target != currentInterruptTarget w then none
+  else match w.request.interruptRequestedAt with
+    | some _ => some w
+    | none => some { w with request :=
+        { w.request with interruptRequestedAt := some w.request.currentTime } }
+
+theorem mismatched_interrupt_target_rejected (w : World) (target : InterruptTarget)
+    (hmismatch : target ≠ currentInterruptTarget w) :
+    latchInterrupt? w target = none := by
+  simp [latchInterrupt?, hmismatch]
+
+theorem latch_interrupt_preserves_existing_stamp
+    {before after : World} {target : InterruptTarget} {stamp : Time}
+    (hstamp : before.request.interruptRequestedAt = some stamp)
+    (hlatch : latchInterrupt? before target = some after) :
+    after.request.interruptRequestedAt = some stamp := by
+  by_cases htarget : target = currentInterruptTarget before
+  · simp [latchInterrupt?, htarget, hstamp] at hlatch
+    cases hlatch
+    exact hstamp
+  · simp [latchInterrupt?, htarget] at hlatch
+
 /-! A terminal decision before the owned execution starts retains the signed
 admission input. It does not fabricate a transcript header. -/
 def terminateBeforeStart? (w : World) (action : RequestContext.Action) : Option World := do
@@ -149,6 +186,28 @@ def claimWithoutBegin? (w : World) : Option World := do
   let request ← RequestContext.step? w.request .claim
   pure { w with queue, request }
 
+theorem claim_without_begin_activates_and_preserves_input
+    {before claimed : World}
+    (hc : claimWithoutBegin? before = some claimed) :
+    claimed.queue.active = some before.input.requestId ∧
+      claimed.input = before.input ∧ claimed.accepted = before.accepted ∧
+      claimed.execution = none ∧ claimed.prepared = before.prepared := by
+  unfold claimWithoutBegin? at hc
+  cases hx : before.execution with
+  | some execution => simp [hx] at hc
+  | none =>
+      cases hqueue : SessionQueue.step? before.queue .claimNext with
+      | none => simp [hx, hqueue] at hc
+      | some queue =>
+          by_cases hactive : queue.active = some before.input.requestId
+          · cases hrequest : RequestContext.step? before.request .claim with
+            | none => simp [hx, hqueue, hactive, hrequest] at hc
+            | some request =>
+                simp [hx, hqueue, hactive, hrequest] at hc
+                cases hc
+                simp [hactive, hx]
+          · simp [hx, hqueue, hactive] at hc
+
 /-! The canonical execution owner is supplied by the claim/begin handoff. It
 must be the same physical request, logical queue head, and processing lease;
 this check does not implement a second lease transition. -/
@@ -165,6 +224,30 @@ def claimAndBegin? (w : World) (generation : Nat)
       execution.currentGeneration? != some generation ||
       execution.claimed.map (·.logicalRequest) != some w.input.requestId then none
   pure { w with queue, request, execution := some execution }
+
+private theorem terminal_request_claim_step_none (w : World)
+    (hterminal : isTerminal w.request.state) :
+    RequestContext.step? w.request .claim = none := by
+  have hnotPending : w.request.state ≠ .pending := by
+    intro hp
+    rw [hp] at hterminal
+    change RequestState.pending = .completed ∨ RequestState.pending = .failed ∨
+      RequestState.pending = .superseded ∨ RequestState.pending = .dead ∨
+      RequestState.pending = .interrupted at hterminal
+    simp at hterminal
+  simp [RequestContext.step?, hnotPending]
+
+/-- A terminal request may retain a pending queue entry, but neither claim
+route can select it because the request owner rejects pending-to-claimed. -/
+theorem terminal_request_cannot_claim_without_begin (w : World)
+    (hterminal : isTerminal w.request.state) : claimWithoutBegin? w = none := by
+  simp [claimWithoutBegin?, terminal_request_claim_step_none w hterminal]
+
+theorem terminal_request_cannot_claim_and_begin (w : World) (generation : Nat)
+    (execution : CanonicalOutput.Execution.World)
+    (hterminal : isTerminal w.request.state) :
+    claimAndBegin? w generation execution = none := by
+  simp [claimAndBegin?, terminal_request_claim_step_none w hterminal]
 
 /-! Preparation is a fallible existing runtime boundary. Its selected message
 may be templated or wrapped; raw admission text is not equated with it. -/
@@ -307,6 +390,50 @@ theorem terminal_before_start_retains_admission_input
             hasExactAuthoredOwner, projectPendingUserTurn]
       · simp [hs, hterm] at ht
 
+theorem terminal_before_start_clears_owned_active
+    {before after : World} {action : RequestContext.Action}
+    (hactive : before.queue.active = some before.input.requestId)
+    (ht : terminateBeforeStart? before action = some after) :
+    after.queue.active = none := by
+  cases hx : before.execution with
+  | some execution => simp [terminateBeforeStart?, hx] at ht
+  | none =>
+      cases hs : RequestContext.step? before.request action with
+      | none => simp [terminateBeforeStart?, hx, hs] at ht
+      | some request =>
+          by_cases hterminal : isTerminal request.state
+          · have hfinish : SessionQueue.step? before.queue .finishActive =
+                some (before.queue.finishActive before.input.requestId) := by
+              simp [SessionQueue.step?, hactive]
+            simp [terminateBeforeStart?, hx, hs, hterminal, hactive, hfinish] at ht
+            cases ht
+            rfl
+          · simp [terminateBeforeStart?, hx, hs, hterminal] at ht
+
+/-- A claimed-but-not-begun terminal request releases its active queue head
+through SessionQueue.finishActive and retains the signed admission input. -/
+theorem claimed_prestart_terminal_retains_input_and_clears_queue
+    {before claimed after : World} {action : RequestContext.Action}
+    (hp : before.prepared = none)
+    (ha : before.accepted = some before.input)
+    (hc : claimWithoutBegin? before = some claimed)
+    (ht : terminateBeforeStart? claimed action = some after) :
+    after.queue.active = none ∧ after.accepted = some before.input ∧
+      after.input = before.input ∧ canonicalAuthoredCount after = 0 := by
+  obtain ⟨hactive, hinput, haccepted, hexecution, hprepared⟩ :=
+    claim_without_begin_activates_and_preserves_input hc
+  have hclaimedAccepted : claimed.accepted = some claimed.input := by
+    rw [haccepted, ha, hinput]
+  have hclaimedPrepared : claimed.prepared = none := by rw [hprepared, hp]
+  have hclaimedActive : claimed.queue.active = some claimed.input.requestId := by
+    simpa [hinput] using hactive
+  obtain ⟨_, hafterAccepted, hafterInput, _, _, _, hcount⟩ :=
+    terminal_before_start_retains_admission_input hexecution hclaimedPrepared
+      hclaimedAccepted ht
+  exact ⟨terminal_before_start_clears_owned_active hclaimedActive ht,
+    by simpa [hinput] using hafterAccepted,
+    by simpa [hinput] using hafterInput, hcount⟩
+
 inductive Action where
   | enqueue
   | claimWithoutBegin
@@ -425,7 +552,7 @@ private def runAction (script : Script) (w : World) : Action → Option World
   -- An external durable interrupt intent becomes observable at this point.
   -- RequestContext owns the subsequent legal terminal transition.
   | .latchInterrupt =>
-      some { w with request := { w.request with interruptRequestedAt := some w.request.currentTime } }
+      latchInterrupt? w (currentInterruptTarget w)
   | .terminate transition =>
       if w.execution.isSome then terminateOwnedBeforePublication? w 1 10 91 transition
       else terminateBeforeStart? w transition
@@ -507,15 +634,43 @@ private def wrongHead : SessionQueue.QueueEntry :=
   { requestId := 12, createdAt := 9, source := .user, policy := .append,
     queueKey := none, queuedAfter := none }
 
+private def firstLatched? : Option World := do
+  let queued ← enqueue? (base none) entry
+  latchInterrupt? queued (currentInterruptTarget queued)
+
+private def repeatedLatched? : Option World := do
+  let first ← firstLatched?
+  let later := { first with request := { first.request with currentTime := 11 } }
+  latchInterrupt? later (currentInterruptTarget later)
+
+private def wrongInterruptTarget? : Option World := do
+  let queued ← enqueue? (base none) entry
+  latchInterrupt? queued
+    { currentInterruptTarget queued with requestDocId := queued.input.requestDocId + 1 }
+
 def wrongHeadObservation : GuardObservation :=
   let withWrongHead := { base none with queue := (base none).queue.appendPending wrongHead }
-  let queued? := enqueue? withWrongHead entry
+  let ready? := do
+    let correctQueued ← enqueue? (base none) entry
+    let owner ← begunOwner? correctQueued
+    let wrongQueued ← enqueue? withWrongHead entry
+    some (wrongQueued, owner)
   let admitted := (do
-    let queued ← queued?
-    let owner ← begunOwner? queued
-    claimAndBegin? queued 91 owner).isSome
+    let (wrongQueued, owner) ← ready?
+    claimAndBegin? wrongQueued 91 owner).isSome
   { name := "queued_steering_cannot_claim_a_different_queue_head",
-    prefixAdmitted := queued?.isSome, admitted }
+    prefixAdmitted := ready?.isSome, admitted }
+
+def incoherentOwnerObservation : GuardObservation :=
+  let ready? := do
+    let queued ← enqueue? (base none) entry
+    let owner ← begunOwner? queued
+    some (queued, owner)
+  let admitted := (do
+    let (queued, owner) ← ready?
+    claimAndBegin? queued 91 { owner with requestId := owner.requestId + 1 }).isSome
+  { name := "queued_steering_rejects_incoherent_supplied_owner",
+    prefixAdmitted := ready?.isSome, admitted }
 
 def interruptedPublishObservation : GuardObservation :=
   let interrupted? := do
@@ -528,7 +683,7 @@ def interruptedPublishObservation : GuardObservation :=
     prefixAdmitted := interrupted?.isSome, admitted := admitted.isSome }
 
 def guardObservations : List GuardObservation :=
-  [wrongHeadObservation, interruptedPublishObservation]
+  [wrongHeadObservation, incoherentOwnerObservation, interruptedPublishObservation]
 
 def traceObservations : List TraceObservation :=
   match interruptedBeforeClaimObservation, admissionRejectedObservation,
@@ -578,9 +733,19 @@ theorem capture_conflict_blocks_send :
 theorem exact_replay_does_not_duplicate_authored_owner :
     (publicationReplayObservation.map (·.canonicalAuthoredCount)) = some 1 := by native_decide
 theorem wrong_head_is_rejected : wrongHeadObservation.admitted = false := by native_decide
+theorem incoherent_owner_is_rejected :
+    incoherentOwnerObservation.admitted = false := by native_decide
 theorem interrupted_publish_is_rejected : interruptedPublishObservation.admitted = false := by native_decide
 theorem wrong_head_prefix_is_reachable : wrongHeadObservation.prefixAdmitted = true := by native_decide
+theorem incoherent_owner_prefix_is_reachable :
+    incoherentOwnerObservation.prefixAdmitted = true := by native_decide
 theorem interrupted_publish_prefix_is_reachable :
     interruptedPublishObservation.prefixAdmitted = true := by native_decide
+theorem first_interrupt_latch_stamps_selected_request :
+    firstLatched?.map (·.request.interruptRequestedAt) = some (some 10) := by native_decide
+theorem repeated_interrupt_latch_preserves_original_timestamp :
+    repeatedLatched?.map (·.request.interruptRequestedAt) = some (some 10) := by native_decide
+theorem mismatched_interrupt_target_cannot_latch :
+    wrongInterruptTarget?.isNone = true := by native_decide
 
 end QueuedSteering
