@@ -47,7 +47,11 @@ import {
   observeManagedServerOperation,
   type ManagedServerWait,
 } from "../../../lib/managedServerStartup";
-import { SETUP_COMPLETE_DWELL_MS, SetupProgress } from "./SetupProgress";
+import {
+  ManagedServerWaitNotice,
+  SETUP_COMPLETE_DWELL_MS,
+  SetupProgress,
+} from "./SetupProgress";
 import type { Shell } from "@/hooks/useShell";
 import { setupStewardPatches } from "@/lib/setupSteward";
 import { supportsLocalManagedServer } from "../../../lib/shellPlatform";
@@ -440,7 +444,9 @@ export function SetupScreen({
     setRuntimeGate("checking");
     setError(null);
     try {
-      await ensureManagedRuntimeServing(api, runtimeFallbackName);
+      await ensureManagedRuntimeServing(api, runtimeFallbackName, {
+        onWait: setManagedWait,
+      });
       setRuntimeGate("ready");
     } catch (cause) {
       setRuntimeGate("unavailable");
@@ -1111,9 +1117,17 @@ export function SetupScreen({
             </Button>
           </div>
         ) : (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> Starting your local agent…
-          </p>
+          <div className="grid gap-3">
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Starting your local agent…
+            </p>
+            {managedWait ? (
+              <ManagedServerWaitNotice
+                wait={managedWait}
+                onOpenLoginItems={api.openManagedServerLoginItems}
+              />
+            ) : null}
+          </div>
         )}
         <Nav onBack={onCancel} />
       </Frame>

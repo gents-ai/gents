@@ -1001,6 +1001,24 @@ where
     }
 }
 
+/// Waits for readiness with the lifecycle lock released. Returns the lock
+/// only when the wait completed and nothing superseded it.
+async fn readiness_outside_lifecycle<'a>(
+    state: &'a DesktopAppState,
+    token: &CancellationToken,
+    lifecycle: LifecycleGuard<'a>,
+    readiness: impl Future<Output = anyhow::Result<Readiness>>,
+) -> (anyhow::Result<Readiness>, Option<LifecycleGuard<'a>>) {
+    drop(lifecycle);
+    match wait_unlocked(token, readiness).await {
+        Ok(readiness) => match relock_start(state, token).await {
+            Ok(lifecycle) => (Ok(readiness), Some(lifecycle)),
+            Err(error) => (Err(error), None),
+        },
+        Err(error) => (Err(error), None),
+    }
+}
+
 enum BootOutcome<'a> {
     Ready(ManagedServerStatus, LifecycleGuard<'a>),
     NeedsLaunch(LifecycleGuard<'a>),
@@ -1668,7 +1686,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
 ) -> Result<ManagedServerStatus, BridgeError> {
     ensure_allowed(&state)?;
     cancel_start_wait(&state).await;
-    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    let lifecycle = state.managed_server_lifecycle.lock().await;
     let authority = EffectiveManagedAuthority::from_request(
         request.tool_ceiling,
         request.tool_root.as_deref(),
@@ -1760,22 +1778,39 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
         emit_status(&app, &state).await;
         return Err(BridgeError::new(error.code, message));
     }
-    let readiness = async {
-        let ready = match wait_for_managed_server(&app, &state, &agent_home)
-            .await
-            .map_err(|error| BridgeError::untyped(error.to_string()))?
-        {
-            Readiness::Ready(ready) => ready,
-            Readiness::ApprovalRequired => {
-                return Err(BridgeError::untyped(
-                    gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED,
-                ))
-            }
-        };
-        validate_ready_runtime(&ready, &authority, &agent_home)
-            .map_err(|error| BridgeError::untyped(error.to_string()))
-    }
+    let token = begin_start_wait(&state).await;
+    emit_status(&app, &state).await;
+    let (waited, lifecycle) = readiness_outside_lifecycle(
+        &state,
+        &token,
+        lifecycle,
+        wait_for_managed_server(&app, &state, &agent_home),
+    )
     .await;
+    if token.is_cancelled() {
+        tracing::info!(target: "gents_desktop::managed_server", "managed Gents server restart was superseded by stop, start, or another restart");
+        return Err(BridgeError::untyped(START_CANCELLED));
+    }
+    let _lifecycle = match lifecycle {
+        Some(lifecycle) => lifecycle,
+        None => match relock_start(&state, &token).await {
+            Ok(lifecycle) => lifecycle,
+            Err(_) => return Err(BridgeError::untyped(START_CANCELLED)),
+        },
+    };
+    finish_start_wait(&state, &token).await;
+    let readiness = waited
+        .map_err(|error| BridgeError::untyped(format!("{error:#}")))
+        .and_then(|readiness| match readiness {
+            Readiness::Ready(ready) => Ok(ready),
+            Readiness::ApprovalRequired => Err(BridgeError::untyped(
+                gents_server::native_service::BACKGROUND_APPROVAL_REQUIRED,
+            )),
+        })
+        .and_then(|ready| {
+            validate_ready_runtime(&ready, &authority, &agent_home)
+                .map_err(|error| BridgeError::untyped(error.to_string()))
+        });
     if let Err(error) = readiness {
         let cleanup = match native_service(&app, &state) {
             Ok(service) => run_native(service, move |service| service.stop(!was_enabled)).await,
@@ -3043,5 +3078,52 @@ mod tests {
         assert!(status.approval_required);
         let observed = project_external_status(ready_status("did:key:ready"), &native);
         assert!(!observed.approval_required);
+    }
+
+    #[tokio::test]
+    async fn stop_during_a_restart_readiness_wait_takes_the_lock_and_ends_the_restart() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+        let restart = readiness_outside_lifecycle(&state, &token, lifecycle, async move {
+            entered_tx.send(()).unwrap();
+            std::future::pending::<anyhow::Result<Readiness>>().await
+        });
+        let stop = async {
+            entered_rx.await.unwrap();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                cancel_start_wait(&state).await;
+                drop(state.managed_server_lifecycle.lock().await);
+            })
+            .await
+            .expect("stop takes the lifecycle lock while restart waits");
+        };
+        let ((waited, lifecycle), ()) = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(restart, stop)
+        })
+        .await
+        .expect("restart ends promptly after stop");
+        assert!(waited.unwrap_err().to_string().contains("cancelled"));
+        assert!(lifecycle.is_none());
+        assert!(
+            token.is_cancelled(),
+            "restart must not clean up the stopped job"
+        );
+        assert!(!state.managed_server.lock().await.starting);
+    }
+
+    #[tokio::test]
+    async fn a_restart_readiness_wait_returns_the_lock_when_the_runtime_is_ready() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let (waited, lifecycle) = readiness_outside_lifecycle(&state, &token, lifecycle, async {
+            Ok(Readiness::Ready(ready_status("did:key:restarted")))
+        })
+        .await;
+        assert!(matches!(waited.unwrap(), Readiness::Ready(_)));
+        assert!(lifecycle.is_some());
+        assert!(state.managed_server_lifecycle.try_lock().is_err());
     }
 }

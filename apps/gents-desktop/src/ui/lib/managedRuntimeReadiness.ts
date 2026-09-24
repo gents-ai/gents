@@ -3,6 +3,14 @@ import type {
   ManagedServerStatus,
 } from "@source-inc/gents-desktop-client";
 
+import {
+  awaitManagedServerSettled,
+  ManagedServerStartupError,
+  observeManagedServerOperation,
+  unsettledManagedServerError,
+  type ManagedServerWait,
+} from "../../lib/managedServerStartup";
+
 type ReadinessApi = Pick<
   DesktopApiAdapter,
   "managedServerStatus" | "startManagedServer"
@@ -51,36 +59,54 @@ export async function waitForManagedRuntimePairing(
  * writes to it. Setup re-entry opens directly at the provider step, so it
  * reuses first run's owner: start the managed server with its stored
  * authority, then wait for readiness. Never starts a second lifecycle.
+ * A runtime that is booting or awaiting macOS approval is waited on within
+ * the bridge's bounds, and `onWait` publishes which wait it is in.
  */
 export async function ensureManagedRuntimeServing(
   api: ReadinessApi,
   fallbackAgentName: string,
-  options: { timeoutMs?: number; intervalMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    intervalMs?: number;
+    onWait?: (wait: ManagedServerWait | null) => void;
+    settle?: Parameters<typeof awaitManagedServerSettled>[3];
+  } = {},
 ): Promise<void> {
   if (!api.managedServerStatus) return;
+  const { onWait = () => {}, settle, ...pairing } = options;
   let status: ManagedServerStatus;
   try {
     status = await api.managedServerStatus();
     if (status.pairingReady) return;
-    // A runtime that is already starting or running is waited on, not
-    // restarted; only a stopped or failed runtime is started again.
+    status = await awaitManagedServerSettled(api, status, onWait, settle);
+    const unsettled = unsettledManagedServerError(status);
+    if (unsettled && unsettled.status.state !== "failed") throw unsettled;
+    // A runtime that is already running is waited on, not restarted; only a
+    // stopped or failed runtime is started again.
     const needsStart =
       status.state === "stopped" ||
       status.state === "failed" ||
       status.state === "disabled";
     if (needsStart) {
-      if (!api.startManagedServer) {
+      const startManagedServer = api.startManagedServer;
+      if (!startManagedServer) {
         throw new ManagedRuntimeUnavailableError("The local agent is not running.");
       }
-      await api.startManagedServer(
-        status.agentName?.trim() || fallbackAgentName.trim() || "Local Agent",
+      const agentName =
+        status.agentName?.trim() || fallbackAgentName.trim() || "Local Agent";
+      await observeManagedServerOperation(
+        api,
+        () => startManagedServer(agentName),
+        onWait,
       );
     }
-    await waitForManagedRuntimePairing(api, options);
+    await waitForManagedRuntimePairing(api, pairing);
   } catch (cause) {
     console.warn("managed runtime is not serving for setup", cause);
     throw new ManagedRuntimeUnavailableError(
-      "The local agent is not running, so provider sign-in is unavailable. Start the agent and try again.",
+      cause instanceof ManagedServerStartupError
+        ? cause.message
+        : "The local agent is not running, so provider sign-in is unavailable. Start the agent and try again.",
     );
   }
 }

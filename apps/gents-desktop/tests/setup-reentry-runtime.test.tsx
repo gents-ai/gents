@@ -148,6 +148,55 @@ describe("setup re-entry at the provider step", () => {
     expect(api.claudeLogin).not.toHaveBeenCalled();
   });
 
+  it("shows macOS approval guidance on re-entry and continues once Gents is allowed", async () => {
+    const { api, shell } = harness();
+    api.openManagedServerLoginItems = vi.fn().mockResolvedValue(undefined);
+    let approved = false;
+    api.managedServerStatus.mockImplementation(async () =>
+      approved
+        ? status({ state: "running", pairingReady: true })
+        : status({ state: "stopped", approvalRequired: true }),
+    );
+    reenter(shell);
+
+    const wait = await screen.findByTestId("setup-managed-server-wait");
+    expect(wait).toHaveTextContent("Login Items & Extensions");
+    await userEvent.click(screen.getByTestId("setup-open-login-items"));
+    expect(api.openManagedServerLoginItems).toHaveBeenCalledOnce();
+
+    approved = true;
+    expect(
+      await screen.findByRole("button", { name: "Sign in" }, { timeout: 3_000 }),
+    ).toBeVisible();
+    expect(api.startManagedServer).not.toHaveBeenCalled();
+  });
+
+  it("waits past the pairing bound for a runtime that is still booting", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { api, shell } = harness();
+      let booting = true;
+      api.managedServerStatus.mockImplementation(async () =>
+        booting
+          ? status({ state: "starting" })
+          : status({ state: "running", pairingReady: true }),
+      );
+      reenter(shell);
+      await screen.findByTestId("setup-managed-server-wait");
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByTestId("setup-managed-server-wait")).toHaveTextContent(
+        "has not reported ready",
+      );
+      booting = false;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await screen.findByRole("button", { name: "Sign in" })).toBeVisible();
+      expect(api.startManagedServer).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not restart a runtime that is already serving", async () => {
     const { api, shell } = harness();
     api.managedServerStatus.mockResolvedValue(

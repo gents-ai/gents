@@ -3,6 +3,7 @@ import { ArrowRight, CircleAlert, CircleCheck } from "lucide-react";
 
 import { Button } from "@gents/ui/components/button";
 import { Spinner } from "@gents/ui/components/spinner";
+import { cn } from "@gents/ui/lib/utils";
 import type { LoadingStepState } from "../../../lib/loadingStatus";
 import {
   describeManagedServerWait,
@@ -51,16 +52,7 @@ export function SetupProgress({
   onContinue: () => void;
   onOpenLoginItems?: () => Promise<void>;
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!wait) return;
-    setNow(Date.now());
-    const interval = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(interval);
-  }, [wait]);
-  const waiting = wait
-    ? describeManagedServerWait(wait, Math.max(now, wait.since))
-    : null;
+  const waiting = useManagedServerWaitDescription(wait);
 
   return (
     <>
@@ -96,20 +88,12 @@ export function SetupProgress({
           ),
         )}
       </ol>
-      {waiting && wait ? (
-        <div className="mt-4 grid gap-3" data-testid="setup-managed-server-wait">
-          <p className="text-sm text-muted-foreground">{waiting.detail}</p>
-          {wait.kind === "approval" && onOpenLoginItems ? (
-            <Button
-              className="w-fit"
-              data-testid="setup-open-login-items"
-              variant="brand"
-              onClick={() => void onOpenLoginItems()}
-            >
-              Open Login Items settings
-            </Button>
-          ) : null}
-        </div>
+      {wait ? (
+        <ManagedServerWaitNotice
+          className="mt-4"
+          wait={wait}
+          onOpenLoginItems={onOpenLoginItems}
+        />
       ) : null}
       {error ? (
         <div className="mt-4 grid gap-3">
@@ -127,5 +111,46 @@ export function SetupProgress({
         </div>
       ) : null}
     </>
+  );
+}
+
+function useManagedServerWaitDescription(wait: ManagedServerWait | null) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!wait) return;
+    setNow(Date.now());
+    const interval = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [wait]);
+  return wait ? describeManagedServerWait(wait, Math.max(now, wait.since)) : null;
+}
+
+export function ManagedServerWaitNotice({
+  wait,
+  onOpenLoginItems,
+  className,
+}: {
+  wait: ManagedServerWait;
+  onOpenLoginItems?: () => Promise<void>;
+  className?: string;
+}) {
+  const waiting = useManagedServerWaitDescription(wait)!;
+  return (
+    <div
+      className={cn("grid gap-3", className)}
+      data-testid="setup-managed-server-wait"
+    >
+      <p className="text-sm text-muted-foreground">{waiting.detail}</p>
+      {wait.kind === "approval" && onOpenLoginItems ? (
+        <Button
+          className="w-fit"
+          data-testid="setup-open-login-items"
+          variant="brand"
+          onClick={() => void onOpenLoginItems()}
+        >
+          Open Login Items settings
+        </Button>
+      ) : null}
+    </div>
   );
 }
