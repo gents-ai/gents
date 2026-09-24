@@ -366,8 +366,13 @@ pub(crate) async fn run(
 
 /// Install the built-in `eval_author` pack into the home, its `author` slot
 /// bound to `profile`, through the owner `gents pack install` uses.
-/// Re-applying the same documents changes nothing.
-async fn install_author(access: &gents::ConfigAccess, owner: &str, profile: &str) -> Result<()> {
+/// Re-applying the same documents changes nothing. Returns the owner's
+/// apply counts (documents written, per collection).
+async fn install_author(
+    access: &gents::ConfigAccess,
+    owner: &str,
+    profile: &str,
+) -> Result<gents::config_client::DesiredStateApplyCounts> {
     use anyhow::Context as _;
     let pack = gents::pack::resolve_pack("eval_author")?;
     let config = gents::pack::load_pack_config(
@@ -387,8 +392,7 @@ async fn install_author(access: &gents::ConfigAccess, owner: &str, profile: &str
         gents::pack::bind_pack_install_config(&pack.manifest, &config, &inference.bindings)?;
     gents::pack::install_pack_documents(access, &bound)
         .await
-        .context("installing the eval_author pack")?;
-    Ok(())
+        .context("installing the eval_author pack")
 }
 
 #[cfg(test)]
@@ -558,23 +562,39 @@ mod tests {
         let fixture = crate::commands::eval::testing::Fixture::new().await;
         let access = &fixture.ctx.access;
         let owner = fixture.ctx.owner.as_str();
-        install_author(access, owner, "local").await.unwrap();
-        install_author(access, owner, "local").await.unwrap();
-        let (_, behavior) = access
-            .transact("cli.eval.init.test_read_author", |txn| {
-                Box::pin(async move {
-                    gents::config_client::read_desired_state_record_in_txn(
-                        txn,
-                        gents::Collection::AgentBehavior,
-                        owner,
-                        turn::AUTHOR_BEHAVIOR,
-                    )
+        // Each document the pack installs, as the home holds it: its
+        // DefraDB document id and its fields.
+        let installed = || async move {
+            let mut documents = Vec::new();
+            for (collection, id) in [
+                (gents::Collection::AgentBehavior, turn::AUTHOR_BEHAVIOR),
+                (gents::Collection::AgentContext, "eval-author-context"),
+                (gents::Collection::Tools, "eval-author-tools"),
+            ] {
+                let found = access
+                    .transact("cli.eval.init.test_read_author", |txn| {
+                        Box::pin(async move {
+                            gents::config_client::read_desired_state_record_in_txn(
+                                txn, collection, owner, id,
+                            )
+                            .await
+                        })
+                    })
                     .await
-                })
-            })
-            .await
-            .unwrap()
-            .expect("the author behavior installed");
+                    .unwrap()
+                    .unwrap_or_else(|| panic!("{} {id} installed", collection.graphql_type()));
+                documents.push(found);
+            }
+            documents
+        };
+        let first_counts = install_author(access, owner, "local").await.unwrap();
+        assert_eq!(first_counts.get(gents::Collection::AgentBehavior), 1);
+        let first = installed().await;
+        install_author(access, owner, "local").await.unwrap();
+        // Re-applying rewrites each document in place with what it holds:
+        // no new document, no changed field.
+        assert_eq!(installed().await, first);
+        let behavior = &first[0].1;
         assert_eq!(behavior["inference_profile_id"], "local");
 
         let error = install_author(access, owner, "no-such-profile")

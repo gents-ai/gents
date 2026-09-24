@@ -64,42 +64,34 @@ pub(crate) async fn pilot(
     install_definition(ctx, &written.out).await?;
 
     let unix_ms = chrono::Utc::now().timestamp_millis();
+    // Every run is named here as it is created, a stopped one included, so
+    // the README names it whatever happens after.
     let mut run_ids = Vec::new();
-    for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
-        if !definition.cases.iter().any(|case| case.split == split) {
-            continue;
+    let result = run_and_answer(ctx, deps, init, turn, drafted, unix_ms, &mut run_ids, out).await;
+    let revised = match result {
+        Ok(revised) => revised,
+        Err(error) if run_ids.is_empty() => return Err(error),
+        Err(error) => {
+            // The pilot's own failure is what returns; a README that could
+            // not be written as well is said beside it, never instead.
+            let note = PilotNote {
+                run_ids: run_ids.clone(),
+                revised: false,
+            };
+            return match rewrite_readme(
+                &written.out,
+                assembled,
+                &drafted.summary,
+                &init.dossier,
+                &note,
+            ) {
+                Ok(()) => Err(error),
+                Err(readme) => Err(error.context(format!(
+                    "the README could not record the pilot runs either: {readme:#}"
+                ))),
+            };
         }
-        let run_id = format!(
-            "{}-pilot-{unix_ms}-{}",
-            definition.definition_id,
-            split_name(split)
-        );
-        run_split(
-            ctx,
-            deps,
-            init,
-            &definition.definition_id,
-            split,
-            &run_id,
-            out,
-        )
-        .await?;
-        run_ids.push(run_id);
-    }
-
-    let mut reports = Vec::with_capacity(run_ids.len());
-    for run_id in &run_ids {
-        reports.push(load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), run_id).await?);
-    }
-    let rows = failing_rows(deps, assembled, &reports).await;
-    let digest = digest_turn(&reports, &rows);
-    writeln!(out, "{digest}")?;
-    let reply = turn.send(&digest).await?;
-    if !turn.shows_replies() {
-        writeln!(out, "{reply}")?;
-    }
-
-    let revised = revise(init, drafted, &run_ids, &reply, out).await?;
+    };
     if !revised {
         rewrite_readme(
             &written.out,
@@ -113,6 +105,61 @@ pub(crate) async fn pilot(
         )?;
     }
     Ok(PilotOutcome { run_ids, revised })
+}
+
+/// The pilot from its first run to the author's answer: every populated
+/// split's run (each id pushed to `run_ids` before it starts), the digest
+/// turn, and the one revision round. Whether the pack was revised.
+#[allow(clippy::too_many_arguments)]
+async fn run_and_answer(
+    ctx: &EvalContext,
+    deps: &Deps<'_>,
+    init: &InitContext<'_>,
+    turn: &mut dyn Turn,
+    drafted: &InitOutcome,
+    unix_ms: i64,
+    run_ids: &mut Vec<String>,
+    out: &mut dyn Write,
+) -> Result<bool> {
+    let assembled = drafted
+        .assembled
+        .as_ref()
+        .ok_or_else(|| anyhow!("nothing was written to pilot"))?;
+    let definition = &assembled.definition;
+    for split in [EvalSplit::Train, EvalSplit::Validation, EvalSplit::HeldOut] {
+        if !definition.cases.iter().any(|case| case.split == split) {
+            continue;
+        }
+        let run_id = format!(
+            "{}-pilot-{unix_ms}-{}",
+            definition.definition_id,
+            split_name(split)
+        );
+        run_ids.push(run_id.clone());
+        run_split(
+            ctx,
+            deps,
+            init,
+            &definition.definition_id,
+            split,
+            &run_id,
+            out,
+        )
+        .await?;
+    }
+
+    let mut reports = Vec::with_capacity(run_ids.len());
+    for run_id in run_ids.iter() {
+        reports.push(load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), run_id).await?);
+    }
+    let rows = failing_rows(deps, assembled, &reports).await;
+    let digest = digest_turn(&reports, &rows);
+    writeln!(out, "{digest}")?;
+    let reply = turn.send(&digest).await?;
+    if !turn.shows_replies() {
+        writeln!(out, "{reply}")?;
+    }
+    revise(init, drafted, run_ids, &reply, out).await
 }
 
 /// Install the pack at `dir` into the home as a directory pack, through the
@@ -237,8 +284,10 @@ async fn failing_rows(
             let Some(evidence) = deps.executor.recollect(&locator, &captures).await else {
                 continue;
             };
-            // Recollected stages are named by their position in the session.
-            let Some(read) = evidence.stages.get(index).or(evidence.stages.last()) else {
+            // Recollected stages are named by their position in the session;
+            // a session without this stage's position shows no rows rather
+            // than another stage's.
+            let Some(read) = evidence.stages.get(index) else {
                 continue;
             };
             let captured = read
@@ -657,6 +706,39 @@ mod tests {
         assert!(init.out.join("cases/val_a.json").is_file());
         let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
         assert!(readme.contains(&piloted.run_ids[0]), "{readme}");
+    }
+
+    #[tokio::test]
+    async fn a_pilot_that_fails_after_its_runs_still_names_them_in_the_readme() {
+        let fixture = Fixture::new().await;
+        let registry = CheckRegistry::builtin();
+        let root = tempfile::tempdir().unwrap();
+        let init = context(&fixture, &registry, &root.path().join("out"));
+        let drafted = drafted(&init).await;
+        let executor = failing_val_a();
+        // The author never answers: the digest turn fails after the runs.
+        let mut turn = ScriptedTurn::new(Vec::<String>::new());
+        let error = pilot(
+            &fixture.ctx,
+            &deps(&executor, &registry, CancellationToken::new()),
+            &init,
+            &mut turn,
+            &drafted,
+            &mut |_| true,
+            &mut Vec::new(),
+        )
+        .await
+        .err()
+        .expect("the failed turn propagates");
+        assert!(format!("{error:#}").contains("no reply left"), "{error:#}");
+        assert_eq!(turn.sent.len(), 1, "the digest was sent");
+        let runs = pilot_runs(&fixture).await;
+        assert_eq!(runs.len(), 3);
+        let readme = std::fs::read_to_string(init.out.join("README.md")).unwrap();
+        for run in &runs {
+            assert!(readme.contains(run.run_id.as_str()), "{readme}");
+        }
+        assert!(!readme.contains("revised after the pilot"), "{readme}");
     }
 
     #[tokio::test]
