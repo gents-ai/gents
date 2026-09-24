@@ -376,7 +376,7 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
 }
 
 #[tokio::test]
-async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_bytes() {
+async fn persist_partial_turn_publishes_text_only_and_retains_partial_signature_bytes() {
     let data_path =
         std::env::temp_dir().join(format!("agent-stream-processor-{}", uuid::Uuid::new_v4()));
     let node = Arc::new(
@@ -437,7 +437,7 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
         &stream_writer,
         &mut lifecycle,
         &response_doc_id,
-        ProviderInputProfile::OpenAiChatCompletions,
+        ProviderInputProfile::ClaudeMessages,
     );
 
     processor
@@ -449,13 +449,55 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
         .await
         .unwrap();
 
-    processor.assistant_turn.push_reasoning(
-        Reasoning::new("Need to inspect directory structure first")
-            .with_id("rs_partial".to_string()),
-    );
+    use gents_loop::provider_audit::{ClaudeAuditEvent, ClaudeBlockKind, ProviderAuditObservation};
+    processor
+        .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
+            ProviderAuditObservation {
+                capture_scope: "inference.1".parse().unwrap(),
+                turn: 0,
+                attempt: 0,
+                event: ClaudeAuditEvent::BlockStart {
+                    index: 0,
+                    kind: ClaudeBlockKind::Text,
+                },
+            },
+        )))
+        .await
+        .unwrap();
     processor
         .assistant_turn
         .push_text("I started by checking the repo layout.");
+    for event in [
+        ClaudeAuditEvent::BlockStop { index: 0 },
+        ClaudeAuditEvent::BlockStart {
+            index: 1,
+            kind: ClaudeBlockKind::Thinking,
+        },
+        ClaudeAuditEvent::ThinkingText {
+            index: 1,
+            fragment: "Need to inspect directory structure first".into(),
+        },
+        ClaudeAuditEvent::Signature {
+            index: 1,
+            fragment: "partial-".into(),
+        },
+        ClaudeAuditEvent::Signature {
+            index: 1,
+            fragment: "signature".into(),
+        },
+    ] {
+        processor
+            .process_item::<()>(Ok(LoopStreamItem::ProviderAudit(
+                ProviderAuditObservation {
+                    capture_scope: "inference.1".parse().unwrap(),
+                    turn: 0,
+                    attempt: 0,
+                    event,
+                },
+            )))
+            .await
+            .unwrap();
+    }
 
     assert!(processor.has_observable_activity());
     assert!(processor
@@ -533,7 +575,7 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
     else {
         panic!("expected a partial closure: {:?}", closing.segment.close);
     };
-    assert_eq!(stream_bytes.len(), 2);
+    assert_eq!(stream_bytes.len(), 3);
     let facts = records
         .iter()
         .map(|row| ObservedSegment {
@@ -541,7 +583,7 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
             segment: &row.segment,
         })
         .collect::<Vec<_>>();
-    let streams = (0..2)
+    let streams = (0..3)
         .map(|stream| {
             reconstruct_stream(
                 &facts,
@@ -555,13 +597,18 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
             .expect("partial extent must reconstruct exactly")
         })
         .collect::<Vec<_>>();
-    assert_eq!(streams.len(), 2);
+    assert_eq!(streams.len(), 3);
     assert!(streams
         .iter()
         .any(|stream| stream.text == "I started by checking the repo layout."));
     assert!(streams
         .iter()
         .any(|stream| stream.text == "Need to inspect directory structure first"));
+    assert!(streams.iter().any(|stream| {
+        stream.text == "partial-signature"
+            && stream.declaration.payload
+                == gents_protocol::output::StreamPayload::ReasoningSignature
+    }));
 
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(&data_path);

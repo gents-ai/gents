@@ -197,6 +197,9 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) delegated_child_resolution_cases: Vec<LeanDelegatedChildResolutionCase>,
     pub(crate) transcript_conformance_cases: Vec<LeanTranscriptCase>,
     pub(crate) canonical_output_projection_cases: Vec<LeanCanonicalOutputProjectionCase>,
+    pub(crate) reasoning_audit_cases: Vec<LeanReasoningAuditCase>,
+    pub(crate) reasoning_signature_cases: Vec<LeanReasoningSignatureCase>,
+    pub(crate) auxiliary_output_cases: Vec<LeanAuxiliaryOutputCase>,
     pub(crate) canonical_execution_gate_cases: Vec<LeanCanonicalExecutionCase>,
     pub(crate) canonical_dispatch_observation_cases: Vec<LeanDispatchObservationCase>,
     pub(crate) canonical_spawned_target_rejection_cases: Vec<LeanSpawnedTargetRejectionCase>,
@@ -221,6 +224,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_stream_cases: Vec<LeanPromptAssemblyClaudeStreamCase>,
     pub(crate) prompt_assembly_claude_thinking_stream_cases:
         Vec<LeanPromptAssemblyClaudeThinkingStreamCase>,
+    pub(crate) prompt_assembly_claude_wire_start_cases: Vec<LeanPromptAssemblyClaudeWireStartCase>,
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub(crate) prompt_assembly_claude_narrowing_cases: Vec<LeanPromptAssemblyClaudeNarrowingCase>,
     pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
@@ -1618,6 +1622,18 @@ pub(crate) fn lean_canonical_output_projection_cases(
     &lean_contract_snapshot().canonical_output_projection_cases
 }
 
+pub(crate) fn lean_reasoning_audit_cases() -> &'static [LeanReasoningAuditCase] {
+    &lean_contract_snapshot().reasoning_audit_cases
+}
+
+pub(crate) fn lean_reasoning_signature_cases() -> &'static [LeanReasoningSignatureCase] {
+    &lean_contract_snapshot().reasoning_signature_cases
+}
+
+pub(crate) fn lean_auxiliary_output_cases() -> &'static [LeanAuxiliaryOutputCase] {
+    &lean_contract_snapshot().auxiliary_output_cases
+}
+
 pub(crate) fn lean_canonical_execution_gate_cases() -> &'static [LeanCanonicalExecutionCase] {
     &lean_contract_snapshot().canonical_execution_gate_cases
 }
@@ -1910,6 +1926,11 @@ pub(crate) fn lean_prompt_assembly_claude_stream_cases(
 pub(crate) fn lean_prompt_assembly_claude_thinking_stream_cases(
 ) -> &'static [LeanPromptAssemblyClaudeThinkingStreamCase] {
     &lean_contract_snapshot().prompt_assembly_claude_thinking_stream_cases
+}
+
+pub(crate) fn lean_prompt_assembly_claude_wire_start_cases(
+) -> &'static [LeanPromptAssemblyClaudeWireStartCase] {
+    &lean_contract_snapshot().prompt_assembly_claude_wire_start_cases
 }
 
 pub(crate) fn lean_prompt_assembly_claude_replay_cases(

@@ -23,22 +23,28 @@ mod runtime_contract;
 
 use std::collections::BTreeSet;
 
+use gents_protocol::output::live::{
+    project_live, reconstruct_audit_prefix, DensePrefixError, LiveObservation, LiveTarget,
+    LiveView, OwnerLiveness,
+};
 use gents_protocol::output::reconstruction::{
     reconstruct_presented_payload, reconstruct_stream, DependencyDenial, ObservedSegment,
 };
+use gents_protocol::output::recovery::plan_recovery_prefix;
 use gents_protocol::output::{
     MediaBlock, MediaData, MediaKind, MessageBlock, MessagePublication, MessageRole, OutputOutcome,
     OutputSegment, OutputSource, OutputWriter, PayloadPresentation, PayloadRef, PresentationPart,
     PresentedPayload, ReasoningPart, ReconstructionError, SegmentRun, SourceClose,
-    StreamDeclaration, StreamPayload, ToolResultPart, TranscriptMessage,
+    StreamDeclaration, StreamPayload, TerminalOutput, ToolResultPart, TranscriptMessage,
 };
 use gents_protocol::rendered_request::{CaptureScope, CaptureScopeKind};
 use runtime_contract::{
-    LeanCanonicalClosure, LeanCanonicalMessage, LeanCanonicalOutputProjectionCase,
-    LeanCanonicalOutputView as View, LeanCanonicalSource, LeanCanonicalWriter, LeanMedia,
-    LeanMediaData, LeanMediaKind, LeanMessageBlock, LeanMessagePublication, LeanMessageRole,
-    LeanOutcome, LeanPayloadKind, LeanPayloadSpec, LeanPresentation, LeanPresentationPart,
-    LeanReasoningPart, LeanResultPart,
+    LeanAuxiliaryKind, LeanAuxiliaryOutputCase, LeanCanonicalClosure, LeanCanonicalMessage,
+    LeanCanonicalOutputProjectionCase, LeanCanonicalOutputView as View, LeanCanonicalSegment,
+    LeanCanonicalSource, LeanCanonicalWriter, LeanMedia, LeanMediaData, LeanMediaKind,
+    LeanMessageBlock, LeanMessagePublication, LeanMessageRole, LeanOutcome, LeanPayloadKind,
+    LeanPayloadSpec, LeanPresentation, LeanPresentationPart, LeanReasoningAuditCase,
+    LeanReasoningAuditResult, LeanReasoningPart, LeanReasoningSignatureCase, LeanResultPart,
 };
 
 /// View classes this adapter can exercise through the reconstruction
@@ -180,6 +186,22 @@ fn lean_source(source: &LeanCanonicalSource) -> OutputSource {
             turn_index: u32::try_from(*turn).expect("generated turn fits u32"),
             attempt: u32::try_from(*attempt).expect("generated attempt fits u32"),
         },
+        LeanCanonicalSource::Auxiliary {
+            auxiliary_kind,
+            scope,
+            turn,
+            attempt,
+        } => OutputSource::ProviderTurn {
+            scope: CaptureScope {
+                kind: match auxiliary_kind {
+                    LeanAuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
+                    LeanAuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
+                },
+                seq: *scope,
+            },
+            turn_index: u32::try_from(*turn).expect("generated turn fits u32"),
+            attempt: u32::try_from(*attempt).expect("generated attempt fits u32"),
+        },
         LeanCanonicalSource::Tool { call } => OutputSource::ToolCall {
             tool_call_doc_id: nat(*call),
         },
@@ -235,8 +257,10 @@ fn lean_payload_kind(
     match kind {
         LeanPayloadKind::Text => StreamPayload::Text,
         LeanPayloadKind::Reasoning => StreamPayload::Reasoning,
+        LeanPayloadKind::Signature => StreamPayload::ReasoningSignature,
         LeanPayloadKind::Summary => StreamPayload::ReasoningSummary,
-        LeanPayloadKind::Opaque => StreamPayload::ReasoningOpaque,
+        LeanPayloadKind::Encrypted => StreamPayload::ReasoningEncrypted,
+        LeanPayloadKind::Redacted => StreamPayload::ReasoningRedacted,
         LeanPayloadKind::Arguments => StreamPayload::ToolArguments {
             id: tool
                 .expect("generated arguments run carries tool identity")
@@ -422,10 +446,11 @@ fn lean_message(message: &LeanCanonicalMessage<LeanPayloadSpec>) -> TranscriptMe
 
 /// Translate one generated case. Never invents a fact: every protocol value is
 /// a faithful translation of the modeled observation or expectation.
-fn translate(case: &LeanCanonicalOutputProjectionCase) -> TranslatedCase {
-    let input = &case.input;
-    let segments = input
-        .records
+fn translate_records(
+    records: &[LeanCanonicalSegment],
+    session: u64,
+) -> Vec<(String, OutputSegment)> {
+    records
         .iter()
         .map(|record| {
             let close = record.close.as_ref().map(|closure| match closure {
@@ -474,7 +499,7 @@ fn translate(case: &LeanCanonicalOutputProjectionCase) -> TranslatedCase {
             let segment = OutputSegment {
                 agent_did: AGENT_DID.to_owned(),
                 requester_did: None,
-                session_id: nat(input.session),
+                session_id: nat(session),
                 request_doc_id: nat(record.coordinate.request),
                 source: lean_source(&record.coordinate.source),
                 writer: lean_writer(&record.writer),
@@ -486,7 +511,12 @@ fn translate(case: &LeanCanonicalOutputProjectionCase) -> TranslatedCase {
             };
             (nat(record.id), segment)
         })
-        .collect();
+        .collect()
+}
+
+fn translate(case: &LeanCanonicalOutputProjectionCase) -> TranslatedCase {
+    let input = &case.input;
+    let segments = translate_records(&input.records, input.session);
     let denied = input
         .denied_segments
         .iter()
@@ -1013,5 +1043,338 @@ fn generated_canonical_output_cases_drive_native_reconstruction() {
          excluded cases: {}; primitive probes: {}",
         exclusions.len(),
         primitive_notes.len()
+    );
+}
+
+#[test]
+fn generated_reasoning_audit_cases_drive_exact_native_prefix() {
+    let snapshot: serde_json::Value =
+        gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
+    let cases: Vec<LeanReasoningAuditCase> = serde_json::from_value(
+        snapshot
+            .get("reasoning_audit_cases")
+            .expect("reasoning audit case group")
+            .clone(),
+    )
+    .expect("strict reasoning audit cases");
+    assert!(!cases.is_empty(), "reasoning audit case group is empty");
+    for case in &cases {
+        let records = translate_records(&case.input.records, case.input.session);
+        let observed = records
+            .iter()
+            .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
+            .collect::<Vec<_>>();
+        let actual = reconstruct_audit_prefix(
+            &observed,
+            &nat(case.input.target.coordinate.request),
+            &lean_source(&case.input.target.coordinate.source),
+            &lean_writer(&case.input.target.writer),
+            None,
+        );
+        match (&case.expected, actual) {
+            (LeanReasoningAuditResult::Ok { streams: expected }, Ok(actual)) => {
+                assert_eq!(actual.streams.len(), expected.len(), "{}", case.name);
+                for (actual, expected) in actual.streams.iter().zip(expected) {
+                    assert_eq!(
+                        actual.declaration.block_index,
+                        u32::try_from(expected.declaration.block).unwrap(),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual.declaration.part_index,
+                        u32::try_from(expected.declaration.part).unwrap(),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual.declaration.payload,
+                        lean_payload_kind(
+                            &expected.declaration.kind,
+                            expected.declaration.tool.as_ref(),
+                            expected.declaration.media_kind.as_ref(),
+                        ),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual.text.as_bytes(),
+                        expected.bytes.as_slice(),
+                        "{}",
+                        case.name
+                    );
+                }
+            }
+            (LeanReasoningAuditResult::Loading, Err(DensePrefixError::Loading))
+            | (LeanReasoningAuditResult::Conflicted, Err(DensePrefixError::Conflicted { .. }))
+            | (LeanReasoningAuditResult::Invalid, Err(DensePrefixError::Invalid { .. })) => {}
+            (expected, actual) => panic!(
+                "reasoning audit case `{}`: expected {expected:?}, got {actual:?}",
+                case.name
+            ),
+        }
+    }
+}
+
+#[test]
+fn generated_auxiliary_cases_drive_native_audit_and_public_projection() {
+    let snapshot: serde_json::Value =
+        gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
+    let cases: Vec<LeanAuxiliaryOutputCase> = serde_json::from_value(
+        snapshot
+            .get("auxiliary_output_cases")
+            .expect("auxiliary output case group")
+            .clone(),
+    )
+    .expect("strict auxiliary output cases");
+    assert!(!cases.is_empty(), "auxiliary output case group is empty");
+    for case in &cases {
+        let input = &case.observation;
+        let records = translate_records(&input.records, input.session);
+        let observed = records
+            .iter()
+            .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
+            .collect::<Vec<_>>();
+        let request_doc_id = nat(input.request);
+        let session_id = nat(input.session);
+        let source = lean_source(&input.target.coordinate.source);
+        let writer = lean_writer(&input.target.writer);
+        assert!(source.is_auxiliary_audit(), "{}", case.name);
+        let actual_audit =
+            reconstruct_audit_prefix(&observed, &request_doc_id, &source, &writer, None);
+        match (&case.expected.audit, actual_audit) {
+            (LeanReasoningAuditResult::Ok { streams: expected }, Ok(actual)) => {
+                assert_eq!(actual.streams.len(), expected.len(), "{}", case.name);
+                for (actual, expected) in actual.streams.iter().zip(expected) {
+                    assert_eq!(
+                        actual.declaration.block_index,
+                        u32::try_from(expected.declaration.block).unwrap(),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual.declaration.part_index,
+                        u32::try_from(expected.declaration.part).unwrap(),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual.declaration.payload,
+                        lean_payload_kind(
+                            &expected.declaration.kind,
+                            expected.declaration.tool.as_ref(),
+                            expected.declaration.media_kind.as_ref(),
+                        ),
+                        "{}",
+                        case.name
+                    );
+                    assert_eq!(
+                        actual.text.as_bytes(),
+                        expected.bytes.as_slice(),
+                        "{}",
+                        case.name
+                    );
+                }
+            }
+            (expected, actual) => panic!(
+                "auxiliary audit case `{}`: expected {expected:?}, got {actual:?}",
+                case.name
+            ),
+        }
+
+        let messages = input
+            .messages
+            .iter()
+            .map(|message| (nat(message.header.id), lean_message(message)))
+            .collect::<Vec<_>>();
+        let message_refs = messages
+            .iter()
+            .map(|(id, message)| (id.as_str(), message))
+            .collect::<Vec<_>>();
+        let denied_headers = input
+            .denied_headers
+            .iter()
+            .map(|id| nat(*id))
+            .collect::<Vec<_>>();
+        let denied_segments = input
+            .denied_segments
+            .iter()
+            .map(|id| nat(*id))
+            .collect::<Vec<_>>();
+        let dependency_denials = input
+            .dependency_denials
+            .iter()
+            .map(|denial| DependencyDenial {
+                root_close_id: nat(denial.root_close_id),
+                denied_doc_id: nat(denial.denied_doc_id),
+            })
+            .collect::<Vec<_>>();
+        let current_request = input
+            .owner
+            .current_request
+            .map(|(request, generation)| (nat(request), nat(generation)));
+        let live_tools = input
+            .owner
+            .live_tools
+            .iter()
+            .map(|id| nat(*id))
+            .collect::<Vec<_>>();
+        let owner = OwnerLiveness {
+            current_request: current_request
+                .as_ref()
+                .map(|(request, generation)| (request.as_str(), generation.as_str())),
+            live_tools: live_tools.iter().map(String::as_str).collect(),
+        };
+        let target_message_id = input.target.message_id.map(nat);
+        let target_request_id = nat(input.target.coordinate.request);
+        let terminal_selection =
+            input
+                .terminal_selection
+                .as_ref()
+                .map(|selection| match selection {
+                    runtime_contract::LeanTerminalSelection::Message { id } => {
+                        TerminalOutput::Message {
+                            message_doc_id: nat(*id),
+                        }
+                    }
+                    runtime_contract::LeanTerminalSelection::NoMessage => TerminalOutput::NoMessage,
+                });
+        let actual_view = project_live(&LiveObservation {
+            request_doc_id: &request_doc_id,
+            session_id: &session_id,
+            target: LiveTarget {
+                request_doc_id: &target_request_id,
+                source: &source,
+                writer: &writer,
+                message_id: target_message_id.as_deref(),
+            },
+            messages: &message_refs,
+            agent_did: AGENT_DID,
+            requester_did: None,
+            records: &observed,
+            denied_headers: &denied_headers,
+            denied_segments: &denied_segments,
+            dependency_denials: &dependency_denials,
+            owner,
+            request_terminal: input.request_terminal,
+            terminal_selection,
+        });
+        assert!(
+            matches!(&case.expected.public_view, View::Absent),
+            "{}",
+            case.name
+        );
+        assert_eq!(actual_view, LiveView::Absent, "{}", case.name);
+
+        let planned = plan_recovery_prefix(&observed, &request_doc_id, &source, &writer)
+            .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+        let recovery_closing =
+            translate_records(std::slice::from_ref(&case.recovery_closing), input.session);
+        assert_eq!(
+            Some(planned.close.clone()),
+            recovery_closing[0].1.close,
+            "{}",
+            case.name
+        );
+        assert!(planned.retained_streams.is_empty(), "{}", case.name);
+        assert!(
+            planned.retained_blocks("native-close").unwrap().is_empty(),
+            "{}",
+            case.name
+        );
+    }
+}
+
+#[test]
+fn generated_reasoning_signature_cases_drive_native_header_validation() {
+    let snapshot: serde_json::Value =
+        gents_lean_contract::load_contract_snapshot().expect("generate Lean contract");
+    let cases: Vec<LeanReasoningSignatureCase> = serde_json::from_value(
+        snapshot
+            .get("reasoning_signature_cases")
+            .expect("reasoning signature case group")
+            .clone(),
+    )
+    .expect("strict reasoning signature cases");
+    assert!(!cases.is_empty(), "reasoning signature case group is empty");
+    let mut byte_exclusions = 0;
+    for case in &cases {
+        if case.name == "invalid_signature_bytes" {
+            byte_exclusions += 1;
+            assert!(!case.accepted, "invalid UTF-8 cannot publish a signature");
+            assert!(
+                case.records
+                    .iter()
+                    .filter_map(|record| record.flush.as_ref())
+                    .any(|flush| String::from_utf8(flush.payload.clone()).is_err()),
+                "invalid_signature_bytes must fail at the protocol UTF-8 string boundary"
+            );
+            continue;
+        }
+        assert!(
+            matches!(&case.payload.presentation, LeanPresentation::Full),
+            "{}: signature validation requires the modeled full payload",
+            case.name
+        );
+        let records = translate_records(&case.records, 0);
+        let observed = records
+            .iter()
+            .map(|(doc_id, segment)| ObservedSegment { doc_id, segment })
+            .collect::<Vec<_>>();
+        let first = &records[0].1;
+        let OutputWriter::RequestExecution {
+            execution_generation,
+        } = &first.writer
+        else {
+            panic!("{}: signature fixture has no request writer", case.name);
+        };
+        let header = TranscriptMessage {
+            message_key: format!("reasoning-signature:{}", case.name),
+            session_id: first.session_id.clone(),
+            agent_did: first.agent_did.clone(),
+            requester_did: None,
+            request_doc_id: Some(first.request_doc_id.clone()),
+            publication: MessagePublication::RequestExecution {
+                execution_generation: execution_generation.clone(),
+            },
+            outcome: OutputOutcome::Complete,
+            sequence: 0,
+            role: MessageRole::Assistant,
+            native_id: None,
+            blocks: vec![MessageBlock::Reasoning {
+                id: None,
+                parts: vec![ReasoningPart::Text {
+                    text: lean_payload_ref(
+                        case.payload.reference.close_id,
+                        case.payload.reference.stream,
+                    ),
+                    signature: case.signature.clone(),
+                }],
+            }],
+            created_at: first.created_at.clone(),
+        };
+        let actual = gents_protocol::output::reconstruction::reconstruct_message(
+            &observed,
+            &[],
+            &[],
+            &header,
+        );
+        assert_eq!(actual.is_ok(), case.accepted, "{}: {actual:?}", case.name);
+        if let Err(error) = actual {
+            assert!(
+                !error.is_incomplete(),
+                "{}: mismatch must fail closed",
+                case.name
+            );
+            assert!(
+                matches!(&error, ReconstructionError::InvalidStructure { detail } if detail.contains("reasoning signature")),
+                "{}: rejected header must fail its signature check: {error:?}",
+                case.name
+            );
+        }
+    }
+    assert_eq!(
+        byte_exclusions, 1,
+        "exactly one modeled byte case is outside String payloads"
     );
 }

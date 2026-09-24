@@ -135,7 +135,7 @@ theorem authored_open_source_is_not_previewed {observation : Observation} {key :
     (hclose : observeClose observation.records observation.target.coordinate = .open) :
     project observation =
       if sourceDenied observation then .denied else .absent := by
-  simp [project, hscope, hmessage, hclose, ownerLive, hsource]
+  simp [project, hscope, hmessage, hclose, ownerLive, hsource, Source.isAuxiliary]
 
 theorem open_preview_requires_validated_prefix {observation : Observation}
     {streams : Streams}
@@ -146,7 +146,13 @@ theorem open_preview_requires_validated_prefix {observation : Observation}
     (hlive : ownerLive observation = true)
     (hreconstruct : reconstructOpen observation = .ok streams) :
     project observation = .live streams := by
-  simp [project, hscope, hmessage, hclose, hdenied, hlive, hreconstruct]
+  have haux : observation.target.coordinate.source.isAuxiliary = false := by
+    cases hsource : observation.target.coordinate.source with
+    | auxiliary kind scope turn attempt => simp [ownerLive, hsource] at hlive
+    | provider scope turn attempt => simp [Source.isAuxiliary]
+    | tool call => simp [Source.isAuxiliary]
+    | authored key => simp [Source.isAuxiliary]
+  simp [project, haux, hscope, hmessage, hclose, hdenied, hlive, hreconstruct]
 
 theorem closed_waiting_preserves_prefix_without_claiming_live
     {observation : Observation} {closing : Segment} {outcome : Outcome}
@@ -163,11 +169,12 @@ theorem closed_waiting_preserves_prefix_without_claiming_live
 
 theorem open_denial_is_not_loading {observation : Observation}
     (hmessage : observation.target.messageId = none)
+    (haux : observation.target.coordinate.source.isAuxiliary = false)
     (hscope : targetScoped observation = true)
     (hclose : observeClose observation.records observation.target.coordinate = .open)
     (hdenied : sourceDenied observation = true) :
     project observation = .denied := by
-  simp [project, hscope, hmessage, hclose, hdenied]
+  simp [project, haux, hscope, hmessage, hclose, hdenied]
 
 theorem nonterminal_partial_is_loading {observation : Observation}
     (closing : Segment) :
@@ -326,21 +333,25 @@ theorem closed_source_is_never_live {observation : Observation}
       .closed closing outcome) :
     project observation ≠ .live streams := by
   simp [project, hmessage, hscope, hclosed]
-  exact projectUnheadedClosed_ne_live observation closing outcome streams
+  split
+  · simp
+  · exact projectUnheadedClosed_ne_live observation closing outcome streams
 
-theorem retained_stream_is_not_opaque {headers : List Header} {closing : Segment}
+theorem retained_stream_is_not_private {headers : List Header} {closing : Segment}
     {streams : Streams} {stream : Declaration × List UInt8}
     (h : stream ∈ retainedStreams headers closing streams) :
-    stream.1.kind ≠ .opaque := by
+    stream.1.kind ≠ .encrypted ∧ stream.1.kind ≠ .redacted ∧
+      stream.1.kind ≠ .signature := by
   simp [retainedStreams, visibleStreams] at h
-  exact h.2
+  exact ⟨h.2.1.1, h.2.1.2, h.2.2⟩
 
 theorem retained_stream_filter_characterization (headers : List Header)
     (closing : Segment) (streams : Streams) :
     retainedStreams headers closing streams =
       ((streams.zipIdx.filter fun entry =>
         !streamReferenced headers closing entry.2).map (·.1)).filter
-          (fun stream => stream.1.kind != .opaque) := rfl
+          (fun stream => stream.1.kind != .encrypted &&
+            stream.1.kind != .redacted && stream.1.kind != .signature) := rfl
 
 theorem segment_delivery_retains_old (observation : Observation)
     (record old : Segment) (hold : old ∈ observation.records) :

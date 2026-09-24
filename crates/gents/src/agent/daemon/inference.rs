@@ -513,11 +513,18 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             let item = match tokio::select! {
                                 biased;
                                 _ = shutdown.changed() => {
+                                    processor
+                                        .persist_received_partial_turn("persist shutdown assistant turn")
+                                        .await?;
+                                    drop(stream);
                                     return Err(anyhow!("shutdown requested during inference stream"));
                                 }
                                 _ = interrupt_rx.changed() => {
                                     request_token.cancel();
                                     inference_token.cancel();
+                                    let output_result = processor
+                                        .persist_received_partial_turn("persist interrupted assistant turn")
+                                        .await;
                                     drop(stream);
                                     if let Err(error) =
                                         persistence_hook.cancel_in_flight_tool_calls().await
@@ -529,16 +536,14 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                             "failed to cancel in-flight tool calls during request interrupt"
                                         );
                                     }
-                                    if let Err(error) = processor
-                                        .persist_partial_turn("persist interrupted assistant turn")
-                                        .await
-                                    {
+                                    if let Err(error) = output_result {
                                         tracing::warn!(
                                             request_id = %request_id,
                                             session_id = %session_id,
                                             error = %error,
-                                            "failed to persist interrupted assistant turn before terminal transition"
+                                            "failed to persist received provider audit before interrupt terminal transition"
                                         );
+                                        return Err(error.context("persisting received provider audit during interrupt"));
                                     }
                                     // Tool terminalization publishes its result atomically;
                                     // abort cannot recreate results from mutable legacy rows.

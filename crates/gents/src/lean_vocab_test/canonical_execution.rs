@@ -335,6 +335,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         item: LeanCanonicalRecoveryItem,
     },
+    CloseAuxiliary {
+        actor: u64,
+        now: u64,
+        generation: u64,
+        closing: LeanCanonicalSegment,
+    },
     /// Explicit due-only deadline CAS. Output and dispatch never extend the lease.
     RenewLease {
         actor: u64,
@@ -442,6 +448,7 @@ impl LeanCanonicalExecutionOperation {
             | Self::RecoverExpiredGeneration { actor, now, .. }
             | Self::RecoverExpiredTerminal { actor, now, .. }
             | Self::ClosePartial { actor, now, .. }
+            | Self::CloseAuxiliary { actor, now, .. }
             | Self::RenewLease { actor, now, .. }
             | Self::AppendOutput { actor, now, .. }
             | Self::AppendToolOutput { actor, now, .. }

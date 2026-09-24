@@ -28,6 +28,7 @@ def requestSegmentShape (world : World) (generation : Generation)
 
 def providerSource : Source → Bool
   | .provider _ _ _ => true
+  | .auxiliary _ _ _ _ => true
   | _ => false
 
 def freshSegmentIdentity (world : World) (record : Segment) : Bool :=
@@ -150,6 +151,44 @@ def freshCompleteExtentExact (segments : List Segment) (closing : Segment) : Boo
         timestampsNondecreasing data &&
         data.all (fun record => record.createdAt ≤ closing.createdAt)
   | _ => false
+
+def freshAuxiliaryExtentExact (segments : List Segment) (closing : Segment) : Bool :=
+  match closing.close with
+  | some (.closed .complete _ _) => freshCompleteExtentExact segments closing
+  | some (.closed .«partial» count _) =>
+      let data := sourceData segments closing.coordinate
+      count == data.length &&
+        (match validateOpenPrefix segments closing.coordinate closing.writer with
+        | .ok _ => true
+        | .error _ => false) &&
+        timestampsNondecreasing data &&
+        data.all (fun record => record.createdAt ≤ closing.createdAt)
+  | _ => false
+
+/-- A compaction or fallback capture closes under the parent request lease but
+never accepts a message or changes transcript/tool state. The native adapter
+must map the two typed capture-scope kinds injectively into this source. -/
+def closeAuxiliaryCore (world : World) (generation : Generation)
+    (closing : Segment) : Except Error World :=
+  if segmentIdentityCollision world closing then .error .identityCollision
+  else if closing ∈ world.segments then
+    if closing.coordinate.source.isAuxiliary &&
+        validateClosingRecord world.segments closing then .ok world
+    else .error .invalidSegment
+  else if requestSegmentShape world generation closing = false ||
+      closing.coordinate.source.isAuxiliary = false ||
+      closing.flush.isSome ||
+      (closedComplete closing = false && closedPartial closing = false) then
+    .error .invalidSegment
+  else if sourceOpen world closing.coordinate = false then .error .sourceAlreadyClosed
+  else
+    let segments := world.segments ++ [closing]
+    if validateClosingRecord segments closing = false ||
+        freshAuxiliaryExtentExact segments closing = false then .error .invalidSegment
+    else match RequestExecutionLease.step? world.lease
+        (.authorizeProducerDecision .mutationWriteGate generation .closeOrRetract) with
+    | none => .error .leaseRejected
+    | some lease => .ok { world with lease := lease, segments := segments }
 
 def transcriptPublicationRowPresent (transcript : Transcript.TranscriptState) (header : Header)
     (turn : Transcript.AssistantTurn) : Bool :=
@@ -565,6 +604,7 @@ def recoveryExtentExact (world : World) (expected : Generation)
 
 def providerCoordinate : Coordinate → Bool
   | ⟨_, .provider _ _ _⟩ => true
+  | ⟨_, .auxiliary _ _ _ _⟩ => true
   | _ => false
 
 def partialClosureBy (generation : Generation) (record : Segment) : Bool :=
@@ -889,6 +929,30 @@ def revokeCorruptCore (world : World) (expected fresh : Generation)
 def appendRaw (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=
   appendRawCore world generation record
+
+def closeAuxiliary (world : World) (generation : Generation)
+    (closing : Segment) : Except Error World :=
+  checked (fun post =>
+    closing ∈ post.segments &&
+      (closures post.segments closing.coordinate).dedup == [closing] &&
+      validateClosingRecord post.segments closing)
+    (closeAuxiliaryCore world generation closing)
+
+theorem closeAuxiliary_success_effect (before after : World)
+    (generation : Generation) (closing : Segment)
+    (h : closeAuxiliary before generation closing = .ok after) :
+    after = before ∨
+      ∃ lease, after = { before with lease := lease, segments := before.segments ++ [closing] } := by
+  have hc := checked_core_success _ _ _ h
+  unfold closeAuxiliaryCore at hc
+  repeat' first
+    | split at hc
+    | contradiction
+    | (solve | cases hc; exact Or.inl rfl)
+  all_goals
+    dsimp only at hc
+    split at hc <;> simp_all
+  all_goals exact Or.inr ⟨_, hc.symm⟩
 
 def retractBeforeRetry (world : World) (generation : Generation)
     (record : Segment) : Except Error World :=

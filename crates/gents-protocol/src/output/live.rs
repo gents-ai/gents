@@ -25,13 +25,13 @@
 //!   reimplementing closed reconstruction.
 //! - Consumes runs with the strict native shape: runs partition the payload
 //!   at UTF-8 boundaries, streams open densely from zero, every native block
-//!   position is declared exactly once, and a zero-byte continuation is not a
+//!   field position is declared exactly once, and a zero-byte continuation is not a
 //!   flush.
 //! - Never reads a closing record for content. Closure observation, extent
 //!   accounting and the sealed path stay with `reconstruction` and `extent`.
 //!
 //! Evidence preserved for the later classifier: every reconstructed stream
-//! keeps its declaration (including `ReasoningOpaque`, which only the
+//! keeps its declaration (including hidden reasoning fields, which only the
 //! rendering step drops, as Lean's `visibleStreams` does);
 //! `highest_visible_ordinal` exposes bytes beyond the contiguous prefix.
 //!
@@ -236,7 +236,7 @@ pub fn reconstruct_dense_prefix(
     // ordinals actually consumed, so malformed data beyond a gap is not
     // reached (and is inert for a bounded preview that excludes it).
     let mut streams: Vec<ReconstructedStream> = Vec::new();
-    let mut positions: BTreeSet<(u32, u32)> = BTreeSet::new();
+    let mut positions: BTreeSet<(u32, u32, bool)> = BTreeSet::new();
     let mut consumed: u32 = 0;
     for (ordinal, slot) in &slots {
         if *ordinal != consumed {
@@ -262,7 +262,11 @@ pub fn reconstruct_dense_prefix(
             };
             if let Some(declaration) = &run.declaration {
                 if run.stream as usize != streams.len()
-                    || !positions.insert((declaration.block_index, declaration.part_index))
+                    || !positions.insert((
+                        declaration.block_index,
+                        declaration.part_index,
+                        matches!(declaration.payload, StreamPayload::ReasoningSignature),
+                    ))
                 {
                     return Err(invalid(
                         "stream declarations are not dense or positions conflict",
@@ -295,6 +299,19 @@ pub fn reconstruct_dense_prefix(
         streams,
         highest_visible_ordinal,
     })
+}
+
+/// Read every field in the validated contiguous prefix of a source. This is
+/// the exact prefix used by live output before presentation removes hidden
+/// reasoning; closure does not expand a missing or malformed prefix.
+pub fn reconstruct_audit_prefix(
+    records: &[ObservedSegment<'_>],
+    request_doc_id: &str,
+    source: &OutputSource,
+    expected_writer: &OutputWriter,
+    limit: Option<u32>,
+) -> Result<DensePrefix, DensePrefixError> {
+    reconstruct_dense_prefix(records, request_doc_id, source, expected_writer, limit)
 }
 
 /// The full live eligibility classifier: the Rust projection of Lean's
@@ -343,12 +360,19 @@ pub enum LiveView {
 }
 
 impl LiveView {
-    /// Lean's `visibleStreams`: reasoning-opaque streams never render,
+    /// Lean's `visibleStreams`: hidden reasoning fields never render,
     /// including in diagnostics and retained partials.
     fn visible_streams(streams: Vec<LiveStream>) -> Vec<LiveStream> {
         streams
             .into_iter()
-            .filter(|stream| stream.declaration.payload != StreamPayload::ReasoningOpaque)
+            .filter(|stream| {
+                !matches!(
+                    stream.declaration.payload,
+                    StreamPayload::ReasoningEncrypted
+                        | StreamPayload::ReasoningRedacted
+                        | StreamPayload::ReasoningSignature
+                )
+            })
             .collect()
     }
 }
@@ -780,6 +804,9 @@ fn resolve_terminal_payload(
 ///    a live owner), retracted and conflicting closures short-circuit, closed
 ///    sources run `project_unheaded_closed`.
 pub fn project_live(observation: &LiveObservation<'_>) -> LiveView {
+    if observation.target.source.is_auxiliary_audit() {
+        return LiveView::Absent;
+    }
     // Lean `project`: a header target goes straight to `projectPublished`.
     if observation.target.message_id.is_some() {
         return project_published(observation);
@@ -1357,7 +1384,7 @@ mod tests {
         StreamDeclaration {
             block_index,
             part_index: 0,
-            payload: StreamPayload::ReasoningOpaque,
+            payload: StreamPayload::ReasoningEncrypted,
         }
     }
 
@@ -1427,6 +1454,76 @@ mod tests {
             None,
             stamp(0),
         )]
+    }
+
+    #[test]
+    fn audit_prefix_keeps_hidden_fields_while_live_presentation_filters_them() {
+        let records = vec![segment(
+            "flush-0",
+            Some(0),
+            vec![
+                run(
+                    0,
+                    1,
+                    Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::Reasoning,
+                    }),
+                ),
+                run(
+                    1,
+                    1,
+                    Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 0,
+                        payload: StreamPayload::ReasoningSignature,
+                    }),
+                ),
+                run(
+                    2,
+                    1,
+                    Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 1,
+                        payload: StreamPayload::ReasoningEncrypted,
+                    }),
+                ),
+                run(
+                    3,
+                    1,
+                    Some(StreamDeclaration {
+                        block_index: 0,
+                        part_index: 2,
+                        payload: StreamPayload::ReasoningRedacted,
+                    }),
+                ),
+            ],
+            "BSER",
+            None,
+            stamp(0),
+        )];
+        let audit =
+            reconstruct_audit_prefix(&observed(&records), "request-1", &source(), &writer(), None)
+                .unwrap();
+        assert_eq!(audit.streams.len(), 4);
+        assert_eq!(audit.streams[1].text, "S");
+        let presented = LiveView::visible_streams(
+            audit
+                .streams
+                .into_iter()
+                .enumerate()
+                .map(|(stream, value)| LiveStream {
+                    source: source(),
+                    stream: stream as u32,
+                    declaration: value.declaration,
+                    state: LiveStreamState::Unclosed,
+                    text: value.text,
+                })
+                .collect(),
+        );
+        assert_eq!(presented.len(), 1);
+        assert_eq!(presented[0].text, "B");
     }
 
     /// Lean `sampleOpenContinuation`: continues both streams with 67, 68.

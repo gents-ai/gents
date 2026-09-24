@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use bytes::Bytes;
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use rig::completion::{CompletionRequest, ToolDefinition};
 use rig::http_client;
 use rig::streaming::RawStreamingChoice;
@@ -505,6 +505,62 @@ async fn chunk_boundaries_do_not_change_the_event_sequence() {
 }
 
 #[tokio::test]
+async fn split_multibyte_sse_signature_retains_exact_utf8() {
+    let sse = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"署名\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n";
+    assert!(sse
+        .as_bytes()
+        .windows(3)
+        .any(|bytes| bytes == "署".as_bytes()));
+    let chunks = sse
+        .as_bytes()
+        .chunks(1)
+        .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+        .collect::<Vec<Result<Bytes, http_client::Error>>>();
+    let body: http_client::sse::BoxedStream = Box::pin(futures::stream::iter(chunks));
+    let events = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream_sse_body(body, MessagesSseState::new(HashSet::new())).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("bounded SSE decode");
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Ok(RawStreamingChoice::Reasoning {
+            content: rig::completion::message::ReasoningContent::Text {
+                signature: Some(signature),
+                ..
+            },
+            ..
+        }) if signature == "署名"
+    )));
+    assert!(events.iter().all(Result::is_ok));
+}
+
+#[tokio::test]
+async fn malformed_utf8_fails_after_prior_valid_sse_events() {
+    let mut bytes = sse_fixture_text("prior").into_bytes();
+    bytes.extend_from_slice(b"data: \xff\n\n");
+    let body: http_client::sse::BoxedStream =
+        Box::pin(futures::stream::once(async { Ok(Bytes::from(bytes)) }));
+    let events = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        stream_sse_body(body, MessagesSseState::new(HashSet::new())).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("bounded SSE decode");
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Ok(RawStreamingChoice::Message(text)) if text == "prior")));
+    assert!(events
+        .last()
+        .expect("decoder error")
+        .as_ref()
+        .unwrap_err()
+        .to_string()
+        .contains("invalid UTF-8"));
+}
+
+#[tokio::test]
 async fn first_text_event_is_observable_before_the_body_is_exhausted() {
     let (tx, rx) = futures::channel::mpsc::unbounded::<Result<Bytes, http_client::Error>>();
     let body: http_client::sse::BoxedStream = Box::pin(rx);
@@ -523,6 +579,220 @@ async fn first_text_event_is_observable_before_the_body_is_exhausted() {
         rest.last().unwrap().as_ref().unwrap(),
         RawStreamingChoice::FinalResponse(_)
     ));
+}
+
+#[tokio::test]
+async fn cancellation_drains_received_signature_without_polling_provider_again() {
+    use crate::rendered_request::scope::{
+        arm, claim_pending, current_audit_sender, drain_ready_audit, scope_request, test_scope,
+        CaptureScopeKind,
+    };
+    use crate::rendered_request::{
+        AssemblyBuildPath, AssemblyTrace, RenderedRequestCaptureSink, RenderedRequestContext,
+    };
+    use gents_loop::provider_audit::ClaudeAuditEvent;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::Poll;
+
+    let sink: RenderedRequestCaptureSink = Arc::new(|_| Box::pin(async { Ok(()) }));
+    let scope = test_scope(
+        RenderedRequestContext {
+            request_doc_id: "doc-audit".into(),
+            request_commit_cid: "bafy-audit".into(),
+            request_id: "req-audit".into(),
+            agent_did: "did:key:agent".into(),
+            requester_did: String::new(),
+            behavior_id: "behavior".into(),
+            session_id: "session".into(),
+            model_name: "claude".into(),
+        },
+        sink,
+    );
+    scope_request(scope, async {
+        arm(
+            CaptureScopeKind::Inference,
+            0,
+            0,
+            AssemblyTrace::from_effective_messages(
+                AssemblyBuildPath::Budgeted,
+                Vec::new(),
+            ),
+        )
+        .unwrap();
+        claim_pending().expect("armed provider attempt");
+        let sender = current_audit_sender().expect("exact attempt sender");
+        let polls = Arc::new(AtomicUsize::new(0));
+        let body_polls = Arc::clone(&polls);
+        let mut first = Some(Bytes::from_static(
+            b"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"partial-sig\"}}\n\n",
+        ));
+        let body: http_client::sse::BoxedStream =
+            Box::pin(futures::stream::poll_fn(move |_| {
+                body_polls.fetch_add(1, Ordering::SeqCst);
+                match first.take() {
+                    Some(chunk) => Poll::Ready(Some(Ok(chunk))),
+                    None => Poll::Pending,
+                }
+            }));
+        let mut stream = Box::pin(stream_sse_body_observed(
+            body,
+            MessagesSseState::new(HashSet::new()),
+            Some(sender),
+        ));
+        assert!(stream.next().now_or_never().is_none());
+        let before_drain = polls.load(Ordering::SeqCst);
+        let received = drain_ready_audit().await;
+        assert_eq!(polls.load(Ordering::SeqCst), before_drain);
+        assert_eq!(received.len(), 2);
+        assert!(matches!(received[0].event, ClaudeAuditEvent::BlockStart { index: 0, .. }));
+        assert!(matches!(
+            &received[1].event,
+            ClaudeAuditEvent::Signature { index: 0, fragment } if fragment == "partial-sig"
+        ));
+        drop(stream);
+    })
+    .await;
+}
+
+#[test]
+fn thinking_start_emits_ordered_audit_observations() {
+    use gents_loop::provider_audit::ClaudeAuditEvent;
+
+    let mut state = MessagesSseState::new(HashSet::new());
+    state
+        .push_line(
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"start\",\"signature\":\"initial\"}}",
+        )
+        .unwrap();
+    state.push_line("").unwrap();
+    assert!(matches!(
+        state.take_audit_events().as_slice(),
+        [
+            ClaudeAuditEvent::BlockStart { index: 0, .. },
+            ClaudeAuditEvent::ThinkingText { index: 0, fragment: text },
+            ClaudeAuditEvent::Signature { index: 0, fragment: signature },
+        ] if text == "start" && signature == "initial"
+    ));
+    state
+        .push_line(
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"-delta\"}}",
+        )
+        .unwrap();
+    state.push_line("").unwrap();
+    assert!(matches!(
+        state.take_audit_events().as_slice(),
+        [ClaudeAuditEvent::Signature { fragment, .. }] if fragment == "-delta"
+    ));
+}
+
+#[test]
+fn generated_claude_wire_start_cases_drive_native_parser() {
+    use crate::lean_vocab_test::{
+        lean_prompt_assembly_claude_wire_start_cases, LeanClaudeReasoningPart,
+        LeanClaudeStreamBlock,
+    };
+
+    let cases = lean_prompt_assembly_claude_wire_start_cases();
+    assert!(!cases.is_empty(), "Lean emitted no Claude wire-start cases");
+    for case in cases {
+        let mut block = json!({"type":"thinking","thinking":case.start.thinking});
+        if case.start.signature_present {
+            block["signature"] = case.start.signature.clone();
+        }
+        let mut sse = format!(
+            "data: {}\n\n",
+            json!({"type":"content_block_start","index":case.start.index,"content_block":block})
+        );
+        for event in &case.later {
+            let index = event.index.expect("modeled Claude block index");
+            let payload = match event.kind.as_str() {
+                "signatureDelta" => json!({
+                    "type":"content_block_delta", "index":index,
+                    "delta":{"type":"signature_delta", "signature":event.fragment.as_deref().expect("modeled signature")}
+                }),
+                "thinkingDelta" => json!({
+                    "type":"content_block_delta", "index":index,
+                    "delta":{"type":"thinking_delta", "thinking":event.fragment.as_deref().expect("modeled thinking")}
+                }),
+                "contentStop" => json!({"type":"content_block_stop", "index":index}),
+                other => panic!("{}: unsupported modeled wire event {other}", case.name),
+            };
+            sse.push_str(&format!("data: {payload}\n\n"));
+        }
+        let parsed = parse_messages_sse_typed(&sse, &HashSet::new());
+        match case.expected.kind.as_str() {
+            "wireError" => assert!(
+                matches!(
+                    parsed,
+                    Err(MessagesParseError::MalformedThinking {
+                        cause: ThinkingParseCause::Malformed(
+                            "thinking start signature is not text"
+                        )
+                    })
+                ),
+                "{}",
+                case.name
+            ),
+            "contentError" => {
+                let expected = case
+                    .expected
+                    .error
+                    .as_deref()
+                    .expect("modeled content error");
+                assert_eq!(expected, "signatureOrder", "{}", case.name);
+                assert!(
+                    matches!(
+                        parsed,
+                        Err(MessagesParseError::MalformedThinking {
+                            cause: ThinkingParseCause::SignatureOrder
+                        })
+                    ),
+                    "{}",
+                    case.name
+                );
+            }
+            "ok" => {
+                let events = parsed.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                let observed: Vec<LeanClaudeStreamBlock> = events
+                    .iter()
+                    .filter_map(|event| {
+                        let RawStreamingChoice::Reasoning { content, .. } = event else {
+                            return None;
+                        };
+                        let rig::completion::message::ReasoningContent::Text { text, signature } =
+                            content
+                        else {
+                            panic!("{}: modeled text reasoning", case.name)
+                        };
+                        Some(LeanClaudeStreamBlock {
+                            kind: "reasoning".into(),
+                            value: None,
+                            parts: Some(vec![LeanClaudeReasoningPart {
+                                kind: "text".into(),
+                                payload: text.clone(),
+                                signature: signature.clone(),
+                            }]),
+                            id: None,
+                            name: None,
+                            arguments: None,
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    observed,
+                    case.expected
+                        .content
+                        .as_ref()
+                        .expect("modeled content")
+                        .as_slice(),
+                    "{}",
+                    case.name
+                );
+            }
+            other => panic!("{}: unknown modeled wire outcome {other}", case.name),
+        }
+    }
 }
 
 /// Live 4xx diagnosability: status, `request-id`, and a bounded body prefix;

@@ -1,6 +1,8 @@
 import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.ContractCases
 import Proofs.StreamingResponse.Executable
+import Proofs.StreamingResponse.ReasoningAudit
+import Proofs.CanonicalOutput.Execution.AuxiliaryCases
 import Proofs.Compaction.Executable
 import Proofs.Recovery.ContractCases
 import Proofs.QueuedSteering
@@ -60,6 +62,12 @@ private def sourceJson : CanonicalOutput.Source → String
   | .provider scope turn attempt => tagged "provider"
       (",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
        ",\"attempt\":" ++ toString attempt)
+  | .auxiliary kind scope turn attempt => tagged "auxiliary"
+      (",\"auxiliary_kind\":" ++ jsonString (match kind with
+        | .compaction => "compaction"
+        | .compactionFallback => "compaction_fallback") ++
+       ",\"scope\":" ++ toString scope ++ ",\"turn\":" ++ toString turn ++
+       ",\"attempt\":" ++ toString attempt)
   | .tool call => tagged "tool" (",\"call\":" ++ toString call)
   | .authored key => tagged "authored" (",\"key\":" ++ toString key)
 
@@ -73,7 +81,8 @@ private def outcomeJson : CanonicalOutput.Outcome → String
 
 private def payloadKindJson : CanonicalOutput.PayloadKind → String
   | .text => "text" | .reasoning => "reasoning" | .summary => "summary"
-  | .opaque => "opaque" | .arguments => "arguments" | .toolOutput => "tool_output"
+  | .signature => "signature" | .encrypted => "encrypted" | .redacted => "redacted"
+  | .arguments => "arguments" | .toolOutput => "tool_output"
   | .media => "media"
 
 private def mediaKindJson : CanonicalOutput.MediaKind → String
@@ -294,6 +303,92 @@ def outputProjectionCaseJson
     ++ "\"rendered_kinds\":" ++ jsonArray
       ((StreamingResponse.renderedKinds witness.expected).map jsonString)
     ++ "}"
+
+def reasoningAuditCaseJson (witness : StreamingResponse.ReasoningAudit.AuditCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"input\":" ++ outputObservationJson witness.input ++
+    ",\"expected\":" ++ (match witness.expected with
+      | .ok streams => tagged "ok" (",\"streams\":" ++ streamsJson streams)
+      | .error .loading => tagged "loading" ""
+      | .error .conflicted => tagged "conflicted" ""
+      | .error .invalid => tagged "invalid" "") ++ "}"
+
+def reasoningSignatureCaseJson
+    (witness : StreamingResponse.ReasoningAudit.SignatureCase) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"records\":" ++ jsonArray (witness.records.map canonicalSegmentJson) ++
+    ",\"payload\":" ++ payloadSpecJson witness.payload ++
+    ",\"signature\":" ++ optionalStringJson witness.signature ++
+    ",\"accepted\":" ++ boolString witness.accepted ++ "}"
+
+def auxiliaryOutputCaseJson
+    (witness : CanonicalOutput.Execution.AuxiliaryCases.Case) : String :=
+  let kind := witness.kind
+  let raw := CanonicalOutput.Execution.AuxiliaryCases.observed kind
+  let closing := CanonicalOutput.Execution.AuxiliaryCases.close kind witness.outcome
+  let staleClosing := CanonicalOutput.Execution.AuxiliaryCases.staleWriterClose kind witness.outcome
+  let claimed := CanonicalOutput.Execution.AuxiliaryCases.claimedWorld
+  let publicationMessage := CanonicalOutput.Execution.Examples.emptyAssistant 200 5
+  let nativePublicationClosing := CanonicalOutput.Execution.AuxiliaryCases.nativePublicationClose kind
+  let nativePublicationMessage := CanonicalOutput.Execution.AuxiliaryCases.nativePublicationMessage
+  let recoveryClosing := CanonicalOutput.Execution.AuxiliaryCases.recoveryClose kind
+  let observation := CanonicalOutput.Execution.AuxiliaryCases.observation kind [raw]
+  let recovery := CanonicalOutput.Execution.recoverExpiredBatch
+    (CanonicalOutput.Execution.Examples.world 20 [raw]) 7 8 5 30
+    [⟨recoveryClosing, none⟩]
+  let recoveryWithHeader := CanonicalOutput.Execution.recoverExpiredBatch
+    (CanonicalOutput.Execution.Examples.world 20 [raw]) 7 8 5 30
+    [⟨recoveryClosing, some (CanonicalOutput.Execution.Examples.recoveryMessage 201 101 0 20)⟩]
+  let publication := CanonicalOutput.Execution.acceptAndPublish
+    (CanonicalOutput.Execution.Examples.world 5 [raw]) 7 closing
+    publicationMessage [] []
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"raw\":" ++ canonicalSegmentJson raw ++
+    ",\"closing\":" ++ canonicalSegmentJson closing ++
+    ",\"stale_closing\":" ++ canonicalSegmentJson staleClosing ++
+    ",\"authority\":{\"claimed_request_state\":" ++
+      jsonString claimed.lease.request.toDefraDB ++
+      ",\"generation\":" ++ optionalNatJson claimed.currentGeneration? ++
+      ",\"begin_boundary\":\"mutation_write_gate\"}" ++
+    ",\"publication_message\":" ++ canonicalMessageJson publicationMessage ++
+    ",\"native_publication_closing\":" ++ canonicalSegmentJson nativePublicationClosing ++
+    ",\"native_publication_message\":" ++ canonicalMessageJson nativePublicationMessage ++
+    ",\"recovery_closing\":" ++ canonicalSegmentJson recoveryClosing ++
+    ",\"observation\":" ++ outputObservationJson observation ++
+    ",\"expected\":{\"append_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.Examples.succeeds
+        (CanonicalOutput.Execution.appendRaw
+          (CanonicalOutput.Execution.Examples.world 5) 7 raw)) ++
+    ",\"close_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.Examples.succeeds
+        (CanonicalOutput.Execution.closeAuxiliary
+          (CanonicalOutput.Execution.Examples.world 5 [raw]) 7 closing)) ++
+    ",\"claimed_append_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.AuxiliaryCases.claimedAppendAccepted kind) ++
+    ",\"begin_accepted\":" ++ boolString
+      CanonicalOutput.Execution.AuxiliaryCases.begunWorld?.isSome ++
+    ",\"begun_append_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.AuxiliaryCases.begunAppendAccepted kind) ++
+    ",\"stale_close_replay_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.AuxiliaryCases.staleWriterCloseReplayAccepted
+        kind witness.outcome) ++
+    ",\"empty_header_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.AuxiliaryCases.emptyHeaderAccepted kind witness.outcome) ++
+    ",\"native_publication_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.AuxiliaryCases.nativePublicationAccepted kind) ++
+    ",\"recovery_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.Examples.succeeds recovery) ++
+    ",\"recovery_with_header_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.Examples.succeeds recoveryWithHeader) ++
+    ",\"publication_accepted\":" ++ boolString
+      (CanonicalOutput.Execution.Examples.succeeds publication) ++
+    ",\"audit\":" ++ (match StreamingResponse.reconstructAuditPrefix observation none with
+      | .ok streams => tagged "ok" (",\"streams\":" ++ streamsJson streams)
+      | .error .loading => tagged "loading" ""
+      | .error .conflicted => tagged "conflicted" ""
+      | .error .invalid => tagged "invalid" "") ++
+    ",\"public_view\":" ++ outputViewJson (StreamingResponse.project observation) ++
+    "}}"
 
 def compactionReducerCaseJson (witness : Compaction.CompactionReducerCase) : String :=
   "{"

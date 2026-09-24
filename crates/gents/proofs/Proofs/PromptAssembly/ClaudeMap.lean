@@ -635,7 +635,7 @@ abbrev ReplayTag := CanonicalOutput.Coordinate
 def providerReplayTag (tag : ReplayTag) : Bool :=
   match tag.source with
   | .provider .. => true
-  | .tool .. | .authored .. => false
+  | .auxiliary .. | .tool .. | .authored .. => false
 
 structure TaggedReplayRow where
   source : Option ReplayTag

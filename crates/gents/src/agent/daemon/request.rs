@@ -121,11 +121,38 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
             &request_commit_cid,
             self.behavior.model_name.clone(),
         );
-        let capture_scope = crate::rendered_request::scope_from_factory(
+        let mut capture_scope = crate::rendered_request::scope_from_factory(
             capture_context.clone(),
             self.rendered_request_capture_factory.as_ref(),
         );
+        if let Some(scope) = capture_scope.as_mut() {
+            std::sync::Arc::get_mut(scope)
+                .context("fresh request capture scope unexpectedly shared")?
+                .set_auxiliary_output_sink(stream_writer.auxiliary_output_sink(
+                    request.clone(),
+                    lifecycle.execution_generation()?.to_owned(),
+                    crate::provider_input::ProviderInputProfile::resolve(
+                        self.behavior.backend_provider_kind,
+                        self.behavior.openai_wire_api,
+                    ),
+                ));
+        }
         let handled = admission::scope_request(admission_context, async {
+            // Prompt preparation may call a compaction provider; its output
+            // requires the same Processing fence as the main inference turn.
+            let response_behavior_id = lifecycle.behavior_id().to_string();
+            lifecycle
+                .begin_owned_execution(stream_writer)
+                .instrument(tracing::info_span!(
+                    "request.begin_response",
+                    request_id = %request.request_id,
+                    session_id = %request.session_id,
+                    agent_did = %request.agent_did,
+                    behavior_id = %response_behavior_id,
+                    subagent_depth = trace_attrs.subagent_depth,
+                    is_subagent = trace_attrs.is_subagent,
+                ))
+                .await?;
             self.spawn_conversation_title_generation(
                 &request,
                 title_admission_context,
@@ -483,19 +510,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                 built.messages = reminders;
             }
 
-            let response_behavior_id = lifecycle.behavior_id().to_string();
-            lifecycle
-                .begin_owned_execution(stream_writer)
-                .instrument(tracing::info_span!(
-                    "request.begin_response",
-                    request_id = %request.request_id,
-                    session_id = %request.session_id,
-                    agent_did = %request.agent_did,
-                    behavior_id = %response_behavior_id,
-                    subagent_depth = trace_attrs.subagent_depth,
-                    is_subagent = trace_attrs.is_subagent,
-                ))
-                .await?;
             let doc_id = lifecycle.request().doc_id.clone();
 
             let inference_behavior_id = lifecycle.behavior_id().to_string();

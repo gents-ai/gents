@@ -451,6 +451,14 @@ def snapshotJson : String :=
     ++ "\"canonical_output_projection_cases\":"
       ++ jsonArray
         (StreamingResponse.outputProjectionCases.map outputProjectionCaseJson) ++ ","
+    ++ "\"reasoning_audit_cases\":" ++ jsonArray
+      (StreamingResponse.ReasoningAudit.auditCases.map reasoningAuditCaseJson) ++ ","
+    ++ "\"reasoning_signature_cases\":" ++ jsonArray
+      (StreamingResponse.ReasoningAudit.signatureCases.map reasoningSignatureCaseJson) ++ ","
+    ++ "\"auxiliary_output_cases\":" ++ jsonArray
+      (CanonicalOutput.Execution.AuxiliaryCases.cases.map auxiliaryOutputCaseJson) ++ ","
+    ++ "\"prompt_assembly_claude_wire_start_cases\":" ++
+      promptAssemblyClaudeWireStartCasesJson ++ ","
     ++ "\"current_input_cases\":" ++ currentInputCasesJson ++ ","
     ++ "\"prompt_assembly_sanitize_cases\":"
       ++ promptAssemblySanitizeCasesJson ++ ","

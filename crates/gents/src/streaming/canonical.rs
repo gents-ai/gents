@@ -41,10 +41,11 @@ pub(crate) struct PublishedProviderTurn {
     pub(crate) accepted_tools: Vec<super::AcceptedToolCall>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProviderAttemptClose {
     Retracted,
     Partial,
+    AuxiliaryComplete,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,6 +123,9 @@ pub(crate) fn retained_partial_blocks(
         &extent.segments == segments && &extent.stream_bytes == stream_bytes,
         "reusable recovery closure truncates or disagrees with committed extent"
     );
+    if source.is_auxiliary_audit() {
+        return Ok(Vec::new());
+    }
     let mut retained = Vec::new();
     for (stream, reconstructed) in extent.streams.iter().enumerate() {
         if matches!(reconstructed.declaration.payload, StreamPayload::Text)
@@ -162,6 +166,24 @@ pub(crate) async fn close_provider_attempt_at(
     candidate: Option<ProviderPartialCandidate>,
     now: DateTime<Utc>,
 ) -> Result<Option<String>> {
+    anyhow::ensure!(
+        matches!(&prepared.source, OutputSource::ProviderTurn { .. })
+            && matches!(&prepared.writer, OutputWriter::RequestExecution { execution_generation }
+                if execution_generation == generation),
+        "provider close requires its exact request writer"
+    );
+    anyhow::ensure!(
+        !matches!(close, ProviderAttemptClose::AuxiliaryComplete)
+            || prepared.source.is_auxiliary_audit(),
+        "headerless Complete closure requires an auxiliary audit source"
+    );
+    anyhow::ensure!(
+        !prepared.source.is_auxiliary_audit()
+            || candidate
+                .as_ref()
+                .is_none_or(|value| value.header.is_none()),
+        "auxiliary audit closure cannot publish a transcript header"
+    );
     ConfigAccess::transact_local_idempotent(
         node,
         None,
@@ -173,9 +195,11 @@ pub(crate) async fn close_provider_attempt_at(
             let records = load_source_in_txn(txn, prepared).await?;
             let closures = records.iter().filter(|row| row.segment.close.is_some()).collect::<Vec<_>>();
             if let [existing] = closures.as_slice() {
+                validate_closing_shape(prepared, &existing.segment)?;
                 let matches = match (&existing.segment.close, close) {
                     (Some(SourceClose::Retracted), ProviderAttemptClose::Retracted) => true,
                     (Some(SourceClose::Closed { outcome: OutputOutcome::Partial, .. }), ProviderAttemptClose::Partial) => true,
+                    (Some(SourceClose::Closed { outcome: OutputOutcome::Complete, .. }), ProviderAttemptClose::AuxiliaryComplete) => true,
                     _ => false,
                 };
                 anyhow::ensure!(matches, "provider close replay changed outcome");
@@ -193,10 +217,24 @@ pub(crate) async fn close_provider_attempt_at(
             let extent = gents_protocol::output::extent::inspect_open_source(
                 &observations, &prepared.request_doc_id, &prepared.source, &prepared.writer,
             )?;
+            if let Some(last_created_at) = extent.last_created_at.as_deref() {
+                let closing = candidate.as_ref().map_or(prepared, |value| &value.closing);
+                let last_created_at = DateTime::parse_from_rfc3339(last_created_at)
+                    .context("provider source has an invalid committed timestamp")?;
+                let closing_created_at = DateTime::parse_from_rfc3339(&closing.created_at)
+                    .context("provider closure has an invalid created_at")?;
+                if closing_created_at < last_created_at {
+                    return Err(ProviderCloseRejection::RegressedTimestamp.into());
+                }
+            }
             let derived_close = match close {
                 ProviderAttemptClose::Retracted => SourceClose::Retracted,
-                ProviderAttemptClose::Partial => SourceClose::Closed {
-                    outcome: OutputOutcome::Partial,
+                ProviderAttemptClose::Partial | ProviderAttemptClose::AuxiliaryComplete => SourceClose::Closed {
+                    outcome: if matches!(close, ProviderAttemptClose::AuxiliaryComplete) {
+                        OutputOutcome::Complete
+                    } else {
+                        OutputOutcome::Partial
+                    },
                     segments: extent.segments,
                     stream_bytes: extent.stream_bytes,
                 },
@@ -272,7 +310,7 @@ async fn partial_header_in_txn(
     now: DateTime<Utc>,
     replay: bool,
 ) -> Result<Option<String>> {
-    if !matches!(close, ProviderAttemptClose::Partial) {
+    if !matches!(close, ProviderAttemptClose::Partial) || prepared.source.is_auxiliary_audit() {
         return Ok(None);
     }
     let message_key = partial_message_key(&prepared.request_doc_id, &prepared.source)?;
@@ -458,6 +496,7 @@ async fn publish_provider_turn_with_time(
             let exemplar = final_flush.as_ref().context("provider publication has no output")?;
             anyhow::ensure!(
                 matches!(&exemplar.source, OutputSource::ProviderTurn { .. } | OutputSource::Authored { .. })
+                    && !exemplar.source.is_auxiliary_audit()
                     && matches!(&exemplar.writer, OutputWriter::RequestExecution { execution_generation }
                         if execution_generation == generation)
                     && matches!(&exemplar.close, None | Some(SourceClose::Closed { outcome: OutputOutcome::Complete, .. })),

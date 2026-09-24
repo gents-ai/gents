@@ -158,6 +158,7 @@ fn bounded_structured_output_preview(raw: &str) -> String {
 #[allow(dead_code)]
 pub enum LoopStreamItem<R> {
     Item(MultiTurnStreamItem<R>),
+    ProviderAudit(crate::provider_audit::ProviderAuditObservation),
     ProviderAttemptStarted {
         turn: usize,
         attempt: u32,

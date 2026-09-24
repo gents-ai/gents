@@ -136,6 +136,16 @@ private theorem retract_preserves (before after : World) (generation : Generatio
           apply closureUnique_append_fresh before.segments record unique
           simpa [sourceOpen] using hopen
 
+private theorem auxiliaryClose_preserves (before after : World) (generation : Generation)
+    (closing : Segment) (unique : ClosureUnique before)
+    (h : closeAuxiliary before generation closing = .ok after) : ClosureUnique after := by
+  rcases closeAuxiliary_success_effect before after generation closing h with rfl | ⟨_, rfl⟩
+  · exact unique
+  · apply closureUnique_append_winner before.segments closing unique
+    have hp := checked_success _ _ _ h
+    simp only [Bool.and_eq_true, decide_eq_true_eq, beq_iff_eq] at hp
+    exact hp.1.2
+
 private theorem accept_preserves (before after : World) (generation : Generation)
     (closing : Segment) (message : MessageEnvelope) (targets : List RemoteTarget)
     (admissions : List ToolAdmission) (unique : ClosureUnique before)
@@ -452,6 +462,9 @@ private theorem evaluate_preserves (operation : Gate.Operation) (before after : 
           (mapError_success Gate.Error.execution _ _ h)).1
   | append generation record =>
       exact appendRaw_preserves before after generation record unique
+        (mapError_success Gate.Error.execution _ _ h)
+  | closeAuxiliary generation closing =>
+      exact auxiliaryClose_preserves before after generation closing unique
         (mapError_success Gate.Error.execution _ _ h)
   | retract generation record =>
       exact retract_preserves before after generation record unique

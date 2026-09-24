@@ -2,6 +2,7 @@ import Proofs.Conformance.Contracts.Json.Helpers
 import Proofs.Conformance.Contracts.Json.SessionHydration
 import Proofs.Conformance.ContractCases.PromptAssembly
 import Proofs.Compaction.Executable
+import Proofs.PromptAssembly.ClaudeWire
 
 namespace Conformance.Contracts
 
@@ -267,6 +268,31 @@ def promptAssemblyClaudeThinkingStreamCaseJson
 
 def promptAssemblyClaudeThinkingStreamCasesJson : String :=
   jsonArray (promptAssemblyClaudeThinkingStreamCases.map promptAssemblyClaudeThinkingStreamCaseJson)
+
+def promptAssemblyClaudeWireStartCaseJson
+    (witness : PromptAssembly.ClaudeWire.Case) : String :=
+  "{\"name\":" ++ jsonString witness.name ++
+    ",\"start\":{\"index\":" ++ toString witness.start.index ++
+    ",\"thinking\":" ++ jsonString witness.start.thinking ++
+    ",\"signature_present\":" ++ boolString witness.start.signature.isSome ++
+    ",\"signature\":" ++
+      (match witness.start.signature with
+       | none => "null"
+       | some value => value.compress) ++ "}" ++
+    ",\"later\":" ++ jsonArray (witness.later.map claudeStreamEventJson) ++
+    ",\"expected\":" ++ (match witness.expected with
+      | .error (.wire .invalidSignatureType) =>
+          "{\"kind\":\"wireError\",\"error\":\"invalidSignatureType\"}"
+      | .error (.content error) =>
+          "{\"kind\":\"contentError\",\"error\":" ++
+            jsonString (PromptAssembly.ClaudeMap.errorName error) ++ "}"
+      | .ok (steps, content) =>
+          "{\"kind\":\"ok\",\"steps\":" ++
+            jsonArray (steps.map claudeContentStepJson) ++
+            ",\"content\":" ++ jsonArray (content.map claudeStreamBlockJson) ++ "}") ++ "}"
+
+def promptAssemblyClaudeWireStartCasesJson : String :=
+  jsonArray (PromptAssembly.ClaudeWire.cases.map promptAssemblyClaudeWireStartCaseJson)
 
 private def claudeReplayInputBlockJson :
     CanonicalOutput.MessageBlock (List UInt8) → String

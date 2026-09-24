@@ -1578,6 +1578,42 @@ def caseCoverage : List CoverageEntry :=
       "gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview"
       "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "reasoning_audit_cases"
+      "ReasoningAuditCases"
+      "native_output_reconstruction::generated_reasoning_audit_cases_drive_exact_native_prefix"
+      "Generated open, partial, retracted, continued-signature and gap observations bind exact native dense-prefix reconstruction, including subtype and bytes. They do not establish provider-event capture, durable write admission, ACP, or full replica completeness beyond the observed prefix.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "reasoning_signature_cases"
+      "ReasoningSignatureCases"
+      "native_output_reconstruction::generated_reasoning_signature_cases_drive_native_header_validation"
+      "Generated typed cases bind published-header signature agreement to retained signature bytes, including provider inline-signature rejection without a retained stream and authored inline-signature allowance. Invalid UTF-8 is rejected at the byte-to-String adapter boundary because native OutputSegment payload is typed String; this does not establish provider-event capture, durable write admission, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "auxiliary_output_cases"
+      "AuxiliaryOutputCases"
+      "streaming::auxiliary_tests::generated_auxiliary_cases_drive_owned_begin_close_and_publication_guards"
+      "Generated compaction/fallback cases bind claimed append denial, own begin/append, Complete or Partial exact close, stale-writer close replay denial, and nonempty auxiliary publication denial to native request/output owners. Empty-assistant publication is Lean-only because the native encoder rejects that shape. This does not cover title ownership, recovery after crash, or every provider cancellation path.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "auxiliary_output_cases"
+      "AuxiliaryOutputCases"
+      "streaming::auxiliary_tests::generated_auxiliary_cases_drive_non_claude_sink_audit_without_publication"
+      "Generated compaction/fallback cases drive the non-Claude auxiliary sink with typed reasoning, signature, encrypted and redacted observations, then compare durable bytes, exact closure, private audit reconstruction and absent public live/message output to Lean. This does not cover crash durability before sink acknowledgement, title ownership, recovery after crash, or every provider cancellation path.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "auxiliary_output_cases"
+      "AuxiliaryOutputCases"
+      "native_output_reconstruction::generated_auxiliary_cases_drive_native_audit_and_public_projection"
+      "Generated compaction/fallback records bind exact private audit bytes and absent public live projection to native reconstruction. This is a read-only projection check; it does not establish provider-event capture, durable write admission, recovery transactions, title ownership, or ACP.")
+      "canonical-output" [Surface.runtimeInternal]
+  , tagged (consumerWithFollowUp
+      "prompt_assembly_claude_wire_start_cases"
+      "PromptAssemblyClaudeWireStartCases"
+      "claude_messages::tests::generated_claude_wire_start_cases_drive_native_parser"
+      "The four generated wire-start cases bind initial signature plus later delta, absent initial signature, ordered rejection of later thinking, and malformed signature type at the native SSE parser. The native test compares final content/error, not intermediate modeled steps or durable output capture.")
+      "prompt-assembly" [Surface.runtimeInternal]
   , tagged (followUpCoverage
       "compaction_reducer_cases"
       "CompactionReducerCases"

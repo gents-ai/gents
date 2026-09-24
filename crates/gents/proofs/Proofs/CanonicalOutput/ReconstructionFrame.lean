@@ -109,6 +109,18 @@ private theorem preserves_bind {ε α β : Type} {before after : Except ε α}
     simp only [hb, Bind.bind, Except.bind] at h
     simpa only [ha, Bind.bind, Except.bind] using rest item value h
 
+private theorem preserves_bind_of {ε α β : Type} {before after : Except ε α}
+    {f g : α → Except ε β} (first : Preserves before after)
+    (rest : ∀ value, before = .ok value → Preserves (f value) (g value)) :
+    Preserves (before >>= f) (after >>= g) := by
+  intro value h
+  cases hb : before with
+  | error error => simp [hb, Bind.bind, Except.bind] at h
+  | ok item =>
+    have ha := first item hb
+    simp only [hb, Bind.bind, Except.bind] at h
+    simpa only [ha, Bind.bind, Except.bind] using rest item hb value h
+
 private theorem preserves_mapError {ε δ α : Type} {before after : Except ε α}
     (f : ε → δ) (h : Preserves before after) :
     Preserves (before.mapError f) (after.mapError f) := by
@@ -146,6 +158,8 @@ section MessageFrame
 variable (before after : List Segment) (denied : List DocId)
     (hc : ∀ ref, Preserves (resolveClose before denied ref) (resolveClose after denied ref))
     (hp : ∀ ref, Preserves (reconstructPayload before denied ref) (reconstructPayload after denied ref))
+    (he : ∀ ref closing, resolveClose before denied ref = .ok closing →
+      Preserves (reconstructExtent before closing) (reconstructExtent after closing))
 include hc hp
 
 private theorem declaredPayload_frame (spec : PayloadSpec) :
@@ -155,6 +169,27 @@ private theorem declaredPayload_frame (spec : PayloadSpec) :
   intro closing
   apply preserves_bind (preserves_mapError _ (hp _))
   intro payload
+  exact preserves_refl _
+
+include he in
+private theorem validateReasoningSignature_frame (spec : PayloadSpec)
+    (signature : Option String) :
+    Preserves (validateReasoningSignature before denied spec signature)
+      (validateReasoningSignature after denied spec signature) := by
+  unfold validateReasoningSignature
+  apply preserves_bind_of (preserves_mapError _ (hc spec.reference))
+  intro closing hclose
+  have hresolved : resolveClose before denied spec.reference = .ok closing := by
+    cases hr : resolveClose before denied spec.reference with
+    | error error => simp [hr, Except.mapError] at hclose
+    | ok found =>
+      simp [hr, Except.mapError] at hclose
+      cases hclose
+      rfl
+  apply preserves_bind (preserves_mapError _ (hp spec.reference))
+  intro payload
+  apply preserves_bind (preserves_mapError _ (he spec.reference closing hresolved))
+  intro streams
   exact preserves_refl _
 
 omit hc in
@@ -189,11 +224,19 @@ private theorem validateMediaDeclaration_frame (media : Media PayloadSpec) :
     exact preserves_bind (declaredPayload_frame before after denied hc hp _)
       (fun _ => preserves_refl _)
 
+include he in
 private theorem validateBlockMetadata_frame (header : Header) (block : MessageBlock PayloadSpec) :
     Preserves (validateBlockMetadata before denied header block)
       (validateBlockMetadata after denied header block) := by
   cases block with
-  | text | reasoning => exact preserves_refl _
+  | text => exact preserves_refl _
+  | reasoning id parts =>
+    apply preserves_forM
+    intro part
+    cases part with
+    | text payload signature =>
+      exact validateReasoningSignature_frame before after denied hc hp he payload signature
+    | encrypted _ | redacted _ | summary _ => exact preserves_refl _
   | toolCall doc id call name args sig extra =>
     exact preserves_bind (declaredPayload_frame before after denied hc hp _)
       (fun _ => preserves_refl _)
@@ -251,6 +294,7 @@ private theorem validateRecoveryPositions_frame (message : MessageEnvelope) :
   cases closing.coordinate.source <;> try exact preserves_refl _
   exact preserves_bind (preserves_mapError _ (hp _)) (fun _ => preserves_refl _)
 
+include he in
 private theorem validateMessageStructure_frame (message : MessageEnvelope) :
     Preserves (validateMessageStructure before denied message)
       (validateMessageStructure after denied message) := by
@@ -261,7 +305,7 @@ private theorem validateMessageStructure_frame (message : MessageEnvelope) :
       (validateReferenceSource_frame before after denied hc message.header))
     intro _
     apply preserves_bind (preserves_forM _ _ _
-      (validateBlockMetadata_frame before after denied hc hp message.header))
+      (validateBlockMetadata_frame before after denied hc hp he message.header))
     intro _
     cases message.header.publication with
     | requestExecution => exact validateExactProviderPositions_frame before after denied hc hp message
@@ -310,6 +354,7 @@ private theorem reconstructBlock_frame (block : MessageBlock PayloadSpec) :
     exact preserves_bind (reconstructMedia_frame before after denied hp media)
       (fun _ => preserves_refl _)
 
+include he in
 private theorem reconstructMessage_frame (message : MessageEnvelope) :
     Preserves (reconstructMessage before denied message)
       (reconstructMessage after denied message) := by
@@ -318,7 +363,7 @@ private theorem reconstructMessage_frame (message : MessageEnvelope) :
   · exact preserves_refl _
   · split
     · exact preserves_refl _
-    · apply preserves_bind (validateMessageStructure_frame before after denied hc hp message)
+    · apply preserves_bind (validateMessageStructure_frame before after denied hc hp he message)
       intro _
       apply preserves_bind (preserves_mapM _ _ _
         (reconstructBlock_frame before after denied hp))
@@ -326,6 +371,25 @@ private theorem reconstructMessage_frame (message : MessageEnvelope) :
       exact preserves_refl _
 
 end MessageFrame
+
+theorem reconstructExtent_append_open_of_resolved (records : List Segment)
+    (record : Segment)
+    (openSource : closures records record.coordinate = [])
+    (denied : List DocId) (ref : PayloadRef) (closing : Segment)
+    (hclose : resolveClose records denied ref = .ok closing) :
+    Preserves (reconstructExtent records closing)
+      (reconstructExtent (records ++ [record]) closing) := by
+  have member := resolveClose_success_closed records denied ref closing hclose
+  have differentCoordinate : record.coordinate ≠ closing.coordinate := by
+    intro heq
+    have hm : closing ∈ closures records record.coordinate := by
+      simp [closures, sourceRecords, member.1, member.2, heq]
+    simp [openSource] at hm
+  have extents (count : Nat) : extent (records ++ [record]) closing.coordinate count =
+      extent records closing.coordinate count := by
+    simp [extent, sourceRecords, List.filter_append, differentCoordinate]
+  intro streams h
+  simpa only [reconstructExtent, extents] using h
 
 /-- Successful native reconstruction is stable under writes to an open source.
 This covers all native block kinds and metadata checks, not just text bytes. -/
@@ -337,6 +401,8 @@ theorem reconstructMessage_append_open (records : List Segment) (record : Segmen
     reconstructMessage (records ++ [record]) denied message = .ok native :=
   reconstructMessage_frame records (records ++ [record]) denied
     (resolveClose_append_open records record fresh openSource denied)
-    (reconstructPayload_append_open records record fresh openSource denied) message native h
+    (reconstructPayload_append_open records record fresh openSource denied)
+    (reconstructExtent_append_open_of_resolved records record openSource denied)
+    message native h
 
 end CanonicalOutput
