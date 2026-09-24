@@ -1365,7 +1365,13 @@ def caseCoverage : List CoverageEntry :=
       "canonical_output_projection_cases"
       "CanonicalOutputProjectionCases"
       "gents_protocol::transcript::tests::generated_reasoning_visibility_matches_persisted_presentation"
-      "The two published mixed/all-opaque reasoning cases bind present_message and gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview to renderedKinds. This binds stateless reasoning presentation, not full streaming event delivery, projection selection, ACP or genesis validation.")
+      "The two published mixed/all-opaque reasoning cases bind present_message to renderedKinds. This binds stateless reasoning presentation, not projection selection, ACP or genesis validation.")
+      "canonical-output" [Surface.agentFacing, Surface.operatorUi]
+  , tagged (consumerWithFollowUp
+      "canonical_output_projection_cases"
+      "CanonicalOutputProjectionCases"
+      "gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview"
+      "The two published mixed/all-opaque reasoning cases bind render_reasoning_text to renderedKinds. This binds the stateless per-event rendering function, not stream-event delivery or reconnect behavior.")
       "canonical-output" [Surface.agentFacing, Surface.operatorUi]
   , tagged (followUpCoverage
       "compaction_reducer_cases"

@@ -56,6 +56,20 @@ impl ConformanceConsumer {
 pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
     &[
         ConformanceConsumer::RustTest {
+            id: "gents_protocol::transcript::tests::generated_reasoning_visibility_matches_persisted_presentation",
+            package: "gents-protocol",
+            source_path: "crates/gents-protocol/src/transcript.rs",
+            module_path: "gents_protocol::transcript::tests",
+            function: "generated_reasoning_visibility_matches_persisted_presentation",
+        },
+        ConformanceConsumer::RustTest {
+            id: "gents_loop::stream_processor::tests::generated_reasoning_visibility_matches_live_preview",
+            package: "gents-loop",
+            source_path: "crates/gents-loop/src/stream_processor.rs",
+            module_path: "gents_loop::stream_processor::tests",
+            function: "generated_reasoning_visibility_matches_live_preview",
+        },
+        ConformanceConsumer::RustTest {
             id: "lean_vocab_test::support::canonical_presentation::native_adapter::generated_payload_presentation_cases_use_native_reconstruction",
             package: "gents",
             source_path: "crates/gents/src/lean_vocab_test/canonical_presentation/native_adapter.rs",
