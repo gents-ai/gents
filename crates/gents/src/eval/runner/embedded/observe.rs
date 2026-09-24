@@ -1,15 +1,20 @@
 //! Request observation for an embedded trial: wait until terminal, read the
 //! evidence rows, and classify the outcome the way the stage runner does.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gents_protocol::output::MessageRole;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
+use gents_protocol::transcript::present_message;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::config_client::ConfigAccess;
 use crate::defra_node::EmbeddedNode;
 use crate::graphql::{escape_graphql_string, first_row, graphql_with_transaction_retry};
+use crate::run_timeline::{RunTimelineRows, TimelineToolCallRow};
 
 /// Progress and usage callbacks for one `await_terminal_with` poll.
 ///
@@ -179,7 +184,7 @@ pub async fn await_terminal_with(
 }
 
 pub async fn collect_request_evidence(
-    node: &EmbeddedNode,
+    node: &Arc<EmbeddedNode>,
     request_id: &str,
 ) -> Result<RequestEvidence> {
     let query = evidence_query(request_id);
@@ -187,14 +192,30 @@ pub async fn collect_request_evidence(
     let data = response
         .data
         .context("collect request evidence returned no data")?;
-    Ok(request_evidence_from_query_data(&data))
+    let timeline = crate::run_timeline_fetch::load_run_timeline_rows(
+        &ConfigAccess::Local(node.clone()),
+        request_id,
+    )
+    .await
+    .context("load request run timeline")?;
+    Ok(request_evidence_from_sources(&data, &timeline))
 }
 
-/// Map the evidence-query data object into [`RequestEvidence`].
+/// Map the evidence-query data object and the request's run timeline into
+/// [`RequestEvidence`]. Tool calls and assistant messages come from the
+/// timeline; the request failure reason and inference calls from the query.
+pub fn request_evidence_from_sources(data: &Value, timeline: &RunTimelineRows) -> RequestEvidence {
+    let mut evidence = request_evidence_from_query_data(data);
+    evidence.tool_calls = timeline.tool_calls.iter().map(tool_call_evidence).collect();
+    evidence.messages = assistant_messages(timeline);
+    evidence
+}
+
+/// Map a query data object into [`RequestEvidence`].
 ///
-/// Embedded collection and the control-plane wrapper share this parser so both
-/// arms classify the same fields. Missing collections are empty; a row is never
-/// unwrapped.
+/// `AgentToolCall` rows, when present, are serialized
+/// [`TimelineToolCallRow`]s, the shape the stage runner's observed outcome
+/// carries. Missing collections are empty; a row is never unwrapped.
 pub fn request_evidence_from_query_data(data: &Value) -> RequestEvidence {
     let requests = rows(data, "AgentRequest");
     let failure_reason = requests
@@ -204,16 +225,8 @@ pub fn request_evidence_from_query_data(data: &Value) -> RequestEvidence {
         failure_reason,
         tool_calls: rows(data, "AgentToolCall")
             .iter()
-            .map(|row| ToolCallEvidence {
-                tool_name: field_string(row, "tool_name").unwrap_or_default(),
-                status: field_string(row, "status"),
-                lifecycle_state: field_string(row, "lifecycle_state"),
-                tool_failure_class: field_string(row, "tool_failure_class"),
-                started_at: field_string(row, "started_at"),
-                completed_at: field_string(row, "completed_at"),
-                args: field_value(row, "args"),
-                result: field_value(row, "result"),
-            })
+            .filter_map(|row| serde_json::from_value::<TimelineToolCallRow>(row.clone()).ok())
+            .map(|row| tool_call_evidence(&row))
             .collect(),
         inference_calls: rows(data, "InferenceCall")
             .iter()
@@ -228,22 +241,51 @@ pub fn request_evidence_from_query_data(data: &Value) -> RequestEvidence {
                 ended_at: field_string(row, "ended_at"),
             })
             .collect(),
-        responses: rows(data, "AgentResponse")
-            .iter()
-            .map(|row| ResponseEvidence {
-                status: field_string(row, "status"),
-                error_message: field_string(row, "error_message"),
-            })
-            .collect(),
-        messages: rows(data, "AgentMessage")
-            .iter()
-            .map(|row| MessageEvidence {
-                role: field_string(row, "role").unwrap_or_default(),
-                content: field_string(row, "content").unwrap_or_default(),
-                created_at: field_string(row, "timestamp"),
-            })
-            .collect(),
+        responses: Vec::new(),
+        messages: Vec::new(),
     }
+}
+
+fn tool_call_evidence(row: &TimelineToolCallRow) -> ToolCallEvidence {
+    ToolCallEvidence {
+        tool_name: row.tool_name.clone(),
+        status: Some(row.status.clone()).filter(|status| !status.is_empty()),
+        lifecycle_state: row.lifecycle_state.clone(),
+        tool_failure_class: row.tool_failure_class.clone(),
+        started_at: row.started_at.clone(),
+        completed_at: row.completed_at.clone(),
+        args: if row.args.is_empty() {
+            Value::Null
+        } else {
+            Value::String(row.args.clone())
+        },
+        result: row.result.clone().map_or(Value::Null, Value::String),
+    }
+}
+
+/// The request's own assistant messages in sequence order, presented through
+/// the transcript owner.
+fn assistant_messages(timeline: &RunTimelineRows) -> Vec<MessageEvidence> {
+    let Some(request_doc_id) = timeline.request.doc_id.as_deref() else {
+        return Vec::new();
+    };
+    let mut messages = timeline
+        .messages
+        .iter()
+        .filter(|row| {
+            row.request_doc_id.as_deref() == Some(request_doc_id)
+                && row.header.role == MessageRole::Assistant
+        })
+        .collect::<Vec<_>>();
+    messages.sort_by_key(|row| row.sequence);
+    messages
+        .into_iter()
+        .map(|row| MessageEvidence {
+            role: "assistant".to_string(),
+            content: present_message(&row.message).body_markdown,
+            created_at: row.timestamp.clone(),
+        })
+        .collect()
 }
 
 /// Same string kinds the stage runner returns today: `"deadline"`, `"tool"`,
@@ -262,13 +304,7 @@ pub fn classify_request_outcome(
     let budget_exhausted = evidence
         .failure_reason
         .as_deref()
-        .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted"))
-        || evidence.responses.iter().any(|response| {
-            response
-                .error_message
-                .as_deref()
-                .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted"))
-        });
+        .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted"));
     if budget_exhausted {
         return Some("tool");
     }
@@ -279,10 +315,10 @@ pub fn classify_request_outcome(
                 .as_deref()
                 .is_some_and(|reason| !reason.is_empty())
     });
-    let tool_failed = evidence.tool_calls.iter().any(|call| {
-        matches!(call.lifecycle_state.as_deref(), Some("failed"))
-            || matches!(call.status.as_deref(), Some("failed" | "error"))
-    });
+    let tool_failed = evidence
+        .tool_calls
+        .iter()
+        .any(|call| matches!(call.lifecycle_state.as_deref(), Some("failed")));
     // Failed tool execution can terminate an otherwise healthy provider stream.
     // Co-occurrence does not establish which boundary caused termination.
     if inference_failed && tool_failed {
@@ -312,40 +348,37 @@ struct RequestPollRow {
 }
 
 async fn poll_request(node: &EmbeddedNode, request_id: &str) -> Result<Option<RequestPollRow>> {
-    let escaped = escape_graphql_string(request_id);
-    let query = format!(
-        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state session_id }} }}"#
-    );
-    let response = graphql_with_transaction_retry(node, &query, "await terminal").await?;
+    let response =
+        graphql_with_transaction_retry(node, &poll_query(request_id), "await terminal").await?;
     first_row(&response, "AgentRequest")
 }
 
+fn poll_query(request_id: &str) -> String {
+    let escaped = escape_graphql_string(request_id);
+    format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{escaped}" }} }}, limit: 1) {{ lifecycle_state session_id }} }}"#
+    )
+}
+
+/// The request failure reason and its inference calls. Tool calls and
+/// messages are read through the run timeline owner.
 pub fn evidence_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
         r#"{{
             AgentRequest(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ failure_reason }}
-            AgentToolCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
-                tool_name status lifecycle_state tool_failure_class started_at completed_at args result
-            }}
-            AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ status error_message }}
             InferenceCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 call_seq call_state failure_reason prompt_tokens completion_tokens queued_at started_at ended_at
             }}
-            AgentMessage(
-                filter: {{ request_id: {{ _eq: "{request_id}" }}, role: {{ _eq: "assistant" }} }},
-                order: {{ sequence: ASC }}
-            ) {{ role content timestamp }}
         }}"#
     )
 }
 
-/// Two-collection usage sample: response status and inference timing.
+/// Usage sample: inference timing and tokens.
 pub fn inference_sample_query(request_id: &str) -> String {
     let request_id = escape_graphql_string(request_id);
     format!(
         r#"{{
-            AgentResponse(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{ status error_message }}
             InferenceCall(filter: {{ request_id: {{ _eq: "{request_id}" }} }}) {{
                 call_seq call_state failure_reason prompt_tokens completion_tokens queued_at started_at ended_at
             }}
@@ -366,10 +399,6 @@ fn field_string(row: &Value, key: &str) -> Option<String> {
         Some(Value::String(text)) => Some(text.clone()),
         Some(other) => Some(other.to_string()),
     }
-}
-
-fn field_value(row: &Value, key: &str) -> Value {
-    row.get(key).cloned().unwrap_or(Value::Null)
 }
 
 fn field_i64(row: &Value, key: &str) -> Option<i64> {
@@ -406,7 +435,7 @@ mod tests {
                 vec![ToolCallEvidence {
                     tool_name: "t".into(),
                     status: Some("failed".into()),
-                    lifecycle_state: None,
+                    lifecycle_state: Some("failed".into()),
                     tool_failure_class: None,
                     started_at: None,
                     completed_at: None,
@@ -454,25 +483,34 @@ mod tests {
             ),
             Some("tool")
         );
-        // Old table: budget exhaustion still wins when inference and tool also failed.
-        let mut budget_and_both = evidence(true, true, Some("invalid_tool_call_budget_exhausted"));
-        budget_and_both.responses.push(ResponseEvidence {
-            status: Some("error".into()),
-            error_message: Some("invalid_tool_call_budget_exhausted: limit=8, used=8".into()),
-        });
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &budget_and_both),
-            Some("tool")
+            classify_request_outcome(
+                S::Failed,
+                false,
+                &evidence(
+                    true,
+                    true,
+                    Some("invalid_tool_call_budget_exhausted: limit=8, used=8")
+                )
+            ),
+            Some("tool"),
+            "budget exhaustion wins when inference and tool also failed"
         );
-        // Old table: the response error alone is enough for the budget arm.
-        let mut budget_on_response = evidence(true, true, None);
-        budget_on_response.responses.push(ResponseEvidence {
-            status: Some("error".into()),
-            error_message: Some("invalid_tool_call_budget_exhausted: limit=8, used=8".into()),
+        let mut status_only = evidence(false, false, None);
+        status_only.tool_calls.push(ToolCallEvidence {
+            tool_name: "t".into(),
+            status: Some("failed".into()),
+            lifecycle_state: Some("completed".into()),
+            tool_failure_class: None,
+            started_at: None,
+            completed_at: None,
+            args: Value::Null,
+            result: Value::Null,
         });
         assert_eq!(
-            classify_request_outcome(S::Failed, false, &budget_on_response),
-            Some("tool")
+            classify_request_outcome(S::Failed, false, &status_only),
+            Some("runtime"),
+            "only the authoritative lifecycle_state marks a tool failed"
         );
         assert_eq!(
             classify_request_outcome(S::Failed, false, &evidence(true, true, None)),
@@ -550,41 +588,123 @@ mod tests {
         assert!(response.errors.is_empty(), "{:?}", response.errors);
     }
 
-    /// Every collection the evidence query reads, mapped out of a real home.
+    /// A field a query names that the schema no longer has fails here rather
+    /// than in a live run.
+    #[tokio::test]
+    async fn every_query_observe_issues_is_valid_against_the_home_schema() {
+        let home = EmbeddedHome::create_temp("observe-queries").await.unwrap();
+        for query in [
+            poll_query("req-\"quoted\""),
+            evidence_query("req-\"quoted\""),
+            inference_sample_query("req-\"quoted\""),
+        ] {
+            let response = home.node.execute(&query).await;
+            assert!(response.errors.is_empty(), "{query}: {:?}", response.errors);
+        }
+        home.node.shutdown().await;
+    }
+
+    /// Every source the evidence reads, mapped out of a real home whose rows
+    /// were written by the canonical owners.
     ///
     /// A whole canary run exercises messages and inference calls; it never
-    /// produces a tool call or an error response, and a field read out of the
-    /// wrong column would be invisible there. This pins all four vectors
-    /// against rows written by hand.
+    /// produces a tool call or a failed request, and a field read out of the
+    /// wrong column would be invisible there. This pins all three vectors and
+    /// the failure reason.
     #[tokio::test]
-    async fn request_evidence_maps_every_collection_the_query_reads() {
+    async fn request_evidence_maps_every_source_it_reads() {
+        use crate::lifecycle::RequestTerminalOutcome;
+        use crate::streaming::DefraStreamWriter;
+        use crate::tool_call_lifecycle::admission_fixture::{
+            claimed_signed_request, publish_accepted_on_claimed_request,
+        };
+        use crate::tool_call_lifecycle::{AwaitMode, CancelPolicy, FailureClass};
+        use gents_protocol::message::{AssistantContent, Message, Text};
+        use gents_protocol::output::TerminalOutput;
+
         let home = EmbeddedHome::create_temp("observe-evidence").await.unwrap();
-        insert_request(&home, "req-evidence", "failed").await;
-        let did = crate::graphql::escape_graphql_string(home.did());
-        for mutation in [
-            format!(
-                r#"mutation {{ create_AgentToolCall(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", tool_call_id: "call-1", tool_name: "fs_read", args: "path=x", result: "denied", status: "failed", lifecycle_state: "failed", tool_failure_class: "argumentInvalid", started_at: "2026-01-01T00:00:01Z", completed_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", agent_did: "{did}", call_id: "call-1", call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_AgentResponse(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", behavior_id: "observe", status: "error", error_message: "invalid_tool_call_budget_exhausted: limit=8, used=8", created_at: "2026-01-01T00:00:03Z" }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_AgentMessage(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", sequence: 2, role: "assistant", content: "second", timestamp: "2026-01-01T00:00:05Z" }}) {{ _docID }} }}"#
-            ),
-            format!(
-                r#"mutation {{ create_AgentMessage(input: {{ request_id: "req-evidence", agent_did: "{did}", requester_did: "{did}", session_id: "s-1", sequence: 1, role: "assistant", content: "first", timestamp: "2026-01-01T00:00:04Z" }}) {{ _docID }} }}"#
-            ),
-        ] {
-            let response = home.node.execute(&mutation).await;
-            assert!(response.errors.is_empty(), "{:?}", response.errors);
-        }
+        let did = home.did().to_owned();
+        let mut request = claimed_signed_request(
+            &home.node,
+            "req-evidence",
+            "s-evidence",
+            home.identity.as_ref(),
+            None,
+        )
+        .await;
+        let mut tool = publish_accepted_on_claimed_request(
+            home.node.clone(),
+            &mut request,
+            &did,
+            0,
+            "fs_read",
+            "call-1",
+            serde_json::json!({"path": "x"}),
+            None,
+            AwaitMode::Foreground,
+            CancelPolicy::Cascade,
+            true,
+        )
+        .await
+        .unwrap();
+        tool.fail("denied", FailureClass::ArgumentInvalid)
+            .await
+            .unwrap();
+        let writer = DefraStreamWriter::new(home.node.clone(), &did, Duration::from_millis(1));
+        writer
+            .start_provider_attempt(
+                &request.request().doc_id,
+                1,
+                0,
+                "inference.2".parse().unwrap(),
+            )
+            .await;
+        let answer = writer
+            .publish_native_turn(
+                &request,
+                1,
+                0,
+                &Message::Assistant {
+                    id: Some("final".into()),
+                    content: vec![AssistantContent::Text(Text {
+                        text: "the answer".into(),
+                    })],
+                },
+            )
+            .await
+            .unwrap();
+        let request_doc_id = escape_graphql_string(&request.request().doc_id);
+        let did_literal = escape_graphql_string(&did);
+        let response = home
+            .node
+            .execute(&format!(
+                r#"mutation {{ create_InferenceCall(input: {{ request_id: "req-evidence", request_doc_id: "{request_doc_id}", agent_did: "{did_literal}", call_id: "inference-1", call_kind: "inference", attempt: 0, call_seq: 3, call_state: "failed", failure_reason: "HTTP 503", prompt_tokens: 11, completion_tokens: 7, queued_at: "2026-01-01T00:00:00Z", started_at: "2026-01-01T00:00:01Z", ended_at: "2026-01-01T00:00:02Z" }}) {{ _docID }} }}"#
+            ))
+            .await;
+        assert!(response.errors.is_empty(), "{:?}", response.errors);
+        request
+            .terminalize_owned(
+                RequestTerminalOutcome::Failed,
+                TerminalOutput::Message {
+                    message_doc_id: answer.message_doc_id,
+                },
+                Some("invalid_tool_call_budget_exhausted: limit=8, used=8"),
+            )
+            .await
+            .unwrap();
 
         let evidence = collect_request_evidence(&home.node, "req-evidence")
             .await
             .unwrap();
+
+        assert!(
+            evidence
+                .failure_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("invalid_tool_call_budget_exhausted")),
+            "{:?}",
+            evidence.failure_reason
+        );
 
         assert_eq!(evidence.tool_calls.len(), 1, "{:?}", evidence.tool_calls);
         let tool_call = &evidence.tool_calls[0];
@@ -595,16 +715,26 @@ mod tests {
             tool_call.tool_failure_class.as_deref(),
             Some("argumentInvalid")
         );
-        assert_eq!(tool_call.args.as_str(), Some("path=x"));
-        assert_eq!(tool_call.result.as_str(), Some("denied"));
+        assert_eq!(
+            tool_call
+                .args
+                .as_str()
+                .map(|args| serde_json::from_str::<Value>(args).unwrap()),
+            Some(serde_json::json!({"path": "x"}))
+        );
+        assert!(
+            tool_call
+                .result
+                .as_str()
+                .is_some_and(|result| result.contains("denied")),
+            "{:?}",
+            tool_call.result
+        );
         for (field, at) in [
             ("started_at", tool_call.started_at.as_deref()),
             ("completed_at", tool_call.completed_at.as_deref()),
         ] {
-            assert!(
-                at.is_some_and(|at| at.starts_with("2026-01-01T00:00:0")),
-                "{field}: {at:?}"
-            );
+            assert!(at.is_some_and(|at| !at.is_empty()), "{field}: {at:?}");
         }
 
         assert_eq!(evidence.inference_calls.len(), 1);
@@ -619,16 +749,7 @@ mod tests {
         assert_eq!(call.started_at.as_deref(), Some("2026-01-01T00:00:01Z"));
         assert_eq!(call.ended_at.as_deref(), Some("2026-01-01T00:00:02Z"));
 
-        assert_eq!(evidence.responses.len(), 1, "{:?}", evidence.responses);
-        assert_eq!(evidence.responses[0].status.as_deref(), Some("error"));
-        assert!(
-            evidence.responses[0]
-                .error_message
-                .as_deref()
-                .is_some_and(|message| message.contains("invalid_tool_call_budget_exhausted")),
-            "{:?}",
-            evidence.responses[0]
-        );
+        assert!(evidence.responses.is_empty());
 
         assert_eq!(
             evidence
@@ -636,21 +757,21 @@ mod tests {
                 .iter()
                 .map(|message| (message.role.as_str(), message.content.as_str()))
                 .collect::<Vec<_>>(),
-            [("assistant", "first"), ("assistant", "second")],
-            "assistant messages arrive in sequence order, not insertion order"
+            [("assistant", ""), ("assistant", "the answer")],
+            "the request's assistant messages arrive in sequence order, tool results excluded"
         );
         assert!(
-            evidence.messages[0]
+            evidence.messages.iter().all(|message| message
                 .created_at
                 .as_deref()
-                .is_some_and(|at| at.starts_with("2026-01-01T00:00:04")),
-            "a message's created_at is read from its timestamp column: {:?}",
-            evidence.messages[0]
+                .is_some_and(|at| !at.is_empty())),
+            "a message's created_at is its canonical header's: {:?}",
+            evidence.messages
         );
 
         // These are exactly the rows the classifier reads, so the mapping is
         // pinned against what it is for: the tool budget wins over the failed
-        // inference call.
+        // inference call and the failed tool.
         assert_eq!(
             classify_request_outcome(RequestLifecycleState::Failed, false, &evidence),
             Some("tool")
