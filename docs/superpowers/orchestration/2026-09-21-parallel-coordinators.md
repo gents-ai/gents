@@ -320,3 +320,8 @@ support, the wizard's chat visibility and Cargo.toml), regenerates desktop bindi
 generated commits conflict, and gates each tip against main's new CI rules. Ledger under the design
 worktree at `.superpowers/sdd/2026-09-24-stack-rebase/`. The contract and wizard worktrees were
 removed first (clean, pushed) so every branch is free to check out.
+- 2026-09-24 rebase: tip 2 `feat/eval-contract` `31cc751a7` → `5ac9d7067`, full gate clean except
+  `e2e_subagent r6_background_tools::wait_tool_caller_interrupt_returns_without_cancelling_background_row`,
+  which fails 3/3 on `main` @ `8059b672d` and on the maintainer's PR 1 tip too: pre-existing on
+  main, not ours, not yet filed. Conflicts: Snapshot.lean (both imports kept),
+  conformance_consumers.rs (main's deleted request-execution-lease consumer not restored).
