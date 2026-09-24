@@ -264,6 +264,18 @@ test.describe("kit shell", () => {
     await expect(confirm).toHaveCount(0);
   });
 
+  test("a provider's profile count opens its backend without crashing", async ({
+    page,
+  }) => {
+    await gotoHarness(page);
+    await openConfig(page);
+    await openConfigSection(page, /^Providers\b/);
+    await page.getByRole("button", { name: "1 profile" }).first().click();
+    await expect(page.getByTestId("error-banner")).toHaveCount(0);
+    await expect(page.getByText(/Something went wrong/i)).toHaveCount(0);
+    await expect(page.getByRole("textbox", { name: "Tags" })).toBeVisible();
+  });
+
   test("seeded skills satisfy the canonical editor shape", async ({ page }) => {
     await gotoHarness(page);
     await openConfig(page);

@@ -178,6 +178,21 @@ export const MOBILE_PERFORMANCE_FIXTURE = {
   repeatedNavigationCount: 10,
 } as const;
 
+/* a patch carries canonical (snake_case) InferenceBackend fields; the view
+   the bridge projects is camelCase with tags always a list */
+function projectBackendPatch(
+  backend: InferenceBackendView,
+  changes: Record<string, unknown>,
+): InferenceBackendView {
+  return {
+    ...backend,
+    ...("enabled" in changes ? { enabled: changes.enabled as boolean | null } : {}),
+    ...("name" in changes ? { name: changes.name as string | null } : {}),
+    ...("endpoint" in changes ? { endpoint: changes.endpoint as string | null } : {}),
+    ...("tags" in changes ? { tags: (changes.tags as string[] | null) ?? [] } : {}),
+  };
+}
+
 export function createDesktopUiHarness(
   options: DesktopUiHarnessOptions = {},
 ): DesktopUiHarness {
@@ -1379,6 +1394,7 @@ export function createDesktopUiHarness(
             enabled: backend.enabled ?? true,
             tags: backend.tags ?? [],
             models: [],
+            advertisedModels: [],
             probeStatus: "healthy",
           })),
         ],
@@ -1485,7 +1501,7 @@ export function createDesktopUiHarness(
             ...deployment,
             inferenceBackends: deployment.inferenceBackends.map((backend) =>
               backend.backendId === patch.id
-                ? { ...backend, ...patch.changes }
+                ? projectBackendPatch(backend, patch.changes)
                 : backend,
             ),
           };
@@ -1765,7 +1781,10 @@ export function createDesktopUiHarness(
             maxConcurrent: document.max_concurrent ?? null,
             maxQueueDepth: document.max_queue_depth ?? null,
             enabled: document.enabled ?? true,
+            /* the bridge projects tags as a list, never absent */
+            tags: document.tags ?? [],
             models: [],
+            advertisedModels: [],
             probeStatus: "healthy",
           },
         ),
@@ -2828,7 +2847,9 @@ function createDeployment(): DeploymentView {
         maxConcurrent: 4,
         maxQueueDepth: 16,
         enabled: true,
+        tags: [],
         models: ["gpt-4.1-mini"],
+        advertisedModels: [],
         probeStatus: "healthy",
       },
     ],
