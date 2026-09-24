@@ -88,7 +88,7 @@ describe("SessionScreen transcript render boundary", () => {
     view.rerender(
       <TranscriptPanel {...props} session={{ ...failed, turnState: "interrupted" }} />,
     );
-    expect(screen.getByText("You stopped this response.")).toBeVisible();
+    expect(screen.getByText("This response was stopped.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
 

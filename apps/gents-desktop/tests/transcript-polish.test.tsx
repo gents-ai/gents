@@ -15,7 +15,7 @@ vi.mock("../src/ui/screens/Markdown", () => ({
 import { TranscriptPanel } from "../src/ui/screens/SessionScreen";
 import { ToolBody } from "../src/ui/screens/tool-views";
 import { diffText, toolSummary } from "../src/ui/screens/tool-summary";
-import { activityStatus } from "../src/ui/screens/activity-status";
+import { activityStatus, isStopping } from "../src/ui/screens/activity-status";
 
 function tool(
   presentation: RenderedToolCallView["presentation"],
@@ -210,5 +210,32 @@ describe("stop", () => {
     expect(
       within(notice).getByText("a stop request on this request"),
     ).toBeInTheDocument();
+  });
+
+  it("binds Stopping to the request being stopped", () => {
+    const base = {
+      inFlight: true,
+      requestId: "request-b",
+      latestRequestId: "request-b",
+      interruptObserved: false,
+      requestedStop: null,
+    };
+    expect(isStopping(base)).toBe(false);
+    expect(isStopping({ ...base, requestedStop: "request-b" })).toBe(true);
+    expect(isStopping({ ...base, interruptObserved: true })).toBe(true);
+    expect(
+      isStopping({ ...base, latestRequestId: "request-a", interruptObserved: true }),
+    ).toBe(false);
+    expect(isStopping({ ...base, requestedStop: "request-a" })).toBe(false);
+    expect(isStopping({ ...base, inFlight: false, requestedStop: "request-b" })).toBe(
+      false,
+    );
+  });
+
+  it("does not claim the person stopped a response it has no cause for", () => {
+    render(panel(session({ turnState: "interrupted" }), false));
+    const notice = screen.getByTestId("stopped-notice");
+    expect(notice).toHaveTextContent("This response was stopped.");
+    expect(notice).not.toHaveTextContent("You stopped");
   });
 });

@@ -77,7 +77,7 @@ import { LoadingStatus } from "./LoadingStatus";
 import { SlashSkillMenu } from "./SlashSkillMenu";
 import { useSlashSkills } from "./useSlashSkills";
 import { Thinking } from "./Thinking";
-import { activityStatus } from "./activity-status";
+import { activityStatus, isStopping } from "./activity-status";
 import { TracePanel } from "./TracePanel";
 import { BehaviorAvatar, BehaviorChip } from "./parts";
 import { BehaviorHoverCard } from "./HoverCards";
@@ -737,9 +737,9 @@ const STOP_SOURCES: Record<string, string> = {
 
 function StoppedNotice({ cause }: { cause: DerivedCancelCauseView | null }) {
   const headline =
-    !cause || cause.cause === "userCancelled"
+    cause?.cause === "userCancelled"
       ? "You stopped this response."
-      : cause.cause === "deadline"
+      : cause?.cause === "deadline"
         ? "This response stopped at its deadline."
         : "This response was stopped.";
   const at = cause?.at ? new Date(cause.at) : null;
@@ -928,7 +928,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const session = shell.selectedSession;
   const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
-  const [stopInFlight, setStopInFlight] = useState<string | null>(null);
+  const [requestedStop, setRequestedStop] = useState<string | null>(null);
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
     null,
   );
@@ -1188,14 +1188,20 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   /* stop: the desktop previews the cascade first; with no children it
      interrupts at once, otherwise it asks */
   const stoppableRequestId = shell.activeRequestId ?? session?.latestRequestId ?? null;
-  const stopping =
-    inFlight &&
-    (session?.latestRequestOutcome?.cancelCause?.source === "requestInterrupt" ||
-      (stopInFlight !== null && stopInFlight === stoppableRequestId));
+  const stopping = isStopping({
+    inFlight,
+    requestId: stoppableRequestId,
+    latestRequestId: session?.latestRequestId ?? null,
+    interruptObserved:
+      session?.latestRequestOutcome?.cancelCause?.source === "requestInterrupt",
+    requestedStop,
+  });
   const stop = async () => {
     const requestId = stoppableRequestId;
     if (!requestId || stopping) return;
-    setStopInFlight(requestId);
+    setRequestedStop(requestId);
+    const release = () =>
+      setRequestedStop((current) => (current === requestId ? null : current));
     try {
       const preview = await shell.api.previewInterruptCascade({
         requestId,
@@ -1206,7 +1212,10 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         preview.willInterrupt.length +
         preview.willDetach.length +
         preview.unknownPolicy.length;
-      if (kids > 0) return setCascadeFor(requestId);
+      if (kids > 0) {
+        release();
+        return setCascadeFor(requestId);
+      }
       const r = await shell.api.interruptRequest({
         requestId,
         agentDid: shell.selectedAgentDid,
@@ -1214,12 +1223,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         cascade: false,
         expectedPreviewSignature: null,
       });
-      if (!r.accepted && !r.alreadyInterrupted)
+      if (!r.accepted && !r.alreadyInterrupted) {
+        release();
         toast("This response had already finished.");
+      }
     } catch (e) {
+      release();
       toast(`Couldn't stop: ${String(e)}`);
-    } finally {
-      setStopInFlight(null);
     }
   };
 
