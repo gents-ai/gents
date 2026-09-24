@@ -67,4 +67,79 @@ mod tests {
         assert!(turn.contains("at least 6 cases"), "{turn}");
         assert!(!turn.contains("## How to reply with a draft"), "{turn}");
     }
+
+    /// The authoring contract the `eval_author` pack ships.
+    const AUTHOR_PROMPT: &str = include_str!(
+        "../../../../../../packs/eval_author/agent_behaviors/eval_author/system_prompt.md"
+    );
+
+    /// The first fenced json block after `## The case shape`: the worked
+    /// example.
+    fn worked_example(prompt: &str) -> &str {
+        let at = prompt
+            .find("## The case shape")
+            .expect("a case shape section");
+        prompt[at..]
+            .split("```json\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n```").next())
+            .expect("a json block after the case shape heading")
+    }
+
+    /// Every way the example strays from the registry: an unregistered
+    /// check, or params its schema refuses.
+    fn example_violations(example: &str, registry: &CheckRegistry) -> Vec<String> {
+        let case: gents::document_config::EvalCase =
+            serde_json::from_str(example).expect("the worked example is an EvalCase");
+        let mut violations = Vec::new();
+        for stage in &case.stages {
+            for check in &stage.checks {
+                let Some(registered) = registry.get(&check.check) else {
+                    violations.push(format!("unknown check {}", check.check));
+                    continue;
+                };
+                let schema = registered.describe().params_schema;
+                let validator = jsonschema::validator_for(&schema).expect("a compiling schema");
+                violations.extend(
+                    validator
+                        .iter_errors(&check.params)
+                        .map(|error| format!("{}: {error}", check.check)),
+                );
+            }
+        }
+        violations
+    }
+
+    #[test]
+    fn the_worked_example_names_only_registered_checks_with_valid_params() {
+        let violations =
+            example_violations(worked_example(AUTHOR_PROMPT), &CheckRegistry::builtin());
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn an_example_that_invents_a_check_is_caught() {
+        let example = worked_example(AUTHOR_PROMPT);
+        let registry = CheckRegistry::builtin();
+        let first = registry.names()[0];
+        let invented = example.replace(first, "invented_check");
+        let violations = example_violations(&invented, &registry);
+        assert!(
+            violations.iter().any(|v| v.contains("invented_check")),
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn the_contract_names_the_floor_flag_and_the_reducers_scoring_reduces() {
+        assert!(
+            AUTHOR_PROMPT.contains("--validation-min"),
+            "{AUTHOR_PROMPT}"
+        );
+        assert!(!AUTHOR_PROMPT.contains("guaranteed"), "{AUTHOR_PROMPT}");
+        for reducer in ["`all`", "`weighted_mean`", "`last_stage`"] {
+            assert!(AUTHOR_PROMPT.contains(reducer), "{reducer}");
+        }
+        assert!(AUTHOR_PROMPT.contains("acceptance"), "{AUTHOR_PROMPT}");
+    }
 }

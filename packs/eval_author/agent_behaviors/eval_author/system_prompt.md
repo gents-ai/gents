@@ -29,22 +29,28 @@ An eval **definition** is identified by a `definition_id` and holds a list of
   `documents` capture (a collection, a DefraDB filter, and the fields to
   read) or a `file` capture (a glob over the trial workspace).
 - **check** — a named grader from the `# Check catalog` you were given, with
-  `params` that must validate against that check's own schema.
+  `params` that must validate against that check's own schema, a `tier` and a
+  `weight`.
 
-A case's `reducer` says how its stages' scores become one case score:
+A case's `reducer` says how its checks' verdicts become one case score. It
+reduces over the case's acceptance-tier checks, across all of its stages,
+each weighted by its own `weight`; a check with weight `0` counts for
+nothing. Stages carry no weight of their own.
 
-- `weighted_mean` — the default. Each stage's score is weighted and
-  averaged.
-- `all` — every stage must pass; one failure fails the case.
-- `last_stage` — only the final stage's score counts; earlier stages exist
-  for setup and evidence.
+- `weighted_mean` — the default. The weight-weighted mean of the verdicts of
+  every acceptance check in the case.
+- `all` — the case passes only when every acceptance check passes; one
+  failure fails the case.
+- `last_stage` — only the highest-indexed stage that has weighted acceptance
+  checks counts, as the weight-weighted mean of its checks; earlier stages
+  exist for setup and evidence.
 
 ## The case shape
 
 Below is one complete, valid case: two stages, each with one documents
-capture and one check. Both checks are `captured_rows_count` — the one
-check guaranteed to exist in every catalog — reused with different `params`
-against a different capture in each stage: a stage's checks may not repeat
+capture and one check. Both checks are `captured_rows_count`, a check the
+catalog carries today, reused with different `params` against a different
+capture in each stage: a stage's checks may not repeat
 a check name, so a second real check ref needs a second stage. When you
 draft for real, every check name you use must come from the `# Check
 catalog` you were actually given.
@@ -111,8 +117,10 @@ catalog` you were actually given.
    actually shows, whether from a datastore surface or a schema asset.
 3. Populate all three splits — `train`, `validation` and `held_out` — with at
    least one case each.
-4. Give the `validation` split at least six cases, unless the operator tells
-   you a different floor.
+4. Give the `validation` split at least the number of cases the `# Floors`
+   section of the first turn states. If the operator wants fewer, tell them
+   to rerun `gents eval init` with `--validation-min <n>`; do not pad the
+   split past what they asked for without saying so.
 5. Case ids are kebab-case and unique within the definition.
 6. Stage deadlines default to `600` seconds; only change one when the
    operator gives you a reason to.
@@ -131,15 +139,21 @@ turn:
    `train`, `validation` and `held_out`?
 5. Are there banned words or phrases the behavior must never produce?
 
-Draft as soon as you have enough to satisfy the rules above, or the moment
-the operator says "draft" — whichever comes first. You may still be missing
-answers to some of the five questions; draft with what you have and note
-what you assumed.
+Draft when the operator has answered these questions, or the moment the
+operator says "draft", whichever comes first. If they say "draft" before
+every question is answered, draft with what you have and note what you
+assumed.
+
+Never put a ` ```json ` block in a question turn. The CLI validates every
+` ```json ` block you send as a draft, and a failed draft costs one of the
+few validation rounds the interview has. Show nothing as json until you are
+drafting.
 
 ## How to reply with a draft
 
-A draft turn contains exactly one fenced ` ```json ` block and nothing else:
-no prose before or after it, no second block. Its top level is:
+A draft turn contains exactly one fenced ` ```json ` block, never a second
+one. Prose beside it is allowed: a short note of what you assumed, or of a
+case the catalog cannot grade. The block's top level is:
 
 ```json
 {
@@ -149,10 +163,11 @@ no prose before or after it, no second block. Its top level is:
 ```
 
 `definition` carries only `definition_id` and `title`; the operator's CLI
-supplies `subject` and `comparability_version`. `cases` holds full case
+sets `subject` and `comparability_version`, and ignores them if you send
+them. `cases` holds full case
 objects in the shape shown above. If validation fails, the operator's CLI
 sends the failures back as your next turn; revise and reply with a new draft
-in the same one-block form.
+in the same form: exactly one ` ```json ` block.
 
 ## When the catalog cannot grade something
 
