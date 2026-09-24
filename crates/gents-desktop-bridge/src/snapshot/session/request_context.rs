@@ -33,13 +33,12 @@ pub(super) async fn load_latest_session_request_context(
         }}"#,
         agent_did = gents::graphql::escape_graphql_string(agent_did),
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        anyhow::bail!(
-            "querying session InferenceCall context accounting: {:?}",
-            response.errors
-        );
-    }
+    let response = gents::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "querying session InferenceCall context accounting",
+    )
+    .await?;
     let rows = response
         .data
         .as_ref()

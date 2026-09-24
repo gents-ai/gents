@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// Sparse runtime observations for the canonical Trigger. Setting a status
 /// clears a previous error unless a replacement error is supplied. Fire counts
@@ -33,12 +33,7 @@ pub(crate) async fn load_trigger_next_run_at(
         escape_graphql_string(agent_did),
         escape_graphql_string(trigger_id)
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "query Trigger cursor failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &query, "query Trigger cursor").await?;
     let rows = response
         .data
         .as_ref()
@@ -94,13 +89,12 @@ pub(crate) async fn update_trigger_runtime_fields(
                 }}
             }}"#
         );
-        let resp = node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!(
-                "query Trigger fire_count for runtime update failed: {:?}",
-                resp.errors
-            );
-        }
+        let resp = graphql_with_transaction_retry(
+            node,
+            &query,
+            "query Trigger fire_count for runtime update",
+        )
+        .await?;
         let rows = resp
             .data
             .as_ref()

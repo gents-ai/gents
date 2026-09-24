@@ -97,6 +97,7 @@ export type DesktopApiAdapter = {
     confirmation?: string,
   ) => Promise<ManagedServerResetResult>;
   validateManagedServerRoot?: (path: string) => Promise<string>;
+  openManagedServerLoginItems?: () => Promise<void>;
   commitManagedServerAutoStart?: (
     agentName: string,
   ) => Promise<ManagedServerStatus>;

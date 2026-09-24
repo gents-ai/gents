@@ -7,7 +7,7 @@ namespace Conformance.Contracts
 open Conformance.ContractCases
 
 def requestStates : List RequestState :=
-  [ .workspaceBindingPending, .pending, .claimed, .processing, .inputRequired, .completed
+  [ .workspaceBindingPending, .pending, .claimed, .processing, .completed
   , .failed, .superseded, .dead, .interrupted ]
 
 def requestStateNames : List String :=
@@ -61,7 +61,6 @@ def requestSamples : List RequestContext :=
   , requestContext .claimed .acquired true
   , requestContext .processing .executing
   , requestContext .processing .executing true
-  , requestContext .inputRequired .executing
   , requestContext .completed .released
   , requestContext .failed .released
   , requestContext .superseded .released

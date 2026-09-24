@@ -10,7 +10,7 @@ open RequestState ProcessState PersistenceState StorageObservation InferenceCall
 
 instance : Fintype RequestState :=
   Fintype.ofList
-    [.workspaceBindingPending, .pending, .claimed, .processing, .inputRequired,
+    [.workspaceBindingPending, .pending, .claimed, .processing,
      .completed, .failed, .superseded, .dead, .interrupted]
     (fun s => by cases s <;> simp)
 
@@ -60,7 +60,6 @@ theorem active_request_has_distinct_state (s : RequestState) (h : activeCoreRequ
   | pending => exact ⟨.claimed, by decide⟩
   | claimed => exact ⟨.processing, by decide⟩
   | processing => exact ⟨.completed, by decide⟩
-  | inputRequired => cases h
   | completed => cases h
   | failed => cases h
   | superseded => cases h

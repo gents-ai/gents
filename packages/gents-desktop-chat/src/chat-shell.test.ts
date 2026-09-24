@@ -769,7 +769,7 @@ describe("requestProgressPresentation", () => {
     "matches every generated Lean request lifecycle projection",
     async () => {
       const cases = (await loadLeanContractSnapshot()).request_progress_cases;
-      expect(cases).toHaveLength(10);
+      expect(cases).toHaveLength(9);
       for (const contractCase of cases) {
         expect(
           requestProgressPresentation(contractCase.lifecycleState),

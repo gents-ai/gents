@@ -169,7 +169,7 @@ async fn generated_session_recovery_cases_drive_desktop_retry_request() -> Resul
     let illegal_count = cases.len() - legal_count;
     assert_eq!(
         (legal_count, illegal_count),
-        (2, 15),
+        (2, 14),
         "Lean SessionRecovery case split changed; update this desktop driver before bumping"
     );
 

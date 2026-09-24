@@ -58,6 +58,82 @@ pub async fn dispatch_tool(
         biased;
         _ = scope.cancellation_token.cancelled() => ToolOutcome::Cancelled,
         _ = &mut deadline => ToolOutcome::TimedOut { deadline_at: scope.deadline_at },
-        result = call => ToolOutcome::from_dispatch(name, result),
+        result = call => {
+            if deadline_remaining(scope.deadline_at).is_some_and(|remaining| remaining.is_zero()) {
+                ToolOutcome::TimedOut { deadline_at: scope.deadline_at }
+            } else {
+                ToolOutcome::from_dispatch(name, result)
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tool::{BoxFuture, ToolDefinition, ToolError};
+    use crate::tool_call_lifecycle::runtime::scope_request_tool_execution;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct ReadyAfterWallDeadline {
+        deadline_at: DateTime<Utc>,
+        called: Arc<AtomicBool>,
+    }
+
+    impl ToolDyn for ReadyAfterWallDeadline {
+        fn name(&self) -> String {
+            "ready_after_wall_deadline".into()
+        }
+
+        fn definition<'a>(&'a self, _prompt: String) -> BoxFuture<'a, ToolDefinition> {
+            Box::pin(async {
+                ToolDefinition {
+                    name: "ready_after_wall_deadline".into(),
+                    description: "wall-clock deadline regression".into(),
+                    parameters: serde_json::json!({"type": "object"}),
+                }
+            })
+        }
+
+        fn call<'a>(&'a self, _args: String) -> BoxFuture<'a, Result<String, ToolError>> {
+            Box::pin(async move {
+                self.called.store(true, Ordering::SeqCst);
+                let remaining = (self.deadline_at - Utc::now()).to_std().unwrap_or_default();
+                // This synchronous call returns Ready on its first poll after
+                // wall time advances. Tokio cannot repoll its sibling sleep
+                // while the current task is inside this tool future.
+                std::thread::sleep(remaining + std::time::Duration::from_millis(10));
+                Ok("late success".into())
+            })
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ready_tool_after_wall_deadline_is_timed_out() {
+        let deadline_at = Utc::now() + chrono::Duration::seconds(1);
+        let called = Arc::new(AtomicBool::new(false));
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(ReadyAfterWallDeadline {
+            deadline_at,
+            called: Arc::clone(&called),
+        })];
+        let outcome = scope_request_tool_execution(
+            Some(deadline_at),
+            tokio_util::sync::CancellationToken::new(),
+            dispatch_tool(&tools, "ready_after_wall_deadline", "{}".into(), None, None),
+        )
+        .await;
+        assert!(
+            called.load(Ordering::SeqCst),
+            "tool must reach the call-ready branch"
+        );
+        assert_eq!(
+            outcome,
+            ToolOutcome::TimedOut {
+                deadline_at: Some(deadline_at)
+            }
+        );
     }
 }

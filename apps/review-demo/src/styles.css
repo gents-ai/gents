@@ -306,8 +306,7 @@ a:hover {
   color: var(--color-error);
 }
 
-.dag-node.state-waiting-group,
-.dag-node.state-input-required {
+.dag-node.state-waiting-group {
   border-style: solid;
   border-color: var(--color-warning);
   color: var(--color-warning-soft);
@@ -699,8 +698,7 @@ a:hover {
   color: #6ee7a8;
 }
 
-.defending-stage .dag-node.state-waiting-group,
-.defending-stage .dag-node.state-input-required {
+.defending-stage .dag-node.state-waiting-group {
   border-color: #f3a847;
   background: rgb(243 168 71 / 0.06);
   color: #ffd18a;

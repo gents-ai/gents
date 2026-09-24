@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -136,8 +136,9 @@ async fn scan_requests(
         .unwrap_or_default();
     let mut after = String::new();
     loop {
-        let response = node
-            .execute(&format!(
+        let response = graphql_with_transaction_retry(
+            node,
+            &format!(
                 r#"{{ AgentRequest(filter: {{
             agent_did: {{_eq: "{agent}"}}, requester_did: {{_eq: "{agent}"}},
             {session_filter} request_id: {{_gt: "{}"}}
@@ -147,9 +148,10 @@ async fn scan_requests(
             caused_by_parent_request_id caused_by_parent_request_doc_id
         }} }}"#,
                 escape_graphql_string(&after)
-            ))
-            .await;
-        ensure_no_errors(&response, "Grok session request history")?;
+            ),
+            "Grok session request history",
+        )
+        .await?;
         let page: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data
@@ -199,15 +201,17 @@ pub(super) async fn load(
     session: &str,
 ) -> Result<Vec<AgentRequestRow>> {
     ensure!(!session.trim().is_empty(), "session ID must not be empty");
-    let response = node
-        .execute(&format!(
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{ AgentSession(filter: {{session_id: {{_eq: "{}"}}}}, limit: 2) {{
         session_id agent_did requester_did behavior_id
     }} }}"#,
             escape_graphql_string(session)
-        ))
-        .await;
-    ensure_no_errors(&response, "Grok session owner")?;
+        ),
+        "Grok session owner",
+    )
+    .await?;
     let owners = response
         .data
         .as_ref()
@@ -292,14 +296,16 @@ async fn list_entries(
             .map(|id| format!("\"{}\"", escape_graphql_string(id)))
             .collect::<Vec<_>>()
             .join(",");
-        let response = node
-            .execute(&format!(
+        let response = graphql_with_transaction_retry(
+            node,
+            &format!(
                 r#"{{ AgentSession(filter: {{session_id: {{_in: [{ids}]}}}}) {{
             session_id agent_did requester_did behavior_id
         }} }}"#
-            ))
-            .await;
-        ensure_no_errors(&response, "Grok history session owners")?;
+            ),
+            "Grok history session owners",
+        )
+        .await?;
         let owners = response
             .data
             .as_ref()

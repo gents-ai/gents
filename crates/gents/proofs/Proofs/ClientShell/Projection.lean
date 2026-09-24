@@ -62,7 +62,6 @@ inductive RequestProgressIndicator where
   | queued
   | claimed
   | working
-  | waitingForInput
   | completed
   | failed
   | superseded
@@ -75,7 +74,6 @@ def projectRequestProgress : RequestState → RequestProgressIndicator
   | .pending       => .queued
   | .claimed       => .claimed
   | .processing    => .working
-  | .inputRequired => .waitingForInput
   | .completed     => .completed
   | .failed        => .failed
   | .superseded    => .superseded
@@ -86,7 +84,6 @@ def RequestProgressIndicator.label : RequestProgressIndicator → String
   | .queued          => "Queued"
   | .claimed         => "Claimed"
   | .working         => "Working"
-  | .waitingForInput => "Waiting for input"
   | .completed       => "Completed"
   | .failed          => "Failed"
   | .superseded      => "Superseded"

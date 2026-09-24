@@ -328,7 +328,7 @@ fn live_tree_hash_drift_fails_closed() {
 }
 
 #[test]
-fn request_lifecycle_treats_input_required_live_and_terminals_not_live() {
+fn request_lifecycle_treats_active_states_live_and_terminals_not_live() {
     // Pre-claim requests still hold their exclusive workspace binding.
     assert!(super::request_lifecycle_is_live(Some(
         RequestLifecycleState::Pending
@@ -338,9 +338,6 @@ fn request_lifecycle_treats_input_required_live_and_terminals_not_live() {
     )));
     assert!(super::request_lifecycle_is_live(Some(
         RequestLifecycleState::Processing
-    )));
-    assert!(super::request_lifecycle_is_live(Some(
-        RequestLifecycleState::InputRequired
     )));
     assert!(super::request_lifecycle_is_live(Some(
         RequestLifecycleState::Claimed

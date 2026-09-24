@@ -60,7 +60,6 @@ def requestProgressCases : List RequestProgressCase :=
   , requestProgressCase "pending_is_queued" .pending
   , requestProgressCase "claimed_is_claimed" .claimed
   , requestProgressCase "processing_is_working" .processing
-  , requestProgressCase "input_required_waits_for_input" .inputRequired
   , requestProgressCase "completed_is_completed" .completed
   , requestProgressCase "failed_is_failed" .failed
   , requestProgressCase "superseded_is_superseded" .superseded

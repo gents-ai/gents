@@ -7,7 +7,7 @@ const RECOVERY_CREATED_AT: &str = "2026-03-23T00:00:00Z";
 
 pub(super) fn generated_reserved_child_materialization_cases_are_derived() {
     let cases = lean_reserved_child_materialization_cases();
-    assert_eq!(cases.len(), 7);
+    assert_eq!(cases.len(), 9);
     assert_eq!(
         cases
             .iter()
@@ -23,6 +23,8 @@ pub(super) fn generated_reserved_child_materialization_cases_are_derived() {
             ("conflicting_physical_lineage", "conflict", 1),
             ("conflicting_payload", "conflict", 1),
             ("conflicting_workspace", "conflict", 1),
+            ("conflicting_workspace_authority", "conflict", 1),
+            ("conflicting_depth", "conflict", 1),
             ("conflicting_admission", "conflict", 1),
             ("physical_twins_fail_closed", "conflict", 2),
         ]

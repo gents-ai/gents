@@ -90,7 +90,7 @@ pub(crate) struct LeanCanonicalToolAdmission {
     pub(crate) delegated_workspace: Option<LeanCanonicalDelegatedWorkspace>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanCanonicalDelegatedWorkspace {
     pub(crate) workspace_id: u64,
@@ -124,8 +124,9 @@ pub(crate) enum LeanDelegatedChildChoice {
         requested_authority: Option<String>,
     },
     Provision {
-        workspace: LeanObservedChildWorkspace,
+        observed_parent: LeanObservedChildWorkspace,
         parent_path_exact: bool,
+        created_child: Option<LeanObservedChildWorkspace>,
     },
 }
 
@@ -273,6 +274,12 @@ pub(crate) enum LeanCanonicalExecutionOperation {
         generation: u64,
         record: LeanCanonicalSegment,
     },
+    AppendToolOutput {
+        actor: u64,
+        now: u64,
+        document: u64,
+        record: LeanCanonicalSegment,
+    },
     /// The same guarded insert attempted by a same-task holder whose sibling
     /// awaits the gate. The holder is unpollable, so nothing may commit.
     AppendOutputWhileSiblingWaits {
@@ -362,6 +369,7 @@ impl LeanCanonicalExecutionOperation {
             | Self::ClosePartial { actor, now, .. }
             | Self::RenewLease { actor, now, .. }
             | Self::AppendOutput { actor, now, .. }
+            | Self::AppendToolOutput { actor, now, .. }
             | Self::AppendOutputWhileSiblingWaits { actor, now, .. }
             | Self::AcceptTurn { actor, now, .. }
             | Self::BackgroundTool { actor, now, .. }

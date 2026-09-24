@@ -111,6 +111,104 @@ pub(crate) fn render_presentation(
     }
 }
 
+/// The longest UTF-8-safe byte suffix within the diagnostic budget. This
+/// selection is shared with captured process output and terminal presentation.
+pub(crate) fn terminal_output_tail(source: &str, budget: usize) -> &str {
+    let mut start = source.len().saturating_sub(budget);
+    while !source.is_char_boundary(start) {
+        start += 1;
+    }
+    &source[start..]
+}
+
+/// Select only committed tool-source bytes. The terminal reason is a literal
+/// presentation part and never rewrites the raw source or waits for the tool.
+pub(crate) fn terminal_diagnostic_presentation(
+    raw: &str,
+    cause: &str,
+    tail_budget: usize,
+) -> Result<PayloadPresentation> {
+    use gents_protocol::output::PresentationPart;
+
+    let tail = terminal_output_tail(raw, tail_budget);
+    let start = raw.len() - tail.len();
+    let parts = if start == raw.len() {
+        vec![PresentationPart::Literal {
+            text: cause.to_owned(),
+        }]
+    } else {
+        vec![
+            PresentationPart::OutputRange {
+                start_byte: u64::try_from(start)?,
+                end_byte: u64::try_from(raw.len())?,
+            },
+            PresentationPart::Literal { text: "\n".into() },
+            PresentationPart::Literal {
+                text: cause.to_owned(),
+            },
+        ]
+    };
+    Ok(PayloadPresentation::Composed { parts })
+}
+
+struct TerminalOutputPlan<'a> {
+    raw: &'a str,
+    presentation: PayloadPresentation,
+    rendered: String,
+}
+
+fn terminal_output_plan<'a>(
+    prefix: &'a str,
+    text: &'a str,
+    pending_raw: Option<&'a str>,
+    prepared: Option<&PayloadPresentation>,
+    state: ToolCallState,
+) -> Result<TerminalOutputPlan<'a>> {
+    let candidate_raw = if prepared.is_some() {
+        pending_raw.unwrap_or(prefix)
+    } else {
+        text
+    };
+    if state != ToolCallState::Completed && !candidate_raw.starts_with(prefix) {
+        let presentation = terminal_diagnostic_presentation(
+            prefix,
+            text,
+            crate::toolset::DEFAULT_MAX_COMMAND_CHARS,
+        )?;
+        let rendered = render_presentation(prefix, &presentation)?;
+        return Ok(TerminalOutputPlan {
+            raw: prefix,
+            presentation,
+            rendered,
+        });
+    }
+    anyhow::ensure!(
+        candidate_raw.starts_with(prefix),
+        "terminal raw tool result is not an exact extension of persisted raw output"
+    );
+    let presentation = prepared.cloned().unwrap_or(PayloadPresentation::Full);
+    let rendered = render_presentation(candidate_raw, &presentation)?;
+    anyhow::ensure!(
+        rendered == text,
+        "prepared tool presentation does not reconstruct to the terminal native text"
+    );
+    Ok(TerminalOutputPlan {
+        raw: candidate_raw,
+        presentation,
+        rendered,
+    })
+}
+
+fn terminal_metadata_matches(
+    row: &serde_json::Value,
+    fields: TerminalFields<'_>,
+    terminal_status: &str,
+) -> bool {
+    row["status"].as_str() == Some(terminal_status)
+        && row["tool_failure_class"].as_str() == fields.failure.map(FailureClass::as_str)
+        && row["cancel_cause"].as_str() == fields.cancel.map(CancelCause::as_str)
+}
+
 impl ToolCallLifecycle {
     pub(super) async fn start_running_spawned_with_time(
         &mut self,
@@ -1105,7 +1203,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
             ))
             .await?;
         let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1125,6 +1223,14 @@ async fn terminalize_transaction(
                 durable_state.is_terminal(),
                 "tool terminal contender lost to a non-terminal lifecycle"
             );
+            return Ok(false);
+        }
+        if durable_state == fields.state.as_str()
+            && !terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status)
+        {
+            // The winning terminal may have the same state and rendered text
+            // but a different cause. It still owns the CAS; the caller must
+            // adopt its durable row rather than reject its own lost compare.
             return Ok(false);
         }
     }
@@ -1275,7 +1381,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
                 ))
                 .await?;
             let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1297,24 +1403,30 @@ async fn terminalize_transaction(
                 );
                 return Ok(false);
             }
+            if durable_state == fields.state.as_str() {
+                anyhow::ensure!(
+                    terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status),
+                    "canonical tool delivery replay conflicts with terminal cause"
+                );
+            }
 
-            let expected_presentation = presentation.cloned().unwrap_or(PayloadPresentation::Full);
-            let result_output = match existing.message.blocks.as_slice() {
+            let result_payload = match existing.message.blocks.as_slice() {
                 [MessageBlock::ToolResult { parts, .. }]
                     if matches!(parts.as_slice(),
                     [gents_protocol::output::ToolResultPart::Text { text }]
-                    if text.presentation == expected_presentation && text.output.stream == 0) =>
+                    if text.output.stream == 0) =>
                 {
                     let [gents_protocol::output::ToolResultPart::Text { text }] = parts.as_slice()
                     else {
                         unreachable!("guard established the exact native text part")
                     };
-                    &text.output
+                    text
                 }
                 _ => anyhow::bail!(
                     "canonical tool delivery replay has a non-native payload reference"
                 ),
             };
+            let result_output = &result_payload.output;
             let replay_rows = txn
                 .execute(&format!(
                     r#"{{ AgentOutputSegment(filter: {{
@@ -1355,16 +1467,20 @@ async fn terminalize_transaction(
                 .collect::<Vec<_>>();
             let reconstructed = reconstruct_stream(&observed, &[], &[], result_output)
                 .map_err(anyhow::Error::from)?;
+            let plan = terminal_output_plan(
+                &reconstructed.text,
+                text,
+                pending_raw,
+                presentation,
+                fields.state,
+            )?;
             anyhow::ensure!(
-                render_presentation(&reconstructed.text, &expected_presentation)? == text,
-                "canonical tool delivery replay payload differs from terminal result"
+                reconstructed.text == plan.raw
+                    && result_payload.presentation == plan.presentation
+                    && render_presentation(&reconstructed.text, &result_payload.presentation)?
+                        == plan.rendered,
+                "canonical tool delivery replay payload differs from terminal plan"
             );
-            if let Some(raw) = pending_raw {
-                anyhow::ensure!(
-                    reconstructed.text == raw,
-                    "canonical tool delivery replay raw source differs from terminal input"
-                );
-            }
             return Ok(false);
         }
     }
@@ -1403,7 +1519,7 @@ async fn terminalize_transaction(
             session_id: {{ _eq: "{session}" }}, agent_did: {{ _eq: "{agent}" }},
             tool_call_id: {{ _eq: "{tool_id}" }}, tool_name: {{ _eq: "{name}" }},
             message_sequence: {{ _eq: {message_sequence} }}{requester_filter}
-        }}, limit: 2) {{ lifecycle_state }} }}"#
+        }}, limit: 2) {{ lifecycle_state status tool_failure_class cancel_cause }} }}"#
             ))
             .await?;
         let lifecycle_rows = lifecycle["data"]["AgentToolCall"]
@@ -1419,6 +1535,10 @@ async fn terminalize_transaction(
         anyhow::ensure!(
             durable_state == fields.state.as_str(),
             "closed tool source conflicts with terminal lifecycle"
+        );
+        anyhow::ensure!(
+            terminal_metadata_matches(&lifecycle_rows[0], fields, terminal_status),
+            "closed tool source conflicts with terminal cause"
         );
         anyhow::ensure!(
             source_rows.iter().all(|row| row.segment.writer == writer),
@@ -1460,17 +1580,17 @@ async fn terminalize_transaction(
             },
         )
         .map_err(anyhow::Error::from)?;
-        let expected_presentation = presentation.cloned().unwrap_or(PayloadPresentation::Full);
+        let plan = terminal_output_plan(
+            &reconstructed.text,
+            text,
+            pending_raw,
+            presentation,
+            fields.state,
+        )?;
         anyhow::ensure!(
-            render_presentation(&reconstructed.text, &expected_presentation)? == text,
-            "closed tool source differs from terminal result"
+            reconstructed.text == plan.raw,
+            "closed tool source differs from terminal plan"
         );
-        if let Some(raw) = pending_raw {
-            anyhow::ensure!(
-                reconstructed.text == raw,
-                "closed tool source raw bytes differ from terminal input"
-            );
-        }
         return Ok(false);
     }
     let observed = source_rows
@@ -1505,67 +1625,11 @@ async fn terminalize_transaction(
             "clock moved backwards while closing canonical tool output"
         );
     }
-    let (suffix, final_flush, stream_bytes, delivered_presentation) = match presentation {
-        Some(presentation) => {
-            let raw = pending_raw.unwrap_or(prefix);
-            if fields.state != ToolCallState::Completed && !raw.starts_with(prefix) {
-                (
-                    String::new(),
-                    false,
-                    vec![prefix.len() as u64],
-                    PayloadPresentation::Composed {
-                        parts: vec![gents_protocol::output::PresentationPart::Literal {
-                            text: text.to_owned(),
-                        }],
-                    },
-                )
-            } else {
-                anyhow::ensure!(
-                    raw.starts_with(prefix),
-                    "terminal raw tool result is not an exact extension of persisted output"
-                );
-                anyhow::ensure!(
-                    render_presentation(raw, presentation)? == text,
-                    "prepared tool presentation does not reconstruct to the terminal native text"
-                );
-                let suffix = raw[prefix.len()..].to_owned();
-                let final_flush = !suffix.is_empty() || extent.segments == 0;
-                (
-                    suffix,
-                    final_flush,
-                    vec![raw.len() as u64],
-                    presentation.clone(),
-                )
-            }
-        }
-        None => {
-            if fields.state != ToolCallState::Completed && !text.starts_with(prefix) {
-                (
-                    String::new(),
-                    false,
-                    vec![prefix.len() as u64],
-                    PayloadPresentation::Composed {
-                        parts: vec![gents_protocol::output::PresentationPart::Literal {
-                            text: text.to_owned(),
-                        }],
-                    },
-                )
-            } else {
-                anyhow::ensure!(
-                    text.starts_with(prefix),
-                    "terminal tool result is not an exact extension of persisted raw output"
-                );
-                let suffix = text[prefix.len()..].to_owned();
-                let final_flush = !suffix.is_empty() || extent.segments == 0;
-                (
-                    suffix,
-                    final_flush,
-                    vec![text.len() as u64],
-                    PayloadPresentation::Full,
-                )
-            }
-        }
-    };
+    let plan = terminal_output_plan(prefix, text, pending_raw, presentation, fields.state)?;
+    let suffix = plan.raw[prefix.len()..].to_owned();
+    let final_flush = !suffix.is_empty() || extent.segments == 0;
+    let stream_bytes = vec![u64::try_from(plan.raw.len())?];
+    let delivered_presentation = plan.presentation;
     let segments = extent.segments + u32::from(final_flush);
     let runs = if final_flush {
         vec![SegmentRun {
@@ -1751,9 +1815,25 @@ async fn ensure_background_receipt_before_bridge_close(
     Ok(())
 }
 
-/// Commit one raw tool-output chunk.  The per-writer mutex serializes capture
-/// callbacks; this transaction still derives the next ordinal from immutable
-/// facts so retry/restart cannot manufacture a cumulative rewrite.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ToolOutputAppendRejection {
+    #[error("tool output append lost the running tool lifecycle")]
+    NotRunning,
+    #[error("tool output append exceeded the accepted tool deadline")]
+    DeadlineExceeded,
+}
+
+#[derive(Debug)]
+pub(crate) struct ToolOutputAppendReceipt {
+    pub(crate) range: std::ops::Range<u64>,
+    pub(crate) segment_doc_id: String,
+}
+
+/// Commit one raw tool-output chunk. The per-writer mutex serializes capture
+/// callbacks; the transaction derives the next ordinal from immutable facts.
+/// Fresh writes observe the clock under the transaction gate and are accepted
+/// through the deadline (only `now > deadline` rejects). Exact committed
+/// retries bypass only that deadline check, not the Running/open-source fences.
 pub(crate) async fn append_tool_output(
     binding: &ToolOutputBinding,
     bytes: &str,
@@ -1761,7 +1841,34 @@ pub(crate) async fn append_tool_output(
     if bytes.is_empty() {
         return Ok(0..0);
     }
-    let created_at = Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
+    Ok(
+        append_tool_output_with_time(binding, bytes, Utc::now(), None)
+            .await?
+            .range,
+    )
+}
+
+#[cfg(test)]
+pub(crate) async fn append_tool_output_at(
+    binding: &ToolOutputBinding,
+    bytes: &str,
+    operation_created_at: DateTime<Utc>,
+    observed_now: DateTime<Utc>,
+) -> Result<ToolOutputAppendReceipt> {
+    append_tool_output_with_time(binding, bytes, operation_created_at, Some(observed_now)).await
+}
+
+async fn append_tool_output_with_time(
+    binding: &ToolOutputBinding,
+    bytes: &str,
+    operation_created_at: DateTime<Utc>,
+    fixture_now: Option<DateTime<Utc>>,
+) -> Result<ToolOutputAppendReceipt> {
+    anyhow::ensure!(
+        !bytes.is_empty(),
+        "empty tool output has no physical append receipt"
+    );
+    let created_at = operation_created_at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true);
     let payload = bytes.to_owned();
     let binding = binding.clone();
     let node = binding.node.clone();
@@ -1775,6 +1882,7 @@ pub(crate) async fn append_tool_output(
             let payload = payload.clone();
             let binding = binding.clone();
             Box::pin(async move {
+                let now = fixture_now.unwrap_or_else(Utc::now);
                 let tool = escape_graphql_string(&binding.tool_call_doc_id);
                 let request = escape_graphql_string(&binding.request_doc_id);
                 let agent = escape_graphql_string(&binding.agent_did);
@@ -1799,17 +1907,24 @@ pub(crate) async fn append_tool_output(
                         r#"{{ AgentToolCall(filter: {{
                 _docID: {{ _eq: "{tool}" }}, request_doc_id: {{ _eq: "{request}" }},
                 agent_did: {{ _eq: "{agent}" }}, session_id: {{ _eq: "{session}" }},
-                {requester_filter},
-                lifecycle_state: {{ _eq: "running" }}
-            }}, limit: 2) {{ _docID }} }}"#
+                {requester_filter}
+            }}, limit: 2) {{ _docID lifecycle_state deadline_at }} }}"#
                     ))
                     .await?;
+                let tools = row["data"]["AgentToolCall"]
+                    .as_array()
+                    .context("tool output append query omitted physical rows")?;
                 anyhow::ensure!(
-                    row["data"]["AgentToolCall"]
-                        .as_array()
-                        .is_some_and(|rows| rows.len() == 1),
-                    "tool output append lost exact running lifecycle"
+                    tools.len() == 1,
+                    "tool output append has no unique physical binding"
                 );
+                let state = tools[0]["lifecycle_state"]
+                    .as_str()
+                    .and_then(ToolCallState::from_persisted)
+                    .context("tool output append has malformed lifecycle state")?;
+                if state != ToolCallState::Running {
+                    return Err(ToolOutputAppendRejection::NotRunning.into());
+                }
                 let response = txn
                     .execute(&format!(
                         r#"{{ AgentOutputSegment(filter: {{
@@ -1897,14 +2012,30 @@ pub(crate) async fn append_tool_output(
                         existing.segment == segment,
                         "canonical tool output retry conflicts with the recorded segment"
                     );
-                    return Ok(start..start + segment.payload.len() as u64);
+                    return Ok(ToolOutputAppendReceipt {
+                        range: start..start + segment.payload.len() as u64,
+                        segment_doc_id: existing.doc_id.clone(),
+                    });
                 }
-                txn.execute_with_variables(
-                    CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
-                    &output_segment_create_variables(&segment)?,
-                )
-                .await?;
-                Ok(start..start + segment.payload.len() as u64)
+                let deadline = tools[0]["deadline_at"]
+                    .as_str()
+                    .context("tool output append has no accepted deadline")?;
+                let deadline = DateTime::parse_from_rfc3339(deadline)
+                    .context("tool output append has malformed accepted deadline")?
+                    .with_timezone(&Utc);
+                if now > deadline {
+                    return Err(ToolOutputAppendRejection::DeadlineExceeded.into());
+                }
+                let response = txn
+                    .execute_with_variables(
+                        CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+                        &output_segment_create_variables(&segment)?,
+                    )
+                    .await?;
+                Ok(ToolOutputAppendReceipt {
+                    range: start..start + segment.payload.len() as u64,
+                    segment_doc_id: created_doc_id(&response, "AgentOutputSegment")?,
+                })
             })
         },
     )
@@ -1919,6 +2050,101 @@ mod spawned_background_tests {
     };
     use crate::tool_call_lifecycle::SpawnedBackgroundToolAdmission;
     use defra_node::EmbeddedNode;
+
+    #[test]
+    fn terminal_plan_preserves_empty_source_extension_before_diagnostic_fallback() {
+        let case = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases()
+            .iter()
+            .find(|case| case.name == "whole_prefix_then_cause")
+            .expect("generated terminal diagnostic fixture");
+        let raw = String::from_utf8(case.raw.clone()).unwrap();
+        let cause = String::from_utf8(case.cause.clone()).unwrap();
+        let empty = terminal_output_plan(
+            "",
+            &cause,
+            Some(&cause),
+            Some(&PayloadPresentation::Full),
+            ToolCallState::TimedOut,
+        )
+        .unwrap();
+        assert_eq!(empty.raw, cause);
+        assert_eq!(empty.presentation, PayloadPresentation::Full);
+        assert_eq!(empty.rendered, cause);
+
+        let retained = terminal_output_plan(
+            &raw,
+            &cause,
+            Some(&cause),
+            Some(&PayloadPresentation::Full),
+            ToolCallState::TimedOut,
+        )
+        .unwrap();
+        let crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected::Ok {
+            rendered, ..
+        } = &case.expected
+        else {
+            panic!("generated valid terminal diagnostic result");
+        };
+        assert_eq!(retained.raw, raw);
+        assert_eq!(retained.rendered.as_bytes(), rendered);
+    }
+
+    #[test]
+    fn generated_terminal_diagnostic_cases_bind_native_presentation() {
+        use crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected;
+
+        let cases = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases();
+        assert_eq!(
+            cases.len(),
+            10,
+            "all generated terminal diagnostic boundaries must be bound"
+        );
+        for case in cases {
+            let raw = String::from_utf8(case.raw.clone());
+            let cause = String::from_utf8(case.cause.clone());
+            match &case.expected {
+                LeanTerminalDiagnosticPresentationExpected::InvalidUtf8 => {
+                    assert!(
+                        raw.is_err() || cause.is_err(),
+                        "{}: model rejected valid native UTF-8 input",
+                        case.name
+                    );
+                }
+                LeanTerminalDiagnosticPresentationExpected::UnexpectedError { error } => {
+                    panic!(
+                        "{}: model produced unexpected presentation error: {error}",
+                        case.name
+                    )
+                }
+                LeanTerminalDiagnosticPresentationExpected::Ok {
+                    presentation,
+                    rendered,
+                } => {
+                    let raw = raw.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                    let cause = cause.unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                    let budget = usize::try_from(case.tail_budget)
+                        .unwrap_or_else(|error| panic!("{}: {error}", case.name));
+                    let actual = terminal_diagnostic_presentation(&raw, &cause, budget)
+                        .expect("valid native diagnostic input");
+                    assert_eq!(
+                        actual,
+                        crate::lean_vocab_test::native_presentation(presentation)
+                            .expect("modeled presentation translates"),
+                        "{}: native terminal diagnostic presentation diverged",
+                        case.name
+                    );
+                    assert_eq!(
+                        render_presentation(&raw, &actual)
+                            .expect("native presentation renders")
+                            .as_bytes(),
+                        rendered,
+                        "{}: native rendered diagnostic diverged",
+                        case.name
+                    );
+                }
+            }
+        }
+    }
 
     fn admission(deadline_at: DateTime<Utc>) -> SpawnedBackgroundToolAdmission {
         SpawnedBackgroundToolAdmission {
@@ -1950,18 +2176,28 @@ mod spawned_background_tests {
 
     #[tokio::test]
     async fn failed_streaming_tool_preserves_raw_prefix_and_publishes_terminal_failure() {
+        let case = crate::lean_vocab_test::lean_terminal_diagnostic_presentation_cases()
+            .iter()
+            .find(|case| case.name == "whole_prefix_then_cause")
+            .expect("generated terminal diagnostic fixture");
+        let raw = String::from_utf8(case.raw.clone()).unwrap();
+        let cause = String::from_utf8(case.cause.clone()).unwrap();
+        let crate::lean_vocab_test::LeanTerminalDiagnosticPresentationExpected::Ok {
+            rendered, ..
+        } = &case.expected
+        else {
+            panic!("generated valid terminal diagnostic result");
+        };
         let (node, path, mut tool) = published_spawn_parent("streamed-failure").await;
         let tool_doc_id = tool.doc_id().unwrap().to_owned();
         let request_doc_id = tool.request_doc_id.as_deref().unwrap().to_owned();
         let binding = tool
             .tool_output_binding()
             .expect("running tool output binding");
-        append_tool_output(&binding, "stdout-before-failure\n")
-            .await
-            .unwrap();
+        append_tool_output(&binding, &raw).await.unwrap();
 
         assert!(tool
-            .fail_owned("command was interrupted", FailureClass::External, None)
+            .fail_owned(&cause, FailureClass::External, None)
             .await
             .unwrap());
 
@@ -1983,9 +2219,21 @@ mod spawned_background_tests {
             panic!("failed tool delivery does not select text")
         };
         assert_eq!(
-            render_presentation("stdout-before-failure\n", &text.presentation).unwrap(),
-            "command was interrupted"
+            render_presentation(&raw, &text.presentation)
+                .unwrap()
+                .as_bytes(),
+            rendered
         );
+        let observed = crate::tool_call_lifecycle::load_tool_call_presentation(
+            &crate::config_client::ConfigAccess::Local(node.clone()),
+            &tool_doc_id,
+            &tool.agent_did,
+            &tool.session_id,
+            tool.requester_did.as_deref(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(observed.result.unwrap().as_bytes(), rendered);
 
         let segments = node
             .execute(&format!(
@@ -2016,7 +2264,7 @@ mod spawned_background_tests {
                 .iter()
                 .map(|row| row.segment.payload.as_str())
                 .collect::<String>(),
-            "stdout-before-failure\n"
+            raw
         );
         assert_eq!(
             tool_rows
@@ -2047,6 +2295,32 @@ mod spawned_background_tests {
             append_tool_output(&binding, "stdout-before-terminal\n")
                 .await
                 .unwrap();
+            let mut replay = ToolCallLifecycle::load_by_doc_id(
+                node.clone(),
+                &tool_doc_id,
+                &tool.agent_did,
+                &tool.session_id,
+                tool.requester_did.as_deref(),
+            )
+            .await
+            .unwrap()
+            .expect("running physical tool for same-state replay");
+            let mut conflicting_cancel = if timeout {
+                None
+            } else {
+                Some(
+                    ToolCallLifecycle::load_by_doc_id(
+                        node.clone(),
+                        &tool_doc_id,
+                        &tool.agent_did,
+                        &tool.session_id,
+                        tool.requester_did.as_deref(),
+                    )
+                    .await
+                    .unwrap()
+                    .expect("running physical tool for conflicting cause"),
+                )
+            };
 
             if timeout {
                 assert!(tool.timeout().await.unwrap());
@@ -2126,11 +2400,79 @@ mod spawned_background_tests {
             .await
             .unwrap();
             let presented = presentation.result.expect("terminal delivery presentation");
+            assert!(
+                presented.starts_with("stdout-before-terminal\n\n"),
+                "terminal diagnostic must expose committed output before the cause: {presented:?}"
+            );
             if timeout {
-                assert!(presented.starts_with("tool call deadline exceeded at "));
+                assert!(presented.contains("tool call deadline exceeded at "));
             } else {
-                assert_eq!(presented, "tool call cancelled");
+                assert!(presented.ends_with("tool call cancelled"));
             }
+
+            let mut before_messages = tool_delivery_rows(&node, &tool.session_id)
+                .await
+                .into_iter()
+                .map(|row| row.doc_id)
+                .collect::<Vec<_>>();
+            before_messages.sort();
+            let mut before_segments = rows
+                .iter()
+                .map(|row| row.doc_id.clone())
+                .collect::<Vec<_>>();
+            before_segments.sort();
+            if timeout {
+                assert!(!replay.timeout().await.unwrap());
+            } else {
+                assert!(!replay
+                    .cancel_during_run(CancelCause::Interrupted)
+                    .await
+                    .unwrap());
+                let mut conflicting_cancel =
+                    conflicting_cancel.take().expect("cancel cause contender");
+                assert!(!conflicting_cancel
+                    .cancel_during_run(CancelCause::UserCancelled)
+                    .await
+                    .unwrap());
+                assert_eq!(conflicting_cancel.state, ToolCallState::Cancelled);
+                assert_eq!(
+                    conflicting_cancel.cancel_cause,
+                    Some(CancelCause::Interrupted)
+                );
+            }
+            let mut after_messages = tool_delivery_rows(&node, &tool.session_id)
+                .await
+                .into_iter()
+                .map(|row| row.doc_id)
+                .collect::<Vec<_>>();
+            after_messages.sort();
+            assert_eq!(
+                after_messages, before_messages,
+                "terminal replay added a header"
+            );
+            let after_segments = node
+                .execute(&format!(
+                    r#"{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{}" }} }}) {{ {} }} }}"#,
+                    escape_graphql_string(&request_doc_id),
+                    AGENT_OUTPUT_SEGMENT_FIELDS,
+                ))
+                .await;
+            assert!(!after_segments.has_errors(), "{:#?}", after_segments.errors);
+            let mut after_segments = after_segments.data.as_ref().unwrap()["AgentOutputSegment"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(decode_output_segment_row)
+                .collect::<Result<Vec<_>>>()
+                .unwrap()
+                .into_iter()
+                .map(|row| row.doc_id)
+                .collect::<Vec<_>>();
+            after_segments.sort();
+            assert_eq!(
+                after_segments, before_segments,
+                "terminal replay added raw output"
+            );
 
             node.shutdown().await;
             let _ = std::fs::remove_dir_all(path);

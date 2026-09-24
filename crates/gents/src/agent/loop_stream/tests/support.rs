@@ -1,4 +1,11 @@
 use super::*;
+use tokio::sync::Notify;
+
+#[derive(Default)]
+pub(super) struct StreamEntryGate {
+    pub(super) entered: Notify,
+    pub(super) release: Notify,
+}
 
 pub(super) enum ScriptedCall {
     Turn(Vec<RawStreamingChoice<()>>),
@@ -33,6 +40,7 @@ pub(super) struct ScriptedModel {
     /// capture — a stand-in for a mis-wired provider stack that lacks
     /// `RenderedRequestCapturingHttpClient`.
     capture_requests: bool,
+    stream_entry_gate: Option<Arc<StreamEntryGate>>,
 }
 
 impl ScriptedModel {
@@ -53,7 +61,13 @@ impl ScriptedModel {
             seen_requests: Arc::new(Mutex::new(Vec::new())),
             stall_after_chunks: false,
             capture_requests: true,
+            stream_entry_gate: None,
         }
+    }
+
+    pub(super) fn with_stream_entry_gate(mut self, gate: Arc<StreamEntryGate>) -> Self {
+        self.stream_entry_gate = Some(gate);
+        self
     }
 
     /// Model a mis-wired transport: the provider streams without claiming the
@@ -111,6 +125,10 @@ impl CompletionModel for ScriptedModel {
         &self,
         request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        if let Some(gate) = &self.stream_entry_gate {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
         if self.capture_requests {
             crate::test_support::capture_scripted_provider_request(&request, "test-model").await?;
         }

@@ -102,6 +102,10 @@ afterburner = { git = "https://github.com/afterburner-sh/afterburner.git", rev =
 # revs are different types to the compiler.
 afterburner-cloud = { git = "https://github.com/afterburner-sh/afterburner.git", rev = "dd0b702f62164fe3ce25806f71eff71889308c98" }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSURL"] }
+
 [dev-dependencies]
 acp.workspace = true
 async-trait = "0.1"

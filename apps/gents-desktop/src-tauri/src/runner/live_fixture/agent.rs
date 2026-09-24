@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::{
     cli_tool, default_behavior_id_for_agent, default_inference_profile_id_for_behavior,
     AgentIdentity, DocumentRuntimeOptions, Gents, InferenceBackend, KeyIdentity, ToolCeiling,
@@ -255,10 +255,8 @@ async fn wait_for_runtime_process_state(
                 }}
             }}"#
         );
-        let response = node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!("AgentBehaviorReadiness query failed: {:?}", response.errors);
-        }
+        let response =
+            graphql_with_transaction_retry(&node, &query, "AgentBehaviorReadiness query").await?;
         let process_state = response
             .data
             .as_ref()

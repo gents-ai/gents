@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::identity::AgentIdentity;
 
 use super::enrollment_store::{EnrollmentProjection, GraphqlEnrollmentStore};
-use super::graphql_helpers::{ensure_no_errors, graphql_string_list_literal, rows};
+use super::graphql_helpers::{graphql_string_list_literal, rows};
 use super::templates::{resolve_template, CLIENT_TEMPLATE};
 use super::{
     desired_route_is_applied, observe_owned_pairing_live_matches, EmbeddedRemoteP2pAdmin,
@@ -714,18 +714,18 @@ async fn reconcile_data_plane(
     store: &GraphqlEnrollmentStore,
     projection: &EnrollmentProjection,
 ) -> Result<()> {
-    let response = node
-        .execute(
-            r#"{
+    let response = crate::graphql::graphql_with_transaction_retry(
+        node,
+        r#"{
                 PeerPairingDesired {
                     peer_id agent_did template source collections replicator_addresses
                     enrollment_request_digest enrollment_authorization_sequence
                     enrollment_authorization_expires_at
                 }
             }"#,
-        )
-        .await;
-    ensure_no_errors(&response, "query enrollment base-route ownership")?;
+        "query enrollment base-route ownership",
+    )
+    .await?;
     let existing = rows::<EnrollmentRouteRow>(&response, "PeerPairingDesired")?;
     let desired = desired_routes(projection);
     let client = resolve_template(CLIENT_TEMPLATE).context("client template is missing")?;

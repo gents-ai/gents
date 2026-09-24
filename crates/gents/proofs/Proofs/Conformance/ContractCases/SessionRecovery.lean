@@ -152,7 +152,6 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
   let deadLatest := recoveryContext .dead .released 1 3 10 5
   let supersededLatest := recoveryContext .superseded .released 1 3 10 5
   let interruptedLatest := recoveryContext .interrupted .released 1 3 10 5
-  let inputRequiredLatest := recoveryContext .inputRequired .executing 1 3 10 5
   let processingLatest := recoveryContext .processing .executing 1 3 10 5
   [ recoveryCaseFromStep
       "legal_initial_retry_slot"
@@ -222,11 +221,6 @@ def sessionRecoveryCases : List SessionRecoveryCase :=
   , recoveryCaseFromStep
       "illegal_source_interrupted_terminal"
       (recoveryPre interruptedLatest interruptedLatest 1)
-      1
-      2
-  , recoveryCaseFromStep
-      "illegal_source_input_required_reserved"
-      (recoveryPre inputRequiredLatest inputRequiredLatest 1)
       1
       2
   , recoveryCaseFromStep

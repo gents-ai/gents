@@ -31,6 +31,7 @@ serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true
+tokio-util.workspace = true
 tracing.workspace = true
 webbrowser = "1"
 tracing-subscriber.workspace = true

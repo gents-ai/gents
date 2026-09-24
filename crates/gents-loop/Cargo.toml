@@ -51,4 +51,5 @@ tokio-util = "0.7"
 tracing = { workspace = true }
 
 [dev-dependencies]
+gents-lean-contract.workspace = true
 tokio = { version = "1", default-features = false, features = ["sync", "macros", "io-util", "rt", "time", "test-util"] }

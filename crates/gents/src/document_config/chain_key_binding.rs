@@ -4,7 +4,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// Document-layer view of a `ChainKeyBinding` row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -109,14 +109,12 @@ pub async fn list_chain_key_binding_records(
     node: &EmbeddedNode,
     agent_did: &str,
 ) -> Result<Vec<(String, ChainKeyBindingDocument)>> {
-    let response = node
-        .execute(&list_chain_key_bindings_query(agent_did)?)
-        .await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "list ChainKeyBinding failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(
+        node,
+        &list_chain_key_bindings_query(agent_did)?,
+        "list ChainKeyBinding",
+    )
+    .await?;
     super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "ChainKeyBinding")
 }
 
@@ -129,12 +127,7 @@ pub async fn load_chain_key_binding_by_doc_id(
         "{{ ChainKeyBinding(filter: {{_docID: {{_eq: \"{id}\"}}}}) {{ _docID {} }} }}",
         binding_fields()?
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "read ChainKeyBinding failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(node, &query, "read ChainKeyBinding").await?;
     let mut rows =
         super::serde_helpers::try_rows_with_doc_id(response.data.as_ref(), "ChainKeyBinding")?;
     anyhow::ensure!(

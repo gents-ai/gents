@@ -21,7 +21,7 @@ def cases : List Case :=
   , ⟨"delivery_recovery_race_renewal_wins", renewalBeforeRecovery⟩
   , ⟨"stale_writer_loses_after_recovery", recoveryBeforeStaleWriter⟩ ]
   ++ [ ⟨"producer_output_does_not_renew", outputAloneDoesNotRenew⟩
-     , ⟨"input_required_tool_wait_explicitly_renews", toolWaitExplicitRenewal⟩
+     , ⟨"foreground_tool_wait_explicitly_renews", toolWaitExplicitRenewal⟩
      , ⟨"suspended_holder_cannot_publish", sameTaskWaitDoesNotCommit⟩
      , ⟨"complete_extent_cannot_be_truncated", completeTruncationRejected⟩
      , ⟨"spawned_background_lost_ack_replays", some spawnedAdmissionReplayCases⟩

@@ -256,13 +256,12 @@ async fn validate_mailbox_submission_cause(
         }}"#,
         escape_graphql_string(item_id)
     );
-    let response = node.execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "validate mailbox submission cause failed: {:?}",
-            response.errors
-        );
-    }
+    let response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "validate mailbox submission cause",
+    )
+    .await?;
     let rows = response
         .data
         .as_ref()
@@ -861,10 +860,9 @@ async fn fetch_request_view(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("fetch_request({request_id}) failed: {:?}", resp.errors);
-    }
+    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
+        .await
+        .with_context(|| format!("fetch_request({request_id})"))?;
     let row = resp
         .data
         .as_ref()
@@ -907,13 +905,9 @@ async fn fetch_retry_lineage(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "fetch_retry_lineage({request_id}) failed: {:?}",
-            resp.errors
-        );
-    }
+    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
+        .await
+        .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
     let rows = resp
         .data
         .as_ref()

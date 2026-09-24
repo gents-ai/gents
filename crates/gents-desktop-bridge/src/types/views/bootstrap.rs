@@ -57,6 +57,7 @@ pub struct ManagedServerStatus {
     pub effective_tool_root: Option<String>,
     pub suggested_tool_root: Option<String>,
     pub pairing_ready: bool,
+    pub approval_required: bool,
     pub error: Option<String>,
 }
 

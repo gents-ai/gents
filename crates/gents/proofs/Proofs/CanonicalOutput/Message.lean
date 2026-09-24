@@ -60,6 +60,109 @@ theorem full_presentation_preserves_bytes (bytes : List UInt8)
     (h : (utf8? bytes).isSome = true) : present bytes .full = .ok bytes := by
   simp [present, h]
 
+/-- A candidate starts at a UTF-8 boundary, retains no more than the requested
+byte budget, and leaves a valid UTF-8 prefix in the immutable source. -/
+def terminalTailCandidate (raw : List UInt8) (budget start : Nat) : Bool :=
+  decide (start ≤ raw.length) && decide (raw.length - start ≤ budget) &&
+    (utf8? (raw.take start)).isSome && (utf8? (raw.drop start)).isSome
+
+/-- Candidate offsets are scanned in ascending byte order, so the first valid
+one retains the longest possible suffix. The full length is the safe fallback
+when the raw source itself is valid. -/
+def terminalTailStart (raw : List UInt8) (budget : Nat) : Nat :=
+  ((List.range (raw.length + 1)).find? (terminalTailCandidate raw budget)).getD raw.length
+
+theorem terminalTailStart_valid (raw : List UInt8) (budget : Nat)
+    (hraw : (utf8? raw).isSome = true) :
+    terminalTailCandidate raw budget (terminalTailStart raw budget) = true := by
+  let p := terminalTailCandidate raw budget
+  have hempty : (utf8? ([] : List UInt8)).isSome = true := by native_decide
+  have hlast : p raw.length = true := by
+    simp [p, terminalTailCandidate, hraw, hempty]
+  have hsome : ((List.range (raw.length + 1)).find? p).isSome = true := by
+    apply List.find?_isSome.mpr
+    exact ⟨raw.length, by simp, hlast⟩
+  unfold terminalTailStart
+  cases hfind : (List.range (raw.length + 1)).find? p with
+  | none => simp [hfind] at hsome
+  | some start =>
+      simpa [p, hfind] using (List.find?_some hfind)
+
+theorem terminalTailStart_is_longest (raw : List UInt8) (budget start : Nat)
+    (hraw : (utf8? raw).isSome = true)
+    (hbetter : start < terminalTailStart raw budget) :
+    terminalTailCandidate raw budget start = false := by
+  let p := terminalTailCandidate raw budget
+  have hempty : (utf8? ([] : List UInt8)).isSome = true := by native_decide
+  have hlast : p raw.length = true := by
+    simp [p, terminalTailCandidate, hraw, hempty]
+  have hsome : ((List.range (raw.length + 1)).find? p).isSome = true := by
+    apply List.find?_isSome.mpr
+    exact ⟨raw.length, by simp, hlast⟩
+  unfold terminalTailStart at hbetter
+  cases hfind : (List.range (raw.length + 1)).find? p with
+  | none => simp [hfind] at hsome
+  | some chosen =>
+      have hminimal := (List.find?_range_eq_some.mp hfind).2.2 start
+      have hbefore : start < chosen := by
+        change start < ((List.range (raw.length + 1)).find? p).getD raw.length at hbetter
+        simpa [hfind] using hbetter
+      have : p start = false := by
+        simpa using hminimal hbefore
+      exact this
+
+theorem terminalTailStart_bounds (raw : List UInt8) (budget : Nat)
+    (hraw : (utf8? raw).isSome = true) :
+    terminalTailStart raw budget ≤ raw.length ∧
+      raw.length - terminalTailStart raw budget ≤ budget := by
+  have h := terminalTailStart_valid raw budget hraw
+  simp only [terminalTailCandidate, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact ⟨h.1.1.1, h.1.1.2⟩
+
+/-- Preserve the immutable committed bytes and expose only their longest
+UTF-8-safe bounded tail, followed by the terminal cause. Invalid source or
+cause bytes are rejected rather than repaired. -/
+def terminalDiagnosticPresentation (raw cause : List UInt8) (tailBudget : Nat) :
+    Except MessageError Presentation := do
+  if !(utf8? raw).isSome || !(utf8? cause).isSome then
+    .error .invalidUtf8
+  else
+    let start := terminalTailStart raw tailBudget
+    if start == raw.length then
+      .ok (.composed [.literal cause])
+    else
+      .ok (.composed [.range start raw.length, .literal [10], .literal cause])
+
+theorem terminalDiagnosticPresentation_renders (raw cause : List UInt8) (tailBudget : Nat)
+    (hraw : (utf8? raw).isSome = true)
+    (hcause : (utf8? cause).isSome = true) :
+    (terminalDiagnosticPresentation raw cause tailBudget).bind (present raw) =
+      .ok (if terminalTailStart raw tailBudget = raw.length then cause
+           else raw.drop (terminalTailStart raw tailBudget) ++ [10] ++ cause) := by
+  let start := terminalTailStart raw tailBudget
+  have hvalid := terminalTailStart_valid raw tailBudget hraw
+  simp only [terminalTailCandidate, Bool.and_eq_true, decide_eq_true_eq] at hvalid
+  have hbound : start ≤ raw.length := hvalid.1.1.1
+  have hprefix : (utf8? (raw.take start)).isSome = true := hvalid.1.2
+  have htail : (utf8? (raw.drop start)).isSome = true := hvalid.2
+  have hnewline : (utf8? [10]).isSome = true := by native_decide
+  by_cases hempty : start = raw.length
+  · dsimp only [start] at hempty
+    simp [terminalDiagnosticPresentation, hraw, hcause, hempty, Except.bind,
+      present, presentPart]
+  · dsimp only [start] at hempty hbound hprefix htail
+    have htake :
+        (raw.drop (terminalTailStart raw tailBudget)).take
+            (raw.length - terminalTailStart raw tailBudget) =
+          raw.drop (terminalTailStart raw tailBudget) := by
+      simpa [List.length_drop] using
+        (List.take_length (raw.drop (terminalTailStart raw tailBudget)))
+    have hemptyUtf8 : (utf8? ([] : List UInt8)).isSome = true := by native_decide
+    simp [terminalDiagnosticPresentation, hraw, hcause, hempty, Except.bind,
+      present, presentPart, hbound, hprefix, htail, hnewline, hemptyUtf8, htake,
+      List.take_length]
+    rfl
+
 inductive ReasoningPart (α : Type) where
   | text (payload : α) (signature : Option String)
   | encrypted (payload : α)

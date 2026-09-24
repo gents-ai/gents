@@ -59,7 +59,7 @@ pub struct AttemptView {
 /// Request-only state for the current request at the head of a client turn.
 ///
 /// `turn_state` is the execution indicator. `request_state` preserves detail
-/// such as workspace binding and waiting for user input. Output readiness,
+/// such as workspace binding. Output readiness,
 /// live previews and message completeness are not execution states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ClientHeadProjection {
@@ -75,10 +75,6 @@ impl ClientHeadProjection {
     pub fn is_active(self) -> bool {
         !self.is_terminal()
     }
-
-    pub fn waiting_on_user_input(self) -> bool {
-        self.is_active() && self.request_state == RequestLifecycleState::InputRequired
-    }
 }
 
 pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
@@ -88,7 +84,7 @@ pub fn derive_attempt(view: &AttemptView) -> ClientTurnState {
     }
     match view.request.lifecycle_state {
         Request::WorkspaceBindingPending | Request::Pending => ClientTurnState::WaitingForClaim,
-        Request::Claimed | Request::Processing | Request::InputRequired => ClientTurnState::Running,
+        Request::Claimed | Request::Processing => ClientTurnState::Running,
         Request::Completed => ClientTurnState::Completed,
         Request::Failed | Request::Dead => ClientTurnState::Failed,
         Request::Superseded => ClientTurnState::Superseded,

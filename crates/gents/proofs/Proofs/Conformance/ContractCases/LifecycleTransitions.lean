@@ -11,7 +11,6 @@ open Conformance.Contracts (requestStates requestActions requestSamples processS
 inductive LifecycleTransitionClassification where
   | legal
   | illegal
-  | productUnreachable
   | recoveryReachable
   deriving DecidableEq, Repr
 
@@ -20,7 +19,6 @@ namespace LifecycleTransitionClassification
 def toContract : LifecycleTransitionClassification → String
   | .legal => "legal"
   | .illegal => "illegal"
-  | .productUnreachable => "productUnreachable"
   | .recoveryReachable => "recoveryReachable"
 
 end LifecycleTransitionClassification
@@ -74,9 +72,7 @@ def requestTransitionClassification
   match action with
   | some _ => .legal
   | none =>
-      if source = .inputRequired ∨ target = .inputRequired then
-        .productUnreachable
-      else if requestRecoverySweepReachable source target then
+      if requestRecoverySweepReachable source target then
         .recoveryReachable
       else
         .illegal
@@ -94,8 +90,6 @@ def requestTransitionCase (source target : RequestState) : LifecycleTransitionCa
   , action := action
   , boundary :=
       match classification with
-      | .productUnreachable =>
-          some Conformance.Contracts.boundaryRequestInputRequiredReservedId
       | .recoveryReachable =>
           some Conformance.Contracts.boundaryRequestRecoverySweepReachableId
       | _ => none

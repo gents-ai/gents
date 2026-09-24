@@ -187,16 +187,9 @@ impl DescendantGraphAccess<'_> {
         match self {
             Self::Config(access) => access.execute(query).await,
             Self::Local(node) => {
-                let response = node.execute(query).await;
-                if response.has_errors() {
-                    let errors = response
-                        .errors
-                        .iter()
-                        .map(|error| error.message.as_str())
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    anyhow::bail!("descendant graph GraphQL returned errors: {errors}");
-                }
+                let response =
+                    crate::graphql::graphql_with_transaction_retry(node, query, "descendant graph")
+                        .await?;
                 Ok(serde_json::json!({
                     "data": response.data.unwrap_or(Value::Null),
                 }))

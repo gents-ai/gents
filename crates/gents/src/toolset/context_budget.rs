@@ -9,7 +9,7 @@ use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub const CONTEXT_BUDGET_TOOL_NAME: &str = "context_budget";
 
@@ -183,10 +183,9 @@ pub async fn load_context_budget_snapshot(
         bail!("context_budget tool requires a running agent DID");
     }
 
-    let resp = node.execute(&context_query(agent_did)).await;
-    if resp.has_errors() {
-        bail!("loading context budget failed: {:?}", resp.errors);
-    }
+    let resp =
+        graphql_with_transaction_retry(node, &context_query(agent_did), "loading context budget")
+            .await?;
     let envelope: ContextEnvelope = decode(resp.data.as_ref(), "context budget")?;
     let last_request = latest_request_context(&envelope.inference_calls)?;
     let max_tokens = last_request
@@ -198,12 +197,12 @@ pub async fn load_context_budget_snapshot(
     let compactions = if session_ids.is_empty() {
         Vec::new()
     } else {
-        let resp = node
-            .execute(&compaction_query(agent_did, &session_ids))
-            .await;
-        if resp.has_errors() {
-            bail!("loading context compactions failed: {:?}", resp.errors);
-        }
+        let resp = graphql_with_transaction_retry(
+            node,
+            &compaction_query(agent_did, &session_ids),
+            "loading context compactions",
+        )
+        .await?;
         let envelope: CompactionEnvelope = decode(resp.data.as_ref(), "context compactions")?;
         envelope
             .compactions

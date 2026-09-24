@@ -54,6 +54,7 @@ pub fn command_inventory() -> Vec<CommandContract> {
         ("desktop_managed_server_restart", "runtime-admin"),
         ("desktop_managed_server_reset", "runtime-admin"),
         ("desktop_managed_server_validate_root", "runtime-admin"),
+        ("desktop_managed_server_open_login_items", "runtime-admin"),
         ("desktop_open_db_explorer", "runtime-admin"),
         // external-links
         ("desktop_open_external_url", "external-links"),
@@ -433,6 +434,7 @@ mod tests {
             ("desktop_managed_server_restart", "mutate"),
             ("desktop_managed_server_reset", "mutate"),
             ("desktop_managed_server_validate_root", "mutate"),
+            ("desktop_managed_server_open_login_items", "mutate"),
             ("desktop_open_db_explorer", "mutate"),
             ("desktop_open_external_url", "mutate"),
             ("desktop_session_snapshot", "read"),

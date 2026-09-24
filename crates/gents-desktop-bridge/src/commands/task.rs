@@ -1,6 +1,6 @@
 use anyhow::{anyhow, bail, Result};
 use gents::document_config::{Schedule, Task};
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_desktop_core::client::ClientCore;
 use gents_protocol::row::AgentRequestRow;
 
@@ -59,13 +59,9 @@ async fn load_agent_request_by_request_id(
             }}
         }}"#
     );
-    let response = core.node().execute(&query).await;
-    if response.has_errors() {
-        bail!(
-            "query manual task run request failed: {:?}",
-            response.errors
-        );
-    }
+    let response =
+        graphql_with_transaction_retry(&core.node(), &query, "query manual task run request")
+            .await?;
     let local_row = response
         .data
         .as_ref()

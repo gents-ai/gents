@@ -66,30 +66,34 @@ fn full_reference(value: &LeanPayloadSpec) -> Result<PayloadRef> {
     reference(&value.reference)
 }
 
+pub(crate) fn native_presentation(value: &LeanPresentation) -> Result<PayloadPresentation> {
+    Ok(match value {
+        LeanPresentation::Full => PayloadPresentation::Full,
+        LeanPresentation::Composed { parts } => PayloadPresentation::Composed {
+            parts: parts
+                .iter()
+                .map(|part| -> Result<PresentationPart> {
+                    Ok(match part {
+                        LeanPresentationPart::Range { start, end } => {
+                            PresentationPart::OutputRange {
+                                start_byte: *start,
+                                end_byte: *end,
+                            }
+                        }
+                        LeanPresentationPart::Literal { bytes } => PresentationPart::Literal {
+                            text: String::from_utf8(bytes.clone())?,
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
+        },
+    })
+}
+
 fn presentation(value: &LeanPayloadSpec) -> Result<PresentedPayload> {
     Ok(PresentedPayload {
         output: reference(&value.reference)?,
-        presentation: match &value.presentation {
-            LeanPresentation::Full => PayloadPresentation::Full,
-            LeanPresentation::Composed { parts } => PayloadPresentation::Composed {
-                parts: parts
-                    .iter()
-                    .map(|part| -> Result<PresentationPart> {
-                        Ok(match part {
-                            LeanPresentationPart::Range { start, end } => {
-                                PresentationPart::OutputRange {
-                                    start_byte: *start,
-                                    end_byte: *end,
-                                }
-                            }
-                            LeanPresentationPart::Literal { bytes } => PresentationPart::Literal {
-                                text: String::from_utf8(bytes.clone())?,
-                            },
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?,
-            },
-        },
+        presentation: native_presentation(&value.presentation)?,
     })
 }
 

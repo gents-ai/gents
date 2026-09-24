@@ -463,33 +463,30 @@ fn render_reasoning_text(reasoning: &AssistantReasoning) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use gents_protocol::message::ReasoningContent;
+use gents_protocol as test_protocol;
+#[cfg(test)]
+#[path = "../../gents-lean-contract/tests/support/rendered_reasoning.rs"]
+mod rendered_reasoning_contract;
 
-    use super::{render_reasoning_text, AssistantReasoning};
+#[cfg(test)]
+mod tests {
+    use super::{render_reasoning_text, AssistantMessageContent, CompletionMessage};
 
     #[test]
-    fn opaque_reasoning_is_not_streamed_as_text() {
-        let reasoning = AssistantReasoning {
-            id: None,
-            content: vec![
-                ReasoningContent::Encrypted("ciphertext".to_string()),
-                ReasoningContent::Text {
-                    text: "Planning the edit".to_string(),
-                    signature: None,
-                },
-                ReasoningContent::Redacted {
-                    data: "opaque".to_string(),
-                },
-            ],
-        };
-        assert_eq!(render_reasoning_text(&reasoning), "Planning the edit");
-        assert_eq!(
-            render_reasoning_text(&AssistantReasoning {
-                id: None,
-                content: vec![ReasoningContent::Encrypted("ciphertext".to_string())],
-            }),
-            ""
-        );
+    fn generated_reasoning_visibility_matches_live_preview() {
+        for case in super::rendered_reasoning_contract::generated_reasoning_cases() {
+            let CompletionMessage::Assistant { content, .. } = &case.message else {
+                panic!("{}: expected generated assistant message", case.name);
+            };
+            let [AssistantMessageContent::Reasoning(reasoning)] = content.as_slice() else {
+                panic!("{}: expected generated reasoning block", case.name);
+            };
+            assert_eq!(
+                render_reasoning_text(reasoning),
+                case.expected_text,
+                "{}",
+                case.name
+            );
+        }
     }
 }

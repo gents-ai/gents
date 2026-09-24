@@ -528,6 +528,22 @@ The current proof suite covers twenty practical areas:
     event identity; open condition content can update without changing the
     envelope or mutating a terminal row (`Mailbox/Notification`). Generated
     cases exercise the database write owner and its typed receipts.
+    `Mailbox/Handoff` composes the stored open-row receipt, foreground tool
+    completion, and ordinary request-lease terminalization for an explicit
+    session handoff, then delegates a distinct signed reply request to the
+    existing reply-claim owner. General success theorems bind the durable open
+    question and reply source, session, requester, and target agent to the
+    symbolic producer; a finite theorem pins all generated positive and
+    rejected outcomes to those executable owners. Native coverage exercises
+    one signed positive sequence: the mailbox tool's committed receipt,
+    explicit request terminal owner, and linked reply claim. It does not
+    execute an AgentToolCall row or prove that the completion loop observed
+    the tool result before terminalization. The model supplies a matching
+    `Item` to the reply owner but does not prove that projection from the
+    stored row; the native fixture uses a local-self requester, so distinct
+    requester/agent DIDs are not covered. Negative handoff guards remain
+    model-only; generic Ask/Gate notifications do not automatically complete
+    a request.
 20. Request execution leases (#1341, #1571): opaque fresh ownership generations,
     explicit deadlines independent of output, bounded owner renewal,
     atomic expiry recovery, drop recovery, matching-generation terminal CAS,
@@ -634,7 +650,8 @@ Provider-input assembly for Claude: the body's `system[]` order and tools omissi
 | `Proofs/Session/` | Session queue model: queue sources (`background_completion`, steering), coalesce policy/keys, automated wake-up drain |
 | `Proofs/Compaction/` | Transcript reduction (#993) plus durable request-local provider reduction (#1127): canonical provider-view sanitation, pair-safe split correspondence, immutable create-and-compare identity, persist-before-activate, and exact crash restoration. Fences: `tests/conformance/streaming_compaction.rs` and `tests/conformance/durable_reduction.rs`. |
 | `Proofs/RenderedCapture.lean` | Persist-before-send at the provider boundary (#840/#523): the five-component capture key, the opaque canonical request, `assembled → durablyCaptured → sent`, and the capture decision (fresh / idempotent / rejected). It additionally models bounded recursive resolution of full or witnessed splice records and makes a failed decode block capture and send. `CanonicalRequest` is still abstracted as a singleton list of naturals: the conditional splice theorem proves reconstruction once an encoder supplies the target middle, not the concrete UTF-8 JSON algorithm. Rust refines that boundary with independent top-level-field JSON splices, fixed-width persisted offsets, exact base document/field-CID witnesses, and generated cases plus UTF-8/removal/overflow tests. DefraDB CID correctness and collision resistance remain external storage assumptions. Proves `sent_implies_durably_captured`, `sent_requires_a_capture_step`, `capture_key_determines_request`, `capture_idempotent`, `capture_rejects_rebinding`, and `capture_failure_blocks_send`. The key's third component is the exact signed request document identity plus provider-call scope, encoded as the injective pair `[request_doc_id, capture_scope]`, because one request runs several completion loops and each starts its turn and attempt counters at zero. Fences: `agent::loop_stream::tests::generated_rendered_capture_cases_fence_persist_before_send` (ordering, driven through the real owned loop), `rendered_request::encoding::tests::generated_storage_cases_drive_the_lossless_codec` (storage refinement), `tests/conformance/rendered_capture.rs` (key identity), and `tests/e2e_runtime/rendered_request_capture.rs` (the decoded persisted payload equals the body a real HTTP backend received, and a failing sink issues zero provider requests). Scope: `boundary.rendered-capture.assembled-request-artifact`, `boundary.rendered-capture.key-encoding-injectivity`. |
-| `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root/bridge/control-continuation shapes, per-row rejection that cannot poison later admissible work, steering normalization that clears both halves of the spawn tool edge, and message-before-steering-request publication. The R4C generated steering witness fences these values in Rust conformance tests. |
+| `Proofs/DurableLineage.lean` | DefraDB ingest boundary for request provenance: logical/physical document-edge coherence, root/bridge/control-continuation shapes, per-row rejection that cannot poison later admissible work, and steering normalization that clears both halves of the spawn tool edge. Raw admission input is retained separately from canonical execution-start publication. The R4C generated steering witness fences lineage values in Rust conformance tests. |
+| `Proofs/QueuedSteering.lean` | Composes the existing queue, request, canonical execution Gate, reconstruction, RenderedCapture, and pending-turn projection owners. Signed raw input survives pre-start and owned pre-publication terminal outcomes; the latter terminalize the execution and finish the active queue. Input retention is structural, queue clearance follows Handover's finish theorem, and lease/request agreement is checked at this composition boundary. Execution-start publication of the separately prepared message gates authored-input provider send. The send predicate covers the authored-input and capture fences only: lease authorization and the native prepared-message-to-serialized-body projection remain Rust refinement obligations. Generated traces include ordered actions, full prepared candidate records, opaque capture inputs, and derived expectations. |
 | `Proofs/Properties/Safety.lean` | Request/process/persistence safety properties S1-S6 |
 | `Proofs/Properties/Liveness.lean` | Request/process liveness properties L1-L3 |
 | `Proofs/Properties/SchedulingSafety.lean` | Scheduler/fleet safety properties S7-S9 |
@@ -802,7 +819,6 @@ States:
 - `pending`
 - `claimed`
 - `processing`
-- `inputRequired`
 - `completed`
 - `failed`
 - `superseded`
@@ -817,9 +833,6 @@ Operational meaning:
 - `pending` has not been claimed by a backend slot yet
 - `claimed` owns admission but has not started inference
 - `processing` is actively executing
-- `inputRequired` is reserved for a blocked external-input cycle; current Rust
-  runtime code does not emit it because autonomous tool calls run inline, and
-  active runtime filters exclude it until that loop is modeled
 - `dead` is persisted by the request machine only for stale pre-claim TTL
   expiry; post-claim provider failure, retry exhaustion, tool failure, and
   deadline expiry are terminal `failed`. The subagent-liveness recovery sweep
@@ -1419,13 +1432,11 @@ reconstructed count never exceeds backend `max_concurrent`.
 
 The finite-state checks currently establish:
 
-- generated Request transition cases enumerate the full 10x10 state square as
-  legal, illegal, or product-unreachable, with `inputRequired` pairs classified
-  as reserved current-product vocabulary
+- generated Request transition cases enumerate the full 9x9 state square as
+  legal or illegal
 - generated Process transition cases enumerate the full 5x5 state square as
   legal or illegal
-- every active current-product non-terminal request state has at least one
-  successor; reserved `inputRequired` remains vocabulary-only
+- every active current-product non-terminal request state has at least one successor
 - every non-terminal process state has at least one successor
 - every non-terminal persistence state has at least one successor
 - every non-terminal storage-observation state has at least one successor
@@ -1438,8 +1449,8 @@ The finite-state checks currently establish:
 These checks are useful because they catch structural model regressions quickly,
 even before theorem-level reasoning matters. Rust consumes the generated
 Request and Process transition cases directly: legal cases are driven through
-deterministic lifecycle/status paths, ordinary illegal cases must have no Rust
-writer path, and reserved cases must cite their boundary. The `Fintype` instances
+deterministic lifecycle/status paths, and illegal cases must have no Rust
+writer path. The `Fintype` instances
 structurally pin the finite vocabularies; the cardinality output is diagnostic
 and is not itself a separate proof obligation beyond those instances and the
 theorems established in `Proofs/Properties/Decidable.lean`.
@@ -1452,10 +1463,6 @@ are not deviations.
 
 Current boundaries:
 
-- `inputRequired` is reserved persisted/client vocabulary. Rust parses it as
-  non-terminal client vocabulary if observed, but active runtime lifecycle
-  filters use only `pending`, `claimed`, and `processing` until external input
-  is modeled.
 - `dead` is current product behavior only for stale pre-claim TTL expiry.
   Post-claim provider failure, retry exhaustion, tool failure, and deadline
   expiry remain terminal `failed`.
@@ -1566,8 +1573,8 @@ Resume receipts also report the Goal status observed in their transaction.
 Recovering an old child while the Goal is paused returns that child with
 `created: false` and `goal_status: paused`; it does not silently claim reactivation.
 Separate native overlapping-write tests bypass the process-local mutation gate.
-InputRequired and WorkspaceBindingPending remain unfinished requests: a resume
-cannot duplicate work that already waits for input or workspace placement.
+WorkspaceBindingPending remains an unfinished request: a resume cannot
+duplicate work that already waits for workspace placement.
 
 `GoalAutomation/RequestHead.lean` preserves canonical request ordering among
 causal heads while excluding an authenticated continuation's physical parent.

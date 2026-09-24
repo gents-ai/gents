@@ -4,7 +4,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::surface_tool::{
     deserialize_optional_surface_tools, serialize_optional_surface_tools, SurfaceToolDecl,
@@ -62,12 +62,8 @@ pub async fn list_datastore_tool_surfaces(
         "{{ DatastoreToolSurface(filter: {{ agent_did: {{ _eq: \"{owner}\" }} }}) {{ {} }} }}",
         fields.join(" "),
     );
-    let response = node.execute(&query).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "list DatastoreToolSurface failed: {:?}",
-        response.errors
-    );
+    let response =
+        graphql_with_transaction_retry(node, &query, "list DatastoreToolSurface").await?;
     let rows = response
         .data
         .as_ref()
