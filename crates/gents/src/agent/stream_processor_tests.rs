@@ -619,7 +619,13 @@ async fn failed_spawn_preplan_closes_owned_prefix_before_propagating_error() {
         None,
     )
     .await;
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
@@ -740,7 +746,13 @@ async fn failed_spawn_preplan_closes_owned_prefix_before_propagating_error() {
     // A second rejected turn exercises the same path after the fixture loses
     // its lease. Its committed prefix may remain open for recovery, but the
     // old owner must not write a closure, header, or tool admission.
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
