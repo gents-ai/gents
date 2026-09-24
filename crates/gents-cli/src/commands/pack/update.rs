@@ -22,15 +22,32 @@ async fn outdated_packs(
     let mut report = Vec::new();
     for pack in gents::pack::list_installed_packs(&access, &owner).await? {
         let (namespace, name) = super::split_namespace(&pack.coordinate);
-        let (latest, error) = match client.package(namespace, name).await {
-            Ok(package) => (package["latest"].as_str().map(str::to_owned), None),
-            Err(error) => (None, Some(format!("{error:#}"))),
+        let (latest, outdated, error) = match client.package(namespace, name).await {
+            Err(error) => (None, None, Some(format!("{error:#}"))),
+            Ok(package) => match package["latest"].as_str() {
+                None => (
+                    None,
+                    None,
+                    Some("the registry reported no latest version".to_owned()),
+                ),
+                Some(latest) => match is_newer(latest, &pack.version) {
+                    Some(newer) => (Some(latest.to_owned()), Some(newer), None),
+                    None => (
+                        Some(latest.to_owned()),
+                        None,
+                        Some(format!(
+                            "cannot compare registry version {latest} with installed {}: not semver",
+                            pack.version
+                        )),
+                    ),
+                },
+            },
         };
         report.push(json!({
             "pack": pack.coordinate,
             "installed": pack.version,
             "latest": latest,
-            "outdated": latest.as_deref().and_then(|latest| is_newer(latest, &pack.version)),
+            "outdated": outdated,
             "error": error,
         }));
     }
@@ -47,9 +64,9 @@ fn is_newer(latest: &str, installed: &str) -> Option<bool> {
 }
 
 /// The coordinates `update` reinstalls: the named pack, or every installed
-/// one, when the registry has a strictly newer version. A registry lookup
-/// that failed for any selected pack stops the update rather than reading
-/// as "up to date".
+/// one, when the registry has a strictly newer version. A selected pack
+/// whose comparison is unknown (failed lookup, no latest, non-semver) stops
+/// the update rather than reading as "up to date".
 fn packs_to_update(packs: &[Value], package: Option<&str>) -> Result<Vec<String>> {
     let selected: Vec<&Value> = packs
         .iter()
@@ -65,12 +82,15 @@ fn packs_to_update(packs: &[Value], package: Option<&str>) -> Result<Vec<String>
     }
     let failed: Vec<String> = selected
         .iter()
-        .filter_map(|pack| {
-            Some(format!(
+        .filter(|pack| !pack["outdated"].is_boolean())
+        .map(|pack| {
+            format!(
                 "{}: {}",
-                pack["pack"].as_str()?,
-                pack["error"].as_str()?
-            ))
+                pack["pack"].as_str().unwrap_or("?"),
+                pack["error"]
+                    .as_str()
+                    .unwrap_or("version comparison unavailable")
+            )
         })
         .collect();
     anyhow::ensure!(
@@ -139,11 +159,21 @@ mod tests {
         let packs = [
             row("acme/a", Some(true), None),
             row("acme/b", Some(false), None),
-            row("acme/c", None, None),
         ];
         assert_eq!(packs_to_update(&packs, None).unwrap(), ["acme/a"]);
         assert!(packs_to_update(&packs, Some("acme/b")).unwrap().is_empty());
         assert!(packs_to_update(&packs, Some("acme/missing")).is_err());
+    }
+
+    #[test]
+    fn an_unknown_comparison_is_a_failure_not_up_to_date() {
+        let packs = [row("acme/a", Some(true), None), row("acme/c", None, None)];
+        let error = packs_to_update(&packs, None).unwrap_err().to_string();
+        assert!(
+            error.contains("acme/c: version comparison unavailable"),
+            "{error}"
+        );
+        assert_eq!(packs_to_update(&packs, Some("acme/a")).unwrap(), ["acme/a"]);
     }
 
     #[test]
