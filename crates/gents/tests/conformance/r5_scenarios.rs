@@ -23,6 +23,13 @@ async fn generated_r5_p2p_crash_reopens_same_durable_peer_identity() {
     assert_eq!(db.process_generation, 1);
 }
 
+#[tokio::test]
+async fn replicated_output_ordinal_twin_fails_closed_after_physical_p2p_import() {
+    crate::support::r5_conformance::runner::assert_replicated_nonclosing_ordinal_twin_rejected()
+        .await
+        .expect("replicated ordinal twin must invalidate the original canonical projection");
+}
+
 #[test]
 fn generated_r5_actions_decode_without_handwritten_fixture_defaults() {
     let cases = lean_r5_scenario_cases();
