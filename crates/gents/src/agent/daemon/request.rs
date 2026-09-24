@@ -192,11 +192,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let total_compacted_messages = compaction_state.total_messages_compacted;
                     let compaction_generation = compaction_state.generation.clone();
                     let compaction_generation_is_latest = compaction_state.is_latest_generation;
+                    let provider_profile = crate::provider_input::ProviderInputProfile::resolve(
+                        self.behavior.backend_provider_kind,
+                        self.behavior.openai_wire_api,
+                    );
                     let sequenced_history = session::load_sequenced_history_for_request(
                         &self.node,
                         &request,
                         background_cutoff,
                         prior_cursor,
+                        provider_profile,
                     )
                     .instrument(tracing::info_span!(
                         "request.load_active_history",
@@ -217,10 +222,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     // provider projection is allowed to remove an unfinished
                     // tail. The projected view is intentionally a fixpoint;
                     // checking only that view would make this gate vacuous.
-                    let provider_profile = crate::provider_input::ProviderInputProfile::resolve(
-                        self.behavior.backend_provider_kind,
-                        self.behavior.openai_wire_api,
-                    );
                     let canonical_prefix_is_stable =
                         compaction::safe_to_reduce(provider_profile, &durable_history);
                     // One canonical reduction, shared with the compaction writer:
@@ -228,6 +229,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     // prefix drop below must index the same one (#993).
                     let mut replay = crate::provider_input::replay::owned_replay_input(
                         self.node.clone(), request.clone(), request_commit_cid.clone(),
+                        gents_protocol::rendered_request::CaptureScopeKind::Inference,
                     );
                     let tagged = crate::provider_input::replay::tag_canonical_history(
                         &sequenced_history, &mut replay, provider_profile,
@@ -295,16 +297,22 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             aggregate_token_budget.clone(),
                             effective_seed,
                         );
+                        let projected = provider_view_tagged(provider_profile, history)?;
+                        options.max_compacted_prefix_messages =
+                            crate::agent::loop_stream::replay_compaction_prefix_bound(
+                                &projected, &replay.required,
+                            )?;
+                        let projected_native = projected.iter().map(|row| row.message.clone()).collect::<Vec<_>>();
                         options.keep_recent_tokens = self.compactor.retention_target(
                             options.keep_recent_tokens,
-                            &history.iter().map(|row| row.message.clone()).collect::<Vec<_>>(),
+                            &projected_native,
                             admission,
                         )?;
                         let result = admission::scope_call(
                             CallKind::Compaction,
                             1,
                             self.compactor.reduce(
-                                history.iter().map(|row| row.message.clone()).collect(),
+                                projected_native.clone(),
                                 self.behavior.context_window,
                                 &options,
                                 admission,
@@ -314,8 +322,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
 
                         // The reducer exposes an exact split of its input; use
                         // that split to carry associations, never a byte search.
-                        let projected = provider_view_tagged(provider_profile, history)?;
-                        let projected_native = projected.iter().map(|row| row.message.clone()).collect::<Vec<_>>();
                         history = if let Some(exact) = result.exact_reduction() {
                             anyhow::ensure!(projected_native == exact.compacted_prefix.iter().chain(exact.retained_suffix).cloned().collect::<Vec<_>>(),
                                 "session reduction changed its exact provider source");

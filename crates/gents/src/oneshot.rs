@@ -233,6 +233,7 @@ where
         node.clone(),
         request.clone(),
         request_commit_cid.clone(),
+        gents_protocol::rendered_request::CaptureScopeKind::OneShot,
     );
     let output_obligation_gate =
         match crate::agent::output_obligation::OutputObligationGate::for_request(

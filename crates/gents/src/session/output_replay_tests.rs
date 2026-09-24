@@ -33,6 +33,7 @@ struct ReplayFixture {
     header_doc_id: String,
     header: TranscriptMessage,
     boundary: SourceBoundary,
+    scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
 }
 
 impl ReplayFixture {
@@ -44,6 +45,7 @@ impl ReplayFixture {
             request_id: REQUEST_ID,
             request_doc_id: &self.request_doc_id,
             request_commit_cid: &self.request_commit_cid,
+            expected_scope_kind: self.scope_kind,
         }
     }
 
@@ -52,11 +54,12 @@ impl ReplayFixture {
     }
 
     async fn insert_capture(&self, source: RenderedRequestSource) {
+        let capture_scope = format!("{}.1", self.scope_kind);
         let capture_key = gents_loop::rendered_request::capture_key(
             AGENT_DID,
             SESSION_ID,
             &self.request_doc_id,
-            "inference.1",
+            &capture_scope,
             0,
             0,
         )
@@ -68,7 +71,7 @@ impl ReplayFixture {
             r#"mutation {{ create_RenderedRequest(input: {{
                 capture_key: {}, request_doc_id: {}, request_commit_cid: {},
                 request_id: {}, session_id: {}, agent_did: {}, requester_did: "",
-                behavior_id: "general", capture_scope: "inference.1",
+                behavior_id: "general", capture_scope: {},
                 turn_index: 0, attempt: 0, capture_version: {},
                 model_name: "test-model", source: {}, request_json: "{{}}",
                 provenance_json: "{{}}", created_at: {}
@@ -79,6 +82,7 @@ impl ReplayFixture {
             quote(REQUEST_ID),
             quote(SESSION_ID),
             quote(AGENT_DID),
+            quote(&capture_scope),
             gents_protocol::rendered_request::CAPTURE_VERSION,
             quote(source),
             quote(&chrono::Utc::now().to_rfc3339()),
@@ -174,6 +178,8 @@ impl ReplayFixture {
         self.boundary = capture_source_boundary(
             &self.node,
             SESSION_ID,
+            AGENT_DID,
+            None,
             &self.request_doc_id,
             &self.request_commit_cid,
         )
@@ -190,7 +196,91 @@ async fn signed_fixture() -> ReplayFixture {
     fixture_with_provider_payload(true).await
 }
 
+#[tokio::test]
+async fn signed_oneshot_continuation_resolves_its_own_physical_capture_scope() {
+    use gents_protocol::rendered_request::CaptureScopeKind;
+
+    let fixture = fixture_with_provider_payload_and_scope(true, CaptureScopeKind::OneShot).await;
+    fixture
+        .insert_capture(RenderedRequestSource::ClaudeCliSubscription)
+        .await;
+    let candidate = fixture.candidates().await.unwrap().pop().unwrap();
+    assert_eq!(candidate.coordinate.scope.kind, CaptureScopeKind::OneShot);
+    let tag = ReplayTag {
+        request_doc_id: fixture.request_doc_id.clone(),
+        source: OutputSource::ProviderTurn {
+            scope: candidate.coordinate.scope,
+            turn_index: candidate.coordinate.turn_index,
+            attempt: candidate.coordinate.attempt,
+        },
+    };
+    let evidence = super::output::resolve_current_replay_tag(
+        &fixture.node,
+        fixture.scope(),
+        &fixture.boundary,
+        &tag,
+    )
+    .await
+    .unwrap();
+    assert_eq!(evidence.len(), 1);
+    assert_eq!(
+        evidence[0].origin,
+        gents_loop::claude_messages_body::ReplayOrigin::ClaudeSubscription
+    );
+    assert_eq!(evidence[0].reasoning.len(), 2);
+
+    let mut absent = tag.clone();
+    let OutputSource::ProviderTurn { attempt, .. } = &mut absent.source else {
+        unreachable!("fixture tag is provider-owned")
+    };
+    *attempt += 1;
+    let batched = super::output::resolve_current_replay_tags(
+        &fixture.node,
+        fixture.scope(),
+        &fixture.boundary,
+        &[tag.clone(), absent.clone(), tag.clone()],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        batched
+            .iter()
+            .map(|(_, evidence)| evidence.len())
+            .collect::<Vec<_>>(),
+        vec![1, 0, 1]
+    );
+    assert_eq!(batched[0].0, tag);
+    assert_eq!(batched[1].0, absent);
+
+    let wrong_scope = CanonicalReplayScope {
+        expected_scope_kind: CaptureScopeKind::Inference,
+        ..fixture.scope()
+    };
+    let failure = super::output::resolve_current_replay_tag(
+        &fixture.node,
+        wrong_scope,
+        &fixture.boundary,
+        &tag,
+    )
+    .await
+    .unwrap_err();
+    assert!(failure
+        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
+        .is_some());
+}
+
 async fn fixture_with_provider_payload(signed: bool) -> ReplayFixture {
+    fixture_with_provider_payload_and_scope(
+        signed,
+        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+    )
+    .await
+}
+
+async fn fixture_with_provider_payload_and_scope(
+    signed: bool,
+    scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+) -> ReplayFixture {
     let node = Arc::new(EmbeddedNode::builder().build().await.unwrap());
     crate::ensure_runtime_schemas(&node).await.unwrap();
     let now = chrono::Utc::now().to_rfc3339();
@@ -226,7 +316,7 @@ async fn fixture_with_provider_payload(signed: bool) -> ReplayFixture {
     .cid;
 
     let source = OutputSource::ProviderTurn {
-        scope: "inference.1".parse().unwrap(),
+        scope: format!("{scope_kind}.1").parse().unwrap(),
         turn_index: 0,
         attempt: 0,
     };
@@ -407,9 +497,16 @@ async fn fixture_with_provider_payload(signed: bool) -> ReplayFixture {
         .as_str()
         .unwrap()
         .to_string();
-    let boundary = capture_source_boundary(&node, SESSION_ID, &request_doc_id, &request_commit_cid)
-        .await
-        .unwrap();
+    let boundary = capture_source_boundary(
+        &node,
+        SESSION_ID,
+        AGENT_DID,
+        None,
+        &request_doc_id,
+        &request_commit_cid,
+    )
+    .await
+    .unwrap();
     ReplayFixture {
         node,
         request_doc_id,
@@ -417,6 +514,7 @@ async fn fixture_with_provider_payload(signed: bool) -> ReplayFixture {
         header_doc_id,
         header,
         boundary,
+        scope_kind,
     }
 }
 
@@ -692,11 +790,14 @@ async fn replay_high_water_and_header_twins_fail_closed() {
     let observed = fixture().await;
     let mut forged = observed.boundary.clone();
     forged.canonical_through.as_mut().unwrap().commit_cid = "not-a-header-commit".into();
-    assert!(
+    let bad_high_water =
         load_current_request_assistant_candidates(&observed.node, observed.scope(), &forged)
             .await
-            .is_err()
-    );
+            .err()
+            .expect("forged high-water must fail");
+    assert!(bad_high_water
+        .downcast_ref::<gents_loop::loop_stream::ReplayEvidenceViolation>()
+        .is_some());
     let mut forged_request = observed.boundary.clone();
     forged_request.request_commit_cid = "not-a-request-commit".into();
     let forged_scope = CanonicalReplayScope {

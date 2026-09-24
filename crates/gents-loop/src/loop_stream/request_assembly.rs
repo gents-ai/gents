@@ -1,6 +1,7 @@
 use super::*;
 use crate::claude_messages_body::{
-    prepare_replay_checkpoint, restore_and_narrow_replay, TaggedAssistantRow,
+    prepare_replay_checkpoint, restore_and_narrow_replay, ReplayCheckpointError, ReplayTag,
+    TaggedAssistantRow,
 };
 use crate::provider_input::ProviderInputProfile;
 
@@ -8,10 +9,220 @@ pub(super) fn message_values(rows: &[TaggedMessage]) -> Vec<Message> {
     rows.iter().map(|row| row.message.clone()).collect()
 }
 
+/// Translate the checkpoint owner's independently required assistant sources
+/// into the reducer's exact provider-view row coordinates. No native payload
+/// equality or provider-assigned message ID participates in this association.
+pub fn replay_compaction_prefix_bound(
+    rows: &[TaggedMessage],
+    required: &[ReplayTag],
+) -> Result<Option<usize>, ReplayCheckpointError> {
+    let mut assistants = Vec::new();
+    for row in rows {
+        match &row.message {
+            Message::Assistant { id, content } => assistants.push(TaggedAssistantRow {
+                source: row.source.clone(),
+                id: id.clone(),
+                content: content.clone(),
+            }),
+            _ if row.source.is_some() => return Err(ReplayCheckpointError::InvalidAssociation),
+            _ => {}
+        }
+    }
+    prepare_replay_checkpoint(required.to_vec(), assistants, 0)?;
+    Ok(rows.iter().position(|row| {
+        row.source
+            .as_ref()
+            .is_some_and(|tag| required.contains(tag))
+    }))
+}
+
 fn replay_input_error(message: impl Into<String>) -> StreamingError {
     StreamingError::Completion(CompletionError::RequestError(Box::new(
         std::io::Error::new(std::io::ErrorKind::InvalidInput, message.into()),
     )))
+}
+
+/// Resolution happens outside provider attempt retry handling. Invalid
+/// provenance remains typed permanent input failure; infrastructure errors
+/// terminate this invocation without being presented as malformed input.
+pub(super) fn replay_resolution_error(error: anyhow::Error) -> StreamingError {
+    match error.downcast::<ReplayEvidenceViolation>() {
+        Ok(violation) => {
+            StreamingError::Completion(CompletionError::RequestError(Box::new(violation)))
+        }
+        Err(error) => StreamingError::Completion(CompletionError::ProviderError(format!(
+            "loading canonical Claude replay evidence failed: {error:#}",
+        ))),
+    }
+}
+
+pub(super) async fn resolve_replay_evidence(
+    replay: &mut LoopReplayInput,
+    requested: &[ReplayTag],
+) -> Result<(), StreamingError> {
+    let mut missing = Vec::new();
+    for tag in requested {
+        if replay.resolved.contains(tag) {
+            continue;
+        }
+        if replay.evidence.iter().any(|row| row.tag == *tag) {
+            replay.resolved.push(tag.clone());
+        } else if !missing.contains(tag) {
+            missing.push(tag.clone());
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let resolve = replay.resolve.as_ref().ok_or_else(|| {
+        replay_input_error("required Claude replay has no canonical evidence resolver")
+    })?;
+    let evidence = resolve(missing.clone())
+        .await
+        .map_err(replay_resolution_error)?;
+    if evidence.iter().any(|row| !missing.contains(&row.tag)) {
+        return Err(replay_input_error(
+            "canonical resolver returned an unrequested replay source",
+        ));
+    }
+    replay.evidence.extend(evidence);
+    replay.resolved.extend(missing);
+    Ok(())
+}
+
+#[cfg(test)]
+mod replay_error_tests {
+    use super::*;
+
+    fn provider_tag(turn_index: u32) -> ReplayTag {
+        ReplayTag {
+            request_doc_id: "request".into(),
+            source: OutputSource::ProviderTurn {
+                scope: "inference.1".parse().unwrap(),
+                turn_index,
+                attempt: 0,
+            },
+        }
+    }
+
+    fn associated_assistant(tag: &ReplayTag) -> TaggedMessage {
+        TaggedMessage {
+            message: Message::assistant("native assistant row"),
+            source: Some(tag.clone()),
+        }
+    }
+
+    #[test]
+    fn replay_prefix_bound_uses_full_provider_view_row_index() {
+        let earlier = provider_tag(0);
+        let required = provider_tag(1);
+        let rows = vec![
+            TaggedMessage::unassociated(Message::system("preamble")),
+            TaggedMessage::unassociated(Message::user("first")),
+            associated_assistant(&earlier),
+            TaggedMessage::unassociated(Message::user("second")),
+            TaggedMessage::unassociated(Message::assistant("authored history")),
+            associated_assistant(&required),
+        ];
+        assert_eq!(
+            replay_compaction_prefix_bound(&rows, &[required]).unwrap(),
+            Some(5),
+            "the bound is the whole provider-view index, not assistant ordinal 2"
+        );
+    }
+
+    #[test]
+    fn replay_prefix_bound_without_required_sources_is_unbounded() {
+        let rows = vec![
+            TaggedMessage::unassociated(Message::user("input")),
+            associated_assistant(&provider_tag(0)),
+        ];
+        assert_eq!(replay_compaction_prefix_bound(&rows, &[]), Ok(None));
+    }
+
+    #[test]
+    fn replay_prefix_bound_reuses_checkpoint_missing_and_duplicate_errors() {
+        let required = provider_tag(1);
+        let other = provider_tag(0);
+        let missing = vec![associated_assistant(&other)];
+        assert_eq!(
+            replay_compaction_prefix_bound(&missing, &[required.clone()]),
+            Err(ReplayCheckpointError::MissingRequired)
+        );
+
+        let duplicated = vec![
+            associated_assistant(&required),
+            associated_assistant(&required),
+        ];
+        assert_eq!(
+            replay_compaction_prefix_bound(&duplicated, &[required]),
+            Err(ReplayCheckpointError::DuplicateAssociation)
+        );
+    }
+
+    #[test]
+    fn replay_prefix_bound_rejects_tagged_non_assistant() {
+        let required = provider_tag(0);
+        let rows = vec![TaggedMessage {
+            message: Message::user("input"),
+            source: Some(required.clone()),
+        }];
+        assert_eq!(
+            replay_compaction_prefix_bound(&rows, &[required]),
+            Err(ReplayCheckpointError::InvalidAssociation)
+        );
+    }
+
+    #[tokio::test]
+    async fn unresolved_sources_are_batched_and_missing_results_stay_missing() {
+        let tags = (0..2)
+            .map(|turn_index| ReplayTag {
+                request_doc_id: "request".into(),
+                source: OutputSource::ProviderTurn {
+                    scope: "inference.1".parse().unwrap(),
+                    turn_index,
+                    attempt: 0,
+                },
+            })
+            .collect::<Vec<_>>();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        let expected = tags.clone();
+        let mut replay = LoopReplayInput {
+            resolve: Some(Arc::new(move |requested| {
+                assert_eq!(requested, expected);
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async { Ok(Vec::new()) })
+            })),
+            ..LoopReplayInput::default()
+        };
+        resolve_replay_evidence(&mut replay, &tags).await.unwrap();
+        resolve_replay_evidence(&mut replay, &tags).await.unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(replay.resolved, tags);
+        assert!(replay.evidence.is_empty());
+    }
+
+    #[test]
+    fn canonical_violation_retains_its_type_through_context() {
+        let error = anyhow::Error::new(ReplayEvidenceViolation("invalid canonical join".into()))
+            .context("resolving required replay");
+        let StreamingError::Completion(CompletionError::RequestError(error)) =
+            replay_resolution_error(error)
+        else {
+            panic!("canonical violation must remain a typed local input failure");
+        };
+        assert!(error.downcast_ref::<ReplayEvidenceViolation>().is_some());
+    }
+
+    #[test]
+    fn storage_error_is_not_reclassified_by_message_text() {
+        let error = anyhow::anyhow!("canonical replay tag belongs to another physical request");
+        assert!(matches!(
+            replay_resolution_error(error),
+            StreamingError::Completion(CompletionError::ProviderError(_))
+        ));
+    }
 }
 
 fn tagged_from_sourced(
@@ -89,30 +300,7 @@ pub async fn narrow_tagged_history(
         }
         return Ok(());
     }
-    for tag in replay.required.clone() {
-        if replay.resolved.contains(&tag) {
-            continue;
-        }
-        if replay.evidence.iter().any(|row| row.tag == tag) {
-            replay.resolved.push(tag);
-            continue;
-        }
-        let resolve = replay.resolve.as_ref().ok_or_else(|| {
-            replay_input_error("required Claude replay has no canonical evidence resolver")
-        })?;
-        let evidence = resolve(tag.clone()).await.map_err(|error| {
-            StreamingError::Completion(CompletionError::ProviderError(format!(
-                "loading canonical Claude replay evidence failed: {error:#}",
-            )))
-        })?;
-        replay
-            .evidence
-            .extend(evidence.into_iter().map(|evidence| ReplayEvidenceRow {
-                tag: tag.clone(),
-                evidence,
-            }));
-        replay.resolved.push(tag);
-    }
+    resolve_replay_evidence(replay, &replay.required.clone()).await?;
 
     let assistant_indices = rows
         .iter()
@@ -546,6 +734,16 @@ pub(super) async fn build_budgeted_request<M: CompletionModel>(
     })
     .await
     .map_err(|error| {
+        if matches!(
+            error.downcast_ref::<crate::compaction::ReductionError>(),
+            Some(crate::compaction::ReductionError::CannotFit)
+        ) || error.is::<ReplayCheckpointError>()
+            || error.is::<ReplayEvidenceViolation>()
+        {
+            return StreamingError::Completion(CompletionError::RequestError(
+                error.into_boxed_dyn_error(),
+            ));
+        }
         aggregate_token_budget_exhaustion_message(&error).map_or_else(
             || {
                 StreamingError::Completion(CompletionError::ProviderError(format!(

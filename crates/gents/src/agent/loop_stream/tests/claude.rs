@@ -9,6 +9,17 @@
 /// live-confirmed by write request #8).
 #[tokio::test]
 async fn claude_messages_tool_round_trip_through_owned_loop() {
+    for scope_kind in [
+        gents_protocol::rendered_request::CaptureScopeKind::Inference,
+        gents_protocol::rendered_request::CaptureScopeKind::OneShot,
+    ] {
+        signed_claude_tool_round_trip_with_scope(scope_kind).await;
+    }
+}
+
+async fn signed_claude_tool_round_trip_with_scope(
+    scope_kind: gents_protocol::rendered_request::CaptureScopeKind,
+) {
     use crate::claude_messages::{
         install_messages_sse_fixtures, lock_fixtures_for_test, sse_fixture_final_text,
     };
@@ -52,6 +63,9 @@ async fn claude_messages_tool_round_trip_through_owned_loop() {
             .completion_model("claude-sonnet-5");
     let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![echo_tool()]);
     let mut config = owned_config(4);
+    config.on_rendered_request = Some(crate::rendered_request::scope::ambient_arming_sink(
+        scope_kind,
+    ));
     config.provider_input_counter = Arc::new(crate::provider_input::ProviderInputCounter::new(
         crate::BackendProviderKind::ClaudeCliSubscription,
         crate::OpenAiWireApi::ChatCompletions,
@@ -64,6 +78,7 @@ async fn claude_messages_tool_round_trip_through_owned_loop() {
             .request_commit_cid()
             .expect("claimed request commit CID")
             .to_owned(),
+        scope_kind,
     );
     let request_commit_cid = lifecycle
         .request_commit_cid()
@@ -109,7 +124,7 @@ async fn claude_messages_tool_round_trip_through_owned_loop() {
     let request_doc_id = lifecycle.request().doc_id.clone();
     let captures = node
         .execute(&format!(
-            r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ turn_index: ASC }}) {{ turn_index source request_commit_cid capture_version request_json }} }}"#,
+            r#"{{ RenderedRequest(filter: {{ request_doc_id: {{ _eq: "{}" }} }}, order: {{ turn_index: ASC }}) {{ turn_index capture_scope source request_commit_cid capture_version request_json }} }}"#,
             crate::graphql::escape_graphql_string(&request_doc_id),
         ))
         .await;
@@ -127,6 +142,7 @@ async fn claude_messages_tool_round_trip_through_owned_loop() {
     )
     .expect("Claude capture source");
     for (turn_index, row) in capture_rows.iter().enumerate() {
+        assert_eq!(row["capture_scope"], format!("{scope_kind}.1"));
         assert_eq!(
             row["turn_index"].as_u64(),
             Some(turn_index as u64),

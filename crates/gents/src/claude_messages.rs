@@ -75,13 +75,21 @@ pub enum MessagesParseError {
     OverlappingToolUse { id: String },
     #[error("fail-closed: malformed thinking: {cause}")]
     MalformedThinking { cause: ThinkingParseCause },
+    #[error("Claude Messages stream error {error_type}: {message} (request-id {request_id})")]
+    ProviderStreamError {
+        error_type: String,
+        message: String,
+        request_id: String,
+    },
 }
 
 impl From<MessagesParseError> for CompletionError {
     fn from(error: MessagesParseError) -> Self {
         match error {
             error @ MessagesParseError::MalformedThinking { .. } => {
-                CompletionError::RequestError(Box::new(error))
+                // Parsed provider bytes, including EOF truncation, are not a
+                // malformed local request. Keep this on the transient lane.
+                CompletionError::ResponseError(error.to_string())
             }
             other => CompletionError::ProviderError(other.to_string()),
         }
@@ -168,6 +176,15 @@ impl MessagesSseState {
         &mut self,
         line: &str,
     ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+        self.push_line_typed(line).map_err(Into::into)
+    }
+
+    /// The same parser before its Rig-facing error conversion. Conformance
+    /// checks the exact fail-closed cause at this owner boundary.
+    pub fn push_line_typed(
+        &mut self,
+        line: &str,
+    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
         let line = line.strip_suffix('\r').unwrap_or(line);
         if let Some(rest) = line.strip_prefix("data:") {
             if !self.data.is_empty() {
@@ -184,9 +201,14 @@ impl MessagesSseState {
     }
 
     /// End of body: flush an open block and emit `FinalResponse` if none seen.
-    pub fn finish(
+    pub fn finish(self) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+        self.finish_typed().map_err(Into::into)
+    }
+
+    /// End of body with the parser's typed cause retained.
+    pub fn finish_typed(
         mut self,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
         let mut events = self.dispatch_pending_data()?;
         self.close_at_eof(&mut events)?;
         if !self.finished {
@@ -200,7 +222,7 @@ impl MessagesSseState {
 
     fn dispatch_pending_data(
         &mut self,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
         if self.data.is_empty() {
             return Ok(Vec::new());
         }
@@ -221,7 +243,7 @@ impl MessagesSseState {
     fn close_at_eof(
         &mut self,
         events: &mut Vec<RawStreamingChoice<ClaudeStreamResponse>>,
-    ) -> Result<(), CompletionError> {
+    ) -> Result<(), MessagesParseError> {
         match self.pending.take() {
             Some(PendingBlock::Tool(tool)) => {
                 events.push(mapped_tool_call(tool, &self.surface, &mut self.seen_ids)?);
@@ -237,7 +259,7 @@ impl MessagesSseState {
     fn handle_payload(
         &mut self,
         payload: &Value,
-    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
         let mut events = Vec::new();
         let Some(kind) = payload.get("type").and_then(Value::as_str) else {
             return Ok(events);
@@ -255,7 +277,7 @@ impl MessagesSseState {
                             .unwrap_or("")
                             .to_string();
                         if self.pending.is_some() {
-                            return Err(MessagesParseError::OverlappingToolUse { id }.into());
+                            return Err(MessagesParseError::OverlappingToolUse { id });
                         }
                         let name = block
                             .get("name")
@@ -482,9 +504,11 @@ impl MessagesSseState {
                 let error_type = error.get("type").and_then(Value::as_str).unwrap_or("error");
                 let message = error.get("message").and_then(Value::as_str).unwrap_or("");
                 let request_id = self.request_id.as_deref().unwrap_or("-");
-                return Err(CompletionError::ProviderError(format!(
-                    "Claude Messages stream error {error_type}: {message} (request-id {request_id})"
-                )));
+                return Err(MessagesParseError::ProviderStreamError {
+                    error_type: error_type.to_owned(),
+                    message: message.to_owned(),
+                    request_id: request_id.to_owned(),
+                });
             }
             _ => {}
         }
@@ -498,12 +522,21 @@ pub fn parse_messages_sse(
     sse: &str,
     surface: &HashSet<String>,
 ) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, CompletionError> {
+    parse_messages_sse_typed(sse, surface).map_err(Into::into)
+}
+
+/// Parse the same SSE body while retaining the parser's exact error cause.
+/// The live transport uses `parse_messages_sse`'s Rig-facing conversion.
+pub fn parse_messages_sse_typed(
+    sse: &str,
+    surface: &HashSet<String>,
+) -> Result<Vec<RawStreamingChoice<ClaudeStreamResponse>>, MessagesParseError> {
     let mut state = MessagesSseState::new(surface.clone());
     let mut events = Vec::new();
     for line in sse.lines() {
-        events.extend(state.push_line(line)?);
+        events.extend(state.push_line_typed(line)?);
     }
-    events.extend(state.finish()?);
+    events.extend(state.finish_typed()?);
     Ok(events)
 }
 
@@ -521,11 +554,11 @@ enum PendingBlock {
     },
 }
 
-fn malformed_thinking(cause: ThinkingParseCause) -> CompletionError {
-    MessagesParseError::MalformedThinking { cause }.into()
+fn malformed_thinking(cause: ThinkingParseCause) -> MessagesParseError {
+    MessagesParseError::MalformedThinking { cause }
 }
 
-fn reasoning_index(payload: &Value) -> Result<u64, CompletionError> {
+fn reasoning_index(payload: &Value) -> Result<u64, MessagesParseError> {
     payload
         .get("index")
         .and_then(Value::as_u64)
@@ -558,18 +591,17 @@ fn mapped_tool_call(
     tool: PendingTool,
     surface: &HashSet<String>,
     seen_ids: &mut HashSet<String>,
-) -> Result<RawStreamingChoice<ClaudeStreamResponse>, CompletionError> {
+) -> Result<RawStreamingChoice<ClaudeStreamResponse>, MessagesParseError> {
     if tool.id.trim().is_empty() || tool.name.trim().is_empty() {
         return Err(MessagesParseError::MalformedToolUse {
             message: "missing id or name".to_string(),
-        }
-        .into());
+        });
     }
     if !seen_ids.insert(tool.id.clone()) {
-        return Err(MessagesParseError::DuplicateToolUseId { id: tool.id }.into());
+        return Err(MessagesParseError::DuplicateToolUseId { id: tool.id });
     }
     if surface.is_empty() || !surface.contains(&tool.name) {
-        return Err(MessagesParseError::ToolUse { names: tool.name }.into());
+        return Err(MessagesParseError::ToolUse { names: tool.name });
     }
     let raw = tool.arguments_json();
     let input: Value =

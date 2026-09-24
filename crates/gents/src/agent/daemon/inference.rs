@@ -224,8 +224,16 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     let request = turn_request.clone();
                     let request_commit_cid = turn_request_commit_cid.clone();
                     Box::pin(async move {
-                        let native_messages = compaction_request
-                            .messages
+                        let provider_view = crate::agent::loop_stream::provider_view_tagged(
+                            provider_profile,
+                            compaction_request.messages,
+                        )
+                        .map_err(anyhow::Error::new)?;
+                        options.max_compacted_prefix_messages =
+                            crate::agent::loop_stream::replay_compaction_prefix_bound(
+                                &provider_view, &compaction_request.required,
+                            )?;
+                        let native_messages = provider_view
                             .iter()
                             .map(|row| row.message.clone())
                             .collect::<Vec<_>>();
@@ -245,6 +253,8 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                             crate::provider_context_reduction::capture_source_boundary(
                                 node.as_ref(),
                                 &request.session_id,
+                                &request.agent_did,
+                                request.requester_did.as_deref(),
                                 &request.doc_id,
                                 &request_commit_cid,
                             )
@@ -267,11 +277,6 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                                 call_id: join.call_id,
                                 call_seq: join.call_seq,
                             });
-                        let provider_view = crate::agent::loop_stream::provider_view_tagged(
-                            provider_profile,
-                            compaction_request.messages,
-                        )
-                        .map_err(|error| anyhow!("projecting tagged provider view: {error}"))?;
                         let provider_values = provider_view
                             .iter()
                             .map(|row| row.message.clone())
@@ -362,6 +367,7 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     );
                     let boundary = row.source_boundary()?;
                     let replay_scope = crate::session::CanonicalReplayScope {
+                        expected_scope_kind: gents_protocol::rendered_request::CaptureScopeKind::Inference,
                         agent_did: &request.agent_did,
                         requester_did: request.requester_did.as_deref(),
                         session_id: &request.session_id,
@@ -373,34 +379,23 @@ impl<M: rig::completion::CompletionModel + 'static> BehaviorDaemon<M> {
                     replay.evidence.clear();
                     replay.resolved.clear();
                     if replay.required.is_empty() {
-                        // Even with no signed continuation, verify that this
-                        // stored boundary names the real physical request and
-                        // bounded canonical view before activating its bytes.
-                        let _ = crate::session::load_current_request_assistant_candidates(
+                        crate::session::validate_canonical_replay_boundary(
+                            self.node.as_ref(), replay_scope, &boundary,
+                        ).await?;
+                    } else {
+                        let resolved = crate::session::resolve_current_replay_tags(
                             self.node.as_ref(),
                             replay_scope,
                             &boundary,
-                        )
-                        .await?;
-                    }
-                    for tag in &replay.required {
-                        let resolved = crate::session::resolve_current_replay_tag(
-                            self.node.as_ref(),
-                            replay_scope,
-                            &boundary,
-                            tag,
+                            &replay.required,
                         )
                         .await
-                        .with_context(|| {
-                            format!("resolving restored canonical replay tag {tag:?}")
-                        })?;
-                        replay.evidence.extend(resolved.into_iter().map(|evidence| {
-                            crate::agent::loop_stream::ReplayEvidenceRow {
-                                tag: tag.clone(),
-                                evidence,
-                            }
-                        }));
-                        replay.resolved.push(tag.clone());
+                        .context("resolving restored canonical replay sources")?;
+                        replay.evidence.extend(resolved.into_iter().flat_map(|(tag, evidence)|
+                            evidence.into_iter().map(move |evidence|
+                                crate::agent::loop_stream::ReplayEvidenceRow { tag: tag.clone(), evidence })
+                        ));
+                        replay.resolved = replay.required.clone();
                     }
                     loop_config.context_message = None;
                     loop_config.active_reduction_keys = row.active_reduction_keys();

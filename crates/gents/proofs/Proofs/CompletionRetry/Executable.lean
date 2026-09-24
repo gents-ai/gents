@@ -95,14 +95,16 @@ def retryCases : List RetryCase :=
       baseState .localRequestBuild "malformed local request" 12
   , failureOriginWitness "retryable_transport_still_requires_retraction"
       baseState .retryableTransport "connection reset" 12
+  , failureOriginWitness "provider_stream_malformed_requires_retraction"
+      baseState .providerStreamMalformed "incomplete content block" 12
   ]
 
-theorem retryCases_count : retryCases.length = 20 := by decide
+theorem retryCases_count : retryCases.length = 21 := by decide
 
 theorem retry_cases_pin_publication_boundary :
     retryCases.map (fun c => c.post.isSome) =
       [true, false, false, true, true, true, true, true, false, true, false, true, true,
-       true, true, true, true, false, true, true] := by
+       true, true, true, true, false, true, true, true] := by
   native_decide
 
 theorem retry_cases_pin_exhaustion_and_single_repair :
@@ -121,6 +123,11 @@ theorem local_request_build_case_retains_retry_budget :
 theorem retryable_transport_case_still_enters_retraction :
     ((retryCases.drop 19).head?).bind (fun c => c.post.map (·.phase)) =
       some (.retractRequired .transport "connection reset" 12) := by
+  native_decide
+
+theorem provider_stream_malformed_case_still_enters_retraction :
+    ((retryCases.drop 20).head?).bind (fun c => c.post.map (·.phase)) =
+      some (.retractRequired .transport "incomplete content block" 12) := by
   native_decide
 
 end CompletionRetry
