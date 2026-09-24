@@ -6,6 +6,7 @@ use crate::llm::message::{
     UserContent,
 };
 use crate::llm::HookAction;
+use gents_loop::provider_input::ProviderInputProfile;
 use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
@@ -16,6 +17,81 @@ use crate::lifecycle::{ClaimOutcome, ExecutionOrigin, RequestLifecycle};
 use crate::streaming::DefraStreamWriter;
 use crate::test_support::first_content;
 use crate::watcher::AgentRequest;
+
+#[test]
+fn claude_signed_final_seals_preview_without_duplicating_bytes() {
+    use crate::llm::message::ReasoningContent;
+
+    let mut accumulator = AssistantTurnAccumulator::default();
+    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "考");
+    accumulator.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "慮");
+    accumulator
+        .push_provider_reasoning(
+            ProviderInputProfile::ClaudeMessages,
+            Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "考慮".into(),
+                    signature: Some("署名".into()),
+                }],
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        accumulator.take_message(),
+        Some(Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::Reasoning(Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "考慮".into(),
+                    signature: Some("署名".into()),
+                }],
+            })],
+        })
+    );
+
+    let mut mismatch = AssistantTurnAccumulator::default();
+    mismatch.push_provider_reasoning_delta(ProviderInputProfile::ClaudeMessages, None, "prefix");
+    assert!(mismatch
+        .push_provider_reasoning(
+            ProviderInputProfile::ClaudeMessages,
+            Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "rewritten".into(),
+                    signature: Some("sig".into()),
+                }],
+            }
+        )
+        .is_err());
+
+    let mut other = AssistantTurnAccumulator::default();
+    other.push_provider_reasoning_delta(ProviderInputProfile::OpenAiChatCompletions, None, "first");
+    other
+        .push_provider_reasoning(
+            ProviderInputProfile::OpenAiChatCompletions,
+            Reasoning {
+                id: None,
+                content: vec![ReasoningContent::Text {
+                    text: "last".into(),
+                    signature: None,
+                }],
+            },
+        )
+        .unwrap();
+    let Some(Message::Assistant { content, .. }) = other.take_message() else {
+        panic!("other provider reasoning turn");
+    };
+    let AssistantContent::Reasoning(reasoning) = &content[0] else {
+        panic!("reasoning content");
+    };
+    assert_eq!(
+        reasoning.content.len(),
+        2,
+        "non-Claude final remains append-only"
+    );
+}
 
 fn user_text_message(text: &str) -> Message {
     Message::User {
@@ -108,7 +184,13 @@ async fn first_visible_flushes_immediately_and_followup_waits_for_cadence() {
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
             turn: 0,
@@ -232,7 +314,13 @@ async fn pre_stream_failures_do_not_fabricate_provider_attempt_closures() {
     let writer = DefraStreamWriter::new(node.clone(), "did:test:test", Duration::from_secs(60));
     lifecycle.begin_owned_execution(&writer).await.unwrap();
     let doc_id = lifecycle.request().doc_id.clone();
-    let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &writer,
+        &mut lifecycle,
+        &doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     for (attempt, will_retry, error) in [
         (
@@ -344,8 +432,13 @@ async fn persist_partial_turn_publishes_text_only_partial_and_retains_reasoning_
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
@@ -767,8 +860,13 @@ async fn hook_persisted_tool_result_dedupes_matching_stream_result() {
         .start_provider_attempt(&response_doc_id, 0, 0, "inference.1".parse().unwrap())
         .await;
 
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     let stored_call_id = "OaoTQYzCdoptKiK_mdhBA";
     let model_result_id = "c6b8bdeb-ab92-4481-b763-bdafbd463904";
@@ -955,8 +1053,13 @@ async fn streamed_wait_call_precedes_concurrent_notification_and_tool_result() {
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
     let notification_request = lifecycle.request().clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
@@ -1166,8 +1269,13 @@ async fn multiple_streamed_tool_results_share_one_accumulated_assistant_turn() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady {
@@ -1328,8 +1436,13 @@ async fn post_tool_resumption_keeps_each_provider_turn_separate() {
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
 
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     hook.set_active_request_lineage(Some(request_id.clone()), None)
         .await
@@ -1486,8 +1599,13 @@ async fn turn_retraction_retains_old_bytes_but_publishes_only_the_retry() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {
@@ -1670,8 +1788,13 @@ async fn corrupt_tool_call_arguments_persist_object_shaped() {
         .await
         .unwrap();
     let response_doc_id = lifecycle.request().doc_id.clone();
-    let mut processor =
-        StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+    let mut processor = StreamProcessor::new(
+        &hook,
+        &stream_writer,
+        &mut lifecycle,
+        &response_doc_id,
+        ProviderInputProfile::OpenAiChatCompletions,
+    );
 
     processor
         .process_item::<()>(Ok(LoopStreamItem::ProviderAttemptStarted {

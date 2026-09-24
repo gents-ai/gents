@@ -241,7 +241,13 @@ async fn owned_input_handoff_publishes_context_and_prompt_once_before_provider_o
     let context = Message::user("request context");
     let prompt = Message::user("queued prompt ✓");
     {
-        let mut processor = StreamProcessor::new(&hook, &writer, &mut lifecycle, &request_doc_id);
+        let mut processor = StreamProcessor::new(
+            &hook,
+            &writer,
+            &mut lifecycle,
+            &request_doc_id,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        );
         for _ in 0..2 {
             processor
                 .process_item::<()>(Ok(LoopStreamItem::AuthoredInputReady {

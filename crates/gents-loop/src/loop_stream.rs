@@ -135,6 +135,7 @@ where
         let mut invalid_tool_progress = invalid_tool_progress::InvalidToolProgress::default();
         let mut aggregated_usage = Usage::new();
         let aggregate_token_budget = config.aggregate_token_budget.clone();
+        let provider_profile = config.provider_input_counter.profile();
         let mut current_turn: usize = config.initial_turn_index;
         let mut retry = CompletionRetryState::new(config.retry_policy.clone());
         // Retain the effective native message list whenever request-local
@@ -534,11 +535,18 @@ where
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(text)));
                     }
                     StreamedAssistantContent::Reasoning(reasoning) => {
-                        accumulator.push_reasoning(rig_compat::from_rig_reasoning(&reasoning));
+                        accumulator
+                            .push_provider_reasoning(
+                                provider_profile,
+                                rig_compat::from_rig_reasoning(&reasoning),
+                            )
+                            .map_err(|error| StreamingError::Completion(
+                                CompletionError::ProviderError(error.to_string()),
+                            ))?;
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(reasoning)));
                     }
                     StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
-                        accumulator.push_reasoning_delta(id.clone(), &reasoning);
+                        accumulator.push_provider_reasoning_delta(provider_profile, id.clone(), &reasoning);
                         yield LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta { id, reasoning }));
                     }
                     StreamedAssistantContent::ToolCall { tool_call, internal_call_id } => {

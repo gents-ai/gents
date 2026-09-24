@@ -1029,6 +1029,27 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_claude_stream_cases_drive_the_messages_parser",
         },
         ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_claude_thinking_stream_cases_drive_native_sse_parser",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_claude_thinking_stream_cases_drive_native_sse_parser",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_claude_initial_thinking_text_seals_in_native_accumulator",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_claude_initial_thinking_text_seals_in_native_accumulator",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::prompt_assembly::generated_claude_replay_cases_drive_native_messages_body",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance/prompt_assembly.rs",
+            module_path: "conformance::prompt_assembly",
+            function: "generated_claude_replay_cases_drive_native_messages_body",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::loop_stream::tests::generated_rendered_capture_cases_hold_against_the_real_defra_sink",
             package: "gents",
             source_path: "crates/gents/src/agent/loop_stream/tests/capture.rs",

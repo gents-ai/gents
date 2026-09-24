@@ -543,8 +543,13 @@ where
     crate::rendered_request::scope::scope_request(scope, async move {
         futures::pin_mut!(stream);
         let doc_id = lifecycle.request().doc_id.clone();
-        let mut processor =
-            crate::agent::stream_processor::StreamProcessor::new(hook, writer, lifecycle, &doc_id);
+        let mut processor = crate::agent::stream_processor::StreamProcessor::new(
+            hook,
+            writer,
+            lifecycle,
+            &doc_id,
+            gents_loop::provider_input::ProviderInputProfile::OpenAiChatCompletions,
+        );
         let mut collected = CollectedScriptedStream::default();
         while let Some(item) = stream.next().await {
             match &item {

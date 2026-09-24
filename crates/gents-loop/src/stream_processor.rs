@@ -7,6 +7,7 @@ use rig::agent::MultiTurnStreamItem;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent};
 
 use crate::loop_stream::LoopStreamItem;
+use crate::provider_input::ProviderInputProfile;
 use crate::request_lifecycle::RequestLifecycleControl;
 use crate::session_hook::{CanonicalSessionHook, SessionHook};
 use crate::stream_writer::{CanonicalStreamWriter, StreamWriter};
@@ -36,6 +37,7 @@ where
     pending_tool_internal_ids: Vec<String>,
     active_provider_attempt: Option<(usize, u32)>,
     authored_index: u32,
+    provider_profile: ProviderInputProfile,
     doc_id: &'a str,
 }
 
@@ -50,6 +52,7 @@ where
         stream_writer: &'a W,
         lifecycle: &'a mut L,
         doc_id: &'a str,
+        provider_profile: ProviderInputProfile,
     ) -> Self {
         Self {
             persistence_hook,
@@ -63,6 +66,7 @@ where
             pending_tool_internal_ids: Vec::new(),
             active_provider_attempt: None,
             authored_index: 0,
+            provider_profile,
             doc_id,
         }
     }
@@ -168,8 +172,14 @@ where
             ))) => {
                 let reasoning = crate::rig_compat::from_rig_reasoning(&reasoning);
                 let rendered = render_reasoning_text(&reasoning);
-                self.assistant_turn.push_reasoning(reasoning);
-                if !rendered.is_empty() {
+                self.assistant_turn
+                    .push_provider_reasoning(self.provider_profile, reasoning)?;
+                if self.provider_profile == ProviderInputProfile::ClaudeMessages {
+                    // Claude's signed final seals the preview bytes without
+                    // writing them again. The signature persists with the
+                    // final native turn publication, not a duplicate segment.
+                    self.flush_pending().await?;
+                } else if !rendered.is_empty() {
                     let flush_due = self
                         .stream_writer
                         .write_reasoning(self.doc_id, &rendered)
@@ -183,7 +193,11 @@ where
             Ok(LoopStreamItem::Item(MultiTurnStreamItem::StreamAssistantItem(
                 StreamedAssistantContent::ReasoningDelta { reasoning, id },
             ))) => {
-                self.assistant_turn.push_reasoning_delta(id, &reasoning);
+                self.assistant_turn.push_provider_reasoning_delta(
+                    self.provider_profile,
+                    id,
+                    &reasoning,
+                );
                 if !reasoning.is_empty() {
                     let flush_due = self
                         .stream_writer
@@ -378,6 +392,93 @@ impl AssistantTurnAccumulator {
                 signature: None,
             }],
         });
+    }
+
+    pub fn push_provider_reasoning_delta(
+        &mut self,
+        profile: ProviderInputProfile,
+        id: Option<String>,
+        fragment: &str,
+    ) {
+        if profile != ProviderInputProfile::ClaudeMessages {
+            self.push_reasoning_delta(id, fragment);
+            return;
+        }
+        if let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() {
+            if current.id == id {
+                if let Some(gents_protocol::message::ReasoningContent::Text {
+                    text,
+                    signature: None,
+                }) = current.content.last_mut()
+                {
+                    text.push_str(fragment);
+                    return;
+                }
+            }
+        }
+        self.content
+            .push(AssistantMessageContent::Reasoning(AssistantReasoning {
+                id,
+                content: vec![gents_protocol::message::ReasoningContent::Text {
+                    text: fragment.to_owned(),
+                    signature: None,
+                }],
+            }));
+    }
+
+    pub fn push_provider_reasoning(
+        &mut self,
+        profile: ProviderInputProfile,
+        reasoning: AssistantReasoning,
+    ) -> Result<()> {
+        if profile != ProviderInputProfile::ClaudeMessages {
+            self.push_reasoning(reasoning);
+            return Ok(());
+        }
+        use gents_protocol::message::ReasoningContent;
+        anyhow::ensure!(
+            !reasoning.content.is_empty(),
+            "empty Claude reasoning block"
+        );
+        for part in &reasoning.content {
+            match part {
+                ReasoningContent::Text {
+                    signature: Some(signature),
+                    ..
+                } if !signature.is_empty() => {}
+                ReasoningContent::Redacted { data } if !data.is_empty() => {}
+                _ => anyhow::bail!("Claude reasoning block is unsigned or unsupported"),
+            }
+        }
+
+        let first = reasoning.content.first().expect("validated nonempty");
+        if let Some(AssistantMessageContent::Reasoning(current)) = self.content.last_mut() {
+            if current.id == reasoning.id {
+                if let Some(ReasoningContent::Text {
+                    text: preview,
+                    signature: None,
+                }) = current.content.last_mut()
+                {
+                    let ReasoningContent::Text {
+                        text: final_text, ..
+                    } = first
+                    else {
+                        anyhow::bail!("Claude redacted block followed unfinished text preview");
+                    };
+                    anyhow::ensure!(
+                        preview == final_text,
+                        "Claude signed thinking changed preview bytes"
+                    );
+                    *current.content.last_mut().expect("preview exists") = first.clone();
+                    current
+                        .content
+                        .extend(reasoning.content.into_iter().skip(1));
+                    return Ok(());
+                }
+            }
+        }
+        self.push_reasoning(reasoning);
+        Ok(())
     }
 
     pub fn push_tool_call(&mut self, tool_call: AssistantToolCall) {

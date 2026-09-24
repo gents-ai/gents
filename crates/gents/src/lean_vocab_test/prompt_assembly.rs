@@ -241,7 +241,7 @@ pub(crate) struct LeanClaudeReplayBlock {
     pub(crate) kind: String,
     pub(crate) payload: Option<Vec<u8>>,
     pub(crate) signature: Option<String>,
-    pub(crate) call_id: Option<String>,
+    pub(crate) id: Option<String>,
     pub(crate) name: Option<String>,
     pub(crate) arguments: Option<Vec<u8>>,
 }
