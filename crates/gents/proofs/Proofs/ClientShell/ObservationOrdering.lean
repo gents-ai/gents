@@ -129,21 +129,27 @@ inductive StartupPhase where
   | managedServerError | configurationError | clientError | ready
   deriving DecidableEq, Repr
 
-/-- A client observation can recover a client error, not managed-server authority. -/
-def observeStartup (phase : StartupPhase) (running pristine : Bool) : StartupPhase :=
+/-- A client observation can recover a client error, not managed-server authority.
+
+`autostartDeclined` is true exactly when the desktop will not autostart the
+client. The shell derives it from the one predicate that also gates autostart
+(`shouldAutoStartDesktopClient`), so startup never waits on a client that
+nothing will start. -/
+def observeStartup (phase : StartupPhase) (running autostartDeclined : Bool) :
+    StartupPhase :=
   match phase with
   | .loadingConfiguration | .startingClient =>
-      if running || pristine then .ready else .startingClient
+      if running || autostartDeclined then .ready else .startingClient
   | .clientError => if running then .ready else .clientError
   | other => other
 
-theorem observed_running_client_recovers_client_error (pristine : Bool) :
-    observeStartup .clientError true pristine = .ready := by rfl
+theorem observed_running_client_recovers_client_error (autostartDeclined : Bool) :
+    observeStartup .clientError true autostartDeclined = .ready := by rfl
 
-theorem stopped_client_does_not_clear_client_error (pristine : Bool) :
-    observeStartup .clientError false pristine = .clientError := by rfl
+theorem stopped_client_does_not_clear_client_error (autostartDeclined : Bool) :
+    observeStartup .clientError false autostartDeclined = .clientError := by rfl
 
-theorem client_observation_does_not_clear_managed_error (running pristine : Bool) :
-    observeStartup .managedServerError running pristine = .managedServerError := by rfl
+theorem client_observation_does_not_clear_managed_error (running autostartDeclined : Bool) :
+    observeStartup .managedServerError running autostartDeclined = .managedServerError := by rfl
 
 end ClientSnapshotObservation
