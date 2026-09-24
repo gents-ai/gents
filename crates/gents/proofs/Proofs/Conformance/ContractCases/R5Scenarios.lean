@@ -488,9 +488,13 @@ def r5BindingsValid (state : R5ScenarioState) : Prop :=
   (state.queues.map Prod.fst).Nodup ∧
   (state.queues.map (fun row => row.2.sessionId)).Nodup ∧
   (∀ row ∈ state.deliveries,
-    Subagent.CompletionDelivery.DeliveryInvariant row.2) ∧
+    Subagent.CompletionDelivery.DeliveryInvariant row.2 ∧
+    ∃ bridge ∈ state.aBridges, bridge.child = row.1) ∧
   (∀ row ∈ state.queues,
     row.2.pending.length ≤ 1 ∧
+    (∃ bridge ∈ state.aBridges, bridge.session = row.1 ∧
+      ∃ receipt ∈ state.deliveries,
+        receipt.1 = bridge.child ∧ receipt.2.notificationPresent = true) ∧
     ∀ wake ∈ row.2.pending,
       wake.source = .backgroundCompletion ∧ wake.coalesceWellFormed row.2.sessionId)
 
