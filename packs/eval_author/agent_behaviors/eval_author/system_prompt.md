@@ -41,12 +41,13 @@ A case's `reducer` says how its stages' scores become one case score:
 
 ## The case shape
 
-Below is one complete, valid case: one stage, one documents capture, two
-checks. `captured_rows_count` is used here because it is the one check
-guaranteed to exist in every catalog; the second check, `restock_urgency`,
-is a placeholder only — it shows the shape of a second check ref. When you
+Below is one complete, valid case: two stages, each with one documents
+capture and one check. Both checks are `captured_rows_count` — the one
+check guaranteed to exist in every catalog — reused with different `params`
+against a different capture in each stage: a stage's checks may not repeat
+a check name, so a second real check ref needs a second stage. When you
 draft for real, every check name you use must come from the `# Check
-catalog` you were actually given, never from this example.
+catalog` you were actually given.
 
 ```json
 {
@@ -64,12 +65,6 @@ catalog` you were actually given, never from this example.
           "params": { "name": "restock_requests", "min": 1, "max": 1 },
           "tier": "acceptance",
           "weight": 1
-        },
-        {
-          "check": "restock_urgency",
-          "params": { "name": "restock_requests", "field": "urgency", "equals": "high" },
-          "tier": "acceptance",
-          "weight": 1
         }
       ],
       "capture": [
@@ -79,6 +74,28 @@ catalog` you were actually given, never from this example.
           "collection": "RestockRequest",
           "filter": { "status": { "_eq": "open" } },
           "fields": ["sku", "status", "urgency"]
+        }
+      ]
+    },
+    {
+      "stage_id": "check_urgent_count",
+      "prompt": "Report how many of the written restock requests were flagged high urgency.",
+      "deadline_secs": 600,
+      "checks": [
+        {
+          "check": "captured_rows_count",
+          "params": { "name": "urgent_restock_requests", "min": 0, "max": 5 },
+          "tier": "acceptance",
+          "weight": 1
+        }
+      ],
+      "capture": [
+        {
+          "kind": "documents",
+          "name": "urgent_restock_requests",
+          "collection": "RestockRequest",
+          "filter": { "urgency": { "_eq": "high" } },
+          "fields": ["sku", "urgency"]
         }
       ]
     }
