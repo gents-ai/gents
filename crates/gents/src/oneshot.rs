@@ -292,6 +292,7 @@ where
     )
     .await;
     hook.set_request_deadline_at(config.deadline).await;
+    let provider_profile = config.provider_input_counter.profile();
     // Both entry points publish through the same durable processor. The
     // lifecycle's independent renewal task owns liveness; output never renews.
     let inference = async {
@@ -303,8 +304,13 @@ where
             tools,
             config,
         ));
-        let mut processor =
-            StreamProcessor::new(&hook, &stream_writer, &mut lifecycle, &response_doc_id);
+        let mut processor = StreamProcessor::new(
+            &hook,
+            &stream_writer,
+            &mut lifecycle,
+            &response_doc_id,
+            provider_profile,
+        );
         let mut lease_poll = tokio::time::interval(std::time::Duration::from_secs(1));
         lease_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
