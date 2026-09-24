@@ -2,6 +2,7 @@
 mod build;
 mod check;
 mod cli_process;
+mod edit;
 mod inspect;
 mod local;
 pub(crate) mod registry;
@@ -54,6 +55,9 @@ pub(crate) async fn dispatch(command: PackCommand) -> Result<()> {
         PackCommand::Verify(args) => inspect::verify(args),
         PackCommand::New(args) => scaffold::new(args),
         PackCommand::Init(args) => scaffold::init(args),
+        PackCommand::Add(args) => edit::add(args),
+        PackCommand::RemovePart(args) => edit::remove_part(args),
+        PackCommand::Fmt(args) => edit::fmt(args),
         PackCommand::Check(args) => check::check(args).await,
         PackCommand::Graph(args) => check::graph(args),
         PackCommand::Install(args) => install(args).await,

@@ -213,3 +213,19 @@ fn bundled_review_loads_slot_authoring_and_literal_prompt_assets() {
         }
     }
 }
+
+#[test]
+fn skill_instructions_load_from_a_literal_sidecar() {
+    let config = load(
+        json!({
+            "agent_principal":{},
+            "skills":[{"skill_id":"review","name":"review","instructions":"./prompt.md"}]
+        }),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        config.skills[0].instructions.as_deref(),
+        Some("literal {{ task.input }} ${HOST_SHELL}")
+    );
+}

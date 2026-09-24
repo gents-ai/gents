@@ -109,6 +109,14 @@ pub fn decode_pack_config(
             }
         }
     }
+    for skill in &mut config.skills {
+        if let Some(instructions) = &mut skill.instructions {
+            if instructions.starts_with("./") {
+                *instructions =
+                    read_sidecar(crate::Collection::Skill, &skill.skill_id, instructions)?;
+            }
+        }
+    }
     for task in &mut config.tasks {
         if task.prompt_template.starts_with("./") {
             task.prompt_template = read_sidecar(

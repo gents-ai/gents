@@ -28,7 +28,7 @@ pub(crate) fn has_canonical_asset_spelling(path: &str) -> bool {
             if !is_snake_case_name(part) {
                 return false;
             }
-        } else if !matches!(part, "README.md" | "Cargo.toml" | "Cargo.lock")
+        } else if !matches!(part, "README.md" | "SKILL.md" | "Cargo.toml" | "Cargo.lock")
             && (!part.split('.').all(|segment| {
                 !segment.is_empty()
                     && segment.bytes().all(|byte| {
@@ -82,6 +82,7 @@ mod tests {
             "README.md",
             "schemas/review_job.graphql",
             "tasks/review_scan_task/object.json",
+            "skills/triage/SKILL.md",
         ] {
             assert!(has_canonical_asset_spelling(path), "{path}");
         }
@@ -90,6 +91,7 @@ mod tests {
             "tasks/review-task/object.json",
             "tasks/_review/object.json",
             "tasks/review/Prompt.md",
+            "skills/triage/Skill.md",
         ] {
             assert!(!has_canonical_asset_spelling(path), "{path}");
         }

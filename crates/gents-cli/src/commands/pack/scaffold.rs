@@ -246,9 +246,23 @@ fn list_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
-/// Writes the plugin's source: a program that returns its JSON input, in
-/// `language`, at the entry the build compiles. Returns the language.
+/// Writes the plugin's source for the plugin-tool template.
 fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<String> {
+    write_plugin_source(
+        &dir.join("plugins").join(&names.name),
+        &names.name,
+        language,
+    )
+}
+
+/// Writes a plugin's source into `source`: a program that returns its JSON
+/// input, in `language` (rust when absent), at the entry the build compiles.
+/// Returns the language.
+pub(crate) fn write_plugin_source(
+    source: &Path,
+    name: &str,
+    language: Option<&str>,
+) -> Result<String> {
     let language = language.unwrap_or("rust").trim().to_ascii_lowercase();
     let entry = super::build::plugin_entry(&language).with_context(|| {
         format!(
@@ -256,15 +270,14 @@ fn scaffold_plugin(dir: &Path, names: &Names, language: Option<&str>) -> Result<
             gents::pack::SUPPORTED_PLUGIN_LANGUAGES.join(", ")
         )
     })?;
-    let source = dir.join("plugins").join(&names.name);
+    anyhow::ensure!(!source.exists(), "{} already exists", source.display());
     let mut files = vec![(entry.to_owned(), echo_source(entry))];
     if entry == "source/main.rs" {
         files.push((
             "Cargo.toml".into(),
             format!(
-                "[workspace]\n\n[package]\nname = \"{}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
-                 [[bin]]\nname = \"{}\"\npath = \"source/main.rs\"\n",
-                names.name, names.name
+                "[workspace]\n\n[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                 [[bin]]\nname = \"{name}\"\npath = \"source/main.rs\"\n"
             ),
         ));
     }

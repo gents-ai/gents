@@ -374,6 +374,110 @@ pub(crate) struct PackNewArgs {
 }
 
 #[derive(clap::Args)]
+pub(crate) struct PackAddArgs {
+    #[command(subcommand)]
+    pub(crate) command: PackAddCommand,
+    #[arg(
+        long,
+        global = true,
+        help = "Pack directory; defaults to the current directory"
+    )]
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(clap::Subcommand)]
+pub(crate) enum PackAddCommand {
+    /// A behavior with its prompt, context and tools, in an inference slot.
+    Behavior {
+        id: String,
+        #[arg(
+            long,
+            help = "Inference slot; defaults to one named after the behavior"
+        )]
+        slot: Option<String>,
+    },
+    /// A task with its prompt, run by an existing behavior.
+    Task {
+        id: String,
+        #[arg(long)]
+        behavior: String,
+    },
+    /// An event source and a trigger that runs a task when a document is created.
+    Trigger {
+        id: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long, help = "Collection whose new documents fire the trigger")]
+        on: String,
+    },
+    /// A graph; the pack becomes a graph pack.
+    Graph { graph_id: String },
+    /// A graph stage that runs a task, reading one collection and writing another.
+    Stage {
+        node: String,
+        #[arg(long)]
+        graph: String,
+        #[arg(long)]
+        task: String,
+        #[arg(long, help = "Collection the stage reads")]
+        input: String,
+        #[arg(long, help = "Collection the stage writes")]
+        output: String,
+        #[arg(
+            long,
+            help = "Upstream node.port; the first stage becomes the graph's entry"
+        )]
+        from: Option<String>,
+    },
+    /// A plugin from source, or from an already compiled plugin file.
+    Plugin {
+        name: String,
+        #[arg(long, help = "Source language; defaults to rust")]
+        language: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "language",
+            help = "A compiled plugin file to ship as is"
+        )]
+        prebuilt: Option<PathBuf>,
+    },
+    /// A skill whose instructions live in skills/<id>/SKILL.md.
+    Skill {
+        id: String,
+        #[arg(long, help = "An existing SKILL.md to copy")]
+        from: Option<PathBuf>,
+    },
+    /// A collection schema under schemas/.
+    Schema { collection: String },
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug)]
+pub(crate) enum PackPart {
+    Behavior,
+    Task,
+    Trigger,
+    Graph,
+    Plugin,
+    Skill,
+    Schema,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackRemovePartArgs {
+    #[arg(value_enum)]
+    pub(crate) part: PackPart,
+    pub(crate) id: String,
+    #[arg(long, help = "Pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
+pub(crate) struct PackFmtArgs {
+    #[arg(help = "Pack directory; defaults to the current directory")]
+    pub(crate) dir: Option<PathBuf>,
+}
+
+#[derive(clap::Args)]
 pub(crate) struct PackCheckArgs {
     #[arg(help = "Pack directories to check; defaults to the current directory")]
     pub(crate) dirs: Vec<PathBuf>,
@@ -410,6 +514,12 @@ pub(crate) enum PackCommand {
     New(PackNewArgs),
     /// Scaffold a pack in the current directory, named after it.
     Init(PackScaffoldArgs),
+    /// Add a part to a pack and record it in manifest.json.
+    Add(PackAddArgs),
+    /// Remove a part and every file it added.
+    RemovePart(PackRemovePartArgs),
+    /// Rewrite manifest.json and pack_config.json in canonical form.
+    Fmt(PackFmtArgs),
     /// Run every validation an install would on pack directories; writes nothing.
     Check(PackCheckArgs),
     /// Print a graph pack's topology diagram, or write it into its README.
