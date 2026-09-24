@@ -177,13 +177,13 @@ pub(super) struct CanonicalSourceBinding {
 
 /// The query execution seam this leaf reads through.
 ///
-/// Production always executes through the embedded node. The seam exists so
-/// tests can supply bounded canonical header/segment facts. `QuerySink` is
-/// internal to this leaf (the public [`project_messages`] entry point keeps the
-/// `Arc<EmbeddedNode>` signature); the shared `execute` helper below keeps
-/// every read on one seam so ordering regressions cannot hide behind a
-/// direct `node.execute` call. The returned future is `Send` so the
-/// loader's futures stay `Send` end to end without a proc-macro crate.
+/// Production reads through `gents::graphql::graphql_with_transaction_retry`,
+/// which rejects GraphQL errors; a sink reports any failure as `Err` and the
+/// loader propagates it. The seam exists so tests can supply bounded canonical
+/// header/segment facts. `QuerySink` is internal to this leaf (the public
+/// [`project_messages`] entry point keeps the `Arc<EmbeddedNode>` signature).
+/// The returned future is `Send` so the loader's futures stay `Send` end to
+/// end without a proc-macro crate.
 pub(super) trait QuerySink: Send + Sync {
     fn execute(
         &self,
@@ -564,6 +564,24 @@ mod canonical_selection_tests {
                 "AgentOutputSegment": self.segments,
             })))
         }
+    }
+
+    struct FailingSink;
+
+    impl QuerySink for FailingSink {
+        async fn execute(&self, _query: &str) -> Result<defra_node::QueryResponse> {
+            Err(anyhow!(
+                "canonical read owner rejected the projection query"
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn sink_failure_propagates_from_projection() {
+        let error = project_messages_with_sink(&FailingSink, None, &request(), 8192)
+            .await
+            .expect_err("sink failure");
+        assert!(format!("{error:#}").contains("canonical read owner rejected"));
     }
 
     fn request() -> gents_protocol::row::AgentRequestRow {

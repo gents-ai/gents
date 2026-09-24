@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
@@ -323,12 +323,10 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
             }}
         }}"#
     );
-    let resp = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"),
-    )
-    .await?;
+    let resp =
+        graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
+            .await
+            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
     let rows = resp
         .data
         .as_ref()
@@ -383,12 +381,9 @@ pub async fn fetch_interrupt_requested_at_scoped(
             }}
         }}"#
     );
-    let resp = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("fetch_interrupt_requested_at_scoped({request_id})"),
-    )
-    .await?;
+    let resp = graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_scoped")
+        .await
+        .with_context(|| format!("fetch_interrupt_requested_at_scoped({request_id})"))?;
     let rows = resp
         .data
         .as_ref()

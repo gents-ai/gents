@@ -1,5 +1,6 @@
 use crate::error::BridgeError;
 
+use anyhow::Context;
 use std::sync::Arc;
 
 use chrono::Utc;
@@ -549,12 +550,9 @@ async fn fetch_recent_calls(
         limit = RECENT_CALLS_PER_BACKEND,
     );
 
-    let resp = graphql_with_transaction_retry(
-        &node,
-        &query,
-        &format!("list InferenceCall for backend {backend_id}"),
-    )
-    .await?;
+    let resp = graphql_with_transaction_retry(&node, &query, "list InferenceCall by backend")
+        .await
+        .with_context(|| format!("list InferenceCall for backend {backend_id}"))?;
 
     Ok(resp
         .data

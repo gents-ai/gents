@@ -130,9 +130,12 @@ async fn lookup_parent_request(
     let resp = graphql_with_transaction_retry(
         node,
         &query,
-        &format!("querying parent request for inference recovery request_id={request_id}"),
+        "querying parent request for inference recovery",
     )
-    .await?;
+    .await
+    .with_context(|| {
+        format!("querying parent request for inference recovery request_id={request_id}")
+    })?;
 
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
     Ok(rows.into_iter().next())

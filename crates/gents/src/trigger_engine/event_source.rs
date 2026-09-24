@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use chrono::{DateTime, SecondsFormat, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
@@ -231,12 +232,9 @@ impl SourceSchemaCache {
             }}"#,
             name = collection,
         );
-        let response = crate::graphql::graphql_with_transaction_retry(
-            node,
-            &query,
-            &format!("introspect {collection}"),
-        )
-        .await?;
+        let response = crate::graphql::graphql_with_transaction_retry(node, &query, "introspect")
+            .await
+            .with_context(|| format!("introspect {collection}"))?;
         let Some(fields_arr) = response
             .data
             .as_ref()
@@ -577,9 +575,10 @@ impl EventSource {
         let response = crate::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
-            &format!("seen-doc seed query for {collection}"),
+            "seen-doc seed query",
         )
-        .await?;
+        .await
+        .with_context(|| format!("seen-doc seed query for {collection}"))?;
         let rows = response
             .data
             .as_ref()
@@ -613,9 +612,10 @@ impl EventSource {
             let response = crate::graphql::graphql_with_transaction_retry(
                 &self.node,
                 &query,
-                &format!("correlation readiness seed for {collection}.{field}"),
+                "correlation readiness seed",
             )
-            .await?;
+            .await
+            .with_context(|| format!("correlation readiness seed for {collection}.{field}"))?;
             for row in response
                 .data
                 .as_ref()
@@ -706,9 +706,10 @@ impl EventSource {
         let response = crate::graphql::graphql_with_transaction_retry(
             &self.node,
             &query,
-            &format!("event source rescan query for {collection}"),
+            "event source rescan query",
         )
-        .await?;
+        .await
+        .with_context(|| format!("event source rescan query for {collection}"))?;
         let rows = response
             .data
             .as_ref()

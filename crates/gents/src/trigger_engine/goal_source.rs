@@ -583,12 +583,10 @@ impl GoalSource {
             }}"#,
             signed_fields = crate::request_admission::SIGNED_REQUEST_FIELDS,
         );
-        let response = graphql_with_transaction_retry(
-            &self.node,
-            &query,
-            &format!("query goal session requests for {}", goal.session_id),
-        )
-        .await?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query goal session requests")
+                .await
+                .with_context(|| format!("query goal session requests for {}", goal.session_id))?;
         let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data

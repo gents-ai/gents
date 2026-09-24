@@ -397,12 +397,9 @@ pub async fn load_invocation(
         id = escape_graphql_string(invocation_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("query CallbackInvocation {invocation_id}"),
-    )
-    .await?;
+    let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation")
+        .await
+        .with_context(|| format!("query CallbackInvocation {invocation_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackInvocation").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -554,12 +551,9 @@ async fn query_owner_invocations(
         owner = escape_graphql_string(owner_agent_did),
         states = states,
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("query CallbackInvocation states {states}"),
-    )
-    .await?;
+    let response = graphql_with_transaction_retry(node, &query, "query CallbackInvocation states")
+        .await
+        .with_context(|| format!("query CallbackInvocation states {states}"))?;
     rows(&response, "CallbackInvocation")
 }
 
@@ -578,12 +572,9 @@ pub async fn load_callback_result(
         id = escape_graphql_string(invocation_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("query CallbackResult for {invocation_id}"),
-    )
-    .await?;
+    let response = graphql_with_transaction_retry(node, &query, "query CallbackResult")
+        .await
+        .with_context(|| format!("query CallbackResult for {invocation_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "CallbackResult").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -819,12 +810,9 @@ pub(crate) async fn load_isolated_workspace(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("query IsolatedWorkspace {workspace_id}"),
-    )
-    .await?;
+    let response = graphql_with_transaction_retry(node, &query, "query IsolatedWorkspace")
+        .await
+        .with_context(|| format!("query IsolatedWorkspace {workspace_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "IsolatedWorkspace").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"
@@ -847,12 +835,9 @@ pub(crate) async fn load_workspace_placement(
         id = escape_graphql_string(workspace_id),
         owner = escape_graphql_string(owner),
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("query WorkspacePlacement {workspace_id}"),
-    )
-    .await?;
+    let response = graphql_with_transaction_retry(node, &query, "query WorkspacePlacement")
+        .await
+        .with_context(|| format!("query WorkspacePlacement {workspace_id}"))?;
     anyhow::ensure!(
         rows::<Value>(&response, "WorkspacePlacement").map(|rows| rows.len())? <= 1,
         "ambiguous principal-scoped callback/workspace document"

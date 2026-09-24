@@ -45,8 +45,8 @@
 //! Pending prompts are keyed by (session id, prompt id) inside this
 //! connection-scoped manager.
 //!
-//! All durable reads/writes go through the in-process embedded node
-//! (`node.execute(&query).await`) with every interpolated value escaped by
+//! All durable reads go through `gents::graphql::graphql_with_transaction_retry`
+//! and writes through `ConfigAccess`, with every interpolated value escaped by
 //! `gents::graphql::escape_graphql_string`; no HTTP GraphQL helper is used
 //! except the `create_agent_request` seam, which takes the bound GraphQL
 //! endpoint. The turn streams durable `AgentMessage`/`AgentToolCall`/

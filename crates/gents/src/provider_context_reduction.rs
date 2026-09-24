@@ -166,12 +166,12 @@ pub async fn capture_source_boundary(
         }}"#,
         escape_graphql_string(session_id)
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("capturing provider-context source boundary for session {session_id}"),
-    )
-    .await?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "capturing provider-context source boundary")
+            .await
+            .with_context(|| {
+                format!("capturing provider-context source boundary for session {session_id}")
+            })?;
     let rows = response
         .data
         .as_ref()
@@ -391,12 +391,12 @@ pub async fn load_for_request(
         escape_graphql_string(request_doc_id),
         REDUCTION_FIELDS
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("loading ProviderContextReduction for request {request_doc_id}"),
-    )
-    .await?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by request")
+            .await
+            .with_context(|| {
+                format!("loading ProviderContextReduction for request {request_doc_id}")
+            })?;
     let rows: Vec<ProviderContextReduction> = serde_json::from_value(
         response
             .data
@@ -444,9 +444,12 @@ pub async fn load_unconsumed_for_request(
     let response = graphql_with_transaction_retry(
         node,
         &rendered,
-        &format!("checking ProviderContextReduction consumption for request {request_doc_id}"),
+        "checking ProviderContextReduction consumption",
     )
-    .await?;
+    .await
+    .with_context(|| {
+        format!("checking ProviderContextReduction consumption for request {request_doc_id}")
+    })?;
     let captures = response
         .data
         .as_ref()
@@ -530,12 +533,10 @@ async fn load_by_key(
         escape_graphql_string(reduction_key),
         REDUCTION_FIELDS
     );
-    let response = graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("loading ProviderContextReduction key {reduction_key}"),
-    )
-    .await?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "loading ProviderContextReduction by key")
+            .await
+            .with_context(|| format!("loading ProviderContextReduction key {reduction_key}"))?;
     serde_json::from_value(
         response
             .data

@@ -860,12 +860,9 @@ async fn fetch_request_view(
             }}
         }}"#
     );
-    let resp = gents::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("fetch_request({request_id})"),
-    )
-    .await?;
+    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_request")
+        .await
+        .with_context(|| format!("fetch_request({request_id})"))?;
     let row = resp
         .data
         .as_ref()
@@ -908,12 +905,9 @@ async fn fetch_retry_lineage(
             }}
         }}"#
     );
-    let resp = gents::graphql::graphql_with_transaction_retry(
-        node,
-        &query,
-        &format!("fetch_retry_lineage({request_id})"),
-    )
-    .await?;
+    let resp = gents::graphql::graphql_with_transaction_retry(node, &query, "fetch_retry_lineage")
+        .await
+        .with_context(|| format!("fetch_retry_lineage({request_id})"))?;
     let rows = resp
         .data
         .as_ref()

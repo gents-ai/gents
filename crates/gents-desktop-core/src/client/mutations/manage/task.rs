@@ -233,9 +233,10 @@ pub async fn fire_task_now(
     let behavior_response = gents::graphql::graphql_with_transaction_retry(
         node,
         &behavior_query,
-        &format!("fetch behavior for task {task_id}"),
+        "fetch task behavior",
     )
-    .await?;
+    .await
+    .with_context(|| format!("fetch behavior for task {task_id}"))?;
     let behavior_row = behavior_response
         .data
         .as_ref()
@@ -623,9 +624,10 @@ pub async fn fire_schedule_now(
     let trigger_response = gents::graphql::graphql_with_transaction_retry(
         node,
         &trigger_query,
-        &format!("fetch triggers for schedule {schedule_id}"),
+        "fetch schedule triggers",
     )
-    .await?;
+    .await
+    .with_context(|| format!("fetch triggers for schedule {schedule_id}"))?;
     let mut matching = trigger_response
         .data
         .as_ref()
@@ -670,12 +672,10 @@ pub async fn fire_schedule_now(
         }}"#,
         id = escape_graphql_string(task_id),
     );
-    let task_response = gents::graphql::graphql_with_transaction_retry(
-        node,
-        &task_query,
-        &format!("fetch task for schedule {schedule_id}"),
-    )
-    .await?;
+    let task_response =
+        gents::graphql::graphql_with_transaction_retry(node, &task_query, "fetch schedule task")
+            .await
+            .with_context(|| format!("fetch task for schedule {schedule_id}"))?;
     let task_row_json = task_response
         .data
         .as_ref()
