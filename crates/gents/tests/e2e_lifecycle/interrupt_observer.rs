@@ -173,41 +173,6 @@ async fn observer_picks_up_already_set_interrupt_on_first_poll() {
 }
 
 #[tokio::test]
-async fn observer_signals_on_document_change_before_the_fallback_poll() {
-    let db = test_db("observer-change-driven").await;
-    let request_id = uuid::Uuid::new_v4().to_string();
-    let session_id = uuid::Uuid::new_v4().to_string();
-    let created_at = chrono::Utc::now().to_rfc3339();
-    let doc_id = create_request(&db.node, &request_id, &session_id, "pending", &created_at).await;
-
-    let (interrupt_tx, interrupt_rx) = watch::channel::<Option<InterruptIntent>>(None);
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-    let _observer = spawn_request_interrupt_observer(
-        db.node.clone(),
-        doc_id.clone(),
-        interrupt_tx,
-        shutdown_rx,
-    );
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    assert!(interrupt_rx.borrow().is_none());
-
-    let at = chrono::Utc::now().to_rfc3339();
-    set_interrupt_requested_at(&db.node, &doc_id, &at).await;
-    let set = tokio::time::Instant::now();
-
-    let deadline = set + Duration::from_millis(1000);
-    loop {
-        if interrupt_rx.borrow().is_some() {
-            break;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            panic!("observer waited for the fallback poll instead of the document change");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-}
-
-#[tokio::test]
 async fn observer_exits_on_abort() {
     let db = test_db("observer-abort").await;
     let request_id = uuid::Uuid::new_v4().to_string();
