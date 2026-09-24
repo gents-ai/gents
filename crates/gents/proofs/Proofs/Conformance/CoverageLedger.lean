@@ -80,7 +80,7 @@ def consumerWithFollowUp
   }
 
 def r5ScenarioFollowUp : String :=
-  "Six finite generated traces exercise physical two-principal P2P rows, signed child admission, lease/bridge recovery, cancel acknowledgment and keyed delivery through native owners. Model checkpoints cover only selected post-action states and pending queue coalescing; clock scheduling, ACP outcomes and atomic canonical publication remain external premises, not universal native proofs."
+  "Six finite generated traces exercise physical two-principal P2P rows, signed child admission, live-child recovery inertness, expired-child recovery, terminal-bridge receipt repair, cancel acknowledgment and keyed delivery through native owners. Generations bind model symbols to observed native UUIDs, not injected stale-CAS parameters. Interrupted expired-child recovery has a model witness but no native trace here. Every trace materializes children before recovery; orphan materialization is outside this composition. Checkpoints cover selected post-action states and pending queue coalescing; clock scheduling, ACP outcomes and atomic canonical publication remain external premises, not universal native proofs."
 
 def tagged (entry : CoverageEntry)
     (feature : String) (surfaces : List Surface) : CoverageEntry :=

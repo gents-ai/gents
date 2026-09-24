@@ -236,10 +236,11 @@ def observeOne (s : R5ScenarioState) (bridge : R5BridgeFact) : R5ScenarioState :
 def observeAll (s : R5ScenarioState) : R5ScenarioState :=
   s.aBridges.foldl observeOne s
 
-/-- The coordinator's running-tool recovery projects terminal linked children
-and their completion side effects. It does not repair an already-terminal
-child-linked bridge's missing receipt; the completion reconciler owns that.
-Foreign coordinator bridges on B are outside B's locally-owned sweep. -/
+/-- Native running-tool recovery projects terminal linked children, but its
+terminal side-effect sweep excludes child-linked bridges. `observeCompletion`
+separately invokes their completion projection/receipt owner. These traces
+materialize every accepted child before recovery; orphan materialization is
+outside this composition. Foreign bridges are outside B's owned sweep. -/
 def recoverR5Bridges (s : R5ScenarioState) : R5ScenarioState :=
   s.aBridges.foldl (fun state bridge =>
     if bridge.state == .running then observeOne state bridge else state) s
@@ -387,12 +388,12 @@ def r5Case (name : String) (actions : List R5ScenarioAction)
     (childLeaseSecs : Nat := 120) : R5ScenarioCase :=
   { name, actions, childLeaseSecs, post := foldR5Scenario actions childLeaseSecs }
 
-/-- Immediate recovery boundaries, before any later completion observation
-can conceal a missing recovery effect. Indices are zero-based action indices. -/
+/-- Immediate recovery and completion-projection boundaries, before a later
+action can conceal an omitted owner effect. Indices are zero-based. -/
 def r5RecoveryCheckpoints (scenario : R5ScenarioCase) : List (Nat × R5ScenarioState) :=
   scenario.actions.zipIdx.filterMap fun (action, index) =>
     match action with
-    | .recoverBridges | .recoverChildRequests _ _ =>
+    | .recoverBridges | .recoverChildRequests _ _ | .observeCompletion =>
         some (index, foldR5Scenario (scenario.actions.take (index + 1)) scenario.childLeaseSecs)
     | _ => none
 
@@ -411,6 +412,7 @@ def complete (child : String) : List R5ScenarioAction :=
 def r5ScenarioCases : List R5ScenarioCase :=
   [ r5Case "happy_path"
       (setup "tool-call-1" "child-req-1" "parent-req-1-session" ++
+       [.recoverChildRequests 0 1] ++
        complete "child-req-1" ++ [.observeCompletion, .converge])
   , r5Case "b_crash_mid_execution"
       (setup "tool-call-b-crash" "child-req-b-crash" "parent-req-b-crash-session" ++
@@ -430,7 +432,8 @@ def r5ScenarioCases : List R5ScenarioCase :=
         .advanceClock .a 360, .observeCancelAck, .observeCancelAck,
         .replicateCancelIntent "tool-call-cancel" .a .b, .mirrorCancel "tool-call-cancel",
         .publishTerminal "child-req-cancel" .interrupted false,
-        .replicateTerminalRequest "child-req-cancel" .b .a, .observeCancelAck, .converge])
+        .replicateTerminalRequest "child-req-cancel" .b .a, .recoverBridges,
+        .observeCompletion, .observeCancelAck, .converge])
   , r5Case "multi_completion_coalesce"
       (setup "tool-call-multi-1" "child-req-multi-1" "parent-multi-session" ++
        [.acceptedBridge "tool-call-multi-2" "child-req-multi-2" "parent-multi-session" 0,
@@ -470,11 +473,15 @@ theorem r5_recovery_effects_precede_later_completion_observation :
       (scenario.name, (r5RecoveryCheckpoints scenario).map fun checkpoint =>
         (checkpoint.2.notifications.length, checkpoint.2.wakeSessions.length,
          checkpoint.2.bChildren.map (·.terminal)))) =
-    [("happy_path", []),
-     ("b_crash_mid_execution", [(0, 0, [some .failed])]),
+    [("happy_path", [(0, 0, [none]), (1, 1, [some .completed])]),
+     ("b_crash_mid_execution", [(0, 0, [some .failed]), (1, 1, [some .failed])]),
      ("a_crash_mid_wait", [(1, 1, [some .completed]),
+       (1, 1, [some .completed]),
+       (2, 2, [some .completed, some .completed]),
        (2, 2, [some .completed, some .completed])]),
-     ("partition_during_cancel", []), ("multi_completion_coalesce", []),
+     ("partition_during_cancel", [(0, 0, [some .interrupted]), (1, 1, [some .interrupted])]),
+     ("multi_completion_coalesce", [(2, 1, [some .completed, some .completed]),
+       (2, 1, [some .completed, some .completed])]),
      ("remote_depth_ceiling", [])] := by
   native_decide
 
@@ -558,6 +565,22 @@ theorem r5_recovery_requires_expiry_and_failed_observation_cannot_invent_it :
     observeR5Terminal running .failed false = none ∧
     ((awaitR5ChildExpiry running).map (recoverR5Child · 0 1)).map
       (·.terminal) = some (some .failed) := by
+  native_decide
+
+theorem r5_expired_interrupted_child_recovers_as_interrupted :
+    let child : R5ChildFact := { child := "child", interruptRequested := true }
+    let running := (beginR5Child child 0 2).getD child
+    ((awaitR5ChildExpiry running).map (recoverR5Child · 0 1)).map
+      (·.terminal) = some (some .interrupted) := by
+  native_decide
+
+theorem r5_terminal_bridge_receipt_requires_completion_projection :
+    let ready := foldR5Scenario
+      (setup "tool" "child" "session" ++ complete "child" ++ [.cancelBridge "tool"])
+    ready.notifications = [] ∧
+      (recoverR5Bridges ready).notifications = [] ∧
+      (observeAll (recoverR5Bridges ready)).notifications = ["child"] ∧
+      (observeAll (recoverR5Bridges ready)).wakeSessions = ["session"] := by
   native_decide
 
 theorem r5ScenarioCases_remote_depth_bounded :
