@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::toolset::{load_session_inference_observation, SessionTokenUsage};
 use gents_protocol::row::AgentRequestRow;
 use serde_json::{json, Value};
@@ -110,15 +110,17 @@ pub(super) async fn session_info(
             .map(|id| format!("\"{}\"", escape_graphql_string(id)))
             .collect::<Vec<_>>()
             .join(",");
-        let response = node
-            .execute(&format!(
+        let response = graphql_with_transaction_retry(
+            node,
+            &format!(
                 r#"{{
             CompactionEntry(filter: {{request_doc_id: {{_in: [{ids}]}}}}) {{_docID}}
             ProviderContextReduction(filter: {{request_doc_id: {{_in: [{ids}]}}}}) {{_docID}}
         }}"#
-            ))
-            .await;
-        ensure_no_errors(&response, "Grok context compactions")?;
+            ),
+            "Grok context compactions",
+        )
+        .await?;
         for collection in ["CompactionEntry", "ProviderContextReduction"] {
             let rows = response
                 .data
@@ -206,14 +208,16 @@ async fn descendant_owners(
             .map(|id| format!("\"{}\"", escape_graphql_string(id)))
             .collect::<Vec<_>>()
             .join(",");
-        let response = node
-            .execute(&format!(
+        let response = graphql_with_transaction_retry(
+            node,
+            &format!(
                 r#"{{ AgentRequest(filter: {{request_id: {{_in: [{ids}]}}}}) {{
             request_id agent_did requester_did session_id
         }} }}"#
-            ))
-            .await;
-        ensure_no_errors(&response, "Grok descendant usage owners")?;
+            ),
+            "Grok descendant usage owners",
+        )
+        .await?;
         let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data
@@ -314,6 +318,7 @@ pub(super) async fn session_usage(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gents::graphql::ensure_no_errors;
 
     #[tokio::test]
     async fn descendant_owner_batches_cover_all_pages_and_preserve_requesters() {

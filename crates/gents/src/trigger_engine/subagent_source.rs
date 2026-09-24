@@ -22,7 +22,7 @@ use crate::background_tools::{
 };
 use crate::config_client::ConfigAccess;
 use crate::event_delivery_contract::{EventDeliveryRuntimeContract, EventDeliverySourceContract};
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::run_timeline_fetch::load_run_timeline_rows;
 use crate::runtime_snapshot::{ActiveRuntimeSnapshot, ConcurrencyMode, ResolvedTask};
 use crate::tool_call_lifecycle::subagent_request::{
@@ -292,13 +292,12 @@ impl SubagentSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query AgentToolCall for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query AgentToolCall for SubagentSource",
+        )
+        .await?;
         let rows: Vec<ToolCallRow> = response
             .data
             .as_ref()
@@ -376,13 +375,12 @@ impl SubagentSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query parent AgentRequest for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query parent AgentRequest for SubagentSource",
+        )
+        .await?;
         let value = response
             .data
             .as_ref()
@@ -416,13 +414,12 @@ impl SubagentSource {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query parent AgentRequest terminal state for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query parent AgentRequest terminal state for SubagentSource",
+        )
+        .await?;
         let value = response
             .data
             .as_ref()
@@ -443,13 +440,12 @@ impl SubagentSource {
                 ) {{ _docID }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query child AgentRequest for SubagentSource failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "query child AgentRequest for SubagentSource",
+        )
+        .await?;
         Ok(response
             .data
             .as_ref()
@@ -467,13 +463,12 @@ impl SubagentSource {
                 }
             ) { _docID }
         }"#;
-        let response = self.node.execute(query).await;
-        if response.has_errors() {
-            anyhow::bail!(
-                "query running AgentToolCall bridge rows for SubagentSource rescan failed: {:?}",
-                response.errors
-            );
-        }
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            query,
+            "query running AgentToolCall bridge rows for SubagentSource rescan",
+        )
+        .await?;
         let rows: Vec<ToolCallDocIdRow> = response
             .data
             .as_ref()
@@ -1401,3 +1396,6 @@ mod delegated_workspace_tests {
         .is_err());
     }
 }
+
+#[cfg(test)]
+mod delegated_child_tests;

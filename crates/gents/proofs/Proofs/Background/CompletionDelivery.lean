@@ -25,7 +25,7 @@ structure NotificationState where
   terminal : Bool
   notificationPresent : Bool
   deliveryMarked : Bool
-  deriving DecidableEq
+  deriving DecidableEq, Repr
 
 /-- A stable notification key makes publication an insert-once operation. The
     delivery marker is written only after the notification is durable. -/

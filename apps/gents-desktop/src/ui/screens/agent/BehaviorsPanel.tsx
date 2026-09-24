@@ -3,6 +3,7 @@
    visible block on the behavior: pick one, see who else uses it, duplicate
    it or start empty, and edit its instructions and capabilities in place.
    Everything waits for one Save. */
+import { useExclusivePopover } from "@/hooks/useExclusivePopover";
 import { dependentsWarning } from "./dependents";
 import { Fragment, useEffect, useRef, useState } from "react";
 import {
@@ -202,17 +203,23 @@ function ContextPicker({
   onPick: (value: string) => void;
   autoOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(autoOpen);
+  /* a searchable popup is a dialog: one at a time with the shell's others */
+  const popover = useExclusivePopover();
+  const { onOpenChange } = popover;
+  useEffect(() => {
+    if (autoOpen) onOpenChange(true);
+  }, [autoOpen, onOpenChange]);
   const byId = new Map(deployment.contexts.map((c) => [c.context_id, c]));
   return (
     <Combobox
       items={deployment.contexts.map((c) => c.context_id)}
       value={value || null}
-      open={open}
-      onOpenChange={setOpen}
+      open={popover.open}
+      onOpenChange={popover.onOpenChange}
+      onOpenChangeComplete={popover.onOpenChangeComplete}
       onValueChange={(v) => {
         if (v == null) return;
-        setOpen(false);
+        popover.onOpenChange(false);
         onPick(v);
       }}
       itemToStringLabel={labelFor}
@@ -235,6 +242,7 @@ function ContextPicker({
         </span>
       </ComboboxTrigger>
       <ComboboxContent
+        ref={popover.popupRef}
         aria-label="Instructions and tools from"
         className="w-96 min-w-96 max-md:w-[calc(100vw-2rem)] max-md:min-w-0"
       >

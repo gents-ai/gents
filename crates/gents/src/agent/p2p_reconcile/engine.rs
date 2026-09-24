@@ -15,11 +15,11 @@ use p2p::iroh::parse_public_peer_addr;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::identity::AgentIdentity;
 
 use super::enrollment_reconcile::EnrollmentAuthorityHandle;
-use super::graphql_helpers::{ensure_no_errors, first_row, graphql_string_list_literal, rows};
+use super::graphql_helpers::{first_row, graphql_string_list_literal, rows};
 #[cfg(test)]
 use super::templates::Delivery;
 use super::templates::{
@@ -848,8 +848,8 @@ impl GraphqlPairingStateStore {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query PeerPairingApplied")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query PeerPairingApplied").await?;
         let mut rows = rows::<AppliedStateRow>(&response, "PeerPairingApplied")?;
         rows.sort_by(|left, right| left.doc_id.cmp(&right.doc_id));
         Ok(rows)
@@ -968,8 +968,9 @@ impl PairingStateStore for GraphqlPairingStateStore {
                 }}
             }}"#
         );
-        let response = self.node.execute(&query).await;
-        ensure_no_errors(&response, "query pairing desired state")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, &query, "query pairing desired state")
+                .await?;
         let materialized_entry = self
             .data_plane_materialized_entry(&raw_peer_id)
             .await
@@ -1108,8 +1109,8 @@ impl PairingStateStore for GraphqlPairingStateStore {
             DataPlanePairingDesired { peer_id }
             PeerPairingApplied { peer_id }
         }"#;
-        let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query pairing peer ids")?;
+        let response =
+            graphql_with_transaction_retry(&self.node, query, "query pairing peer ids").await?;
         let mut ids = BTreeSet::new();
         for row in rows::<PeerIdRow>(&response, "PeerPairingDesired")? {
             if !row.peer_id.trim().is_empty() {

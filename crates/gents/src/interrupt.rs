@@ -3,12 +3,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use defra_node::EmbeddedNode;
 use tokio::sync::watch;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::lifecycle::queue::{drain_automated_wakeups, drain_subagent_owned_queue};
 
 /// Request a soft interrupt by latching `interrupt_requested_at` on the
@@ -216,12 +216,12 @@ pub(crate) async fn active_session_request(
     requester_did: Option<&str>,
 ) -> Result<Option<gents_protocol::row::AgentRequestRow>> {
     let scope = crate::session::session_scope_filter(agent_did, session_id, requester_did);
-    let response=node.execute(&format!(r#"{{AgentRequest(filter:{{{scope},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#)).await;
-    anyhow::ensure!(
-        !response.has_errors(),
-        "active request lookup failed: {:?}",
-        response.errors
-    );
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(r#"{{AgentRequest(filter:{{{scope},lifecycle_state:{{_in:["claimed","processing"]}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#),
+        "active request lookup",
+    )
+    .await?;
     anyhow::ensure!(
         response
             .data
@@ -323,17 +323,10 @@ pub async fn fetch_interrupt_requested_at_by_doc_id(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        bail!(
-            "fetch_interrupt_requested_at_by_doc_id({request_doc_id}) failed: {}",
-            resp.errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let resp =
+        graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_by_doc_id")
+            .await
+            .with_context(|| format!("fetch_interrupt_requested_at_by_doc_id({request_doc_id})"))?;
     let rows = resp
         .data
         .as_ref()
@@ -388,17 +381,9 @@ pub async fn fetch_interrupt_requested_at_scoped(
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        bail!(
-            "fetch_interrupt_requested_at_scoped({request_id}) failed: {}",
-            resp.errors
-                .iter()
-                .map(|error| error.message.as_str())
-                .collect::<Vec<_>>()
-                .join("; ")
-        );
-    }
+    let resp = graphql_with_transaction_retry(node, &query, "fetch_interrupt_requested_at_scoped")
+        .await
+        .with_context(|| format!("fetch_interrupt_requested_at_scoped({request_id})"))?;
     let rows = resp
         .data
         .as_ref()
@@ -480,15 +465,18 @@ async fn read_interrupt_requested_at(node: &EmbeddedNode, request_doc_id: &str) 
         }}"#,
         doc_id = escape_graphql_string(request_doc_id),
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        tracing::warn!(
-            doc_id = %request_doc_id,
-            errors = ?resp.errors,
-            "interrupt observer query failed; will retry"
-        );
-        return None;
-    }
+    let resp = match graphql_with_transaction_retry(node, &query, "interrupt observer query").await
+    {
+        Ok(resp) => resp,
+        Err(error) => {
+            tracing::warn!(
+                doc_id = %request_doc_id,
+                error = %error,
+                "interrupt observer query failed; will retry"
+            );
+            return None;
+        }
+    };
     resp.data
         .as_ref()
         .and_then(|d| d.get("AgentRequest"))

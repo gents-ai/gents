@@ -350,12 +350,6 @@ async fn generated_process_transition_cases_match_runtime_status_policy() {
                     case.to
                 );
             }
-            "productUnreachable" => {
-                panic!(
-                    "Process transition {} unexpectedly emitted product-unreachable classification",
-                    case.name
-                );
-            }
             other => panic!(
                 "generated Process transition {} has unknown classification {other:?}",
                 case.name

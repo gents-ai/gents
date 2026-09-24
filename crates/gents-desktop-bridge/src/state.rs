@@ -215,6 +215,10 @@ pub struct ManagedServerState {
     pub pairing_task: Option<JoinHandle<()>>,
     pub starting: bool,
     pub last_error: Option<String>,
+    /// Cancels a start that is waiting outside the lifecycle lock.
+    pub start_wait: Option<crate::tauri_commands::managed_server::StartWait>,
+    /// Supervisor restart count when a failed exit was first observed.
+    pub exit_baseline: Option<u64>,
 }
 
 pub struct DesktopBridge {

@@ -73,6 +73,8 @@ export function createDesktopApiAdapter(
         "desktop_managed_server_validate_root",
         { request: { path } },
       ).then((result) => result.canonicalPath),
+    openManagedServerLoginItems: () =>
+      invokeDesktop<void>("desktop_managed_server_open_login_items"),
     commitManagedServerAutoStart: (_agentName) =>
       invokeDesktop<ManagedServerStatus>("desktop_managed_server_set_auto_start", {
         enabled: true,

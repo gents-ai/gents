@@ -435,10 +435,20 @@ async fn generated_r6_completion_owner_cases_use_accepted_native_output() {
     }
 }
 
-/// The composed continuation witness goes through publication and the real
-/// child-completion projector before the watcher can expose the queued wake.
-#[tokio::test]
-async fn generated_r6_notification_precedes_continuation_claim() {
+/// The watcher-selected request is deliberately still pending. The daemon
+/// integration test hands it to `process_request`, which owns its claim.
+pub(crate) struct SelectedBackgroundWake {
+    pub admission: PublishedAdmission,
+    pub wake: crate::watcher::AgentRequest,
+    pub notification_text: String,
+    wait_header: String,
+    wait_native: gents_protocol::message::Message,
+    notifications: Vec<(Value, String)>,
+}
+
+/// Compose the existing signed subagent-completion owners through watcher
+/// selection, leaving the actual wake claim to the caller.
+pub(crate) async fn selected_background_wake() -> SelectedBackgroundWake {
     use super::admission_fixture::{
         complete_child, publish_accepted_on_claimed_request, published_admission_with_owner,
     };
@@ -598,19 +608,45 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         TerminalizeResult::Won
     );
     let mut watcher = DefraWatcher::new(node.clone(), did);
-    let claimed = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
+    let selected = tokio::time::timeout(Duration::from_secs(2), watcher.next_request())
         .await
         .expect("queued completion becomes available")
         .unwrap()
         .unwrap();
-    assert_eq!(claimed.request_id, wake.request_id);
-    assert_eq!(claimed.session_id, session);
-    let behavior = claimed.behavior_id.clone();
+    assert_eq!(selected.request_id, wake.request_id);
+    assert_eq!(selected.session_id, session);
+    drop(watcher);
+    drop(owner);
+    SelectedBackgroundWake {
+        admission,
+        wake: selected,
+        notification_text: notifications[0].1.clone(),
+        wait_header,
+        wait_native,
+        notifications,
+    }
+}
+
+/// The composed continuation witness goes through publication and the real
+/// child-completion projector before the watcher can expose the queued wake.
+#[tokio::test]
+async fn generated_r6_notification_precedes_continuation_claim() {
+    let SelectedBackgroundWake {
+        admission,
+        wake: selected,
+        notification_text: _,
+        wait_header,
+        wait_native,
+        notifications,
+    } = selected_background_wake().await;
+    let node = &admission.node;
+    let did = &admission.agent_did;
+    let behavior = selected.behavior_id.clone();
     let mut continuation = crate::lifecycle::RequestLifecycle::new_with_agent_did(
         node.clone(),
         &behavior,
         did,
-        claimed,
+        selected,
         60,
     );
     assert_eq!(
@@ -631,9 +667,7 @@ async fn generated_r6_notification_precedes_continuation_claim() {
         wait_after, wait_native,
         "claim preserves the preceding assistant wait"
     );
-    drop(watcher);
     drop(continuation);
-    drop(owner);
     node.shutdown().await;
     std::fs::remove_dir_all(admission.path).unwrap();
 }

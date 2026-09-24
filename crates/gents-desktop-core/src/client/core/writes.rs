@@ -1742,15 +1742,17 @@ async fn load_local_hydration_start_evidence(
     let scope = format!(
         "requester_did: {{ _eq: \"{requester_did}\" }}, agent_did: {{ _eq: \"{agent_did}\" }}, session_id: {{ _eq: \"{session_id}\" }}"
     );
-    let response = node
-        .execute(&format!(
+    let response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &format!(
             r#"{{
                 AgentSession(filter: {{ {scope} }}, limit: 1) {{ _docID }}
                 AgentRequest(filter: {{ {scope} }}) {{ request_id lifecycle_state }}
             }}"#
-        ))
-        .await;
-    gents::graphql::ensure_no_errors(&response, "query local hydration start evidence")?;
+        ),
+        "query local hydration start evidence",
+    )
+    .await?;
     local_hydration_start_evidence_from_response(&response)
 }
 
@@ -1779,8 +1781,12 @@ async fn load_local_hydration_documents(
     agent_did: &str,
 ) -> Result<BTreeSet<SessionHydrationDocumentKey>> {
     let query = local_hydration_query(requester_did, session_id, agent_did);
-    let response = node.execute(&query).await;
-    gents::graphql::ensure_no_errors(&response, "query local session hydration documents")?;
+    let response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "query local session hydration documents",
+    )
+    .await?;
     local_hydration_documents_from_response(&response)
 }
 
@@ -1846,8 +1852,12 @@ async fn load_hydration_server_state(
             outcome_signer_did outcome_signature
         }} }}"#
     );
-    let response = node.execute(&query).await;
-    gents::graphql::ensure_no_errors(&response, "query session hydration request")?;
+    let response = gents::graphql::graphql_with_transaction_retry(
+        node,
+        &query,
+        "query session hydration request",
+    )
+    .await?;
     let Some(data) = response.data else {
         return Ok(ClientHydrationRequestState::Missing);
     };

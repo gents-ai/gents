@@ -239,6 +239,29 @@ test.describe("kit shell", () => {
     expect(observed).toEqual({ current: 1, max: 1, overlapping: [] });
   });
 
+  test("the behavior filter and sync health never stack as dialogs", async ({
+    page,
+  }) => {
+    /* Bombadil (run 35946895240): Behavior filter, then Sync healthy, left
+       both popups open. Both are dialogs; the shell keeps one at a time. */
+    await gotoHarness(page);
+    const filters = page.getByLabel("Session filters");
+    const behavior = page.getByRole("dialog", { name: "Filter by behavior" });
+    const sync = page.getByRole("dialog", { name: "Database sync details" });
+
+    await startDialogObservation(page);
+    await filters.getByRole("combobox", { name: "Behavior" }).click();
+    await expect(behavior).toBeVisible();
+    await page.getByRole("button", { name: /Sync healthy/ }).click();
+    await expect(sync).toBeVisible();
+    await expect(behavior).toHaveCount(0);
+
+    await page.waitForTimeout(200);
+    const observed = await finishDialogObservation(page);
+    expect(observed.max).toBe(1);
+    expect(observed.overlapping).toEqual([]);
+  });
+
   test("requires a document name before configuration deletion", async ({ page }) => {
     await gotoHarness(page);
     await openConfig(page);

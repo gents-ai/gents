@@ -155,6 +155,11 @@ export function useShell(
       startupPhase: d.startupPhase,
       onResetManagedServer: d.onResetManagedServer,
       managedServerReset: d.managedServerReset,
+      managedServerWait: d.managedServerWait,
+      skipManagedServerWait: d.onSkipManagedServerWait,
+      restartManagedServer: d.canRestartManagedServer
+        ? d.onRestartManagedServer
+        : undefined,
     };
   }, [api, applyConfig, behaviorColors, d, sendMessage]);
 }

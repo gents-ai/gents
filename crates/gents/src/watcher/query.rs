@@ -64,10 +64,9 @@ impl DefraWatcher {
             fields = AGENT_REQUEST_FIELDS,
         );
 
-        let resp = self.node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!("watcher query failed: {:?}", resp.errors);
-        }
+        let resp =
+            crate::graphql::graphql_with_transaction_retry(&self.node, &query, "watcher query")
+                .await?;
 
         let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
         for row in malformed {
@@ -114,10 +113,12 @@ impl DefraWatcher {
             fields = AGENT_REQUEST_FIELDS,
         );
 
-        let resp = self.node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!("watcher pending-request query failed: {:?}", resp.errors);
-        }
+        let resp = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "watcher pending-request query",
+        )
+        .await?;
 
         let (rows, malformed) = parse_active_runtime_rows(resp.data.as_ref())?;
         for row in malformed {
@@ -233,10 +234,12 @@ impl DefraWatcher {
             session_id = session_id,
             active_runtime_states = active_runtime_states,
         );
-        let resp = self.node.execute(&query).await;
-        if resp.has_errors() {
-            anyhow::bail!("watcher session queue query failed: {:?}", resp.errors);
-        }
+        let resp = crate::graphql::graphql_with_transaction_retry(
+            &self.node,
+            &query,
+            "watcher session queue query",
+        )
+        .await?;
 
         let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
 

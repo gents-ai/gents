@@ -2,7 +2,7 @@ use anyhow::Result;
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 use super::serde_helpers::{
     default_display_name_for_did, first_row_with_doc_id, normalize_optional_string,
@@ -75,10 +75,7 @@ pub(crate) async fn load_agent_principal_record(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("query AgentPrincipal failed: {:?}", resp.errors);
-    }
+    let resp = graphql_with_transaction_retry(node, &query, "query AgentPrincipal").await?;
 
     Ok(first_row_with_doc_id(resp.data.as_ref(), "AgentPrincipal"))
 }

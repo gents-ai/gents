@@ -7,7 +7,7 @@ use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 pub const MEMORY_TOOL_NAME: &str = "memory";
 
@@ -199,10 +199,7 @@ async fn read_memory(node: &EmbeddedNode, agent_did: &str, key: &str) -> Result<
             }}
         }}"#
     );
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        bail!("reading agent memory failed: {:?}", resp.errors);
-    }
+    let resp = graphql_with_transaction_retry(&node, &query, "reading agent memory").await?;
     tracing::debug!(agent_did, key, "agent memory read");
 
     let row = resp

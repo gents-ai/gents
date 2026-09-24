@@ -933,6 +933,32 @@ Denies the desktop_mailbox_start_request command without any pre-configured scop
 <tr>
 <td>
 
+`gents-desktop-bridge:allow-desktop-managed-server-open-login-items`
+
+</td>
+<td>
+
+Enables the desktop_managed_server_open_login_items command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`gents-desktop-bridge:deny-desktop-managed-server-open-login-items`
+
+</td>
+<td>
+
+Denies the desktop_managed_server_open_login_items command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `gents-desktop-bridge:allow-desktop-managed-server-reset`
 
 </td>

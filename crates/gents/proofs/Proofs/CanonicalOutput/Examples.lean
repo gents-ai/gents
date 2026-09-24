@@ -172,12 +172,6 @@ def renewed : World Nat := { live with lease := .active 7 10 15 }
 theorem due_silent_owner_renews_with_exact_deadline_cas :
     step? live (.renew .mutationWriteGate 7 10) = some renewed := by native_decide
 
-theorem owned_input_wait_remains_explicitly_renewable :
-    step? { live with request := .inputRequired }
-      (.renew .mutationWriteGate 7 10) =
-        some { renewed with request := .inputRequired } := by
-  native_decide
-
 theorem early_renewal_is_rejected :
     step? { live with now := 4 } (.renew .mutationWriteGate 7 10) = none := by
   native_decide

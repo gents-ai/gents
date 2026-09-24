@@ -5,7 +5,7 @@ use serde::Deserialize;
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct InferenceCallRecoveryReport {
@@ -93,10 +93,8 @@ async fn load_stale_inference_calls(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("querying stale InferenceCall rows: {:?}", resp.errors);
-    }
+    let resp =
+        graphql_with_transaction_retry(node, &query, "querying stale InferenceCall rows").await?;
 
     let rows = resp
         .data
@@ -129,13 +127,15 @@ async fn lookup_parent_request(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!(
-            "querying parent request for inference recovery request_id={request_id}: {:?}",
-            resp.errors
-        );
-    }
+    let resp = graphql_with_transaction_retry(
+        node,
+        &query,
+        "querying parent request for inference recovery",
+    )
+    .await
+    .with_context(|| {
+        format!("querying parent request for inference recovery request_id={request_id}")
+    })?;
 
     let rows: Vec<AgentRequestRow> = crate::graphql::rows(&resp, "AgentRequest")?;
     Ok(rows.into_iter().next())

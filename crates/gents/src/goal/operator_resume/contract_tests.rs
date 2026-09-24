@@ -206,10 +206,7 @@ async fn waiting_requests_keep_resume_idle_guard_closed_without_duplicate_childr
         .find(|case| case.name == "atomic_publication")
         .unwrap()
         .before;
-    for state in [
-        RequestLifecycleState::InputRequired,
-        RequestLifecycleState::WorkspaceBindingPending,
-    ] {
+    for state in [RequestLifecycleState::WorkspaceBindingPending] {
         assert!(!state.is_terminal());
         let f = Fixture::new(initial).await;
         f.other_request("waiting-existing", "2019-01-01T00:00:00Z", state.as_str())

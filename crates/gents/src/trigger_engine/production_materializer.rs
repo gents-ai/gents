@@ -414,13 +414,12 @@ impl MaterializerHandle for ProductionMaterializer {
                 trigger_id = escaped_trigger_id,
                 request_exclusion_filter = request_exclusion_filter,
             );
-            let resp = node.execute(&query).await;
-            if resp.has_errors() {
-                anyhow::bail!(
-                    "query for active runtime AgentRequest by trigger failed: {:?}",
-                    resp.errors
-                );
-            }
+            let resp = graphql_with_transaction_retry(
+                &node,
+                &query,
+                "query for active runtime AgentRequest by trigger",
+            )
+            .await?;
             let now = chrono::Utc::now();
             let rows = rows::<AgentRequestRow>(&resp, "AgentRequest")?;
             let found = rows.iter().any(|row| row_gates_serial_fire(row, now));
@@ -495,12 +494,12 @@ impl MaterializerHandle for ProductionMaterializer {
             let mut converged = false;
             const EXECUTION_REVOCATION_ATTEMPTS: usize = 4;
             for _ in 0..EXECUTION_REVOCATION_ATTEMPTS {
-                let result = node.execute(&query).await;
-                anyhow::ensure!(
-                    !result.has_errors(),
-                    "loading executions to supersede: {:?}",
-                    result.errors
-                );
+                let result = graphql_with_transaction_retry(
+                    &node,
+                    &query,
+                    "loading executions to supersede",
+                )
+                .await?;
                 let active_rows = rows::<AgentRequestRow>(&result, "AgentRequest")?;
                 if active_rows.is_empty() {
                     converged = true;
@@ -623,13 +622,12 @@ impl MaterializerHandle for ProductionMaterializer {
                     ) {{ _docID request_id }}
                 }}"#,
             );
-            let response = node.execute(&query).await;
-            if response.has_errors() {
-                anyhow::bail!(
-                    "query for materialized event-trigger group failed: {:?}",
-                    response.errors
-                );
-            }
+            let response = graphql_with_transaction_retry(
+                &node,
+                &query,
+                "query for materialized event-trigger group",
+            )
+            .await?;
             Ok(response
                 .data
                 .as_ref()

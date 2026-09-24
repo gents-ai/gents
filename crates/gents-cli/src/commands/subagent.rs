@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::escape_graphql_string;
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents::session::session_scope_filter;
 use gents::tool_call_lifecycle::{CancelCause, CascadeDispatch, ToolCallLifecycle};
 use gents::{DescendantGraphAccess, DescendantQuery, MAX_DESCENDANT_PAGE_LIMIT};
@@ -336,8 +336,13 @@ async fn cancel_parent_bridge_local(
         "parent bridge selects a different physical child or scope"
     );
     let physical = escape_graphql_string(parent_doc_id);
-    let response = execute_node_json(node.as_ref(), &format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#)).await?;
-    let parent = request_row_from_response(&response, parent_request_id)?;
+    let response = graphql_with_transaction_retry(
+        &node,
+        &format!(r#"{{AgentRequest(filter: {{_docID: {{_eq: "{physical}"}}}},limit:2){{_docID request_id agent_did requester_did session_id}}}}"#),
+        "load parent request for subagent cancel",
+    )
+    .await?;
+    let parent = request_row_from_data(&response.data.unwrap_or_default(), parent_request_id)?;
     anyhow::ensure!(
         parent.request_id == parent_request_id && parent.doc_id.as_deref() == Some(parent_doc_id),
         "parent physical and logical identities disagree"
@@ -627,9 +632,13 @@ async fn fetch_request_row_local_scoped(
             }}
         }}"#
     );
-    let response = execute_node_json(node, &query).await?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "load scoped request for subagent cancel")
+            .await?;
     let mut rows = response
-        .pointer("/data/AgentRequest")
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentRequest"))
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
@@ -759,7 +768,7 @@ async fn scoped_fetch_row_graphql(
         }}"#
     );
     let response = post_graphql(graphql, &query).await?;
-    request_row_from_scoped_response(&response, target)
+    request_row_from_scoped_data(&response["data"], target)
 }
 
 async fn scoped_fetch_row_local(
@@ -788,16 +797,17 @@ async fn scoped_fetch_row_local(
             }}
         }}"#
     );
-    let response = execute_node_json(node, &query).await?;
-    request_row_from_scoped_response(&response, target)
+    let response =
+        graphql_with_transaction_retry(node, &query, "load subagent cancel snapshot").await?;
+    request_row_from_scoped_data(&response.data.unwrap_or_default(), target)
 }
 
-fn request_row_from_scoped_response(
-    response: &Value,
+fn request_row_from_scoped_data(
+    data: &Value,
     target: &ScopedRequestRef,
 ) -> Result<AgentRequestRow> {
-    let rows = response
-        .pointer("/data/AgentRequest")
+    let rows = data
+        .get("AgentRequest")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("scoped snapshot query omitted rows"))?;
     anyhow::ensure!(
@@ -836,9 +846,9 @@ fn format_snapshot_states(snapshots: &[RequestCancelSnapshot]) -> String {
         .join(", ")
 }
 
-fn request_row_from_response(response: &Value, request_id: &str) -> Result<AgentRequestRow> {
-    let rows = response
-        .pointer("/data/AgentRequest")
+fn request_row_from_data(data: &Value, request_id: &str) -> Result<AgentRequestRow> {
+    let rows = data
+        .get("AgentRequest")
         .and_then(Value::as_array)
         .ok_or_else(|| anyhow::anyhow!("request row query omitted rows"))?;
     anyhow::ensure!(
@@ -883,25 +893,23 @@ async fn tool_lifecycle_state_local(
 ) -> Result<Option<String>> {
     let physical = escape_graphql_string(doc_id);
     let scope = session_scope_filter(owner, session_id, requester);
-    let response = execute_node_json(node, &format!(r#"{{AgentToolCall(filter: {{{scope},_docID: {{_eq: "{physical}"}}}},limit:2){{_docID lifecycle_state}}}}"#)).await?;
-    let rows = response["data"]["AgentToolCall"]
-        .as_array()
+    let response = graphql_with_transaction_retry(
+        node,
+        &format!(r#"{{AgentToolCall(filter: {{{scope},_docID: {{_eq: "{physical}"}}}},limit:2){{_docID lifecycle_state}}}}"#),
+        "load subagent bridge lifecycle state",
+    )
+    .await?;
+    let rows = response
+        .data
+        .as_ref()
+        .and_then(|data| data.get("AgentToolCall"))
+        .and_then(Value::as_array)
         .context("bridge state query omitted rows")?;
     anyhow::ensure!(rows.len() <= 1, "physical bridge identity is ambiguous");
     Ok(rows
         .first()
         .and_then(|row| row["lifecycle_state"].as_str())
         .map(str::to_owned))
-}
-
-async fn execute_node_json(node: &EmbeddedNode, query: &str) -> Result<Value> {
-    let response = node.execute(query).await;
-    if response.has_errors() {
-        anyhow::bail!("graphql returned errors: {:?}", response.errors);
-    }
-    Ok(json!({
-        "data": response.data.unwrap_or(Value::Null),
-    }))
 }
 
 fn string_field(row: &Value, field: &str) -> Option<String> {

@@ -1740,6 +1740,49 @@ impl CanonicalExecutionAdapter for NativeCanonicalExecutionAdapter {
                     native.segment_ids.insert(doc_id, record.id);
                     native.observe(true).await
                 }
+                LeanCanonicalExecutionOperation::AppendToolOutput {
+                    now,
+                    document,
+                    record,
+                    ..
+                } => {
+                    anyhow::ensure!(
+                        record.close.is_none() && record.flush.is_some(),
+                        "tool append requires a data flush without a closure"
+                    );
+                    let physical = native.physical_tool(*document)?.to_owned();
+                    let prepared = native.tool_output_segment(record, *document, &physical)?;
+                    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+                        native.node.clone(),
+                        &physical,
+                        &native.principal,
+                        &native.session_id,
+                        Some(&native.principal),
+                    )
+                    .await?
+                    .context("accepted physical tool disappeared before output append")?;
+                    let binding = tool.tool_output_binding()?;
+                    let receipt = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+                        &binding,
+                        &prepared.payload,
+                        native.fixture_time(record.created_at)?,
+                        native.fixture_time(*now)?,
+                    )
+                    .await;
+                    let receipt = match receipt {
+                        Ok(receipt) => receipt,
+                        Err(error)
+                            if error
+                                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                                .is_some() =>
+                        {
+                            return native.observe(false).await;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    native.segment_ids.insert(receipt.segment_doc_id, record.id);
+                    native.observe(true).await
+                }
                 LeanCanonicalExecutionOperation::AppendOutputWhileSiblingWaits {
                     now,
                     generation,
@@ -2902,6 +2945,323 @@ async fn every_generated_native_execution_script_runs_to_completion() {
     );
 }
 
+/// Native representation negative controls outside Lean's valid Time domain:
+/// a missing durable deadline fails in the append owner, while malformed input
+/// is rejected by DefraDB's DateTime scalar before it can become a durable row.
+#[tokio::test]
+async fn generated_tool_append_rejects_invalid_durable_deadline_without_writing() {
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "tool_output_before_deadline")
+        })
+        .expect("Lean exports the native pre-deadline tool-output script");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution {
+        seed,
+        query_document,
+        operations,
+        expected_observations,
+        ..
+    } = case
+    else {
+        unreachable!()
+    };
+    let [accept, dispatch, append] = operations.as_slice() else {
+        panic!("generated tool-output script must accept, dispatch, then append");
+    };
+    let LeanCanonicalExecutionOperation::AppendToolOutput {
+        now,
+        document,
+        record,
+        ..
+    } = append
+    else {
+        panic!("third generated operation must append tool output");
+    };
+    let mut adapter = NativeCanonicalExecutionAdapter;
+    let mut native = adapter.initialize(seed).await.unwrap();
+    native.query_document = *query_document;
+    for operation in [accept, dispatch] {
+        assert!(
+            adapter
+                .apply(&mut native, *query_document, operation)
+                .await
+                .unwrap()
+                .accepted
+        );
+    }
+    let before = native.observe(true).await.unwrap();
+    assert_eq!(before, expected_observations[1]);
+    assert!(expected_observations[2].accepted);
+    let physical = native.physical_tool(*document).unwrap().to_owned();
+    let prepared = native
+        .tool_output_segment(record, *document, &physical)
+        .unwrap();
+    let tool = crate::tool_call_lifecycle::ToolCallLifecycle::load_by_doc_id(
+        native.node.clone(),
+        &physical,
+        &native.principal,
+        &native.session_id,
+        Some(&native.principal),
+    )
+    .await
+    .unwrap()
+    .expect("dispatched generated tool has a physical lifecycle");
+    let binding = tool.tool_output_binding().unwrap();
+    let physical = crate::graphql::escape_graphql_string(&physical);
+    for (label, deadline_value) in [("missing", None), ("malformed", Some("not-a-deadline"))] {
+        let deadline_field = deadline_value
+            .map(|value| format!("\"{}\"", crate::graphql::escape_graphql_string(value)))
+            .unwrap_or_else(|| "null".to_owned());
+        let mutation = format!(
+            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{physical}" }} }}, input: {{ deadline_at: {deadline_field} }}) {{ _docID }} }}"#
+        );
+        let changed = crate::config_client::ConfigAccess::write_local(
+            &native.node,
+            "test.generated_tool_append_invalid_deadline",
+            &mutation,
+        )
+        .await;
+        if deadline_value.is_some() {
+            let error = changed.expect_err("DateTime schema must reject malformed deadline input");
+            assert!(
+                error.to_string().contains("Invalid DateTime format"),
+                "malformed deadline must fail at the schema boundary: {error:#}"
+            );
+            assert_eq!(native.observe(true).await.unwrap(), before);
+            continue;
+        }
+        let changed = changed.unwrap();
+        assert_eq!(
+            changed["data"]["update_AgentToolCall"]
+                .as_array()
+                .map(Vec::len),
+            Some(1),
+            "{label} deadline fixture must update exactly one physical tool"
+        );
+        let error = crate::tool_call_lifecycle::delivery::append_tool_output_at(
+            &binding,
+            &prepared.payload,
+            native.fixture_time(record.created_at).unwrap(),
+            native.fixture_time(*now).unwrap(),
+        )
+        .await
+        .expect_err("invalid durable deadline cannot authorize a fresh append");
+        assert!(
+            format!("{error:#}").contains("no accepted deadline"),
+            "missing deadline must fail at the deadline integrity check: {error:#}"
+        );
+        assert!(
+            error
+                .downcast_ref::<crate::tool_call_lifecycle::delivery::ToolOutputAppendRejection>()
+                .is_none(),
+            "{label} deadline is an integrity error, not a modeled rejection: {error:#}"
+        );
+        let mut expected_unchanged = before.clone();
+        expected_unchanged.accepted = false;
+        assert_eq!(
+            native.observe(false).await.unwrap(),
+            expected_unchanged,
+            "{label} deadline must leave exact canonical output records unchanged"
+        );
+    }
+    native.node.shutdown().await;
+}
+
+/// In-process, fixture-time gate experiment: this binds a generated lease-ordering
+/// trace to the real transaction owner, not to host clock jumps or OS suspension.
+#[tokio::test]
+async fn generated_renewal_holds_write_gate_until_stale_recovery_loses() {
+    use crate::config_client::ConfigApplyTxn;
+    use crate::lifecycle::{RecoveryResult, RecoverySelectionChoice, RenewalAttemptOutcome};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tokio::sync::Notify;
+
+    let case = crate::lean_vocab_test::lean_contract_snapshot()
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "renewal_wins_before_terminal_recovery")
+        })
+        .expect("Lean exports the native renewal/recovery ordering case");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution {
+        seed,
+        query_document,
+        operations,
+        expected_observations,
+        ..
+    } = case
+    else {
+        unreachable!()
+    };
+    let [renewal, recovery] = operations.as_slice() else {
+        panic!("generated gate case must contain renewal then recovery");
+    };
+    let [expected_after_renewal, expected_after_recovery] = expected_observations.as_slice() else {
+        panic!("generated gate case must observe both operations");
+    };
+    let LeanCanonicalExecutionOperation::RenewLease {
+        now: renewal_now,
+        generation,
+        expected_deadline,
+        ..
+    } = renewal
+    else {
+        panic!("first generated gate operation must renew");
+    };
+    let LeanCanonicalExecutionOperation::RecoverExpiredTerminal {
+        now: recovery_now,
+        expected_generation,
+        fresh_generation,
+        outcome,
+        selection,
+        items,
+        ..
+    } = recovery
+    else {
+        panic!("second generated gate operation must recover");
+    };
+    assert_eq!(expected_generation, generation);
+    assert!(
+        items.is_empty(),
+        "this gate trace has no recovered output items"
+    );
+    let choice = match selection {
+        LeanTerminalSelection::NoMessage => RecoverySelectionChoice::NoMessage,
+        LeanTerminalSelection::Message { .. } => {
+            panic!("this gate trace requires a no-message recovery selection")
+        }
+    };
+    let target = match outcome.as_str() {
+        "failed" => RequestLifecycleState::Failed,
+        other => panic!("gate fixture requires failed recovery, got {other}"),
+    };
+
+    let mut adapter = NativeCanonicalExecutionAdapter;
+    let mut native = adapter.initialize(seed).await.unwrap();
+    native.query_document = *query_document;
+    let node = Arc::clone(&native.node);
+    let request_doc_id = native.request_doc_id.clone();
+    let request = crate::graphql::escape_graphql_string(&request_doc_id);
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}, limit: 1) {{ {} }} }}"#,
+        crate::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let row = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "test.generated_renewal_gate_stale_request",
+    )
+    .await
+    .unwrap();
+    let stale: AgentRequestRow = crate::graphql::first_row(&row, "AgentRequest")
+        .unwrap()
+        .expect("generated native request");
+    let stale_expiry = stale.execution_lease_expires_at.as_deref().unwrap();
+    let physical_generation = symbolic_generation(*generation);
+    let physical_fresh_generation = symbolic_generation(*fresh_generation);
+    let stale_deadline = DateTime::parse_from_rfc3339(stale_expiry)
+        .unwrap()
+        .with_timezone(&Utc);
+    assert_eq!(
+        stale_deadline,
+        native.fixture_time(*expected_deadline).unwrap()
+    );
+    assert!(
+        native.fixture_time(*recovery_now).unwrap() >= stale_deadline,
+        "recovery must be due against its stale deadline before renewal wins"
+    );
+    assert_eq!(
+        stale.execution_generation.as_deref(),
+        Some(physical_generation.as_str())
+    );
+
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let mut renewal = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
+        1,
+        Arc::clone(&reached),
+        Arc::clone(&release),
+        crate::lifecycle::renew_execution_lease_once_at(
+            &node,
+            &request_doc_id,
+            &physical_generation,
+            native.fixture_time(*expected_deadline).unwrap(),
+            native.fixture_time(*renewal_now).unwrap(),
+        ),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            biased;
+            completed = &mut renewal => panic!("renewal completed before its held mutation: {completed:?}"),
+            _ = reached.notified() => {}
+        }
+    })
+    .await
+    .expect("renewal must reach the held write gate");
+
+    let queued = Arc::new(Notify::new());
+    let acquired = Arc::new(AtomicBool::new(false));
+    let mut recovery = Box::pin(ConfigApplyTxn::with_write_gate_observation(
+        Arc::clone(&queued),
+        Arc::clone(&acquired),
+        crate::lifecycle::recover_expired_generation_with_facts(
+            &node,
+            &stale,
+            &physical_generation,
+            stale_expiry,
+            physical_fresh_generation,
+            native.fixture_time(*recovery_now).unwrap(),
+            Some(choice),
+            Some(target),
+        ),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        tokio::select! {
+            biased;
+            completed = &mut recovery => panic!("stale recovery completed before queuing: {completed:?}"),
+            _ = queued.notified() => {}
+        }
+    })
+    .await
+    .expect("stale recovery must queue at the held write gate");
+    assert!(
+        !acquired.load(Ordering::Acquire),
+        "stale recovery must not acquire the gate before renewal commits"
+    );
+
+    release.notify_one();
+    let (renewed, fired) = tokio::time::timeout(std::time::Duration::from_secs(10), renewal)
+        .await
+        .expect("held renewal must finish after release");
+    assert!(
+        fired,
+        "renewal must pause after its real successful mutation"
+    );
+    assert_eq!(renewed.unwrap(), RenewalAttemptOutcome::Committed);
+    assert_eq!(native.observe(true).await.unwrap(), *expected_after_renewal);
+
+    let recovered = tokio::time::timeout(std::time::Duration::from_secs(10), recovery)
+        .await
+        .expect("queued stale recovery must finish after renewal")
+        .unwrap();
+    assert!(
+        acquired.load(Ordering::Acquire),
+        "recovery must acquire the gate after renewal releases it"
+    );
+    assert_eq!(recovered, RecoveryResult::Lost);
+    assert_eq!(
+        native.observe(false).await.unwrap(),
+        *expected_after_recovery
+    );
+    native.node.shutdown().await;
+}
+
 #[tokio::test]
 async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejection() {
     let case = crate::lean_vocab_test::lean_contract_snapshot()
@@ -2955,9 +3315,9 @@ async fn conflicting_spawned_child_document_is_an_adapter_gap_not_a_native_rejec
     native.node.shutdown().await;
 }
 
-// `choice` is exported separately from the accepted provider arguments: this
-// composes the real resolver and child-request owners, but does not claim the
-// trigger's workspace-argument decoder selected Bind from those arguments.
+// The accepted depth scripts retain their unchanged argument stream. The
+// receiver test separately binds model-published bind arguments to the actual
+// trigger decoder and materialization path.
 #[tokio::test]
 async fn generated_remote_depth_crosses_publication_and_child_creation_boundaries() {
     let contracts = crate::lean_vocab_test::lean_contract_snapshot();
@@ -2969,10 +3329,6 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
         (
             "remote_depth_three_rejects_child",
             "real_spawn_depth_three_copies_parent_depth",
-        ),
-        (
-            "readonly_parent_bind_readwrite_attenuates",
-            "real_spawn_depth_two_copies_parent_depth",
         ),
     ] {
         let modeled = contracts
@@ -3176,27 +3532,7 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
                     assert!(workspace.available);
                     crate::background_tools::SpawnWorkspaceArg::Inherit
                 }
-                crate::lean_vocab_test::LeanDelegatedChildChoice::Bind {
-                    workspace,
-                    requested_authority,
-                } => {
-                    assert_eq!(workspace.workspace_id, parent_stamp.workspace_id);
-                    assert_eq!(
-                        workspace.workspace_owner_agent_did,
-                        parent_stamp.workspace_owner_agent_did
-                    );
-                    assert_eq!(
-                        workspace.workspace_seal_hash,
-                        parent_stamp.workspace_seal_hash
-                    );
-                    assert_eq!(workspace.state, "ready");
-                    assert!(workspace.available);
-                    crate::background_tools::SpawnWorkspaceArg::Bind {
-                        id: format!("lean-workspace-{}", workspace.workspace_id),
-                        authority: requested_authority.clone(),
-                    }
-                }
-                _ => panic!("this native child binding only covers inherit and bind"),
+                _ => panic!("depth publication scripts require inherited workspace"),
             };
             let workspace =
                 crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(
@@ -3287,6 +3623,124 @@ async fn generated_remote_depth_crosses_publication_and_child_creation_boundarie
                     .as_deref()
             );
         }
+    }
+}
+
+// The native fixture supplies the physical IsolatedWorkspace observation; the
+// stamped parent comes from the generated source. This binds the modeled
+// negative choices to the real resolver, not to a test-local seal policy.
+#[tokio::test]
+async fn generated_provision_parent_seal_drift_reaches_real_resolver() {
+    let contracts = crate::lean_vocab_test::lean_contract_snapshot();
+    let native_case = contracts
+        .canonical_execution_gate_cases
+        .iter()
+        .find(|case| {
+            matches!(case,
+                crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { name, .. }
+                    if name == "real_spawn_depth_two_copies_parent_depth")
+        })
+        .expect("Lean exports a native workspace fixture");
+    let crate::lean_vocab_test::LeanCanonicalExecutionCase::NativeExecution { seed, .. } =
+        native_case
+    else {
+        unreachable!()
+    };
+    for name in [
+        "provision_rejects_changed_parent_seal",
+        "provision_rejects_absent_to_present_parent_seal",
+    ] {
+        let modeled = contracts
+            .delegated_child_resolution_cases
+            .iter()
+            .find(|case| case.name == name)
+            .expect("Lean exports the parent-seal drift case");
+        assert!(modeled.delegated_input.is_some());
+        assert!(modeled.expected.is_none());
+        let parent = modeled
+            .parent_workspace
+            .as_ref()
+            .expect("generated accepted source has a parent workspace");
+        let crate::lean_vocab_test::LeanDelegatedChildChoice::Provision {
+            observed_parent,
+            parent_path_exact,
+            created_child,
+        } = &modeled.choice
+        else {
+            panic!("{name} must be a provision choice");
+        };
+        assert!(*parent_path_exact);
+        assert!(created_child.is_some());
+        assert!(observed_parent.available);
+        assert_ne!(
+            parent.workspace_seal_hash,
+            observed_parent.workspace_seal_hash
+        );
+        assert_eq!(parent.workspace_id, observed_parent.workspace_id);
+        assert_eq!(
+            parent.workspace_owner_agent_did,
+            observed_parent.workspace_owner_agent_did
+        );
+        assert_eq!(seed.principal, modeled.parent_agent);
+
+        let mut adapter = NativeCanonicalExecutionAdapter;
+        let native = adapter.initialize(seed).await.unwrap();
+        let workspace_id = format!("lean-workspace-{}", parent.workspace_id);
+        let owner = modeled_principal_did(
+            parent.workspace_owner_agent_did,
+            seed.principal,
+            &native.principal,
+            &native.remote_dids,
+        );
+        let mut document =
+            crate::callback::load_isolated_workspace(&native.node, &workspace_id, &owner)
+                .await
+                .unwrap()
+                .expect("native fixture has an observed parent workspace");
+        document.seal_hash = observed_parent
+            .workspace_seal_hash
+            .map(|seal| format!("lean-seal-{seal}"));
+        let response = native
+            .node
+            .execute(&crate::workspace::isolated_workspace_upsert_mutation(
+                &document,
+            ))
+            .await;
+        assert!(!response.has_errors(), "{name}: {:?}", response.errors);
+        let stamped_seal = parent
+            .workspace_seal_hash
+            .map(|seal| format!("lean-seal-{seal}"));
+        let stamp =
+            crate::tool_call_lifecycle::subagent_workspace::ParentWorkspaceStamp::from_fields(
+                &native.principal,
+                Some(&workspace_id),
+                Some(&owner),
+                Some(&parent.workspace_authority),
+                stamped_seal.as_deref(),
+            );
+        let child_did = modeled_principal_did(
+            modeled.child_agent,
+            seed.principal,
+            &native.principal,
+            &native.remote_dids,
+        );
+        let error = crate::tool_call_lifecycle::subagent_workspace::resolve_child_workspace(
+            &native.node,
+            &stamp,
+            Some(&crate::background_tools::SpawnWorkspaceArg::Provision { policy: None }),
+            None,
+            &child_did,
+            &format!("lean-provision-{name}"),
+            &format!("lean-provision-correlation-{name}"),
+            None,
+        )
+        .await
+        .expect_err("modeled seal drift must reject through the real resolver");
+        assert!(
+            error.message.contains("parent workspace seal drift"),
+            "{name}: {error}"
+        );
+        native.node.shutdown().await;
     }
 }
 

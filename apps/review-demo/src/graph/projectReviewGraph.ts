@@ -14,9 +14,6 @@ function requestState(request: AgentRequestRow | undefined, exists: boolean): No
     return "expected";
   }
   const lifecycle = request?.lifecycle_state ?? "";
-  if (lifecycle === "inputRequired") {
-    return "input-required";
-  }
   const normalized = lifecycle.toLowerCase();
   if (FAILED.has(normalized)) {
     return "failed";

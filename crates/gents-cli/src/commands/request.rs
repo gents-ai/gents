@@ -666,7 +666,6 @@ fn lifecycle_has_begun_inference(state: &str) -> bool {
         RequestLifecycleState::parse_opt(Some(state)),
         Some(
             RequestLifecycleState::Processing
-                | RequestLifecycleState::InputRequired
                 | RequestLifecycleState::Completed
                 | RequestLifecycleState::Superseded
         )
@@ -1538,13 +1537,12 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_helpers_cover_all_ten_states() {
-        let cases: [(RequestLifecycleState, bool, Option<&str>); 10] = [
+    fn lifecycle_helpers_cover_all_nine_states() {
+        let cases: [(RequestLifecycleState, bool, Option<&str>); 9] = [
             (RequestLifecycleState::WorkspaceBindingPending, false, None),
             (RequestLifecycleState::Pending, false, None),
             (RequestLifecycleState::Claimed, false, None),
             (RequestLifecycleState::Processing, true, None),
-            (RequestLifecycleState::InputRequired, true, None),
             (RequestLifecycleState::Completed, true, Some("finish")),
             (RequestLifecycleState::Failed, false, Some("fail")),
             (RequestLifecycleState::Superseded, true, Some("supersede")),

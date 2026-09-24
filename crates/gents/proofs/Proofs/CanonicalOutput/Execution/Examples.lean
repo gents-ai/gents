@@ -347,16 +347,45 @@ def realSpawnProviderTurn : Segment :=
       realSpawnArgumentBytes⟩
     close := some (.closed .complete 1 [realSpawnArgumentBytes.length]) }
 
+def realSpawnProviderTurnForArguments (arguments : String) : Segment :=
+  let bytes := arguments.toUTF8.data.toList
+  { realSpawnProviderTurn with
+    flush := some ⟨0,
+      [⟨0, bytes.length, some
+        { block := 0, part := 0, kind := .arguments,
+          tool := some ⟨"native-call", none, "spawn_subagent"⟩ }⟩], bytes⟩
+    close := some (.closed .complete 1 [bytes.length]) }
+
 def realSpawnProviderMessage : MessageEnvelope :=
   { providerMessage with
     header := { providerMessage.header with refs := [⟨500, 0⟩] }
     blocks := [.toolCall 600 "native-call" none "spawn_subagent"
       ⟨⟨500, 0⟩, .full⟩ none none] }
 
-def acceptedDelegatedCallAtDepth (depth : Nat) : Option DelegatedCall := do
-  let accepted ← (acceptAndPublish (routedDepthWorld depth) 7 realSpawnProviderTurn
-    realSpawnProviderMessage [remote] [remoteAdmission]).toOption
-  accepted.delegatedCalls.find? (fun call => call.call == 600)
+/-- Distinct physical calls and supplied argument bytes use the same
+accept-and-publish owner. The flush and close lengths are derived from those
+bytes; the addressed host resolves the requested workspace later. -/
+def acceptedDelegatedCallFor (call depth : Nat)
+    (workspace : Option DelegatedWorkspace)
+    (arguments : String := realSpawnArguments) : Option DelegatedCall := do
+  let world := { routedDepthWorld depth with
+    remoteRoutes := [(call, 2, 8)], workspace := workspace }
+  let toolContext := { remoteToolContext with callId := call }
+  let admission : ToolAdmission := ⟨call, toolContext, workspace⟩
+  let message := { realSpawnProviderMessage with
+    blocks := [.toolCall call "native-call" none "spawn_subagent"
+      ⟨⟨500, 0⟩, .full⟩ none none] }
+  let accepted ← (acceptAndPublish world 7
+    (realSpawnProviderTurnForArguments arguments) message
+    [{ remote with call := call }] [admission]).toOption
+  accepted.delegatedCalls.find? (fun row => row.call == call)
+
+def acceptedDelegatedCallAtDepthWithWorkspace (depth : Nat)
+    (workspace : DelegatedWorkspace) : Option DelegatedCall := do
+  acceptedDelegatedCallFor 600 depth (some workspace)
+
+def acceptedDelegatedCallAtDepth (depth : Nat) : Option DelegatedCall :=
+  acceptedDelegatedCallAtDepthWithWorkspace depth remoteWorkspace
 
 theorem accepted_depth_two_creates_child_at_bound :
     (acceptedDelegatedCallAtDepth 2).bind
@@ -385,14 +414,36 @@ theorem readonly_parent_inheritance_cannot_escalate :
 theorem provisioned_child_can_have_distinct_identity_without_escalation :
     (acceptedDelegatedCallAtDepth 2).bind (fun row =>
       receiveDelegatedChild 1 2 8 1 2 row
-        (.provision observedProvisionedWorkspace true)) =
+        (.provision observedParentWorkspace true (some observedProvisionedWorkspace))) =
       some (3, some ⟨71, 2, none, .readOnly⟩) := by
   native_decide
 
 theorem unverified_provision_is_not_a_child_workspace :
     (acceptedDelegatedCallAtDepth 2).bind (fun row =>
       receiveDelegatedChild 1 2 8 1 2 row
-        (.provision { observedProvisionedWorkspace with available := false } true)) = none := by
+        (.provision observedParentWorkspace true
+          (some { observedProvisionedWorkspace with available := false }))) = none := by
+  native_decide
+
+theorem failed_provision_cannot_stamp_child :
+    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
+      receiveDelegatedChild 1 2 8 1 2 row
+        (.provision observedParentWorkspace true none)) = none := by
+  native_decide
+
+theorem changed_parent_seal_blocks_provision :
+    (acceptedDelegatedCallAtDepth 2).bind (fun row =>
+      receiveDelegatedChild 1 2 8 1 2 row
+        (.provision { observedParentWorkspace with sealHash := some 99 } true
+          (some observedProvisionedWorkspace))) = none := by
+  native_decide
+
+theorem absent_to_present_parent_seal_blocks_provision :
+    (acceptedDelegatedCallAtDepthWithWorkspace 2
+      { remoteWorkspace with sealHash := none }).bind (fun row =>
+      receiveDelegatedChild 1 2 8 1 2 row
+        (.provision observedParentWorkspace true
+          (some observedProvisionedWorkspace))) = none := by
   native_decide
 
 theorem accepted_depth_replay_rejects_changed_source :

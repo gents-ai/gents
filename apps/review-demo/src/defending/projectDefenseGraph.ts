@@ -18,9 +18,6 @@ function stateFor(
   documentExists: boolean,
 ): DefenseNodeState {
   const lifecycle = request?.lifecycle_state ?? "";
-  if (lifecycle === "inputRequired") {
-    return "input-required";
-  }
   const normalized = lifecycle.toLowerCase();
   if (FAILED.has(normalized)) {
     return "failed";
@@ -118,9 +115,6 @@ function verifierActivity(
   }
   if (lifecycle === "processing" || lifecycle === "running") {
     return "running";
-  }
-  if (lifecycle === "inputrequired" || lifecycle === "input-required") {
-    return "input required";
   }
   if (DONE.has(lifecycle)) {
     return completionStatus === "verified"

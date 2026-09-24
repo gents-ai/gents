@@ -106,10 +106,10 @@ instance {Generation : Type} [DecidableEq Generation]
   cases boundary <;> cases hlease : world.lease <;> simp <;> infer_instance
 
 /-- Lifecycle states in which the owned completion loop may keep its explicit
-lease alive. `inputRequired` remains owned while waiting for user input; it is
-not an implicit relinquishment or an output-derived timeout policy. -/
+lease alive. A mailbox handoff completes the producer; it does not hold a lease
+while waiting for the later, separately claimed reply request. -/
 def renewableLifecycle : RequestState → Prop
-  | .claimed | .processing | .inputRequired => True
+  | .claimed | .processing => True
   | _ => False
 
 instance (request : RequestState) : Decidable (renewableLifecycle request) := by

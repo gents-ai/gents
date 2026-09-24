@@ -283,7 +283,7 @@ retired. Only claim/reclaim and bounded explicit renewal establish the lease
 deadline. Output, publication, dispatch, socket activity and replay do not extend it.
 
 The existing request execution owner renews while it owns active work, including
-silent inference, foreground tool waits and an owned `inputRequired` wait.
+silent inference and foreground tool waits.
 Renewal must be independently polled from provider/tool reads; a blocking read
 is not permission to miss the deadline.
 Its lifetime is tied to the owned completion loop and stops when that ownership
@@ -412,7 +412,7 @@ selection, rather than choosing whichever attempt has visible output. The target
 | Request lifecycle | Client turn state |
 | --- | --- |
 | WorkspaceBindingPending, Pending | WaitingForClaim |
-| Claimed, Processing, InputRequired | Running |
+| Claimed, Processing | Running |
 | Completed | Completed |
 | Failed, Dead | Failed |
 | Superseded | Superseded |

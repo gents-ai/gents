@@ -52,10 +52,10 @@ use crate::agent::persona_ops::{
     apply_persona_request, decide_persona_request, BehaviorRef, PersonaCatalogView, PersonaOp,
     PersonaRequestDoc, PersonaVerdict,
 };
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use crate::AgentIdentity;
 
-use super::graphql_helpers::{ensure_no_errors, rows};
+use super::graphql_helpers::rows;
 use super::{EnrollmentAuthorityHandle, EnrollmentAuthorizationFence};
 
 /// One reconcile sweep's outcome. `applied` is a first-time apply,
@@ -513,8 +513,12 @@ impl PersonaRequestStore for GraphqlPersonaRequestStore {
                 processed_at
             }
         }"#;
-        let response = self.node.execute(query).await;
-        ensure_no_errors(&response, "query PersonaConfigRequest pending rows")?;
+        let response = graphql_with_transaction_retry(
+            &self.node,
+            query,
+            "query PersonaConfigRequest pending rows",
+        )
+        .await?;
         Ok(
             rows::<PersonaRequestRow>(&response, "PersonaConfigRequest")?
                 .into_iter()
@@ -638,8 +642,8 @@ async fn load_catalog_view_from_node(
             }}
         }}"#
     );
-    let response = node.execute(&query).await;
-    ensure_no_errors(&response, "query persona catalog sources")?;
+    let response =
+        graphql_with_transaction_retry(node, &query, "query persona catalog sources").await?;
 
     let known_agent_dids: BTreeSet<String> =
         rows::<AgentPrincipalCatalogRow>(&response, "AgentPrincipal")?
@@ -933,6 +937,7 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::graphql::ensure_no_errors;
 
     const TEST_ACTOR_DID: &str = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
 

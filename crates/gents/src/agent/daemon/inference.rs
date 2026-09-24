@@ -672,6 +672,121 @@ mod tests {
     #[derive(Clone)]
     struct RoutedReplyModel;
 
+    #[derive(Clone)]
+    struct WakeInputModel {
+        provider_inputs: Arc<std::sync::Mutex<Vec<String>>>,
+        title_calls: Arc<AtomicUsize>,
+        title_shape_mismatches: Arc<AtomicUsize>,
+    }
+
+    #[allow(refining_impl_trait)]
+    impl CompletionModel for WakeInputModel {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            unreachable!("the wake test constructs its deterministic model directly")
+        }
+
+        async fn completion(
+            &self,
+            _request: CompletionRequest,
+        ) -> Result<CompletionResponse<Self::Response>, CompletionError> {
+            Err(CompletionError::ProviderError(
+                "non-streaming completion is unused".into(),
+            ))
+        }
+
+        async fn stream(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+            crate::test_support::capture_scripted_provider_request(&request, "scripted").await?;
+            let history =
+                serde_json::to_value(&request.chat_history).expect("serialize provider input");
+            // This direct daemon fixture uses a raw model, outside the
+            // AdmittedCompletionModel call-kind wrapper. Route only the title
+            // owner's exact preamble and request shape; reject disagreement.
+            let title_preamble = super::super::title::title_generation_preamble();
+            let title_shape = request.max_tokens == Some(24) && request.tools.is_empty();
+            let title_preamble_present = json_contains_text(&history, &title_preamble);
+            let text = match (title_shape, title_preamble_present) {
+                (true, true) => {
+                    self.title_calls.fetch_add(1, Ordering::SeqCst);
+                    "background-completion-review"
+                }
+                (false, false) => {
+                    self.provider_inputs
+                        .lock()
+                        .expect("wake provider input capture")
+                        .push(
+                            serde_json::to_string(&request.chat_history)
+                                .expect("serialize provider input"),
+                        );
+                    "wake handled"
+                }
+                _ => {
+                    self.title_shape_mismatches.fetch_add(1, Ordering::SeqCst);
+                    return Err(CompletionError::ProviderError(
+                        "wake fixture title shape and owner preamble disagree".into(),
+                    ));
+                }
+            };
+            let inner: rig::streaming::StreamingResult<()> = Box::pin(stream::iter(vec![
+                Ok(RawStreamingChoice::Message(text.to_string())),
+                Ok(RawStreamingChoice::FinalResponse(())),
+            ]));
+            Ok(StreamingCompletionResponse::stream(inner))
+        }
+    }
+
+    fn json_contains_text(value: &serde_json::Value, expected: &str) -> bool {
+        match value {
+            serde_json::Value::String(text) => text.contains(expected),
+            serde_json::Value::Array(values) => values
+                .iter()
+                .any(|value| json_contains_text(value, expected)),
+            serde_json::Value::Object(fields) => fields
+                .values()
+                .any(|value| json_contains_text(value, expected)),
+            _ => false,
+        }
+    }
+
+    async fn persisted_request_by_doc_id(
+        node: &defra_node::EmbeddedNode,
+        doc_id: &str,
+    ) -> serde_json::Value {
+        let response = node
+            .execute(&format!(
+                r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{}" }} }}) {{ lifecycle_state failure_reason terminal_output }} }}"#,
+                crate::graphql::escape_graphql_string(doc_id)
+            ))
+            .await;
+        assert!(
+            !response.has_errors(),
+            "request lifecycle query: {:?}",
+            response.errors
+        );
+        let rows = response.data.as_ref().unwrap()["AgentRequest"]
+            .as_array()
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        rows[0].clone()
+    }
+
+    async fn persisted_request_state(
+        node: &defra_node::EmbeddedNode,
+        doc_id: &str,
+    ) -> gents_protocol::request_lifecycle::RequestLifecycleState {
+        let row = persisted_request_by_doc_id(node, doc_id).await;
+        gents_protocol::request_lifecycle::RequestLifecycleState::parse(
+            row["lifecycle_state"].as_str().unwrap(),
+        )
+        .unwrap()
+    }
+
     #[allow(refining_impl_trait)]
     impl CompletionModel for RoutedReplyModel {
         type Response = ();
@@ -744,6 +859,10 @@ mod tests {
             )
             .expect("test identity"),
         );
+        test_behavior_with_identity(identity)
+    }
+
+    fn test_behavior_with_identity(identity: Arc<dyn AgentIdentity>) -> Arc<ResolvedBehavior> {
         let principal = Arc::new(RuntimePrincipal {
             agent_did: identity.did().to_string(),
             identity,
@@ -1094,6 +1213,148 @@ mod tests {
 
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(data_path);
+    }
+
+    /// The R6 completion fixture uses a background subagent child, not a
+    /// spawned shell process. Its selected wake remains pending until the
+    /// daemon's ordinary admission and claim path runs here.
+    #[tokio::test]
+    async fn background_completion_wake_reaches_daemon_provider_input() {
+        use gents_protocol::request_lifecycle::RequestLifecycleState;
+
+        let selected =
+            crate::tool_call_lifecycle::completion_owner_conformance::selected_background_wake()
+                .await;
+        let admission = selected.admission;
+        let wake = selected.wake;
+        let notification_text = selected.notification_text;
+        let node = admission.node.clone();
+        assert_eq!(
+            persisted_request_state(&node, &wake.doc_id).await,
+            RequestLifecycleState::Pending,
+            "watcher selection must not preclaim the wake"
+        );
+        let identity: Arc<dyn AgentIdentity> = Arc::new(
+            KeyIdentity::load_or_create(admission.path.join("test-agent.key"), None)
+                .expect("load the signed fixture's original identity"),
+        );
+        let behavior = test_behavior_with_identity(identity);
+        assert_eq!(behavior.agent_did(), admission.agent_did);
+        assert_eq!(wake.agent_did, admission.agent_did);
+        assert_eq!(
+            wake.max_total_tokens, None,
+            "fixture allows the daemon's auxiliary title task"
+        );
+        assert!(
+            crate::session::session_needs_generated_title(
+                &node,
+                &admission.agent_did,
+                wake.requester_did.as_deref(),
+                &wake.session_id,
+            )
+            .await
+            .expect("read fixture session title"),
+            "fixture starts with a placeholder title so its auxiliary title task can be drained"
+        );
+
+        let prompt_builder = LayeredPromptBuilder::for_behavior(
+            &behavior.system_prompt,
+            &behavior.behavior_id,
+            &[],
+            false,
+            &[],
+        );
+        let preamble = prompt_builder.preamble().to_string();
+        let provider_inputs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let title_calls = Arc::new(AtomicUsize::new(0));
+        let title_shape_mismatches = Arc::new(AtomicUsize::new(0));
+        let request_identity = behavior.principal_identity().clone();
+        let mut daemon = BehaviorDaemon::new(
+            node.clone(),
+            behavior,
+            Arc::new(WakeInputModel {
+                provider_inputs: provider_inputs.clone(),
+                title_calls: title_calls.clone(),
+                title_shape_mismatches: title_shape_mismatches.clone(),
+            }),
+            preamble,
+            Arc::new(Vec::<Box<dyn ToolDyn>>::new()),
+            prompt_builder,
+            FailurePolicy::default(),
+            Some(crate::rendered_request::defra_rendered_request_capture_factory(node.clone())),
+            BackgroundToolRegistry::default(),
+            BackgroundExecutionRegistry::default(),
+            Arc::new(StartupBarrier::ready_for_test()),
+            crate::runtime_status::RuntimeStatusHandle::new(
+                node.clone(),
+                admission.agent_did.clone(),
+            ),
+            1,
+            crate::request_admission::AgentRequestAdmissionVerifier::new(
+                node.clone(),
+                request_identity,
+                crate::agent::p2p_reconcile::enrollment_authority_channel().1,
+            ),
+        )
+        .unwrap();
+        let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        daemon.process_request(wake.clone(), shutdown_rx).await;
+
+        // The title task is spawned separately by process_request. This wait
+        // observes its existing durable session-title owner before shutdown;
+        // title generation is not a background-wake acceptance condition.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                if !crate::session::session_needs_generated_title(
+                    &node,
+                    &admission.agent_did,
+                    wake.requester_did.as_deref(),
+                    &wake.session_id,
+                )
+                .await
+                .expect("observe auxiliary title task")
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("auxiliary title task must settle before test shutdown");
+
+        let diagnostic = persisted_request_by_doc_id(&node, &wake.doc_id).await;
+        let captured = provider_inputs.lock().expect("wake provider input capture");
+        assert_eq!(
+            captured.len(),
+            1,
+            "one deterministic main provider turn must run; title_calls={}, wake={:?}",
+            title_calls.load(Ordering::SeqCst),
+            diagnostic
+        );
+        assert!(title_calls.load(Ordering::SeqCst) <= 1);
+        assert_eq!(
+            title_shape_mismatches.load(Ordering::SeqCst),
+            0,
+            "title errors must not be hidden by the fallback"
+        );
+        let first_input: serde_json::Value =
+            serde_json::from_str(&captured[0]).expect("decode first provider chat history");
+        assert!(
+            json_contains_text(&first_input, &notification_text),
+            "exact durable notification must reach first provider input: {}",
+            captured[0]
+        );
+        drop(captured);
+
+        assert_eq!(
+            persisted_request_state(&node, &wake.doc_id).await,
+            RequestLifecycleState::Completed,
+            "wake must complete through the daemon's owned request path"
+        );
+
+        drop(daemon);
+        node.shutdown().await;
+        std::fs::remove_dir_all(admission.path).unwrap();
     }
 
     #[tokio::test]

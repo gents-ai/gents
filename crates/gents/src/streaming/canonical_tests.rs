@@ -519,6 +519,113 @@ async fn every_successful_publication_mutation_rolls_back_if_the_transaction_fai
     let _ = std::fs::remove_dir_all(path);
 }
 
+async fn recovery_receipt_fixture(
+    name: &str,
+) -> (
+    Arc<EmbeddedNode>,
+    std::path::PathBuf,
+    RequestLifecycle,
+    DefraStreamWriter,
+    gents_protocol::row::AgentRequestRow,
+    String,
+) {
+    let (node, path, lifecycle, writer) = fixture(name).await;
+    let request = lifecycle.request();
+    crate::config_client::ConfigAccess::transact_local(
+        &node,
+        None,
+        "test.recovery_session_observation",
+        |txn| {
+            Box::pin(async move {
+                let now = chrono::Utc::now().to_rfc3339();
+                crate::session::ensure_session_in_txn(
+                    &txn,
+                    &request.session_id,
+                    &request.agent_did,
+                    &request.behavior_id,
+                    request.requester_did.as_deref(),
+                    None,
+                    None,
+                    &now,
+                )
+                .await?;
+                let session = crate::session::load_agent_session_row_in_txn(
+                    &txn,
+                    &request.agent_did,
+                    &request.session_id,
+                    request.requester_did.as_deref(),
+                )
+                .await?
+                .expect("recovery session");
+                let facts =
+                    crate::session::load_scoped_request_facts_in_txn(&txn, &session.session, false)
+                        .await?;
+                let fact = facts
+                    .iter()
+                    .find(|fact| fact.observed.request_doc_id == request.doc_id)
+                    .expect("recovery request fact");
+                assert!(
+                    crate::session::advance_session_request_observation_in_txn(
+                        &txn,
+                        fact,
+                        &request.content,
+                        &now,
+                    )
+                    .await?
+                );
+                Ok(())
+            })
+        },
+    )
+    .await
+    .unwrap();
+    let doc_id = &lifecycle.request().doc_id;
+    writer
+        .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
+        .await;
+    writer
+        .flush_native_partial(
+            &lifecycle,
+            &gents_protocol::message::Message::assistant("retained recovery prefix"),
+        )
+        .await
+        .unwrap();
+    let escaped = crate::graphql::escape_graphql_string(doc_id);
+    let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+    let expire = crate::config_client::ConfigAccess::write_local(
+        &node,
+        "test.expire_recovery_receipt_fixture",
+        &format!(
+            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
+            crate::graphql::escape_graphql_string(&expiry),
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        expire["data"]["update_AgentRequest"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let query = format!(
+        r#"{{ AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}) {{ {} }} }}"#,
+        crate::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let response = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "test.read_recovery_receipt_fixture",
+    )
+    .await
+    .unwrap();
+    let observed = crate::graphql::first_row(&response, "AgentRequest")
+        .unwrap()
+        .unwrap();
+    (node, path, lifecycle, writer, observed, expiry)
+}
+
 #[tokio::test]
 async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mutations() {
     use crate::config_client::ConfigApplyTxn;
@@ -528,77 +635,10 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
     // a fresh recovery of the same shape. No test-side recovery write script.
     let mut mutation_count = 0;
     for baseline in [true, false] {
-        let (node, path, lifecycle, writer) = fixture("recovery-mutation-rollback").await;
-        let request = lifecycle.request();
-        crate::config_client::ConfigAccess::transact_local(
-            &node,
-            None,
-            "test.recovery_session_observation",
-            |txn| {
-                Box::pin(async move {
-                    let now = chrono::Utc::now().to_rfc3339();
-                    crate::session::ensure_session_in_txn(
-                        &txn,
-                        &request.session_id,
-                        &request.agent_did,
-                        &request.behavior_id,
-                        request.requester_did.as_deref(),
-                        None,
-                        None,
-                        &now,
-                    )
-                    .await?;
-                    let session = crate::session::load_agent_session_row_in_txn(
-                        &txn,
-                        &request.agent_did,
-                        &request.session_id,
-                        request.requester_did.as_deref(),
-                    )
-                    .await?
-                    .expect("recovery session");
-                    let facts = crate::session::load_scoped_request_facts_in_txn(
-                        &txn,
-                        &session.session,
-                        false,
-                    )
-                    .await?;
-                    let fact = facts
-                        .iter()
-                        .find(|fact| fact.observed.request_doc_id == request.doc_id)
-                        .expect("recovery request fact");
-                    assert!(
-                        crate::session::advance_session_request_observation_in_txn(
-                            &txn,
-                            fact,
-                            &request.content,
-                            &now,
-                        )
-                        .await?
-                    );
-                    Ok(())
-                })
-            },
-        )
-        .await
-        .unwrap();
-        let doc_id = &lifecycle.request().doc_id;
-        writer
-            .start_provider_attempt(doc_id, 0, 0, "inference.1".parse().unwrap())
-            .await;
-        writer
-            .flush_native_partial(
-                &lifecycle,
-                &gents_protocol::message::Message::assistant("retained recovery prefix"),
-            )
-            .await
-            .unwrap();
+        let (node, path, _lifecycle, _writer, observed, expiry) =
+            recovery_receipt_fixture("recovery-mutation-rollback").await;
+        let doc_id = observed.doc_id.as_deref().unwrap();
         let escaped = crate::graphql::escape_graphql_string(doc_id);
-        let expiry = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
-        let expire = node.execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{escaped}" }} }}, input: {{ execution_lease_expires_at: "{}" }}) {{ _docID }} }}"#,
-            crate::graphql::escape_graphql_string(&expiry),
-        )).await;
-        assert!(!expire.has_errors(), "{:?}", expire.errors);
         let snapshot = || async {
             let response = node.execute(&format!(
                 r#"{{
@@ -614,10 +654,6 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
             response
         };
         let before = snapshot().await;
-        let observed: gents_protocol::row::AgentRequestRow =
-            crate::graphql::first_row(&before, "AgentRequest")
-                .unwrap()
-                .unwrap();
         let generation = observed.execution_generation.as_deref().unwrap();
         let now = chrono::Utc::now();
         let recover = || {
@@ -686,6 +722,132 @@ async fn recovery_mutations_are_atomic_and_caller_replay_has_no_transactional_mu
         node.shutdown().await;
         let _ = std::fs::remove_dir_all(path);
     }
+}
+
+#[tokio::test]
+async fn post_commit_receipt_loss_replays_exact_recovered_generation_and_selection() {
+    use crate::config_client::ConfigApplyTxn;
+    use crate::lifecycle::{recover_expired_generation_with_facts, RecoveryResult};
+    use gents_protocol::output::{MessagePublication, TerminalOutput};
+
+    let (node, path, _lifecycle, _writer, observed, expiry) =
+        recovery_receipt_fixture("recovery-receipt-loss").await;
+    let request_doc_id = observed.doc_id.as_deref().unwrap();
+    let old_generation = observed.execution_generation.as_deref().unwrap();
+    let fresh_generation = "recovery-receipt-loss-generation";
+    assert_ne!(old_generation, fresh_generation);
+    let observed_now = chrono::Utc::now();
+    let request = crate::graphql::escape_graphql_string(request_doc_id);
+    let query = format!(
+        r#"{{
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal source writer runs payload close created_at }}
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID message_key sequence publication outcome role blocks created_at }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID lifecycle_state }}
+            AgentRequest(filter: {{ _docID: {{ _eq: "{request}" }} }}) {{ {} lifecycle_state terminal_output failure_reason terminalized_at }}
+            AgentSession {{ _docID observation }}
+        }}"#,
+        crate::watcher::AGENT_REQUEST_FIELDS,
+    );
+    let snapshot = || async {
+        crate::graphql::graphql_with_transaction_retry(
+            &node,
+            &query,
+            "test.recovery_receipt_snapshot",
+        )
+        .await
+        .expect("read recovery physical facts")
+        .data
+        .expect("recovery query data")
+    };
+    let before = snapshot().await;
+    assert!(before["AgentMessage"].as_array().unwrap().is_empty());
+    let original_segments = before["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(original_segments.len(), 1);
+    let original = &original_segments[0];
+    assert!(original["close"].is_null());
+    let recover = || {
+        recover_expired_generation_with_facts(
+            &node,
+            &observed,
+            old_generation,
+            &expiry,
+            fresh_generation.into(),
+            observed_now,
+            None,
+            None,
+        )
+    };
+    let (first, fault_fired) = ConfigApplyTxn::with_post_commit_receipt_loss(recover()).await;
+    assert!(
+        fault_fired,
+        "the committed recovery receipt must be lost once"
+    );
+    assert_eq!(first.unwrap(), RecoveryResult::Won { published: 1 });
+
+    let committed = snapshot().await;
+    let headers = committed["AgentMessage"].as_array().unwrap();
+    assert_eq!(
+        headers.len(),
+        1,
+        "nonempty prefix must publish one recovery header"
+    );
+    assert!(
+        !headers[0]["blocks"].as_array().unwrap().is_empty(),
+        "recovery header must retain the flushed provider prefix"
+    );
+    let committed_segments = committed["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(
+        committed_segments.len(),
+        before["AgentOutputSegment"].as_array().unwrap().len() + 1,
+        "recovery must close the unclosed provider prefix"
+    );
+    assert!(
+        committed_segments.contains(original),
+        "recovery must retain the exact original flush"
+    );
+    let closing = committed_segments
+        .iter()
+        .find(|row| row["_docID"] != original["_docID"])
+        .expect("recovery creates one new closing segment");
+    assert!(!closing["close"].is_null());
+    assert_eq!(closing["source"], original["source"]);
+    assert_eq!(closing["writer"], original["writer"]);
+    let header_doc_id = headers[0]["_docID"].as_str().unwrap();
+    let publication: MessagePublication =
+        serde_json::from_value(headers[0]["publication"].clone()).unwrap();
+    assert!(matches!(
+        publication,
+        MessagePublication::RequestRecovery { execution_generation }
+            if execution_generation == fresh_generation
+    ));
+    assert_eq!(headers[0]["outcome"], "partial");
+    let request = &committed["AgentRequest"][0];
+    assert_eq!(request["lifecycle_state"], "failed");
+    assert_eq!(request["execution_generation"], fresh_generation);
+    let selection: TerminalOutput =
+        serde_json::from_value(request["terminal_output"].clone()).expect("recovery selection");
+    assert_eq!(
+        selection,
+        TerminalOutput::Message {
+            message_doc_id: header_doc_id.to_owned(),
+        }
+    );
+    assert_ne!(
+        committed["AgentSession"], before["AgentSession"],
+        "recovery must refresh the durable session observation"
+    );
+
+    let (replay, writes) =
+        ConfigApplyTxn::with_successful_mutation_failure_at(None, recover()).await;
+    assert_eq!(replay.unwrap(), RecoveryResult::Won { published: 1 });
+    assert_eq!(writes, 0, "same-generation replay must not mutate");
+    assert_eq!(
+        snapshot().await,
+        committed,
+        "external replay must preserve all physical IDs, request facts and session observation"
+    );
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
 }
 
 #[tokio::test]
@@ -1302,6 +1464,197 @@ async fn accepted_tool_publication_replay_returns_exact_physical_bindings() {
     assert_eq!(a.arguments, b.arguments);
     assert_eq!(a.id, "native-tool");
     assert_eq!(a.call_id.as_deref(), Some("provider-call"));
+    node.shutdown().await;
+    let _ = std::fs::remove_dir_all(path);
+}
+
+// External storage premise under test: the embedded commit is durable but its
+// receipt never reaches the publication owner. #1630 relies on the existing
+// idempotent transaction retry to reconstruct committed publication; no
+// rollback is simulated and no model policy changes.
+/// Covers native dispatch-start election and one persisted completion after
+/// publication receipt loss. It does not execute an external `ToolDyn` effect
+/// or fault the dispatch transaction's own commit receipt.
+#[tokio::test]
+async fn post_commit_receipt_loss_replays_into_exact_committed_publication() {
+    use gents_protocol::message::{AssistantContent, Message, ToolCall, ToolFunction};
+    let (node, path, lifecycle, writer) = fixture("receipt-loss").await;
+    writer
+        .start_provider_attempt(
+            &lifecycle.request().doc_id,
+            0,
+            0,
+            "inference.1".parse().unwrap(),
+        )
+        .await;
+    let message = Message::Assistant {
+        id: Some("provider-message".into()),
+        content: vec![AssistantContent::ToolCall(ToolCall {
+            id: "native-tool".into(),
+            call_id: Some("provider-call".into()),
+            function: ToolFunction::new("read".into(), serde_json::json!({"path":"文.txt"})),
+            signature: Some("sig".into()),
+            additional_params: None,
+        })],
+    };
+    // The canonical publication owner may replay internally, so the first
+    // publish is not required to surface Err; the fault must fire exactly once
+    // at the post-commit boundary.
+    let (first, fault_fired) = crate::config_client::ConfigApplyTxn::with_post_commit_receipt_loss(
+        writer.publish_native_turn(&lifecycle, 0, 0, &message),
+    )
+    .await;
+    let first = first.expect("idempotent owner must reconstruct the lost receipt");
+    assert!(fault_fired, "post-commit receipt-loss fault must fire");
+    // Capture the committed state before an external replay so the comparison
+    // brackets that replay, rather than comparing two reads afterward.
+    let request = crate::graphql::escape_graphql_string(&lifecycle.request().doc_id);
+    let query = format!(
+        r#"{{
+            AgentMessage(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID sequence }}
+            AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}, order: {{ ordinal: ASC }}) {{ _docID ordinal close }}
+            AgentToolCall(filter: {{ request_doc_id: {{ _eq: "{request}" }} }}) {{ _docID lifecycle_state }}
+        }}"#
+    );
+    let before = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_before_external_replay",
+    )
+    .await
+    .expect("read committed receipt-loss publication");
+    let replay = writer
+        .publish_native_turn(&lifecycle, 0, 0, &message)
+        .await
+        .expect("external replay resolves committed publication");
+    let replayed = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_after_external_replay",
+    )
+    .await
+    .expect("read publication after external replay");
+    assert_eq!(
+        replayed.data, before.data,
+        "replay after a lost receipt must not add stored documents"
+    );
+    assert_eq!(first.message_doc_id, replay.message_doc_id);
+    assert_eq!(first.sequence, replay.sequence);
+    assert_eq!(first.accepted_tools.len(), replay.accepted_tools.len());
+    assert_eq!(first.accepted_tools.len(), 1);
+    let a = &first.accepted_tools[0];
+    let b = &replay.accepted_tools[0];
+    assert_eq!(a.tool_call_doc_id, b.tool_call_doc_id);
+    assert_eq!(a.accepted_header_doc_id, b.accepted_header_doc_id);
+    assert_eq!(a.arguments, b.arguments);
+    assert_eq!(a.id, "native-tool");
+    assert_eq!(a.call_id.as_deref(), Some("provider-call"));
+    let rows = before.data.as_ref().unwrap();
+    let message_rows = rows["AgentMessage"].as_array().unwrap();
+    assert_eq!(message_rows.len(), 1, "exactly one committed header");
+    assert_eq!(message_rows[0]["_docID"], first.message_doc_id);
+    assert_eq!(message_rows[0]["sequence"], first.sequence);
+    let segment_rows = rows["AgentOutputSegment"].as_array().unwrap();
+    assert_eq!(segment_rows.len(), 1);
+    assert_eq!(segment_rows[0]["_docID"], a.arguments.close_doc_id);
+    assert!(
+        !segment_rows[0]["close"].is_null(),
+        "publication closes its delta"
+    );
+    let tool_rows = rows["AgentToolCall"].as_array().unwrap();
+    assert_eq!(tool_rows.len(), 1);
+    assert_eq!(tool_rows[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(tool_rows[0]["lifecycle_state"], "pending");
+    assert_eq!(a.accepted_header_doc_id, first.message_doc_id);
+
+    // Both the lost-receipt return and an external replay refer to the same
+    // accepted physical call. Only one can win the real dispatch admission CAS.
+    let deadline = lifecycle.claimed_deadline_at().unwrap();
+    let mut first_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+        node.clone(),
+        lifecycle.request().agent_did.clone(),
+        lifecycle.request().requester_did.clone(),
+        a.clone(),
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .unwrap();
+    let mut replay_dispatch = crate::tool_call_lifecycle::ToolCallLifecycle::from_accepted(
+        node.clone(),
+        lifecycle.request().agent_did.clone(),
+        lifecycle.request().requester_did.clone(),
+        b.clone(),
+        deadline,
+        crate::tool_call_lifecycle::AwaitMode::Foreground,
+        crate::tool_call_lifecycle::CancelPolicy::Cascade,
+    )
+    .unwrap();
+    let (first_start, replay_start) = tokio::join!(
+        first_dispatch.start_running(),
+        replay_dispatch.start_running(),
+    );
+    assert_ne!(
+        first_start.is_ok(),
+        replay_start.is_ok(),
+        "exactly one accepted handle must win pending-to-running dispatch: first={first_start:?}, replay={replay_start:?}"
+    );
+    let loser_error = if first_start.is_ok() {
+        replay_start.as_ref().unwrap_err()
+    } else {
+        first_start.as_ref().unwrap_err()
+    };
+    assert!(
+        format!("{loser_error:#}").contains("no longer pending"),
+        "the losing handle must be rejected by the physical pending-row fence: {loser_error:#}"
+    );
+    let dispatched = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_after_dispatch_race",
+    )
+    .await
+    .expect("read single dispatched tool row");
+    let dispatched_tools = dispatched.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(dispatched_tools.len(), 1);
+    assert_eq!(dispatched_tools[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(dispatched_tools[0]["lifecycle_state"], "running");
+
+    let winner = if first_start.is_ok() {
+        &mut first_dispatch
+    } else {
+        &mut replay_dispatch
+    };
+    winner
+        .complete("one receipt-loss dispatch result")
+        .await
+        .unwrap();
+    let completed = crate::graphql::graphql_with_transaction_retry(
+        &node,
+        &query,
+        "receipt_loss_after_single_completion",
+    )
+    .await
+    .expect("read completed tool row");
+    let completed_tools = completed.data.as_ref().unwrap()["AgentToolCall"]
+        .as_array()
+        .unwrap();
+    assert_eq!(completed_tools.len(), 1);
+    assert_eq!(completed_tools[0]["_docID"], a.tool_call_doc_id);
+    assert_eq!(completed_tools[0]["lifecycle_state"], "completed");
+    let output = crate::background_tools::canonical_tool_output(
+        &node,
+        &a.tool_call_doc_id,
+        &lifecycle.request().doc_id,
+        &lifecycle.request().session_id,
+        &lifecycle.request().agent_did,
+        lifecycle.request().requester_did.as_deref(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(output, "one receipt-loss dispatch result");
     node.shutdown().await;
     let _ = std::fs::remove_dir_all(path);
 }

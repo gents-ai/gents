@@ -5,6 +5,7 @@ use crate::lean_vocab_test::{
     lean_goal_capability_resolution_cases, lean_goal_continuation_materialization_cases,
     lean_goal_create_cases, lean_goal_decision_cases, lean_goal_submission_cases,
     lean_goal_transition_cases, lean_task_goal_publication_cases, lean_task_goal_recovery_cases,
+    lean_terminal_diagnostic_presentation_cases,
 };
 
 pub(super) fn lean_executable_contracts_cover_initial_domains() {
@@ -83,7 +84,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
             "pending",
             "claimed",
             "processing",
-            "inputRequired",
             "completed",
             "failed",
             "superseded",
@@ -100,7 +100,6 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_lean_transition_is_illegal("SessionRecovery", "dead", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "superseded", "pending");
     assert_lean_transition_is_illegal("SessionRecovery", "interrupted", "pending");
-    assert_lean_transition_is_illegal("SessionRecovery", "inputRequired", "pending");
     assert_lean_transition_is_legal("InferenceCall", "queued", "running");
     assert_lean_transition_is_legal("InferenceCall", "running", "completed");
     assert_lean_transition_is_legal("InferenceCall", "running", "failed");
@@ -125,10 +124,10 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     );
     assert_eq!(lean_contract_snapshot().runtime_reconcile_cases.len(), 14);
     assert_eq!(lean_contract_snapshot().root_admission_cases.len(), 27);
-    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 100);
+    assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
-    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 17);
+    assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
         lean_contract_snapshot()
             .inference_slot_accounting_cases
@@ -234,7 +233,6 @@ async fn agent_tool_call_has_cross_principal_coordination_fields() {
 fn lean_boundary_metadata_is_typed_and_reviewable() {
     let snapshot = lean_contract_snapshot();
     let expected_boundary_ids = [
-        "boundary.request.input-required-reserved",
         "boundary.request.dead-preclaim-only",
         "boundary.request.recovery-sweep-reachable",
         "boundary.tool-call.permanent-without-retry-evidence",
@@ -504,6 +502,18 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "request_execution_lease_trace_cases".to_string(),
             "RequestExecutionLeaseTraceCases".to_string(),
+        ));
+    }
+    if !snapshot.queued_steering_trace_cases.is_empty() {
+        emitted.insert((
+            "queued_steering_trace_cases".into(),
+            "QueuedSteeringTraceCases".into(),
+        ));
+    }
+    if !snapshot.queued_steering_guard_cases.is_empty() {
+        emitted.insert((
+            "queued_steering_guard_cases".into(),
+            "QueuedSteeringGuardCases".into(),
         ));
     }
     if !snapshot.provider_eof_cases.is_empty() {
@@ -850,6 +860,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "ClientBehaviorReadinessCases".to_string(),
         ));
     }
+    if !snapshot.readiness_publication_cases.is_empty() {
+        emitted.insert((
+            "readiness_publication_cases".to_string(),
+            "ReadinessPublicationCases".to_string(),
+        ));
+    }
     if !snapshot.live_overlay_cases.is_empty() {
         emitted.insert((
             "live_overlay_cases".to_string(),
@@ -866,6 +882,24 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "recovery_sweep_cases".to_string(),
             "RecoverySweepCases".to_string(),
+        ));
+    }
+    if !snapshot.mailbox_handoff_cases.is_empty() {
+        emitted.insert((
+            "mailbox_handoff_cases".to_string(),
+            "MailboxHandoffCases".to_string(),
+        ));
+    }
+    if !snapshot.reserved_child_materialization_cases.is_empty() {
+        emitted.insert((
+            "reserved_child_materialization_cases".to_string(),
+            "ReservedChildMaterializationCases".to_string(),
+        ));
+    }
+    if !snapshot.local_parent_depth_cases.is_empty() {
+        emitted.insert((
+            "local_parent_depth_cases".to_string(),
+            "LocalParentDepthCases".to_string(),
         ));
     }
     if !lean_restart_disposition_cases().is_empty() {
@@ -914,6 +948,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "canonical_payload_presentation_cases".to_string(),
             "CanonicalPayloadPresentationCases".to_string(),
+        ));
+    }
+    if !lean_terminal_diagnostic_presentation_cases().is_empty() {
+        emitted.insert((
+            "terminal_diagnostic_presentation_cases".to_string(),
+            "TerminalDiagnosticPresentationCases".to_string(),
         ));
     }
     if !lean_compaction_reducer_cases().is_empty() {
@@ -992,6 +1032,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "rendered_capture_cases".to_string(),
             "RenderedCaptureCases".to_string(),
+        ));
+    }
+    if !snapshot.rendered_capture_storage_cases.is_empty() {
+        emitted.insert((
+            "rendered_capture_storage_cases".to_string(),
+            "RenderedCaptureStorageCases".to_string(),
         ));
     }
     if !snapshot.durable_reduction_cases.is_empty() {
@@ -1206,6 +1252,9 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "R5CrossPrincipalCases".into(),
         ));
     }
+    if !snapshot.r5_scenario_cases.is_empty() {
+        emitted.insert(("r5_scenario_cases".into(), "R5Scenarios".into()));
+    }
     if !lean_composed_invariant_witnesses().is_empty() {
         emitted.insert((
             "composed_invariant_witnesses".to_string(),
@@ -1307,6 +1356,12 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
         emitted.insert((
             "session_hydration_cases".to_string(),
             "SessionHydrationDecisionCases".to_string(),
+        ));
+    }
+    if !snapshot.session_hydration_closure_cases.is_empty() {
+        emitted.insert((
+            "session_hydration_closure_cases".to_string(),
+            "SessionHydrationClosureCases".to_string(),
         ));
     }
     if !snapshot.session_hydration_apply_cases.is_empty() {

@@ -1,5 +1,5 @@
 use crate::graphql::escape_graphql_string;
-pub(super) use crate::graphql::{ensure_no_errors, first_row, rows};
+pub(super) use crate::graphql::{first_row, rows};
 
 /// Render a GraphQL string-list literal, emitting `null` for an empty list
 /// (never `[]`, which types as `JsonArray` and corrupts nillable array columns).

@@ -1,7 +1,8 @@
 use anyhow::{bail, Context, Result};
 use defra_p2p_adapter::P2pDocumentRequest;
 use gents::background_completion::{
-    observe_cancel_cascade_ack, project_background_subagent_completion,
+    observe_cancel_cascade_ack, project_background_subagent_completion, CancelAckOutcome,
+    STUCK_CANCEL_THRESHOLD_SECS,
 };
 use gents::config_client::{
     apply_desired_state_plan, read_desired_state_record_in_txn as read_desired_state_record,
@@ -34,7 +35,35 @@ use crate::support::streaming_backend::{
 };
 use crate::support::{first_optional_row, test_p2p_db, TestDb};
 
-use super::scenario::{ModeledAction, ModeledScenario, NodeId};
+use super::scenario::{
+    ModeledAction, ModeledBridgeFact, ModeledCancelAckEvent, ModeledCancelAckOutcome,
+    ModeledChildChoice, ModeledChildFact, ModeledRecoveryCheckpoint, ModeledScenario,
+    ModeledWorkspaceStamp, NodeId,
+};
+
+const GENERATED_CHILD_BEHAVIOR: &str = "r5-generated-child-behavior";
+
+fn native_spawn_arguments(modeled: &str) -> Result<String> {
+    let mut value: serde_json::Value =
+        serde_json::from_str(modeled).context("decode Lean-accepted native spawn arguments")?;
+    let fields = value
+        .as_object_mut()
+        .context("Lean-accepted spawn arguments are not a JSON object")?;
+    anyhow::ensure!(
+        fields.get("name").and_then(serde_json::Value::as_str) == Some("lean-behavior-8"),
+        "Lean-accepted spawn arguments do not name the modeled target behavior"
+    );
+    fields.insert("name".into(), GENERATED_CHILD_BEHAVIOR.into());
+    serde_json::to_string(&value).context("encode physical target in accepted spawn arguments")
+}
+
+fn spawn_prompt(arguments: &str) -> Result<String> {
+    let value: serde_json::Value = serde_json::from_str(arguments)?;
+    let prompt = value["prompt"]
+        .as_str()
+        .context("Lean-accepted spawn arguments omitted prompt")?;
+    Ok(prompt.to_owned())
+}
 
 pub struct HarnessNode {
     pub id: NodeId,
@@ -52,17 +81,24 @@ pub struct Harness {
     b: HarnessNode,
     history: Vec<Observation>,
     generated_bridges: HashMap<String, GeneratedBridge>,
+    modeled_parent_request_ids: HashSet<String>,
     generated_pairing_done: bool,
     generated_child_backend: Option<MockStreamingBackend>,
     generated_child_agent: Option<BootedAgent>,
-    short_child_lease_for_b_crash: bool,
+    child_lease_secs: u64,
+    child_backend_capacity: usize,
+    modeled_generations: HashMap<String, HashMap<u64, String>>,
+    observed_expired_children: HashSet<String>,
+    observed_cancel_ack_events: Vec<ModeledCancelAckEvent>,
 }
 
 struct GeneratedBridge {
     symbolic_child: String,
+    symbolic_call_doc: u64,
     session_id: String,
     physical_child_request_id: Option<String>,
     physical_bridge_doc_id: String,
+    accepted_arguments: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -91,6 +127,8 @@ impl Observation {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BridgeObservation {
+    #[serde(rename = "_docID")]
+    pub doc_id: String,
     pub request_id: String,
     pub session_id: String,
     pub tool_call_id: String,
@@ -100,6 +138,8 @@ pub struct BridgeObservation {
     pub cancel_cascade_intent_at: Option<String>,
     pub cancel_pending_remote_ack: Option<bool>,
     pub stuck_since: Option<String>,
+    pub delegated_input: Option<gents_protocol::output::DelegatedToolInput>,
+    pub delegated_workspace: Option<gents_protocol::output::DelegatedWorkspace>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,6 +149,11 @@ pub struct RequestObservation {
     pub lifecycle_state: RequestLifecycleState,
     pub caused_by_parent_tool_call_id: Option<String>,
     pub interrupt_requested_at: Option<String>,
+    pub subagent_depth: Option<u32>,
+    pub workspace_id: Option<String>,
+    pub workspace_owner_agent_did: Option<String>,
+    pub workspace_seal_hash: Option<String>,
+    pub workspace_authority: Option<String>,
 }
 
 impl RequestObservation {
@@ -164,10 +209,15 @@ impl Harness {
             b,
             history: Vec::new(),
             generated_bridges: HashMap::new(),
+            modeled_parent_request_ids: HashSet::new(),
             generated_pairing_done: false,
             generated_child_backend: None,
             generated_child_agent: None,
-            short_child_lease_for_b_crash: false,
+            child_lease_secs: 0,
+            child_backend_capacity: 0,
+            modeled_generations: HashMap::new(),
+            observed_expired_children: HashSet::new(),
+            observed_cancel_ack_events: Vec::new(),
         };
         harness.record_observation().await?;
         Ok(harness)
@@ -175,28 +225,51 @@ impl Harness {
 
     pub async fn start_generated(scenario: &ModeledScenario) -> Result<Self> {
         let mut harness = Self::start_two_p2p_nodes().await?;
-        harness.short_child_lease_for_b_crash = scenario
+        anyhow::ensure!(
+            scenario.child_lease_secs > 0,
+            "R5 modeled child lease must be positive"
+        );
+        anyhow::ensure!(
+            scenario.cancel_ack_threshold_secs == u64::try_from(STUCK_CANCEL_THRESHOLD_SECS)?,
+            "R5 modeled cancel-ack threshold differs from native owner"
+        );
+        harness.child_lease_secs = scenario.child_lease_secs;
+        harness.child_backend_capacity = scenario
             .actions
             .iter()
-            .any(|action| matches!(action, ModeledAction::CrashNode { node, .. } if node == "B"));
+            .filter(|action| {
+                matches!(
+                    action,
+                    ModeledAction::PublishAcceptedBackgroundBridge { .. }
+                )
+            })
+            .count()
+            .max(1);
         let plans = scenario
             .actions
             .iter()
             .filter_map(|action| match action {
-                ModeledAction::PublishAcceptedBackgroundBridge { child, .. } => Some(child),
+                ModeledAction::PublishAcceptedBackgroundBridge {
+                    child,
+                    accepted_arguments,
+                    ..
+                } => Some((child, accepted_arguments.as_deref())),
                 _ => None,
             })
-            .map(|child| {
-                let prompt = format!("R5 child {child}");
-                StreamPlan::current_authored_user(
+            .map(|(child, accepted_arguments)| {
+                let modeled = accepted_arguments
+                    .context("R5 accepted bridge omitted modeled argument bytes")?;
+                let arguments = native_spawn_arguments(modeled)?;
+                let prompt = spawn_prompt(&arguments)?;
+                Ok(StreamPlan::current_authored_user(
                     &prompt,
                     vec![StreamResponse::Stream(StreamScript::paused_before(
                         &prompt,
                         vec![StreamChunk::text(format!("R5 result {child}"))],
                     ))],
-                )
+                ))
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         let backend = MockStreamingBackend::start_with_plans("r5-generated-child-model", plans)?;
         bind_default_behavior_backend(
             harness.b.db.node.as_ref(),
@@ -295,27 +368,34 @@ impl Harness {
         child: &str,
         session: &str,
         parent_depth: u32,
-        expect_depth_rejection: bool,
+        call_doc: u64,
+        parent_workspace: Option<&ModeledWorkspaceStamp>,
+        accepted_arguments: &str,
     ) -> Result<()> {
         anyhow::ensure!(
-            (parent_depth >= gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH)
-                == expect_depth_rejection,
-            "modeled R5 spawn outcome does not match the owned depth ceiling"
+            parent_depth < gents::tool_call_lifecycle::MAX_SUBAGENT_DEPTH,
+            "modeled accepted R5 bridge exceeds owned depth ceiling"
         );
         anyhow::ensure!(
             !self.generated_bridges.contains_key(tool),
             "duplicate R5 accepted bridge {tool}"
         );
-        if expect_depth_rejection {
-            return self
-                .publish_depth_rejected_spawn_invocation(tool, child, session, parent_depth)
-                .await;
-        }
-        const CHILD_BEHAVIOR: &str = "r5-generated-child-behavior";
+        anyhow::ensure!(
+            !self
+                .generated_bridges
+                .values()
+                .any(|bridge| bridge.symbolic_call_doc == call_doc),
+            "distinct R5 modeled calls share symbolic physical document {call_doc}"
+        );
+        anyhow::ensure!(
+            parent_workspace.is_none(),
+            "R5 runner does not yet bind modeled parent workspace receive"
+        );
+        let arguments = native_spawn_arguments(accepted_arguments)?;
         configure_subagent_behavior(
             self.b.db.node.as_ref(),
             self.b.did(),
-            CHILD_BEHAVIOR,
+            GENERATED_CHILD_BEHAVIOR,
             "r5-generated-child-tools",
             Vec::new(),
             true,
@@ -334,9 +414,9 @@ impl Harness {
             &format!("r5-generated-parent-tools-{tool}"),
             vec![subagent_target(
                 self.a.did(),
-                CHILD_BEHAVIOR.to_string(),
+                GENERATED_CHILD_BEHAVIOR.to_string(),
                 self.b.did().to_string(),
-                CHILD_BEHAVIOR.to_string(),
+                GENERATED_CHILD_BEHAVIOR.to_string(),
             )],
             true,
             true,
@@ -346,12 +426,6 @@ impl Harness {
         let parent_request = format!("r5-generated-parent-request-{tool}");
         let backend_id = format!("r5-generated-parent-backend-{tool}");
         let prompt = format!("accepted R5 background bridge {tool}");
-        let arguments = json!({
-            "name": CHILD_BEHAVIOR,
-            "prompt": format!("R5 child {child}"),
-            "await_mode": "background",
-        })
-        .to_string();
         let configured = [parent_behavior.as_str()];
         let prepared = prepare_accepted_turn(
             &self.a.db,
@@ -363,7 +437,7 @@ impl Harness {
                 request_id: &parent_request,
                 session_id: session,
                 prompt: &prompt,
-                accepted_chunks: vec![StreamChunk::tool_call(tool, "spawn_subagent", arguments)],
+                accepted_chunks: vec![StreamChunk::tool_call(tool, "spawn_subagent", &arguments)],
                 child_plans: Vec::new(),
                 valid_until: None,
                 subagent_depth: Some(parent_depth),
@@ -420,14 +494,31 @@ impl Harness {
             observed.data
         );
         let bridge = wait_for_bridge(self.a.db.node.as_ref(), session, tool).await;
+        let copied: gents_protocol::output::DelegatedToolInput = serde_json::from_value(
+            bridge
+                .delegated_input
+                .clone()
+                .context("R5 accepted bridge omitted delegated input")?,
+        )?;
+        anyhow::ensure!(
+            copied.parent_subagent_depth == parent_depth && copied.arguments == arguments,
+            "R5 accepted bridge did not retain the modeled arguments and parent depth"
+        );
+        anyhow::ensure!(
+            bridge.delegated_workspace.is_none(),
+            "R5 no-workspace accepted bridge unexpectedly carries a workspace stamp"
+        );
         runtime.shutdown().await;
+        self.modeled_parent_request_ids.insert(parent_request);
         self.generated_bridges.insert(
             tool.to_string(),
             GeneratedBridge {
                 symbolic_child: child.to_string(),
+                symbolic_call_doc: call_doc,
                 session_id: session.to_string(),
                 physical_child_request_id: bridge.child_request_id,
                 physical_bridge_doc_id: bridge.doc_id,
+                accepted_arguments: arguments,
             },
         );
         Ok(())
@@ -648,6 +739,7 @@ impl Harness {
             "R5 max-depth rejection materialized a remote child"
         );
         runtime.shutdown().await;
+        self.modeled_parent_request_ids.insert(parent_request);
         Ok(())
     }
 
@@ -711,11 +803,26 @@ impl Harness {
         Ok(())
     }
 
-    async fn materialize_generated_child(&mut self, child: &str, tool: &str) -> Result<()> {
-        let physical_child = self
-            .generated_bridge(tool, child)?
-            .physical_child_request_id
-            .clone();
+    async fn materialize_generated_child(
+        &mut self,
+        child: &str,
+        tool: &str,
+        payload: u64,
+        choice: &ModeledChildChoice,
+        expected: &ModeledChildFact,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            matches!(choice, ModeledChildChoice::None),
+            "R5 runner does not yet bind modeled child workspace choices: {choice:?}"
+        );
+        let bridge = self.generated_bridge(tool, child)?;
+        anyhow::ensure!(
+            payload == bridge.symbolic_call_doc,
+            "R5 modeled payload {payload} does not match accepted call document {}",
+            bridge.symbolic_call_doc
+        );
+        let physical_child = bridge.physical_child_request_id.clone();
+        let expected_prompt = spawn_prompt(&bridge.accepted_arguments)?;
         let Some(physical_child) = physical_child else {
             // An accepted tool row may have no child reservation when the
             // production admission owner rejects delegation (depth ceiling).
@@ -735,9 +842,12 @@ impl Harness {
                 "r5-generated-child-model",
             )
             .await;
-            if self.short_child_lease_for_b_crash {
-                configure_generated_child_lease(&self.b).await?;
-            }
+            configure_generated_child_execution(
+                &self.b,
+                self.child_lease_secs,
+                self.child_backend_capacity,
+            )
+            .await?;
             let agent = Gents::from_default_behavior_documents(
                 self.b.db.node.clone(),
                 self.b.db.node_identity.clone(),
@@ -766,37 +876,16 @@ impl Harness {
             self.a.did(),
             observed.requester_did
         );
-        Ok(())
-    }
-
-    async fn wait_for_generated_child_execution_before_b_crash(&self) -> Result<()> {
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        for bridge in self.generated_bridges.values() {
-            let Some(physical_child) = bridge.physical_child_request_id.as_deref() else {
-                continue;
-            };
-            loop {
-                let row = crate::support::load_request_row_by_logical_id(
-                    self.b.db.node.as_ref(),
-                    physical_child,
-                )
-                .await;
-                if row.lifecycle_state == Some(RequestLifecycleState::Processing)
-                    && row.execution_lease_expires_at.is_some()
-                {
-                    break;
-                }
-                anyhow::ensure!(
-                    tokio::time::Instant::now() < deadline,
-                    "R5 B crash did not occur mid-execution for child {}: state={:?}, failure={:?}, lease={:?}",
-                    bridge.symbolic_child,
-                    row.lifecycle_state,
-                    row.failure_reason,
-                    row.execution_lease_expires_at
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-            }
-        }
+        anyhow::ensure!(
+            observed.content == expected_prompt && observed.subagent_depth == Some(expected.depth),
+            "R5 child {child} lost modeled prompt/depth: native={observed:?}, modeled={expected:?}"
+        );
+        let child_row = load_child_requests(&self.b)
+            .await?
+            .into_iter()
+            .find(|row| row.request_id == physical_child)
+            .with_context(|| format!("R5 child {child} disappeared after materialization"))?;
+        self.assert_child_workspace(&child_row, expected.workspace.as_ref())?;
         Ok(())
     }
 
@@ -923,10 +1012,18 @@ impl Harness {
                     has_message,
                     "R5 completed child requires its modeled message"
                 );
+                let bridge = self
+                    .generated_bridges
+                    .values()
+                    .find(|bridge| bridge.symbolic_child == child)
+                    .with_context(|| {
+                        format!("R5 completed child {child} has no accepted bridge")
+                    })?;
+                let prompt = spawn_prompt(&bridge.accepted_arguments)?;
                 self.generated_child_backend
                     .as_ref()
                     .context("R5 child provider backend was not prepared")?
-                    .release(&format!("R5 child {child}"));
+                    .release(&prompt);
                 crate::support::live_inference::wait_for_request_terminal(
                     self.b.db.node.as_ref(),
                     physical_child,
@@ -966,8 +1063,13 @@ impl Harness {
             row.execution_lease_expires_at
         );
         anyhow::ensure!(
-            matches!(row.terminal_output, Some(TerminalOutput::Message { .. })) == has_message,
-            "R5 child {child} terminal selection disagrees with model"
+            matches!(
+                (has_message, row.terminal_output.as_ref()),
+                (true, Some(TerminalOutput::Message { .. }))
+                    | (false, Some(TerminalOutput::NoMessage))
+            ),
+            "R5 child {child} terminal selection disagrees with generated has_message={has_message}: {:?}",
+            row.terminal_output
         );
         Ok(())
     }
@@ -1119,54 +1221,451 @@ impl Harness {
         }
     }
 
-    async fn wait_for_generated_expired_child_leases(&self) -> Result<()> {
-        let wait_limit = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
-        for bridge in self.generated_bridges.values() {
-            let Some(physical_child) = bridge.physical_child_request_id.as_deref() else {
-                continue;
-            };
+    async fn observe_generated_child_begin(&mut self, child: &str, generation: u64) -> Result<()> {
+        let physical_child = self.generated_child_request_id(child)?.to_owned();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let physical_generation = loop {
             let row = crate::support::load_request_row_by_logical_id(
                 self.b.db.node.as_ref(),
-                physical_child,
+                &physical_child,
             )
             .await;
-            if row.lifecycle_state != Some(RequestLifecycleState::Processing) {
-                continue;
-            }
-            let expiry = row
-                .execution_lease_expires_at
-                .as_deref()
-                .context("crashed R5 child lost its persisted execution deadline")?;
-            let expiry = chrono::DateTime::parse_from_rfc3339(expiry)
-                .context("crashed R5 child has malformed execution deadline")?
-                .with_timezone(&chrono::Utc);
-            while chrono::Utc::now() <= expiry {
+            if row.lifecycle_state == Some(RequestLifecycleState::Processing) {
+                let physical_generation = row
+                    .execution_generation
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .context("R5 processing child omitted owned generation")?;
+                let native_lease_secs =
+                    read_generated_child_lease_secs(&self.b, &physical_child).await?;
                 anyhow::ensure!(
-                    tokio::time::Instant::now() < wait_limit,
-                    "R5 child execution deadline did not pass within configured test limit"
+                    native_lease_secs == i64::try_from(self.child_lease_secs)?,
+                    "R5 native claim lease differs from exported child_lease_secs: {native_lease_secs}"
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                anyhow::ensure!(
+                    row.execution_lease_expires_at.is_some(),
+                    "R5 processing child omitted durable expiry"
+                );
+                break physical_generation.to_owned();
             }
+            anyhow::ensure!(
+                tokio::time::Instant::now() < deadline,
+                "R5 modeled BeginChild did not observe physical processing for {child}: {:?}",
+                row.lifecycle_state
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        let prior = self
+            .modeled_generations
+            .entry(child.to_owned())
+            .or_default()
+            .insert(generation, physical_generation.clone());
+        anyhow::ensure!(
+            prior.is_none_or(|prior| prior == physical_generation),
+            "R5 symbolic generation {generation} changed its physical owner for {child}"
+        );
+        Ok(())
+    }
+
+    async fn wait_for_generated_expired_child_lease(&self, child: &str) -> Result<()> {
+        let wait_limit = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let physical_child = self.generated_child_request_id(child)?;
+        let row =
+            crate::support::load_request_row_by_logical_id(self.b.db.node.as_ref(), physical_child)
+                .await;
+        anyhow::ensure!(
+            row.lifecycle_state == Some(RequestLifecycleState::Processing),
+            "R5 AwaitChildExpiry requires a processing child {child}: {:?}",
+            row.lifecycle_state
+        );
+        let expiry = row
+            .execution_lease_expires_at
+            .as_deref()
+            .context("crashed R5 child lost its persisted execution deadline")?;
+        let expiry = chrono::DateTime::parse_from_rfc3339(expiry)
+            .context("crashed R5 child has malformed execution deadline")?
+            .with_timezone(&chrono::Utc);
+        while chrono::Utc::now() <= expiry {
+            anyhow::ensure!(
+                tokio::time::Instant::now() < wait_limit,
+                "R5 child execution deadline did not pass within configured test limit"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
         Ok(())
     }
 
+    async fn recover_generated_child_requests(
+        &mut self,
+        expected_generation: u64,
+        fresh_generation: u64,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            expected_generation != fresh_generation,
+            "R5 recovery generation symbols must be distinct"
+        );
+        let mut candidates = Vec::new();
+        let mut live_children = Vec::new();
+        for (symbolic_child, generations) in &self.modeled_generations {
+            let Some(expected_physical) = generations.get(&expected_generation) else {
+                continue;
+            };
+            let physical_child = self.generated_child_request_id(symbolic_child)?.to_owned();
+            let row = crate::support::load_request_row_by_logical_id(
+                self.b.db.node.as_ref(),
+                &physical_child,
+            )
+            .await;
+            if row.lifecycle_state == Some(RequestLifecycleState::Processing) {
+                anyhow::ensure!(
+                    row.execution_generation.as_deref() == Some(expected_physical.as_str()),
+                    "R5 child {symbolic_child} no longer owns modeled generation {expected_generation}"
+                );
+                let binding = (
+                    symbolic_child.clone(),
+                    physical_child,
+                    expected_physical.clone(),
+                );
+                if self.observed_expired_children.contains(symbolic_child) {
+                    candidates.push(binding);
+                } else {
+                    live_children.push(binding);
+                }
+            }
+        }
+        let report = RequestLifecycle::recover_all(self.b.db.node.as_ref(), self.b.did()).await?;
+        anyhow::ensure!(
+            report.requests_recovered == candidates.len(),
+            "R5 real request recovery count differs from modeled expired children: {report:?}, expected {}",
+            candidates.len()
+        );
+        for (symbolic_child, physical_child, generation) in live_children {
+            let row = crate::support::load_request_row_by_logical_id(
+                self.b.db.node.as_ref(),
+                &physical_child,
+            )
+            .await;
+            anyhow::ensure!(
+                row.lifecycle_state == Some(RequestLifecycleState::Processing)
+                    && row.execution_generation.as_deref() == Some(generation.as_str()),
+                "R5 recovery changed modeled live child {symbolic_child}: {:?}",
+                row.lifecycle_state
+            );
+        }
+        for (symbolic_child, physical_child, old_generation) in candidates {
+            let row = crate::support::load_request_row_by_logical_id(
+                self.b.db.node.as_ref(),
+                &physical_child,
+            )
+            .await;
+            anyhow::ensure!(
+                row.lifecycle_state
+                    .is_some_and(RequestLifecycleState::is_terminal),
+                "R5 recovered child {symbolic_child} is not terminal: {:?}",
+                row.lifecycle_state
+            );
+            let next_generation = row
+                .execution_generation
+                .as_deref()
+                .filter(|value| !value.is_empty())
+                .context("R5 recovered child omitted fresh physical generation")?;
+            anyhow::ensure!(
+                next_generation != old_generation,
+                "R5 recovery reused the expired physical generation for {symbolic_child}"
+            );
+            let prior = self
+                .modeled_generations
+                .get_mut(&symbolic_child)
+                .context("R5 child generation binding disappeared")?
+                .insert(fresh_generation, next_generation.to_owned());
+            anyhow::ensure!(
+                prior.is_none_or(|prior| prior == next_generation),
+                "R5 fresh generation symbol changed its physical owner for {symbolic_child}"
+            );
+        }
+        Ok(())
+    }
+
+    fn record_cancel_ack_outcomes(&mut self, outcomes: Vec<CancelAckOutcome>) {
+        self.observed_cancel_ack_events
+            .extend(outcomes.into_iter().map(|outcome| {
+                let (tool, outcome) = match outcome {
+                    CancelAckOutcome::Pending {
+                        parent_tool_call_id,
+                    } => (parent_tool_call_id, ModeledCancelAckOutcome::Pending),
+                    CancelAckOutcome::Stuck {
+                        parent_tool_call_id,
+                        ..
+                    } => (parent_tool_call_id, ModeledCancelAckOutcome::Stuck),
+                    CancelAckOutcome::Acked {
+                        parent_tool_call_id,
+                    } => (parent_tool_call_id, ModeledCancelAckOutcome::Acked),
+                };
+                ModeledCancelAckEvent { tool, outcome }
+            }));
+    }
+
+    pub fn observed_cancel_ack_events(&self) -> &[ModeledCancelAckEvent] {
+        &self.observed_cancel_ack_events
+    }
+
+    fn assert_child_workspace(
+        &self,
+        child: &RequestObservation,
+        expected: Option<&ModeledWorkspaceStamp>,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            expected.is_none(),
+            "R5 runner does not yet bind modeled child workspace stamps"
+        );
+        anyhow::ensure!(
+            child.workspace_id.is_none()
+                && child.workspace_owner_agent_did.is_none()
+                && child.workspace_seal_hash.is_none()
+                && child.workspace_authority.is_none(),
+            "R5 no-workspace child has an unexpected native workspace stamp: {child:?}"
+        );
+        Ok(())
+    }
+
+    fn assert_bridge_fact(
+        &self,
+        actual: &BridgeObservation,
+        expected: &ModeledBridgeFact,
+    ) -> Result<()> {
+        let mapped = self.generated_bridge(&expected.tool, &expected.child)?;
+        anyhow::ensure!(
+            mapped.symbolic_call_doc == expected.call_doc
+                && actual.doc_id == mapped.physical_bridge_doc_id,
+            "R5 modeled call document {} did not map to exact native bridge {}",
+            expected.call_doc,
+            actual.doc_id
+        );
+        let copied = actual
+            .delegated_input
+            .as_ref()
+            .context("R5 bridge omitted accepted delegated input")?;
+        anyhow::ensure!(
+            copied.parent_subagent_depth == expected.parent_depth
+                && copied.arguments == mapped.accepted_arguments,
+            "R5 accepted bridge lost modeled parent depth/argument bytes: {actual:?}"
+        );
+        anyhow::ensure!(
+            expected.parent_workspace.is_none() && actual.delegated_workspace.is_none(),
+            "R5 runner does not yet bind modeled parent workspace stamps"
+        );
+        anyhow::ensure!(
+            actual.lifecycle_state == expected.state
+                && actual.child_request_id.as_deref()
+                    == Some(self.generated_child_request_id(&expected.child)?),
+            "R5 bridge {} differs: native={actual:?}, modeled={expected:?}",
+            expected.tool
+        );
+        Ok(())
+    }
+
+    fn assert_child_fact(
+        &self,
+        actual: &RequestObservation,
+        expected: &ModeledChildFact,
+    ) -> Result<()> {
+        anyhow::ensure!(
+            actual.subagent_depth == Some(expected.depth),
+            "R5 child {} depth differs: native={actual:?}, modeled={expected:?}",
+            expected.child
+        );
+        self.assert_child_workspace(actual, expected.workspace.as_ref())?;
+        let observed_terminal = actual
+            .lifecycle_state
+            .is_terminal()
+            .then_some(actual.lifecycle_state.as_str());
+        anyhow::ensure!(
+            observed_terminal == expected.terminal.as_deref()
+                && actual.interrupt_requested_at.is_some() == expected.interrupt_requested,
+            "R5 child {} differs: native={actual:?}, modeled={expected:?}",
+            expected.child
+        );
+        Ok(())
+    }
+
+    fn assert_exact_snapshot_facts(
+        &self,
+        snapshot: &Observation,
+        expected_bridges: &[ModeledBridgeFact],
+        expected_children: &[ModeledChildFact],
+    ) -> Result<()> {
+        // The depth-ceiling fixture creates unrelated ancestor bridges on A.
+        // Scope to the actual parent requests exercised by modeled actions,
+        // including the rejected invocation's parent, never by expected tool
+        // IDs: an unexpected bridge on either parent must remain observable.
+        let relevant_bridges = snapshot
+            .a_bridge_rows
+            .iter()
+            .filter(|row| self.modeled_parent_request_ids.contains(&row.request_id))
+            .collect::<Vec<_>>();
+        let mut actual_bridge_ids = relevant_bridges
+            .iter()
+            .map(|row| row.doc_id.as_str())
+            .collect::<Vec<_>>();
+        let mut expected_bridge_ids = expected_bridges
+            .iter()
+            .map(|fact| {
+                Ok(self
+                    .generated_bridge(&fact.tool, &fact.child)?
+                    .physical_bridge_doc_id
+                    .as_str())
+            })
+            .collect::<Result<Vec<_>>>()?;
+        actual_bridge_ids.sort_unstable();
+        expected_bridge_ids.sort_unstable();
+        anyhow::ensure!(
+            actual_bridge_ids == expected_bridge_ids,
+            "R5 modeled parent bridge document multiset differs: native={actual_bridge_ids:?}, modeled={expected_bridge_ids:?}"
+        );
+
+        let mut actual_child_ids = snapshot
+            .b_child_requests
+            .iter()
+            .map(|row| row.request_id.as_str())
+            .collect::<Vec<_>>();
+        let mut expected_child_ids = expected_children
+            .iter()
+            .map(|fact| self.generated_child_request_id(&fact.child))
+            .collect::<Result<Vec<_>>>()?;
+        actual_child_ids.sort_unstable();
+        expected_child_ids.sort_unstable();
+        anyhow::ensure!(
+            actual_child_ids == expected_child_ids,
+            "R5 B child request multiset differs: native={actual_child_ids:?}, modeled={expected_child_ids:?}"
+        );
+
+        for expected in expected_bridges {
+            let doc_id = &self
+                .generated_bridge(&expected.tool, &expected.child)?
+                .physical_bridge_doc_id;
+            let actual = relevant_bridges
+                .iter()
+                .find(|row| &row.doc_id == doc_id)
+                .with_context(|| format!("R5 bridge {} missing from A", expected.tool))?;
+            self.assert_bridge_fact(actual, expected)?;
+        }
+        for expected in expected_children {
+            let physical_child = self.generated_child_request_id(&expected.child)?;
+            let actual = snapshot
+                .b_child_requests
+                .iter()
+                .find(|row| row.request_id == physical_child)
+                .with_context(|| format!("R5 child {} missing from B", expected.child))?;
+            self.assert_child_fact(actual, expected)?;
+        }
+        Ok(())
+    }
+
+    pub fn assert_final_child_and_bridge_facts(&self, scenario: &ModeledScenario) -> Result<()> {
+        let snapshot = self
+            .history
+            .last()
+            .context("R5 final observation is missing")?;
+        self.assert_exact_snapshot_facts(
+            snapshot,
+            &scenario.expected_a_bridges,
+            &scenario.expected_b_children,
+        )
+    }
+
+    fn assert_recovery_checkpoint(&self, checkpoint: &ModeledRecoveryCheckpoint) -> Result<()> {
+        let snapshot = self
+            .history
+            .last()
+            .context("R5 recovery checkpoint omitted observation")?;
+        let (modeled_notifications, modeled_wakes) = self.modeled_completion_keys()?;
+        let mut expected_notifications = checkpoint
+            .notification_children
+            .iter()
+            .map(|child| {
+                Ok(format!(
+                    "background-completion-notification:{}:subagent",
+                    self.generated_child_request_id(child)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut actual_notifications = snapshot
+            .subagent_notifications
+            .iter()
+            .filter(|key| modeled_notifications.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        expected_notifications.sort();
+        actual_notifications.sort();
+        anyhow::ensure!(
+            actual_notifications == expected_notifications,
+            "R5 recovery action {} notification children disagree: native={actual_notifications:?}, modeled={expected_notifications:?}",
+            checkpoint.after_action
+        );
+        let mut expected_wakes = checkpoint
+            .wake_sessions
+            .iter()
+            .map(|session| format!("background_completion:{session}"))
+            .collect::<Vec<_>>();
+        let mut actual_wakes = snapshot
+            .background_wakeup_keys
+            .iter()
+            .filter(|key| modeled_wakes.contains(*key))
+            .cloned()
+            .collect::<Vec<_>>();
+        expected_wakes.sort();
+        actual_wakes.sort();
+        anyhow::ensure!(
+            actual_wakes == expected_wakes,
+            "R5 recovery action {} wake sessions disagree: native={actual_wakes:?}, modeled={expected_wakes:?}",
+            checkpoint.after_action
+        );
+        self.assert_exact_snapshot_facts(snapshot, &checkpoint.bridges, &checkpoint.children)
+            .with_context(|| format!("R5 recovery action {}", checkpoint.after_action))
+    }
+
     pub async fn run_modeled(&mut self, scenario: &ModeledScenario) -> Result<()> {
-        for action in &scenario.actions {
+        let mut next_checkpoint = 0;
+        for (index, action) in scenario.actions.iter().enumerate() {
             let crashed = match action {
                 ModeledAction::CrashNode { node, .. } => Some(node.clone()),
                 _ => None,
             };
-            self.apply_modeled_action(action).await?;
-            self.record_observation_after(crashed).await?;
+            self.apply_modeled_action(action, scenario)
+                .await
+                .with_context(|| {
+                    format!("R5 scenario {} action {index}: {action:?}", scenario.name)
+                })?;
+            self.record_observation_after(crashed)
+                .await
+                .with_context(|| {
+                    format!(
+                        "R5 scenario {} observation after action {index}: {action:?}",
+                        scenario.name
+                    )
+                })?;
+            if let Some(checkpoint) = scenario.recovery_checkpoints.get(next_checkpoint) {
+                if checkpoint.after_action == index {
+                    self.assert_recovery_checkpoint(checkpoint)?;
+                    next_checkpoint += 1;
+                }
+            }
         }
+        anyhow::ensure!(
+            next_checkpoint == scenario.recovery_checkpoints.len(),
+            "R5 native trace did not consume every generated recovery checkpoint"
+        );
         if let Some(agent) = self.generated_child_agent.take() {
             agent.shutdown().await;
         }
         Ok(())
     }
 
-    async fn apply_modeled_action(&mut self, action: &ModeledAction) -> Result<()> {
+    async fn apply_modeled_action(
+        &mut self,
+        action: &ModeledAction,
+        scenario: &ModeledScenario,
+    ) -> Result<()> {
         match action {
             ModeledAction::PairPrincipals { node, peer } => {
                 self.pair_generated_principals(node, peer).await?
@@ -1176,9 +1675,22 @@ impl Harness {
                 child,
                 session,
                 parent_depth,
+                call_doc,
+                parent_workspace,
+                accepted_arguments,
             } => {
-                self.publish_accepted_background_bridge(tool, child, session, *parent_depth, false)
-                    .await?
+                self.publish_accepted_background_bridge(
+                    tool,
+                    child,
+                    session,
+                    *parent_depth,
+                    *call_doc,
+                    parent_workspace.as_ref(),
+                    accepted_arguments
+                        .as_deref()
+                        .context("R5 accepted bridge omitted modeled argument bytes")?,
+                )
+                .await?
             }
             ModeledAction::RejectSpawnInvocation {
                 tool,
@@ -1186,7 +1698,7 @@ impl Harness {
                 session,
                 parent_depth,
             } => {
-                self.publish_accepted_background_bridge(tool, child, session, *parent_depth, true)
+                self.publish_depth_rejected_spawn_invocation(tool, child, session, *parent_depth)
                     .await?
             }
             ModeledAction::ReplicateBridge { tool, source, to } => {
@@ -1197,8 +1709,29 @@ impl Harness {
                 self.replicate_generated_bridge(tool, source, to, false)
                     .await?
             }
-            ModeledAction::MaterializeChild { child, tool } => {
-                self.materialize_generated_child(child, tool).await?
+            ModeledAction::MaterializeChild {
+                child,
+                tool,
+                payload,
+                choice,
+            } => {
+                let expected = scenario
+                    .expected_b_children
+                    .iter()
+                    .find(|row| row.child == *child)
+                    .with_context(|| {
+                        format!("R5 materialized child {child} has no modeled fact")
+                    })?;
+                self.materialize_generated_child(child, tool, *payload, choice, expected)
+                    .await?
+            }
+            ModeledAction::BeginChild { child, generation } => {
+                self.observe_generated_child_begin(child, *generation)
+                    .await?
+            }
+            ModeledAction::AwaitChildExpiry { child } => {
+                self.wait_for_generated_expired_child_lease(child).await?;
+                self.observed_expired_children.insert(child.clone());
             }
             ModeledAction::ReplicateChild { child, source, to } => {
                 self.replicate_generated_child(child, source, to, true)
@@ -1232,26 +1765,25 @@ impl Harness {
                 self.observe_generated_cancel_mirror(tool).await?
             }
             ModeledAction::ObserveCancelAck => {
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                let outcomes =
+                    observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                self.record_cancel_ack_outcomes(outcomes);
             }
-            ModeledAction::RecoverNode { node } => {
-                if node == "B" && self.generated_child_agent.is_none() {
-                    self.wait_for_generated_expired_child_leases().await?;
-                }
-                let runtime = self.node(node)?;
-                let _ = ToolCallLifecycle::recover_all(&runtime.db.node, runtime.did()).await?;
-                let _ =
-                    RequestLifecycle::recover_all(runtime.db.node.as_ref(), runtime.did()).await?;
+            ModeledAction::RecoverBridges => {
+                let _ = ToolCallLifecycle::recover_all(&self.a.db.node, self.a.did()).await?;
+            }
+            ModeledAction::RecoverChildRequests {
+                expected_generation,
+                fresh_generation,
+            } => {
+                self.recover_generated_child_requests(*expected_generation, *fresh_generation)
+                    .await?;
             }
             ModeledAction::CrashNode {
                 node,
                 durable_reopen_premise,
             } => {
                 anyhow::ensure!(*durable_reopen_premise, "R5 crash omitted reopen premise");
-                if node == "B" {
-                    self.wait_for_generated_child_execution_before_b_crash()
-                        .await?;
-                }
                 self.crash_node(node).await?;
             }
             ModeledAction::AdvanceClock { node, seconds } => {
@@ -1259,7 +1791,9 @@ impl Harness {
             }
             ModeledAction::Converge => {
                 self.observe_generated_background_completion().await?;
-                let _ = observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                let outcomes =
+                    observe_cancel_cascade_ack(self.a.db.node.clone(), self.a.did()).await?;
+                self.record_cancel_ack_outcomes(outcomes);
             }
         }
         Ok(())
@@ -1444,13 +1978,55 @@ async fn write_generated_scripted_route(
     exec(node, &mutation, "write generated scripted P2P route").await
 }
 
-/// A short, valid runtime lease makes the generated crash/recovery trace
-/// executable against real elapsed time. The production execution and
-/// recovery owners still choose the terminal outcome; this only configures a
-/// behavior-owned limit before any child execution is claimed.
-async fn configure_generated_child_lease(node: &HarnessNode) -> Result<()> {
+async fn read_generated_child_lease_secs(node: &HarnessNode, request_id: &str) -> Result<i64> {
+    #[derive(Deserialize)]
+    struct LeaseRow {
+        execution_lease_secs: Option<i64>,
+    }
+    let response = node.db.node.execute(&format!(
+        r#"{{ AgentRequest(filter: {{ request_id: {{ _eq: "{}" }} }}, limit: 2) {{ execution_lease_secs }} }}"#,
+        escape_graphql_string(request_id),
+    )).await;
+    anyhow::ensure!(
+        !response.has_errors(),
+        "R5 child lease query failed: {:?}",
+        response.errors
+    );
+    let rows: Vec<LeaseRow> = serde_json::from_value(
+        response
+            .data
+            .as_ref()
+            .and_then(|value| value.get("AgentRequest"))
+            .context("R5 child lease query omitted AgentRequest")?
+            .clone(),
+    )?;
+    let [row] = rows.as_slice() else {
+        bail!("R5 child lease query did not resolve exactly one request");
+    };
+    row.execution_lease_secs
+        .context("R5 processing child omitted execution_lease_secs")
+}
+
+/// Configure the exported lease duration through the behavior-owned execution
+/// document before any child is claimed. The native claim/recovery owners
+/// still choose the physical generation and terminal outcome.
+async fn configure_generated_child_execution(
+    node: &HarnessNode,
+    lease_secs: u64,
+    backend_capacity: usize,
+) -> Result<()> {
     const BEHAVIOR: &str = "r5-generated-child-behavior";
     const EXECUTION: &str = "r5-generated-child-execution";
+    const BACKEND: &str = "r5-generated-child-backend";
+    anyhow::ensure!(lease_secs > 0, "R5 child lease must be positive");
+    anyhow::ensure!(
+        backend_capacity > 0,
+        "R5 child backend capacity must be positive"
+    );
+    let backend_capacity = i64::try_from(backend_capacity)?;
+    let deadline_secs = lease_secs
+        .checked_add(30)
+        .context("R5 child deadline duration overflow")?;
     let agent_did = node.did().to_string();
     let profile_id = format!("{BEHAVIOR}-inference");
     ConfigAccess::transact_local(
@@ -1470,15 +2046,25 @@ async fn configure_generated_child_lease(node: &HarnessNode) -> Result<()> {
                 .await?
                 .context("R5 child inference profile was not configured")?;
                 profile["execution_id"] = EXECUTION.into();
+                let (_, mut backend) = read_desired_state_record(
+                    txn,
+                    Collection::InferenceBackend,
+                    &agent_did,
+                    BACKEND,
+                )
+                .await?
+                .context("R5 child inference backend was not configured")?;
+                backend["max_concurrent"] = backend_capacity.into();
                 let execution = json!({
                     "agent_did": agent_did,
                     "execution_id": EXECUTION,
-                    "stream_liveness_timeout_secs": 2,
-                    "deadline_duration_secs": 30,
+                    "stream_liveness_timeout_secs": lease_secs,
+                    "deadline_duration_secs": deadline_secs,
                 });
                 let plan = DesiredStateApplyPlan::new(
                     [
                         (Collection::InferenceProfile, profile),
+                        (Collection::InferenceBackend, backend),
                         (Collection::InferenceExecution, execution),
                     ]
                     .into_iter()
@@ -1671,11 +2257,12 @@ async fn run_cancel_mirror_on_b(node: &HarnessNode, admitted_parent_did: &str) -
 }
 
 async fn advance_r5_clock_effects(node: &HarnessNode, seconds: u64) -> Result<()> {
-    let past = (chrono::Utc::now() - chrono::Duration::seconds(seconds as i64))
-        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let elapsed = chrono::Duration::try_seconds(i64::try_from(seconds)?)
+        .context("R5 clock advance exceeds timestamp range")?;
     let query = r#"{
         AgentToolCall(filter: { cancel_pending_remote_ack: { _eq: true } }) {
             _docID
+            cancel_cascade_intent_at
             started_at
             deadline_at
             completed_at
@@ -1690,13 +2277,24 @@ async fn advance_r5_clock_effects(node: &HarnessNode, seconds: u64) -> Result<()
             response.errors
         );
     }
-    let rows: Vec<AdvanceBridgeRow> = response
-        .data
-        .as_ref()
-        .and_then(|d| d.get("AgentToolCall"))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or_default();
+    let rows: Vec<AdvanceBridgeRow> = serde_json::from_value(
+        response
+            .data
+            .context("R5 clock query omitted data")?
+            .get("AgentToolCall")
+            .context("R5 clock query omitted tool rows")?
+            .clone(),
+    )?;
     for row in rows {
+        let intent = chrono::DateTime::parse_from_rfc3339(
+            row.cancel_cascade_intent_at
+                .as_deref()
+                .context("R5 pending cancellation omitted intent timestamp")?,
+        )?;
+        let past = intent
+            .checked_sub_signed(elapsed)
+            .context("R5 clock advance underflow")?
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
         let doc_id = escape_graphql_string(&row.doc_id);
         let datetime_fields = row.datetime_update_fragment();
         let mutation = format!(
@@ -1716,6 +2314,7 @@ async fn advance_r5_clock_effects(node: &HarnessNode, seconds: u64) -> Result<()
 struct AdvanceBridgeRow {
     #[serde(rename = "_docID")]
     doc_id: String,
+    cancel_cascade_intent_at: Option<String>,
     started_at: Option<String>,
     deadline_at: Option<String>,
     completed_at: Option<String>,
@@ -1757,6 +2356,7 @@ fn push_runner_datetime_field(fields: &mut Vec<String>, field: &'static str, val
 async fn load_bridge_rows(node: &HarnessNode) -> Result<Vec<BridgeObservation>> {
     let query = r#"{
         AgentToolCall(filter: { await_mode: { _eq: "background" } }) {
+            _docID
             request_id
             session_id
             tool_call_id
@@ -1766,6 +2366,8 @@ async fn load_bridge_rows(node: &HarnessNode) -> Result<Vec<BridgeObservation>> 
             cancel_cascade_intent_at
             cancel_pending_remote_ack
             stuck_since
+            delegated_input
+            delegated_workspace
         }
     }"#;
     let response = node.db.node.execute(query).await;
@@ -1831,6 +2433,11 @@ async fn load_child_requests(node: &HarnessNode) -> Result<Vec<RequestObservatio
             lifecycle_state
             caused_by_parent_tool_call_id
             interrupt_requested_at
+            subagent_depth
+            workspace_id
+            workspace_owner_agent_did
+            workspace_seal_hash
+            workspace_authority
         }
     }"#;
     let response = node.db.node.execute(query).await;
@@ -1986,5 +2593,186 @@ async fn exec(node: &HarnessNode, mutation: &str, label: &str) -> Result<()> {
     if response.has_errors() {
         bail!("{label} failed: {:?}", response.errors);
     }
+    Ok(())
+}
+
+/// Exercise imported-fact projection only; it does not establish that either
+/// peer could authorize the other's write under a production ACP grant.
+pub async fn assert_replicated_nonclosing_ordinal_twin_rejected() -> Result<()> {
+    use gents::session::canonical_rows::{
+        decode_output_segment_row, decode_transcript_message_row, output_segment_create_variables,
+        AGENT_MESSAGE_FIELDS, AGENT_OUTPUT_SEGMENT_FIELDS, CREATE_AGENT_OUTPUT_SEGMENT_MUTATION,
+    };
+    use gents_protocol::message::Message;
+    use gents_protocol::output::ReconstructionError;
+
+    const SESSION: &str = "r5-replicated-ordinal-conflict";
+    const ORIGINAL: &str = "original";
+    const TWIN: &str = "intruder";
+    let harness = Harness::start_two_p2p_nodes().await?;
+    let agent_did = crate::support::AGENT_DID;
+    crate::support::create_agent_message_in_scope(
+        harness.a.db.node.as_ref(),
+        agent_did,
+        None,
+        SESSION,
+        1,
+        "assistant",
+        ORIGINAL,
+        "2026-01-01T00:00:00Z",
+    )
+    .await;
+
+    let a_access = ConfigAccess::Local(harness.a.db.node.clone());
+    let header_query = format!(
+            "{{ AgentMessage(filter: {{ agent_did: {{ _eq: \"{}\" }}, session_id: {{ _eq: \"{}\" }}, sequence: {{ _eq: 1 }} }}) {{ {AGENT_MESSAGE_FIELDS} }} }}",
+            escape_graphql_string(agent_did),
+            escape_graphql_string(SESSION),
+        );
+    let header_response = a_access.execute(&header_query).await?;
+    let headers = header_response["data"]["AgentMessage"]
+        .as_array()
+        .context("original canonical header query omitted rows")?;
+    anyhow::ensure!(headers.len() == 1, "expected one original canonical header");
+    let header = decode_transcript_message_row(&headers[0])?;
+    let request_doc_id = header
+        .message
+        .request_doc_id
+        .as_deref()
+        .context("original header omitted its request")?;
+    let segment_query = format!(
+            "{{ AgentOutputSegment(filter: {{ request_doc_id: {{ _eq: \"{}\" }}, agent_did: {{ _eq: \"{}\" }} }}) {{ {AGENT_OUTPUT_SEGMENT_FIELDS} }} }}",
+            escape_graphql_string(request_doc_id),
+            escape_graphql_string(agent_did),
+        );
+    let original_response = a_access.execute(&segment_query).await?;
+    let original_rows = original_response["data"]["AgentOutputSegment"]
+        .as_array()
+        .context("original segment query omitted rows")?;
+    anyhow::ensure!(original_rows.len() == 1, "expected one original segment");
+    let original = decode_output_segment_row(&original_rows[0])?;
+    anyhow::ensure!(
+        original.segment.payload == ORIGINAL,
+        "original payload changed"
+    );
+    anyhow::ensure!(
+        original.segment.ordinal == Some(0) && original.segment.close.is_some(),
+        "original fixture is not a closed ordinal-0 segment"
+    );
+    let native_id = header
+        .message
+        .native_id
+        .as_deref()
+        .context("original assistant header omitted native ID")?;
+    anyhow::ensure!(native_id == "native-1", "fixture native ID changed");
+    let (baseline_header, baseline_message) = gents::session::load_canonical_message_from_node(
+        harness.a.db.node.as_ref(),
+        &header.doc_id,
+        agent_did,
+        None,
+    )
+    .await?;
+    anyhow::ensure!(baseline_header == header.message, "baseline header changed");
+    anyhow::ensure!(
+        baseline_message == Message::assistant_with_id(native_id.to_owned(), ORIGINAL),
+        "baseline projection did not contain the original text"
+    );
+
+    let mut twin = original.segment.clone();
+    twin.payload = TWIN.into();
+    twin.close = None;
+    anyhow::ensure!(
+        twin.payload.len() == original.segment.payload.len() && twin.close.is_none(),
+        "twin must be nonclosing without changing the sealed byte extent"
+    );
+    let variables = output_segment_create_variables(&twin)?;
+    ConfigAccess::transact_local(
+        harness.b.db.node.as_ref(),
+        None,
+        "test.r5_replicated_output_conflict",
+        |txn| {
+            let variables = variables.clone();
+            Box::pin(async move {
+                txn.execute_with_variables(CREATE_AGENT_OUTPUT_SEGMENT_MUTATION, &variables)
+                    .await
+                    .map(|_| ())
+            })
+        },
+    )
+    .await?;
+    let b_access = ConfigAccess::Local(harness.b.db.node.clone());
+    let source_rows = b_access.execute(&segment_query).await?;
+    let source_rows = source_rows["data"]["AgentOutputSegment"]
+        .as_array()
+        .context("source segment query omitted rows")?;
+    anyhow::ensure!(source_rows.len() == 1, "source must hold only the twin");
+    let source_twin = decode_output_segment_row(&source_rows[0])?;
+    let twin_doc_id = source_twin.doc_id.clone();
+    anyhow::ensure!(
+        source_twin.segment == twin,
+        "source twin differs from the created physical fact"
+    );
+    anyhow::ensure!(
+        twin_doc_id != original.doc_id,
+        "twin reused original identity"
+    );
+    anyhow::ensure!(
+        !physical_document_exists(&harness.a, "AgentOutputSegment", &twin_doc_id).await?,
+        "twin arrived on A before explicit P2P push"
+    );
+    harness
+        .push_document(
+            &harness.b.id,
+            &harness.a.id,
+            "AgentOutputSegment",
+            &twin_doc_id,
+        )
+        .await?;
+    let received_response = a_access.execute(&segment_query).await?;
+    let received_rows = received_response["data"]["AgentOutputSegment"]
+        .as_array()
+        .context("receiver segment query omitted rows")?;
+    anyhow::ensure!(
+        received_rows.len() == 2,
+        "receiver did not retain both facts"
+    );
+    let received = received_rows
+        .iter()
+        .map(decode_output_segment_row)
+        .collect::<Result<Vec<_>>>()?;
+    anyhow::ensure!(
+        received
+            .iter()
+            .any(|row| row.doc_id == original.doc_id && row.segment == original.segment)
+            && received
+                .iter()
+                .any(|row| row.doc_id == twin_doc_id && row.segment == twin),
+        "receiver physical identities or bytes changed during P2P import"
+    );
+    let unchanged_header = a_access.execute(&header_query).await?;
+    let unchanged_rows = unchanged_header["data"]["AgentMessage"]
+        .as_array()
+        .context("receiver header query omitted rows after import")?;
+    anyhow::ensure!(unchanged_rows.len() == 1, "receiver header count changed");
+    let unchanged = decode_transcript_message_row(&unchanged_rows[0])?;
+    anyhow::ensure!(
+        unchanged.doc_id == header.doc_id && unchanged.message == header.message,
+        "P2P import changed the original canonical header"
+    );
+    let error = gents::session::load_canonical_message_from_node(
+        harness.a.db.node.as_ref(),
+        &header.doc_id,
+        agent_did,
+        None,
+    )
+    .await
+    .expect_err("replicated ordinal twin must reject canonical reconstruction");
+    anyhow::ensure!(
+        matches!(
+            error.downcast_ref::<ReconstructionError>(),
+            Some(ReconstructionError::ConflictingSegments { ordinal: 0, .. })
+        ),
+        "expected ordinal-0 segment conflict, got {error:#}"
+    );
     Ok(())
 }

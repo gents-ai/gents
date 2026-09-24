@@ -1,6 +1,6 @@
 use super::*;
 
-fn stored_value(item: &MailboxItem) -> Value {
+pub(super) fn stored_value(item: &MailboxItem) -> Value {
     let mut value = serde_json::to_value(item).unwrap();
     for field in ["created_at", "updated_at", "resolved_at", "deadline_at"] {
         if let Some(text) = value[field].as_str() {

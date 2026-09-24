@@ -63,7 +63,7 @@ use anyhow::{Context, Result};
 use futures_util::future::BoxFuture;
 use gents::config_client::ConfigAccess;
 use gents::defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use serde_json::{json, Value};
 
 use super::projection::subagents::{
@@ -1553,8 +1553,9 @@ async fn ensure_session_document(config: &AcpServiceConfig, session_id: &str) ->
             }}
         }}"#
     );
-    let response = config.node.execute(&lookup).await;
-    ensure_no_errors(&response, "grok shim AgentSession lookup")?;
+    let response =
+        graphql_with_transaction_retry(&config.node, &lookup, "grok shim AgentSession lookup")
+            .await?;
     let rows = response
         .data
         .as_ref()
@@ -1758,6 +1759,7 @@ mod tests {
         streaming_backend::{MockStreamingBackend, StreamChunk, StreamPlan, StreamResponse},
     };
     use crate::commands::grok_shim::turn::PromptBlock;
+    use gents::graphql::ensure_no_errors;
     use tokio::sync::Mutex;
 
     fn bound_model() -> BoundModel {

@@ -113,9 +113,6 @@ pub(in crate::commands::codex_shim) fn projected_thread_status(
     head: Option<ClientHeadProjection>,
 ) -> codex::ThreadStatus {
     match head {
-        Some(head) if head.waiting_on_user_input() => codex::ThreadStatus::Active {
-            active_flags: vec![codex::ThreadActiveFlag::WaitingOnUserInput],
-        },
         Some(ClientHeadProjection {
             turn_state: ClientTurnState::WaitingForClaim | ClientTurnState::Running,
             ..
@@ -315,18 +312,17 @@ mod tests {
     #[test]
     fn thread_status_projects_runtime_request_lifecycle() {
         let cases = [
-            ("pending", "active", None),
-            ("claimed", "active", None),
-            ("processing", "active", None),
-            ("inputRequired", "active", Some("waitingOnUserInput")),
-            ("completed", "idle", None),
-            ("superseded", "idle", None),
-            ("interrupted", "idle", None),
-            ("failed", "systemError", None),
-            ("dead", "systemError", None),
+            ("pending", "active"),
+            ("claimed", "active"),
+            ("processing", "active"),
+            ("completed", "idle"),
+            ("superseded", "idle"),
+            ("interrupted", "idle"),
+            ("failed", "systemError"),
+            ("dead", "systemError"),
         ];
 
-        for (runtime_state, expected_type, expected_flag) in cases {
+        for (runtime_state, expected_type) in cases {
             let head =
                 gents_protocol::client_protocol::project_persisted_attempt(runtime_state, false);
             let encoded =
@@ -336,9 +332,7 @@ mod tests {
                 Some(&json!(expected_type)),
                 "runtime state {runtime_state:?}"
             );
-            if let Some(flag) = expected_flag {
-                assert_eq!(encoded.pointer("/activeFlags/0"), Some(&json!(flag)));
-            }
+            assert!(encoded.pointer("/activeFlags/0").is_none());
         }
 
         assert_eq!(

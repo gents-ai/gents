@@ -62,7 +62,6 @@
         "same_deadline_replay_after_renewal_is_rejected",
         "one_tick_duration_cannot_advance_before_expiry",
         "terminal_lifecycle_rejects_renewal_even_with_active_lease",
-        "input_required_wait_keeps_explicit_owner_heartbeat",
         "close_or_retract_authorization_does_not_renew",
         "accept_and_publish_authorization_does_not_renew",
         "dispatch_authorization_does_not_renew",

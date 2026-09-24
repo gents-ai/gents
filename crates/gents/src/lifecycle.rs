@@ -658,8 +658,6 @@ mod tests {
                 .map(String::as_str)
                 .collect::<Vec<_>>()
         );
-        assert!(!RequestLifecycleState::InputRequired.is_terminal());
-        assert!(!RequestLifecycleState::InputRequired.is_active_runtime());
         assert!(RequestLifecycleState::Interrupted.is_terminal());
         let expected_nonterminal_graphql_list = format!(
             "[{}]",

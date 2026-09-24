@@ -177,36 +177,34 @@ fn looks_like_tool_call_markup(text: &str) -> bool {
 }
 
 #[cfg(test)]
+use crate as test_protocol;
+#[cfg(test)]
+#[path = "../../gents-lean-contract/tests/support/rendered_reasoning.rs"]
+mod rendered_reasoning_contract;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::message::Text;
 
     #[test]
-    fn opaque_reasoning_is_not_presented() {
-        let message = Message::Assistant {
-            id: None,
-            content: vec![
-                AssistantContent::Reasoning(Reasoning {
-                    id: None,
-                    content: vec![
-                        ReasoningContent::Encrypted("ciphertext".to_string()),
-                        ReasoningContent::Summary("Checked the config".to_string()),
-                        ReasoningContent::Redacted {
-                            data: "opaque".to_string(),
-                        },
-                    ],
-                }),
-                AssistantContent::Reasoning(Reasoning {
-                    id: None,
-                    content: vec![ReasoningContent::Encrypted("ciphertext".to_string())],
-                }),
-            ],
-        };
-
-        assert_eq!(
-            present_message(&message).reasoning_markdown.as_deref(),
-            Some("Checked the config")
-        );
+    fn generated_reasoning_visibility_matches_persisted_presentation() {
+        for case in super::rendered_reasoning_contract::generated_reasoning_cases() {
+            let presentation = present_message(&case.message);
+            assert_eq!(presentation.body_markdown, "", "{}", case.name);
+            assert_eq!(
+                presentation.reasoning_markdown.as_deref().unwrap_or(""),
+                case.expected_text,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                presentation.reasoning_markdown.is_none(),
+                case.rendered_kinds.is_empty(),
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]

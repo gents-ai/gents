@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use defra_node::EmbeddedNode;
-use gents::graphql::{ensure_no_errors, escape_graphql_string};
+use gents::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 use gents_protocol::message::{AssistantContent, Message, UserContent};
 use serde_json::{json, Value};
 
@@ -177,28 +177,28 @@ pub(super) struct CanonicalSourceBinding {
 
 /// The query execution seam this leaf reads through.
 ///
-/// Production always executes through the embedded node. The seam exists so
-/// tests can supply bounded canonical header/segment facts. `QuerySink` is
-/// internal to this leaf (the public [`project_messages`] entry point keeps the
-/// `Arc<EmbeddedNode>` signature); the shared `execute` helper below keeps
-/// every read on one seam so ordering regressions cannot hide behind a
-/// direct `node.execute` call. The returned future is `Send` so the
-/// loader's futures stay `Send` end to end without a proc-macro crate.
+/// Production reads through `gents::graphql::graphql_with_transaction_retry`,
+/// which rejects GraphQL errors; a sink reports any failure as `Err` and the
+/// loader propagates it. The seam exists so tests can supply bounded canonical
+/// header/segment facts. `QuerySink` is internal to this leaf (the public
+/// [`project_messages`] entry point keeps the `Arc<EmbeddedNode>` signature).
+/// The returned future is `Send` so the loader's futures stay `Send` end to
+/// end without a proc-macro crate.
 pub(super) trait QuerySink: Send + Sync {
     fn execute(
         &self,
         query: &str,
-    ) -> impl std::future::Future<Output = defra_node::QueryResponse> + Send;
+    ) -> impl std::future::Future<Output = Result<defra_node::QueryResponse>> + Send;
 }
 
-/// The production sink: the embedded node itself.
+/// The production sink: the canonical read owner over the embedded node.
 struct NodeSink<'a> {
     node: &'a Arc<EmbeddedNode>,
 }
 
 impl QuerySink for NodeSink<'_> {
-    async fn execute(&self, query: &str) -> defra_node::QueryResponse {
-        self.node.execute(query).await
+    async fn execute(&self, query: &str) -> Result<defra_node::QueryResponse> {
+        graphql_with_transaction_retry(self.node, query, "grok canonical message projection").await
     }
 }
 
@@ -269,8 +269,7 @@ async fn project_messages_with_sink<S: QuerySink>(
         escape_graphql_string(physical),
         escape_graphql_string(physical)
     );
-    let response = sink.execute(&query).await;
-    ensure_no_errors(&response, "grok canonical message projection")?;
+    let response = sink.execute(&query).await?;
     let data = response
         .data
         .as_ref()
@@ -559,12 +558,30 @@ mod canonical_selection_tests {
     }
 
     impl QuerySink for Facts {
-        async fn execute(&self, _query: &str) -> defra_node::QueryResponse {
-            defra_node::QueryResponse::success(json!({
+        async fn execute(&self, _query: &str) -> Result<defra_node::QueryResponse> {
+            Ok(defra_node::QueryResponse::success(json!({
                 "AgentMessage": self.headers,
                 "AgentOutputSegment": self.segments,
-            }))
+            })))
         }
+    }
+
+    struct FailingSink;
+
+    impl QuerySink for FailingSink {
+        async fn execute(&self, _query: &str) -> Result<defra_node::QueryResponse> {
+            Err(anyhow!(
+                "canonical read owner rejected the projection query"
+            ))
+        }
+    }
+
+    #[tokio::test]
+    async fn sink_failure_propagates_from_projection() {
+        let error = project_messages_with_sink(&FailingSink, None, &request(), 8192)
+            .await
+            .expect_err("sink failure");
+        assert!(format!("{error:#}").contains("canonical read owner rejected"));
     }
 
     fn request() -> gents_protocol::row::AgentRequestRow {

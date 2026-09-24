@@ -450,7 +450,6 @@ async fn drive_generated_request_legal_case(case: &LeanLifecycleTransitionCase) 
 pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() {
     let mut legal_count = 0;
     let mut illegal_count = 0;
-    let mut product_unreachable_count = 0;
     let mut recovery_reachable_count = 0;
 
     for case in lean_request_transition_cases() {
@@ -514,29 +513,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
                 );
                 drive_generated_request_recovery_reachable_case(case).await;
             }
-            "productUnreachable" => {
-                product_unreachable_count += 1;
-                assert!(
-                    case.from == "inputRequired" || case.to == "inputRequired",
-                    "Request transition {} product-unreachable classification must be scoped to reserved inputRequired, got {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-                assert_eq!(
-                    case.boundary.as_deref(),
-                    Some("boundary.request.input-required-reserved"),
-                    "Request transition {} must cite the reserved inputRequired boundary",
-                    case.name
-                );
-                assert!(
-                    rust_request_transition_action(&case.from, &case.to).is_none(),
-                    "Request transition {} is reserved but Rust has a writer path for {} -> {}",
-                    case.name,
-                    case.from,
-                    case.to
-                );
-            }
             other => panic!(
                 "generated Request transition {} has unknown classification {other:?}",
                 case.name
@@ -546,7 +522,6 @@ pub(super) async fn generated_request_transition_cases_cover_lifecycle_policy() 
 
     assert_eq!(legal_count, 13);
     assert_eq!(illegal_count, 66);
-    assert_eq!(product_unreachable_count, 19);
     assert_eq!(recovery_reachable_count, 2);
 }
 
@@ -681,11 +656,10 @@ async fn force_persisted_lifecycle_state(node: &EmbeddedNode, doc_id: &str, life
 /// to this state-changing writer inventory.
 #[tokio::test]
 async fn production_request_writers_only_reach_contracted_edges() {
-    const START_STATES: [&str; 10] = [
+    const START_STATES: [&str; 9] = [
         "pending",
         "claimed",
         "processing",
-        "inputRequired",
         "completed",
         "failed",
         "superseded",

@@ -89,8 +89,6 @@ def codexShimProjectionCases : List CodexShimProjectionCase :=
       .claimed false
   , codexShimProjectionCase "codex_shim.projection.processing"
       .processing false
-  , codexShimProjectionCase "codex_shim.projection.input_required"
-      .inputRequired false
   , codexShimProjectionCase "codex_shim.projection.completed_request"
       .completed false
   , codexShimProjectionCase "codex_shim.projection.failed_request"
@@ -105,8 +103,6 @@ def codexShimProjectionCases : List CodexShimProjectionCase :=
       .interrupted false
   , codexShimProjectionCase "codex_shim.projection.local_interrupt_preempts_core_state"
       .processing true
-  , codexShimProjectionCase "codex_shim.projection.local_interrupt_input_required"
-      .inputRequired true
   ]
 
 def codexShimProjectionCasesJson : String :=
@@ -293,7 +289,6 @@ def codexShimSubagentStatusCases : List CodexShimSubagentStatusCase :=
   , codexShimSubagentStatusCase "codex_shim.subagent_status.pending" .pending
   , codexShimSubagentStatusCase "codex_shim.subagent_status.claimed" .claimed
   , codexShimSubagentStatusCase "codex_shim.subagent_status.processing" .processing
-  , codexShimSubagentStatusCase "codex_shim.subagent_status.input_required" .inputRequired
   , codexShimSubagentStatusCase "codex_shim.subagent_status.completed" .completed
   , codexShimSubagentStatusCase "codex_shim.subagent_status.failed" .failed
   , codexShimSubagentStatusCase "codex_shim.subagent_status.dead" .dead
@@ -688,8 +683,6 @@ def codexShimThreadStatusCases : List CodexShimThreadStatusCase :=
       "codex_shim.thread_status.processing"
       ["CodexShim.active_request_projects_active_thread"]
       (some .processing)
-  , codexShimThreadStatusCase "codex_shim.thread_status.input_required" []
-      (some .inputRequired)
   , codexShimThreadStatusCase
       "codex_shim.thread_status.completed"
       ["CodexShim.completed_request_projects_idle_thread"]

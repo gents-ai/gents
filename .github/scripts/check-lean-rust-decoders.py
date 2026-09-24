@@ -22,12 +22,15 @@ GROUPS = {
     "current_input_cases": "LeanCurrentInputCase",
     "canonical_execution_gate_cases": "LeanCanonicalExecutionCase",
     "canonical_payload_presentation_cases": "LeanPayloadPresentationCase",
+    "terminal_diagnostic_presentation_cases": "LeanTerminalDiagnosticPresentationCase",
     "canonical_output_projection_cases": "LeanCanonicalOutputProjectionCase",
     "compaction_projection_join_cases": "LeanCompactionProjectionJoinCase",
     "compaction_canonical_projection_cases": "LeanCanonicalCompactionCase",
     "repaired_projection_admission_cases": "LeanRepairedProjectionCase",
     "request_execution_lease_cases": "LeanRequestExecutionLeaseCase",
     "request_execution_lease_trace_cases": "LeanRequestExecutionLeaseTraceCase",
+    "queued_steering_trace_cases": "LeanQueuedSteeringTraceCase",
+    "queued_steering_guard_cases": "LeanQueuedSteeringGuardCase",
 }
 INT_RANGES = {
     "u8": (0, 2**8 - 1), "u16": (0, 2**16 - 1),
@@ -135,12 +138,13 @@ def parse_items(source):
             "deny": "deny_unknown_fields" in serde,
             "tag": tag.group(1) if tag else None,
             "snake": 'rename_all = "snake_case"' in serde,
+            "camel": 'rename_all = "camelCase"' in serde,
             "unsupported": [],
         }
         allowed_serde = [r'deny_unknown_fields']
         if kind == "enum":
             allowed_serde += [r'tag\s*=\s*"[^"]+"',
-                              r'rename_all\s*=\s*"snake_case"']
+                              r'rename_all\s*=\s*"(?:snake_case|camelCase)"']
         item["unsupported"].extend(unsupported_serde(serde_attrs, allowed_serde))
         item["unsupported"].extend(unsupported_non_serde(all_attrs, [r'derive\([^)]*\)']))
         derives = [attr for attr in all_attrs if re.fullmatch(r'derive\([^)]*\)', attr.strip())]
@@ -165,7 +169,8 @@ def parse_items(source):
                 parsed_fields, field_errors = parse_fields(vfields) if vfields is not None else (None, [])
                 item["unsupported"].extend(field_errors)
                 variants.append({
-                    "name": snake(vname) if item["snake"] else vname,
+                    "name": (snake(vname) if item["snake"] else
+                             vname[0].lower() + vname[1:] if item["camel"] else vname),
                     "fields": parsed_fields,
                     "newtype": " ".join(vnew.split()) if vnew else None,
                     "unsupported": unsupported_serde(variant_attrs, []) +

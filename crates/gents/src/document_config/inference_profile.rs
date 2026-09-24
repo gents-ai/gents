@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
 use serde::{Deserialize, Serialize};
 
-use crate::graphql::escape_graphql_string;
+use crate::graphql::{escape_graphql_string, graphql_with_transaction_retry};
 
 /// Complete selectable inference preset. Multiple profiles may select different
 /// models or efforts through the same backend without duplicating credentials.
@@ -156,10 +156,7 @@ pub async fn list_inference_profile_records(
         }}"#
     );
 
-    let resp = node.execute(&query).await;
-    if resp.has_errors() {
-        anyhow::bail!("list InferenceProfile failed: {:?}", resp.errors);
-    }
+    let resp = graphql_with_transaction_retry(node, &query, "list InferenceProfile").await?;
 
     let rows = resp
         .data

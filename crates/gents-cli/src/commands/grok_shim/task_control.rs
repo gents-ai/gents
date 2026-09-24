@@ -1,10 +1,7 @@
 //! Stock task-button control, delegated to the runtime's process owner.
 use anyhow::{Context, Result};
 use defra_node::EmbeddedNode;
-use gents::{
-    graphql::{ensure_no_errors, escape_graphql_string},
-    hook::BackgroundExecutionRegistry,
-};
+use gents::{graphql::escape_graphql_string, hook::BackgroundExecutionRegistry};
 use gents_protocol::row::AgentRequestRow;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -56,8 +53,7 @@ pub(super) async fn kill(
         if !edge.controllable() || (!parent_addressed && child_session != request.session_id) {
             continue;
         }
-        let response = node.execute(&format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ request_id session_id agent_did requester_did }} }}"#, escape_graphql_string(&edge.child_request_id))).await;
-        ensure_no_errors(&response, "Grok child process scope")?;
+        let response = gents::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentRequest(filter: {{request_id: {{_eq: "{}"}}}}, limit: 2) {{ request_id session_id agent_did requester_did }} }}"#, escape_graphql_string(&edge.child_request_id)), "Grok child process scope").await?;
         let rows: Vec<AgentRequestRow> = serde_json::from_value(
             response
                 .data
@@ -80,9 +76,8 @@ pub(super) async fn kill(
     // not cancel whichever one happens to appear first.
     let mut matches = Vec::new();
     for candidate in candidates {
-        let response = node.execute(&format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
-            escape_graphql_string(&candidate.0), escape_graphql_string(&request.task_id))).await;
-        ensure_no_errors(&response, "Grok task owner lookup")?;
+        let response = gents::graphql::graphql_with_transaction_retry(&node, &format!(r#"{{ AgentToolCall(filter: {{session_id: {{_eq: "{}"}}, tool_call_id: {{_eq: "{}"}}}}, limit: 2) {{_docID}} }}"#,
+            escape_graphql_string(&candidate.0), escape_graphql_string(&request.task_id)), "Grok task owner lookup").await?;
         let rows = response
             .data
             .as_ref()

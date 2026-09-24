@@ -26,7 +26,8 @@ inductive ChildChoice where
   | noWorkspace
   | inherit (workspace : ObservedWorkspace)
   | bind (workspace : ObservedWorkspace) (requestedAuthority : Option BindingAuthority)
-  | provision (workspace : ObservedWorkspace) (parentPathExact : Bool)
+  | provision (observedParent : ObservedWorkspace) (parentPathExact : Bool)
+      (createdChild : Option ObservedWorkspace)
   deriving DecidableEq, Repr
 
 def authorityRank : BindingAuthority → Nat
@@ -96,16 +97,30 @@ def resolveChild (parent : Option ChildStamp) (parentAgent childAgent : Nat)
           let authority := (parent.map (fun source =>
             authorityInfimum source.authority requested)).getD requested
           (stamped workspace authority).map some
-  | .provision workspace parentPathExact =>
+  | .provision observedParent parentPathExact createdChild =>
       match parent with
       | some source =>
-          if workspace.available && parentPathExact &&
-              workspace.ownerAgent == childAgent then
-            if workspace.state == .ready then
-              (stamped workspace (authorityInfimum source.authority .readWrite)).map some
-            else none
+          if observedParent.available && sourceAgrees source observedParent &&
+              parentPathExact then
+            createdChild.bind fun workspace =>
+              if workspace.available && workspace.ownerAgent == childAgent &&
+                  workspace.state == .ready then
+                (stamped workspace (authorityInfimum source.authority .readWrite)).map some
+              else none
           else none
       | none => none
+
+/-- A provision result uses the already-observed parent source before the
+fallible host creation result can supply a child. `available` on the created
+child still represents the separate document, placement and principal checks. -/
+theorem provision_source_agrees (source child : ChildStamp)
+    (parentAgent childAgent : Nat) (observedParent : ObservedWorkspace)
+    (parentPathExact : Bool) (createdChild : Option ObservedWorkspace)
+    (h : resolveChild (some source) parentAgent childAgent
+      (.provision observedParent parentPathExact createdChild) = some (some child)) :
+    sourceAgrees source observedParent = true := by
+  simp only [resolveChild] at h
+  split at h <;> simp_all
 
 theorem authority_infimum_never_exceeds_left (left right : BindingAuthority) :
     authorityRank (authorityInfimum left right) ≤ authorityRank left := by
@@ -147,15 +162,19 @@ theorem resolved_child_cannot_exceed_parent (parent child : ChildStamp)
               simp_all
               rw [stamped_authority workspace _ child hs]
               exact authority_infimum_never_exceeds_left ..
-  | provision workspace parentPathExact =>
+  | provision observedParent parentPathExact createdChild =>
       simp only [resolveChild] at h
       split at h <;> try contradiction
-      split at h <;> try contradiction
-      cases hs : stamped workspace (authorityInfimum parent.authority .readWrite) with
-      | none => simp [hs] at h
-      | some actual =>
-          simp_all
-          rw [stamped_authority workspace _ child hs]
-          exact authority_infimum_never_exceeds_left ..
+      cases createdChild with
+      | none => simp at h
+      | some workspace =>
+        simp only [Option.bind] at h
+        split at h <;> try contradiction
+        cases hs : stamped workspace (authorityInfimum parent.authority .readWrite) with
+        | none => simp [hs] at h
+        | some actual =>
+            simp_all
+            rw [stamped_authority workspace _ child hs]
+            exact authority_infimum_never_exceeds_left ..
 
 end Workspace
