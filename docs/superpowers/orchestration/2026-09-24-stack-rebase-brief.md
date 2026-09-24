@@ -95,3 +95,11 @@ to fix on the PR that introduced it, as a fix commit at that PR's tip.
 
 All seven branches rebased, each PR tip gated, the ledger complete, and a final message with the
 table of old and new tips, gate totals per tip, and any fix commits added.
+
+## Amendment (2026-09-24, user-approved): lighter gates below the top
+
+Main's CI skips the heavy Rust suites for a PR that is not the top of its stack, so only the
+wizard tip (branch 7) is tested in full by CI. Gate policy from branch 3 on: `cargo fmt --all
+--check`, `cargo check --workspace --all-targets`, `lake build` only when the rebase touched
+proofs, and the desktop bindings drift test at tips 2 and 6. The full gate runs once, at the
+wizard tip; a failure there is bisected down to the tip that introduced it and fixed there.
