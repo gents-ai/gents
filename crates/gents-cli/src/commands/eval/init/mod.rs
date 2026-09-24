@@ -28,6 +28,7 @@ use crate::cli::EvalInitArgs;
 mod contract;
 mod dossier;
 mod draft;
+mod pilot;
 mod turn;
 mod validate;
 mod write;
@@ -48,12 +49,14 @@ pub(crate) struct InitContext<'a> {
     pub(crate) force: bool,
     /// The subject as the operator named it, for the printed next commands.
     pub(crate) subject: String,
+    /// The subject's directory: the pilot's cell names it.
+    pub(crate) subject_dir: PathBuf,
+    /// The inference profile the author and the pilot run on.
+    pub(crate) profile: String,
 }
 
 /// How an interview ended. The session is the turn's: an interview that
 /// fails returns no outcome, and its session still names the transcript.
-// The pilot reads what was written.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct InitOutcome {
     /// The pack at `--out`; `None` when the operator ended the interview.
     pub(crate) written: Option<Written>,
@@ -104,7 +107,7 @@ pub(crate) async fn interview(
         }
         rounds += 1;
         let summary = said.join("\n");
-        match checked(parsed, ctx, &summary).await {
+        match checked(parsed, ctx, &summary, None).await {
             Ok((assembled, staged)) => {
                 let written = commit(staged, &ctx.out, ctx.force)?;
                 print_written(ctx, &assembled, &written, out)?;
@@ -147,11 +150,13 @@ fn next_line(lines: &mut dyn Iterator<Item = String>) -> Option<String> {
 
 /// Validation steps 1 to 7 over a reply that carries a draft: parsed,
 /// assembled, held to the contract, catalog and subject, then staged
-/// through the loader round trip. Every failure is messages for the author.
+/// through the loader round trip, its README recording `pilot`. Every
+/// failure is messages for the author.
 async fn checked(
     parsed: Result<Option<draft::Draft>, String>,
     ctx: &InitContext<'_>,
     summary: &str,
+    pilot: Option<&write::PilotNote>,
 ) -> Result<(Assembled, Staged), Vec<String>> {
     let draft = match parsed {
         Ok(Some(draft)) => draft,
@@ -165,7 +170,7 @@ async fn checked(
         &ctx.dossier.slot,
     )?;
     validate(&assembled, ctx.registry, &ctx.dossier, &ctx.floors)?;
-    let staged = stage(&assembled, summary, &ctx.dossier, None).await?;
+    let staged = stage(&assembled, summary, &ctx.dossier, pilot).await?;
     Ok((assembled, staged))
 }
 
@@ -196,19 +201,20 @@ fn print_written(
     Ok(())
 }
 
-/// Refused before anything is read or installed: a non-terminal stdin (this
-/// command is an interview), an existing `--out` without `--force`, and a
-/// home no runtime serves (the author's requests need one to claim them).
+/// Refused before anything is read or installed: an existing `--out`
+/// without `--force`, a non-terminal stdin (this command is an interview),
+/// and a home no runtime serves (the author's requests need one to claim
+/// them).
 pub(crate) async fn preflight(args: &EvalInitArgs) -> Result<()> {
     use std::io::IsTerminal;
-    anyhow::ensure!(
-        std::io::stdin().is_terminal(),
-        "gents eval init is an interview; run it in a terminal"
-    );
     anyhow::ensure!(
         args.force || args.out.symlink_metadata().is_err(),
         "{} already exists; pass --force to replace it",
         args.out.display()
+    );
+    anyhow::ensure!(
+        std::io::stdin().is_terminal(),
+        "gents eval init is an interview; run it in a terminal"
     );
     let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
     let graphql = match args
@@ -255,8 +261,9 @@ pub(crate) async fn run(
     .await?;
     let subject_dir = subject
         .directory()
-        .ok_or_else(|| anyhow!("subject {} resolved to no directory", args.subject))?;
-    let dossier = dossier::render(subject_dir, args.behavior.as_deref())?;
+        .ok_or_else(|| anyhow!("subject {} resolved to no directory", args.subject))?
+        .to_path_buf();
+    let dossier = dossier::render(&subject_dir, args.behavior.as_deref())?;
     writeln!(
         out,
         "drafting an eval of behavior {} of pack {} {} ({})",
@@ -280,6 +287,8 @@ pub(crate) async fn run(
         out: args.out.clone(),
         force: args.force,
         subject: args.subject.clone(),
+        subject_dir,
+        profile,
     };
     let mut turn = turn::LiveTurn {
         graphql: graphql.clone(),
@@ -297,14 +306,54 @@ pub(crate) async fn run(
             Ok(_) => Some(line),
         }
     });
-    let result = interview(&mut turn, &mut lines, &init, out).await;
-    match &result {
-        Ok(outcome) if outcome.written.is_none() => {
+    let result = async {
+        let outcome = interview(&mut turn, &mut lines, &init, out).await?;
+        if outcome.written.is_none() {
             writeln!(out, "the interview ended; nothing was written")?;
+            return Ok(());
         }
-        Ok(outcome) => writeln!(out, "the draft validated in round {}", outcome.rounds)?,
-        Err(_) => {}
+        writeln!(out, "the draft validated in round {}", outcome.rounds)?;
+        if !args.pilot {
+            return Ok(());
+        }
+        let count = outcome
+            .assembled
+            .as_ref()
+            .map_or(0, |assembled| assembled.definition.cases.len());
+        let question = format!("Pilot {count} cases, one trial each, on {}?", init.profile);
+        let approved = args.yes || crate::interactive_backend::confirm(&question, true).await;
+        // Only now does Ctrl-C stop launching rather than end the process.
+        let deps = Deps {
+            executor: deps.executor,
+            registry: deps.registry,
+            cancel: super::cancel_on_ctrl_c(
+                "interrupt: the pilot stops launching; the pack stays as written",
+            ),
+            options: deps.options.clone(),
+        };
+        let piloted = pilot::pilot(
+            ctx,
+            &deps,
+            &init,
+            &mut turn,
+            &outcome,
+            &mut |_| approved,
+            out,
+        )
+        .await?;
+        writeln!(
+            out,
+            "piloted in {}{}",
+            piloted.run_ids.join(", "),
+            if piloted.revised {
+                "; the author revised the pack from the evidence"
+            } else {
+                "; the pack stays as written"
+            }
+        )?;
+        Ok::<(), anyhow::Error>(())
     }
+    .await;
     // Whatever the outcome, the session is the author's transcript.
     writeln!(
         out,
@@ -312,8 +361,7 @@ pub(crate) async fn run(
         turn::AUTHOR_BEHAVIOR,
         id = turn.session_id()
     )?;
-    let _ = result?;
-    Ok(())
+    result
 }
 
 /// Install the built-in `eval_author` pack into the home, its `author` slot
@@ -383,6 +431,8 @@ mod tests {
             out,
             force: false,
             subject: "./canary".into(),
+            subject_dir: PathBuf::from("./canary"),
+            profile: "local".into(),
         }
     }
 
@@ -534,6 +584,19 @@ mod tests {
             format!("{error:#}").contains("no-such-profile"),
             "{error:#}"
         );
+    }
+
+    #[tokio::test]
+    async fn an_existing_out_is_refused_before_anything_else() {
+        let root = tempfile::tempdir().unwrap();
+        let out = root.path().display().to_string();
+        let crate::cli::EvalCommand::Init(args) =
+            crate::commands::eval::testing::eval_command(&["init", "./subject", "--out", &out])
+        else {
+            panic!("not init");
+        };
+        let error = preflight(&args).await.unwrap_err().to_string();
+        assert!(error.contains("--force"), "{error}");
     }
 
     #[tokio::test]

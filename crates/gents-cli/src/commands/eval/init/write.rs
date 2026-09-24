@@ -223,6 +223,23 @@ pub(crate) fn case_table(definition: &EvalDefinition) -> String {
     text
 }
 
+/// Replace the README of the pack at `out` with one that records `pilot`.
+/// The manifest already lists README.md, so nothing else changes.
+pub(crate) fn rewrite_readme(
+    out: &Path,
+    assembled: &Assembled,
+    interview_summary: &str,
+    subject: &Dossier,
+    pilot: &PilotNote,
+) -> Result<()> {
+    let path = out.join(README);
+    std::fs::write(
+        &path,
+        readme(assembled, interview_summary, subject, Some(pilot)),
+    )
+    .with_context(|| format!("writing {}", path.display()))
+}
+
 /// The pack name a definition id gives: `-` becomes `_`, and the result
 /// must be a pack name.
 fn pack_name(definition_id: &str) -> Result<String, String> {
