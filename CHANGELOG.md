@@ -91,6 +91,16 @@ every runtime you pair with to 0.19.0 together.
 
 - If you stored inline API keys under an earlier version, rotate them (#1394).
 
+### Known issues
+
+- The desktop's local agent listens on port 9191. If another `gents server`
+  already uses that port, setup stops with "port 9191 does not advertise the
+  initialized Gents identity". Stop that server or move it to another port
+  before setting up the desktop.
+- A desktop build that isn't signed with the release identity can sit on
+  "Starting the secure client…" instead of reporting that it can't read its
+  keychain identity (#1739). Install the published release.
+
 ## 0.18.5 - 2026-09-22
 
 ### Added
