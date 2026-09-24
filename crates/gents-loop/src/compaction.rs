@@ -25,7 +25,8 @@ pub mod history;
 pub mod summary;
 
 use history::{
-    extract_file_activity, pretruncate_tool_results, split_messages_for_summary_with_counter,
+    extract_file_activity, pretruncate_tool_results,
+    split_messages_for_summary_with_counter_bounded,
 };
 use summary::{
     bounded_error_diagnostic, compaction_json_fallback_prompt, compaction_prompt,
@@ -58,7 +59,7 @@ pub enum ReductionError {
     ExactCountOverflow { field: &'static str, value: usize },
     #[error("compaction_invalid_rolling_plan")]
     InvalidRollingPlan,
-    #[error("compaction_cannot_fit_provider_visible_history")]
+    #[error("compaction_cannot_fit_provider_visible_history: the conversation cannot be reduced enough for this model's context budget without removing required history. Start a new session or use a larger context window.")]
     CannotFit,
 }
 
@@ -91,6 +92,9 @@ pub struct ReductionOptions {
     pub tool_result_max_chars: usize,
     pub keep_recent_tokens: usize,
     pub mode: ReductionMode,
+    /// Maximum provider-view prefix the reducer may summarize. `Some(0)`
+    /// fails closed: the required continuation starts at the first row.
+    pub max_compacted_prefix_messages: Option<usize>,
     /// Output budget for the internal summary completion. Deliberately
     /// independent of the user turn's max_output_tokens (#1017).
     pub summary_max_output_tokens: usize,
@@ -115,6 +119,7 @@ impl Default for ReductionOptions {
             tool_result_max_chars: 2000,
             keep_recent_tokens: 20000,
             mode: ReductionMode::Summarize,
+            max_compacted_prefix_messages: None,
             summary_max_output_tokens: DEFAULT_COMPACTION_SUMMARY_MAX_OUTPUT_TOKENS,
             summary_file_list_max: DEFAULT_COMPACTION_SUMMARY_FILE_LIST_MAX,
             deadline: None,
@@ -510,10 +515,11 @@ impl<M: CompletionModel + 'static> ReductionEngine for ProviderReductionEngine<M
                 });
             }
 
-            let (old_messages, recent_messages) = split_messages_for_summary_with_counter(
+            let (old_messages, recent_messages) = split_messages_for_summary_with_counter_bounded(
                 stripped_messages.clone(),
                 options.keep_recent_tokens,
                 counter,
+                options.max_compacted_prefix_messages,
             )?;
             if old_messages.is_empty() {
                 // Provider-view stripping is itself a useful non-durable repair.

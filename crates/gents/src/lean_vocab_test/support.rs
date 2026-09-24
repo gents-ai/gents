@@ -212,6 +212,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) prompt_assembly_claude_replay_cases: Vec<LeanPromptAssemblyClaudeReplayCase>,
     pub(crate) prompt_assembly_claude_narrowing_cases: Vec<LeanPromptAssemblyClaudeNarrowingCase>,
     pub(crate) prompt_assembly_claude_checkpoint_cases: Vec<LeanPromptAssemblyClaudeCheckpointCase>,
+    pub(crate) protected_replay_compaction_cases: Vec<LeanProtectedReplayCompactionCase>,
     pub(crate) rendered_capture_cases: Vec<LeanRenderedCaptureCase>,
     pub(crate) rendered_capture_storage_cases: Vec<LeanRenderedCaptureStorageCase>,
     pub(crate) durable_reduction_cases: Vec<LeanDurableReductionCase>,
@@ -1778,6 +1779,11 @@ pub(crate) fn lean_prompt_assembly_claude_narrowing_cases(
 pub(crate) fn lean_prompt_assembly_claude_checkpoint_cases(
 ) -> &'static [LeanPromptAssemblyClaudeCheckpointCase] {
     &lean_contract_snapshot().prompt_assembly_claude_checkpoint_cases
+}
+
+pub(crate) fn lean_protected_replay_compaction_cases(
+) -> &'static [LeanProtectedReplayCompactionCase] {
+    &lean_contract_snapshot().protected_replay_compaction_cases
 }
 
 pub(crate) fn lean_rendered_capture_cases() -> &'static [LeanRenderedCaptureCase] {

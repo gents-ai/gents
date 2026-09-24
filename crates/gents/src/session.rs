@@ -53,8 +53,8 @@ pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };
 pub(crate) use output::{
-    load_canonical_message_in_txn, load_current_request_assistant_candidates,
-    load_request_headers_in_txn, resolve_current_replay_tag, CanonicalReplayScope,
+    load_canonical_message_in_txn, load_request_headers_in_txn, resolve_current_replay_tags,
+    validate_canonical_replay_boundary, CanonicalReplayScope,
 };
 pub use query::{decode_session_row, session_scope_filter, AGENT_SESSION_FIELDS};
 pub(crate) use query::{load_session_behavior_id, require_session};

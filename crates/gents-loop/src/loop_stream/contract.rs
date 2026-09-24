@@ -26,13 +26,19 @@ pub struct ReplayEvidenceRow {
     pub evidence: ResolvedReplayEvidence,
 }
 
+/// A deterministic violation of canonical replay provenance. Native owners
+/// preserve this type through contextual errors; storage failures must not be
+/// relabeled as invalid provider input.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ReplayEvidenceViolation(pub String);
+
 /// A native canonical lookup. The returned list deliberately retains zero or
 /// multiple matches so the replay owner can reject missing/ambiguous evidence.
 pub type ReplayEvidenceResolver = Arc<
     dyn Fn(
-            ReplayTag,
-        )
-            -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ResolvedReplayEvidence>>> + Send>>
+            Vec<ReplayTag>,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<ReplayEvidenceRow>>> + Send>>
         + Send
         + Sync,
 >;

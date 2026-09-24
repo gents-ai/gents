@@ -57,12 +57,15 @@ mod turn_threading;
 
 pub use contract::{
     LoopConfig, LoopReplayInput, LoopStreamItem, RenderedRequestSink, ReplayEvidenceResolver,
-    ReplayEvidenceRow, StructuredOutputConfig, TaggedMessage, TurnCompactionOutcome,
-    TurnCompactionRequest,
+    ReplayEvidenceRow, ReplayEvidenceViolation, StructuredOutputConfig, TaggedMessage,
+    TurnCompactionOutcome, TurnCompactionRequest,
 };
 pub use one_shot::{run_loop_to_text, run_loop_to_typed};
 pub use request_assembly::{assemble_new_messages, is_request_context_message};
-pub use request_assembly::{narrow_tagged_history, provider_view_tagged, sanitize_tagged_history};
+pub use request_assembly::{
+    narrow_tagged_history, provider_view_tagged, replay_compaction_prefix_bound,
+    sanitize_tagged_history,
+};
 // Not `#[cfg(test)]`: gents' own loop_stream test suite (crates/gents/src/
 // agent/loop_stream/tests/budgeting.rs and request_assembly.rs) calls these
 // directly, and a cfg(test) item in this crate is invisible to a dependent
@@ -855,21 +858,7 @@ where
                             "documentless Claude thinking cannot continue to another provider turn"),
                     )))
                 })?;
-                let resolve = replay.resolve.as_ref().ok_or_else(|| {
-                    StreamingError::Completion(CompletionError::RequestError(Box::new(
-                        std::io::Error::new(std::io::ErrorKind::InvalidInput,
-                            "persisted Claude continuation has no canonical replay resolver"),
-                    )))
-                })?;
-                let evidence = resolve(tag.clone()).await.map_err(|error| {
-                    StreamingError::Completion(CompletionError::ProviderError(format!(
-                        "loading accepted Claude replay evidence failed: {error:#}",
-                    )))
-                })?;
-                replay.evidence.extend(evidence.into_iter().map(|evidence| ReplayEvidenceRow {
-                    tag: tag.clone(), evidence,
-                }));
-                replay.resolved.push(tag.clone());
+                request_assembly::resolve_replay_evidence(&mut replay, std::slice::from_ref(tag)).await?;
                 replay.required.push(tag.clone());
             }
 

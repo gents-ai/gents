@@ -1,5 +1,6 @@
 import Proofs.Compaction.Prefix
 import Proofs.Compaction.Properties
+import Proofs.PromptAssembly.ClaudeMap
 
 /-!
 # The real summarize reducer
@@ -87,6 +88,88 @@ theorem pairSafeBoundary_pending_empty (msgs : List MessageRow) (limit : Nat) :
   rcases foldrMax_eq_zero_or_mem _ with h | h
   · rw [h]; rfl
   · exact of_decide_eq_true (List.mem_filter.mp h).2
+
+/-- A reduction may summarize no farther than the first independently required
+Claude replay row. The retention target selects a preferred boundary; it is
+not the full provider context ceiling. Returning `none` means there is no
+useful protected prefix to summarize before provider IO. -/
+def protectedPairSafeBoundary (msgs : List MessageRow) (rawIndex maxPrefix : Nat) : Option Nat :=
+  let split := min (pairSafeBoundary msgs rawIndex) (pairSafeBoundary msgs maxPrefix)
+  if split == 0 then none else some split
+
+theorem protectedPairSafeBoundary_bounded (msgs : List MessageRow)
+    (rawIndex maxPrefix split : Nat)
+    (h : protectedPairSafeBoundary msgs rawIndex maxPrefix = some split) :
+    split ≤ maxPrefix := by
+  dsimp [protectedPairSafeBoundary] at h
+  split_ifs at h
+  cases h
+  exact (Nat.min_le_right _ _).trans (pairSafeBoundary_le msgs maxPrefix)
+
+theorem protectedPairSafeBoundary_pair_closed (msgs : List MessageRow)
+    (rawIndex maxPrefix split : Nat)
+    (h : protectedPairSafeBoundary msgs rawIndex maxPrefix = some split) :
+    pendingAfter ∅ (msgs.take split) = ∅ := by
+  dsimp [protectedPairSafeBoundary] at h
+  split_ifs at h
+  cases h
+  rcases Nat.le_total (pairSafeBoundary msgs rawIndex)
+    (pairSafeBoundary msgs maxPrefix) with hle | hle
+  · simpa [Nat.min_eq_left hle] using
+      pairSafeBoundary_pending_empty msgs rawIndex
+  · simpa [Nat.min_eq_right hle] using
+      pairSafeBoundary_pending_empty msgs maxPrefix
+
+inductive ProtectedReplaySplitError where
+  | cannotFit
+  | misalignedAssistantProjection
+  | replay (error : PromptAssembly.ClaudeMap.MapError)
+  deriving DecidableEq, Repr
+
+/-- The only replay check here is the existing ClaudeMap owner. Successful
+reduction therefore cannot reinterpret a required tag as summarized history. -/
+def prepareProtectedReplayCheckpoint (msgs : List MessageRow)
+    (rawIndex maxPrefix : Nat)
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow) :
+    Except ProtectedReplaySplitError PromptAssembly.ClaudeMap.ReplayCheckpoint :=
+  if rows.length != (msgs.filter (fun row => row.role == .assistant)).length then
+    .error .misalignedAssistantProjection
+  else
+    match protectedPairSafeBoundary msgs rawIndex maxPrefix with
+    | none => .error .cannotFit
+    | some split =>
+        let assistantSplit := (msgs.take split |>.filter (fun row => row.role == .assistant)).length
+        (PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows assistantSplit).mapError .replay
+
+theorem preparedProtectedReplayCheckpoint_uses_replay_owner
+    (msgs : List MessageRow) (rawIndex maxPrefix : Nat)
+    (required : List PromptAssembly.ClaudeMap.ReplayTag)
+    (rows : List PromptAssembly.ClaudeMap.TaggedReplayRow)
+    (checkpoint : PromptAssembly.ClaudeMap.ReplayCheckpoint)
+    (h : prepareProtectedReplayCheckpoint msgs rawIndex maxPrefix
+      required rows = .ok checkpoint) :
+    ∃ split, protectedPairSafeBoundary msgs rawIndex maxPrefix = some split ∧
+      split ≤ maxPrefix ∧
+      rows.length = (msgs.filter (fun row => row.role == .assistant)).length ∧
+      PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows
+        (msgs.take split |>.filter (fun row => row.role == .assistant)).length =
+          .ok checkpoint := by
+  unfold prepareProtectedReplayCheckpoint at h
+  split_ifs at h with haligned
+  cases hs : protectedPairSafeBoundary msgs rawIndex maxPrefix with
+    | none => simp [hs] at h
+    | some split =>
+        simp only [hs] at h
+        cases hp : PromptAssembly.ClaudeMap.prepareReplayCheckpoint required rows
+            (msgs.take split |>.filter (fun row => row.role == .assistant)).length with
+        | error error => simp [hp, Except.mapError] at h
+        | ok prepared =>
+            simp [hp, Except.mapError] at h
+            cases h
+            exact ⟨split, rfl,
+              protectedPairSafeBoundary_bounded msgs rawIndex maxPrefix split hs,
+              by simpa only [bne_iff_ne, ne_eq, not_not] using haligned, hp⟩
 
 /-! ## Pair closure of the retained tail -/
 
