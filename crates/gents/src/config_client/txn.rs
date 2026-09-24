@@ -83,9 +83,35 @@ impl MutationWriteGate {
 
     async fn acquire(self: &Arc<Self>, operation: WriteOperation) -> Result<MutationWriteGuard> {
         ensure_not_reentrant_embedded_write(operation)?;
+        #[cfg(test)]
+        let lock_future = {
+            let mut lock = Box::pin(Arc::clone(&self.lock).lock_owned());
+            let observation = SUCCESSFUL_MUTATION_FAULT
+                .try_with(|fault| fault.write_gate_observation.clone())
+                .ok()
+                .flatten();
+            std::future::poll_fn(move |cx| {
+                let polled = lock.as_mut().poll(cx);
+                if let Some(observation) = observation.as_ref() {
+                    match &polled {
+                        std::task::Poll::Pending => {
+                            if !observation.queued_fired.swap(true, Ordering::Relaxed) {
+                                observation.queued.notify_one();
+                            }
+                        }
+                        std::task::Poll::Ready(_) => {
+                            observation.acquired.store(true, Ordering::Release);
+                        }
+                    }
+                }
+                polled
+            })
+        };
+        #[cfg(not(test))]
+        let lock_future = Arc::clone(&self.lock).lock_owned();
         let guard = match tokio::time::timeout(
             EMBEDDED_TRANSACTION_STORAGE_STEP_TIMEOUT,
-            Arc::clone(&self.lock).lock_owned(),
+            lock_future,
         )
         .await
         {
@@ -147,6 +173,23 @@ struct SuccessfulMutationFault {
     count: AtomicUsize,
     lose_receipt: bool,
     receipt_fired: AtomicBool,
+    pause: Option<SuccessfulMutationPause>,
+    write_gate_observation: Option<Arc<WriteGateObservation>>,
+}
+
+#[cfg(test)]
+struct SuccessfulMutationPause {
+    after: usize,
+    reached: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+    fired: AtomicBool,
+}
+
+#[cfg(test)]
+struct WriteGateObservation {
+    queued: Arc<tokio::sync::Notify>,
+    acquired: Arc<AtomicBool>,
+    queued_fired: AtomicBool,
 }
 
 #[cfg(test)]
@@ -155,17 +198,22 @@ tokio::task_local! {
 }
 
 #[cfg(test)]
-fn after_successful_mutation_for_test() -> Result<()> {
-    SUCCESSFUL_MUTATION_FAULT
-        .try_with(|fault| {
-            let count = fault.count.fetch_add(1, Ordering::Relaxed) + 1;
-            anyhow::ensure!(
-                fault.fail_after != Some(count),
-                "injected failure after successful transaction mutation {count}"
-            );
-            Ok(())
-        })
-        .unwrap_or(Ok(()))
+async fn after_successful_mutation_for_test() -> Result<()> {
+    let Ok(fault) = SUCCESSFUL_MUTATION_FAULT.try_with(Arc::clone) else {
+        return Ok(());
+    };
+    let count = fault.count.fetch_add(1, Ordering::Relaxed) + 1;
+    anyhow::ensure!(
+        fault.fail_after != Some(count),
+        "injected failure after successful transaction mutation {count}"
+    );
+    if let Some(pause) = fault.pause.as_ref() {
+        if pause.after == count && !pause.fired.swap(true, Ordering::Relaxed) {
+            pause.reached.notify_one();
+            pause.release.notified().await;
+        }
+    }
+    Ok(())
 }
 
 // External storage premise, test-only: an embedded commit may be durable while
@@ -513,6 +561,8 @@ impl<'a> ConfigApplyTxn<'a> {
             count: AtomicUsize::new(0),
             lose_receipt: false,
             receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
@@ -527,11 +577,73 @@ impl<'a> ConfigApplyTxn<'a> {
             count: AtomicUsize::new(0),
             lose_receipt: true,
             receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: None,
         });
         let output = SUCCESSFUL_MUTATION_FAULT
             .scope(Arc::clone(&fault), future)
             .await;
         (output, fault.receipt_fired.load(Ordering::Relaxed))
+    }
+
+    /// Pause once after the selected successful mutation, while its transaction
+    /// still owns the write gate; the test supplies both synchronization points.
+    #[cfg(test)]
+    pub(crate) async fn with_successful_mutation_pause_at<F: Future>(
+        after: usize,
+        reached: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+        future: F,
+    ) -> (F::Output, bool) {
+        assert!(after > 0);
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_fired: AtomicBool::new(false),
+            pause: Some(SuccessfulMutationPause {
+                after,
+                reached,
+                release,
+                fired: AtomicBool::new(false),
+            }),
+            write_gate_observation: None,
+        });
+        let output = SUCCESSFUL_MUTATION_FAULT
+            .scope(Arc::clone(&fault), future)
+            .await;
+        (
+            output,
+            fault
+                .pause
+                .as_ref()
+                .expect("pause configured")
+                .fired
+                .load(Ordering::Relaxed),
+        )
+    }
+
+    /// Observe the actual embedded write-gate lock poll without changing its
+    /// acquisition path. `queued` signals Pending once; `acquired` records Ready.
+    #[cfg(test)]
+    pub(crate) async fn with_write_gate_observation<F: Future>(
+        queued: Arc<tokio::sync::Notify>,
+        acquired: Arc<AtomicBool>,
+        future: F,
+    ) -> F::Output {
+        let fault = Arc::new(SuccessfulMutationFault {
+            fail_after: None,
+            count: AtomicUsize::new(0),
+            lose_receipt: false,
+            receipt_fired: AtomicBool::new(false),
+            pause: None,
+            write_gate_observation: Some(Arc::new(WriteGateObservation {
+                queued,
+                acquired,
+                queued_fired: AtomicBool::new(false),
+            })),
+        });
+        SUCCESSFUL_MUTATION_FAULT.scope(fault, future).await
     }
 
     async fn begin_local_owned(
@@ -651,7 +763,7 @@ impl<'a> ConfigApplyTxn<'a> {
             self.affected_documents
                 .fetch_add(graphql::affected_documents(&response), Ordering::Relaxed);
             #[cfg(test)]
-            after_successful_mutation_for_test()?;
+            after_successful_mutation_for_test().await?;
         }
         Ok(response)
     }
@@ -728,7 +840,7 @@ impl<'a> ConfigApplyTxn<'a> {
             self.affected_documents
                 .fetch_add(graphql::affected_documents(&envelope), Ordering::Relaxed);
             #[cfg(test)]
-            after_successful_mutation_for_test()?;
+            after_successful_mutation_for_test().await?;
         }
         Ok(response)
     }

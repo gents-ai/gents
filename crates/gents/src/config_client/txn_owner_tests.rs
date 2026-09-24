@@ -123,6 +123,136 @@ async fn clean_known_noop_commit_is_debug_but_mutation_is_info() {
 }
 
 #[tokio::test]
+async fn successful_mutation_pause_is_one_shot_and_task_scoped() {
+    let node = EmbeddedNode::builder().build().await.unwrap();
+    node.add_schema("type MutationPauseProbe { value: String }")
+        .await
+        .unwrap();
+    let reached = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let completed = Arc::new(AtomicUsize::new(0));
+    let completed_for_callback = Arc::clone(&completed);
+    let mut paused = Box::pin(ConfigApplyTxn::with_successful_mutation_pause_at(
+        2,
+        Arc::clone(&reached),
+        Arc::clone(&release),
+        ConfigAccess::transact_local(&node, None, "test.mutation_pause", move |txn| {
+            let completed = Arc::clone(&completed_for_callback);
+            Box::pin(async move {
+                for value in ["first", "second", "third"] {
+                    txn.execute(&format!(
+                        "mutation {{ create_MutationPauseProbe(input: {{ value: \"{}\" }}) {{ _docID }} }}",
+                        crate::graphql::escape_graphql_string(value),
+                    ))
+                    .await?;
+                    completed.fetch_add(1, Ordering::Relaxed);
+                }
+                Ok::<_, anyhow::Error>(())
+            })
+        }),
+    ));
+
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            () = reached.notified() => {}
+            result = &mut paused => panic!("transaction finished before selected pause: {result:?}"),
+        }
+    })
+    .await
+    .expect("selected mutation did not reach the pause");
+    assert_eq!(
+        completed.load(Ordering::Relaxed),
+        1,
+        "the second successful mutation must pause before its callback resumes"
+    );
+    let queued = Arc::new(Notify::new());
+    let acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut contender = Box::pin(ConfigApplyTxn::with_write_gate_observation(
+        Arc::clone(&queued),
+        Arc::clone(&acquired),
+        ConfigAccess::transact_local(&node, None, "test.waiting_for_mutation_gate", |txn| {
+            Box::pin(async move {
+                txn.execute(r#"mutation { create_MutationPauseProbe(input: { value: "contender" }) { _docID } }"#)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }),
+    ));
+    tokio::time::timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            () = queued.notified() => {}
+            result = &mut contender => panic!("contender acquired a held write gate: {result:?}"),
+        }
+    })
+    .await
+    .expect("contender did not poll the write-gate lock Pending");
+    assert!(
+        !acquired.load(Ordering::Acquire),
+        "contender acquired the gate before release"
+    );
+    release.notify_one();
+    let (result, fired) = tokio::time::timeout(Duration::from_secs(30), paused)
+        .await
+        .expect("paused transaction did not resume after release");
+    result.expect("paused transaction commits after release");
+    assert!(fired, "selected pause never fired");
+    assert_eq!(completed.load(Ordering::Relaxed), 3);
+    tokio::time::timeout(Duration::from_secs(30), contender)
+        .await
+        .expect("queued contender did not resume")
+        .expect("queued contender committed after gate release");
+    assert!(
+        acquired.load(Ordering::Acquire),
+        "actual write-gate lock did not report Ready after release"
+    );
+
+    let dormant_queued = Arc::new(Notify::new());
+    let dormant_acquired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    ConfigApplyTxn::with_write_gate_observation(
+        dormant_queued,
+        Arc::clone(&dormant_acquired),
+        async {},
+    )
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        ConfigAccess::transact_local(&node, None, "test.after_mutation_pause", |txn| {
+            Box::pin(async move {
+                txn.execute(r#"mutation { create_MutationPauseProbe(input: { value: "outside" }) { _docID } }"#)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }),
+    )
+    .await
+    .expect("an out-of-scope write must not wait on the old release")
+    .expect("out-of-scope write commits");
+    assert!(
+        !dormant_acquired.load(Ordering::Acquire),
+        "completed observer scope leaked into a later write"
+    );
+
+    let (failure, count) = ConfigApplyTxn::with_successful_mutation_failure_at(
+        Some(1),
+        ConfigAccess::transact_local(&node, None, "test.existing_mutation_failure", |txn| {
+            Box::pin(async move {
+                txn.execute(r#"mutation { create_MutationPauseProbe(input: { value: "fault" }) { _docID } }"#)
+                    .await?;
+                Ok::<_, anyhow::Error>(())
+            })
+        }),
+    )
+    .await;
+    assert_eq!(count, 1);
+    let error = failure.expect_err("existing mutation fault still fires");
+    assert!(
+        format!("{error:#}").contains("injected failure after successful transaction mutation 1"),
+        "{error:#}"
+    );
+    node.shutdown().await;
+}
+
+#[tokio::test]
 async fn cancellation_after_embedded_begin_reports_and_completes_rollback() {
     let node = EmbeddedNode::builder().build().await.unwrap();
     let node_ref = &node;
