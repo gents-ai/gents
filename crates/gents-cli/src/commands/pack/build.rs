@@ -48,10 +48,8 @@ pub(crate) fn dispatch(args: PackBuildArgs) -> Result<()> {
         let reports = build_all(Path::new("packs"))?;
         return crate::print_json(&json!({ "packs": reports }));
     }
-    let dir = args.dir.as_deref().context(
-        "PACK_DIR is required; pass a directory or --all to build every pack under packs/",
-    )?;
-    let report = build_pack(dir, args.out.as_deref())?;
+    let dir = args.dir.unwrap_or_else(|| PathBuf::from("."));
+    let report = build_pack(&dir, args.out.as_deref())?;
     crate::print_json(&serde_json::to_value(report)?)
 }
 
@@ -94,7 +92,12 @@ pub(crate) fn build_pack(dir: &Path, out: Option<&Path>) -> Result<BuildReport> 
     let out_dir = match out.and_then(Path::parent) {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
         Some(_) => PathBuf::from("."),
-        None => dir.parent().unwrap_or_else(|| Path::new(".")).to_path_buf(),
+        // Beside the pack directory, even when it was named as `.`.
+        None => std::path::absolute(dir)
+            .with_context(|| format!("resolving {}", dir.display()))?
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf(),
     };
     std::fs::create_dir_all(&out_dir).with_context(|| format!("creating {}", out_dir.display()))?;
     let mut staged = tempfile::Builder::new()
@@ -199,8 +202,65 @@ fn build_plugin(dir: &Path, manifest: &PackManifest, plugin: &PackPlugin) -> Res
         &staged.join("manifold.json"),
         &serde_json::to_vec(&manifold)?,
     )?;
+
+    // Unchanged source and the artifact this build last produced from it: skip.
+    let stamp = staged.join("target").join("gents-build.stamp");
+    let source_digest = tree_digest(&staged)?;
+    if let (Ok(recorded), Ok(artifact)) = (
+        std::fs::read_to_string(&stamp),
+        std::fs::read(&artifact_path),
+    ) {
+        if recorded == format!("{source_digest} {}", sha256_hex(&artifact)) {
+            return Ok(());
+        }
+    }
     let local = afterburner_build::load_and_validate(&owner, &staged)?;
-    afterburner_build::compile(&owner, &staged, local, &artifact_path)
+    afterburner_build::compile(&owner, &staged, local, &artifact_path)?;
+    let artifact = std::fs::read(&artifact_path)
+        .with_context(|| format!("reading {}", artifact_path.display()))?;
+    std::fs::create_dir_all(stamp.parent().context("stamp parent")?)?;
+    std::fs::write(&stamp, format!("{source_digest} {}", sha256_hex(&artifact)))
+        .with_context(|| format!("writing {}", stamp.display()))
+}
+
+/// Digest of every file under `dir` except the toolchain's `target/`, by
+/// relative path and content, in path order.
+fn tree_digest(dir: &Path) -> Result<String> {
+    fn walk(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            if entry.file_name() == "target" && dir == root {
+                continue;
+            }
+            if entry.file_type()?.is_dir() {
+                walk(root, &entry.path(), files)?;
+            } else {
+                files.push(entry.path());
+            }
+        }
+        Ok(())
+    }
+    use sha2::Digest;
+    let mut files = Vec::new();
+    walk(dir, dir, &mut files).with_context(|| format!("reading {}", dir.display()))?;
+    files.sort();
+    let mut hasher = sha2::Sha256::new();
+    for file in files {
+        let relative = file
+            .strip_prefix(dir)
+            .context("walked outside the plugin")?;
+        let bytes = std::fs::read(&file)?;
+        hasher.update(relative.to_string_lossy().as_bytes());
+        hasher.update([0]);
+        hasher.update((bytes.len() as u64).to_be_bytes());
+        hasher.update(&bytes);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(bytes))
 }
 
 /// The entry file a plugin's source holds, by language: the one convention
@@ -415,6 +475,47 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("format_check"), "{message}");
         assert!(message.contains("is not a directory"), "{message}");
+    }
+
+    /// A second build of unchanged source reuses the artifact; a source edit
+    /// rebuilds it.
+    #[test]
+    fn an_unchanged_plugin_is_not_recompiled() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("format_check");
+        super::super::scaffold::scaffold(
+            &dir,
+            "format_check",
+            &crate::cli::PackScaffoldArgs {
+                kind: None,
+                namespace: "acme".into(),
+                template: Some(crate::cli::PackTemplate::PluginTool),
+                language: None,
+            },
+        )
+        .unwrap();
+        let _guard = crate::commands::afterburner_build::compile_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let artifact = dir.join("plugins/format_check.afb");
+        build_pack(&dir, Some(&root.path().join("a.pack"))).unwrap();
+        let first = std::fs::metadata(&artifact).unwrap().modified().unwrap();
+        build_pack(&dir, Some(&root.path().join("b.pack"))).unwrap();
+        assert_eq!(
+            std::fs::metadata(&artifact).unwrap().modified().unwrap(),
+            first,
+            "unchanged source must not be recompiled"
+        );
+
+        let source = dir.join("plugins/format_check/source/main.rs");
+        let edited = std::fs::read_to_string(&source).unwrap() + "\n// edited\n";
+        std::fs::write(&source, edited).unwrap();
+        build_pack(&dir, Some(&root.path().join("c.pack"))).unwrap();
+        assert_ne!(
+            std::fs::metadata(&artifact).unwrap().modified().unwrap(),
+            first,
+            "an edited source is rebuilt"
+        );
     }
 
     #[test]

@@ -788,7 +788,10 @@ fn pack_build_parses_dir_out_and_all() {
         _ => panic!("expected pack build --all"),
     }
     // Neither a directory nor --all is a usage error, not a silent no-op.
-    assert!(Cli::try_parse_from(["gents", "pack", "build"]).is_err());
+    match parse_pack(&["build"]) {
+        PackCommand::Build(args) => assert!(args.dir.is_none() && !args.all),
+        _ => panic!("expected pack build"),
+    }
     // --all and an explicit directory are mutually exclusive.
     assert!(Cli::try_parse_from(["gents", "pack", "build", "packs/mailbox", "--all"]).is_err());
 }

@@ -603,10 +603,7 @@ pub(crate) struct PackFetchArgs {
 
 #[derive(clap::Args)]
 pub(crate) struct PackBuildArgs {
-    #[arg(
-        required_unless_present = "all",
-        help = "Pack directory to compile and pack (its manifest.json and declared assets)"
-    )]
+    #[arg(help = "Pack directory to compile and pack; defaults to the current directory")]
     pub(crate) dir: Option<PathBuf>,
     #[arg(
         long,
