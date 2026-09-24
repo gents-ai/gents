@@ -17,11 +17,19 @@ pub(super) struct Host {
 /// The container runtime is provisioned with `gents init --inference-url`,
 /// which configures an unauthenticated OpenAI-compatible backend, and host
 /// credentials never enter the container.
-/// The host controller provisions from these arguments only, so the
-/// container runtime and the Rust runner use the same selected target.
-fn start_arguments(target: &InferenceTarget) -> Result<[&str; 3]> {
+/// The host controller provisions the container runtime from these arguments
+/// only (`gents init` with this endpoint, model and capacity), so the container
+/// and the Rust runner use the same selected target.
+fn start_arguments(target: &InferenceTarget) -> Result<Vec<String>> {
     require_host_target(target)?;
-    Ok(["start", target.endpoint(), target.model()])
+    let backend = target.backend("did:key:host");
+    Ok(vec![
+        "start".into(),
+        target.endpoint().into(),
+        target.model().into(),
+        backend.effective_max_concurrent().to_string(),
+        backend.effective_max_queue_depth().to_string(),
+    ])
 }
 
 #[test]
@@ -32,31 +40,82 @@ fn host_start_provisions_the_selected_target_model() {
         [
             "start",
             "http://workstation-1:8000/v1",
-            "GLM-5.3-Flash-NVFP4"
+            "GLM-5.3-Flash-NVFP4",
+            "4",
+            "100"
         ]
     );
     assert_eq!(
-        start_arguments(&target).unwrap()[1..],
+        start_arguments(&target).unwrap()[1..3],
         [target.endpoint(), target.model()]
     );
     let openrouter = InferenceTarget::load("openrouter").unwrap();
     assert!(start_arguments(&openrouter).is_err());
-    let tuned = InferenceTarget::decode(
-        "tuned".into(),
-        serde_json::json!({
-            "agent_principal": {},
-            "inference_backends": [{
-                "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
-                "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "unauthenticated"}
-            }],
-            "inference_profiles": [{
-                "profile_id": "p", "backend_id": "b", "model_name": "m", "context_window": 1000
-            }]
-        }),
-    )
-    .unwrap();
-    let error = start_arguments(&tuned).unwrap_err();
-    assert!(error.to_string().contains("context_window"), "{error}");
+}
+
+#[test]
+fn host_suites_refuse_target_settings_the_container_cannot_honor() {
+    let target = |backend: serde_json::Value, profile: serde_json::Value| {
+        let mut backend_doc = serde_json::json!({
+            "backend_id": "b", "name": "b", "provider_kind": "OpenAiCompatible",
+            "endpoint": "http://127.0.0.1:9/v1", "auth": {"kind": "unauthenticated"}
+        });
+        backend_doc
+            .as_object_mut()
+            .unwrap()
+            .extend(backend.as_object().unwrap().clone());
+        let mut profile_doc =
+            serde_json::json!({"profile_id": "p", "backend_id": "b", "model_name": "m"});
+        profile_doc
+            .as_object_mut()
+            .unwrap()
+            .extend(profile.as_object().unwrap().clone());
+        InferenceTarget::decode(
+            "t".into(),
+            serde_json::json!({
+                "agent_principal": {},
+                "inference_backends": [backend_doc],
+                "inference_profiles": [profile_doc]
+            }),
+        )
+        .unwrap()
+    };
+    let none = serde_json::json!({});
+    assert!(start_arguments(&target(
+        serde_json::json!({"openai_wire_api": "chat_completions"}),
+        none.clone()
+    ))
+    .is_ok());
+    for (backend, profile, field) in [
+        (
+            serde_json::json!({"openai_wire_api": "responses"}),
+            none.clone(),
+            "openai_wire_api",
+        ),
+        (
+            serde_json::json!({"connect_timeout_secs": 5}),
+            none.clone(),
+            "connect_timeout_secs",
+        ),
+        (
+            serde_json::json!({"discovery_timeout_secs": 5}),
+            none.clone(),
+            "discovery_timeout_secs",
+        ),
+        (
+            none.clone(),
+            serde_json::json!({"context_window": 1000}),
+            "context_window",
+        ),
+        (
+            none.clone(),
+            serde_json::json!({"reasoning_effort": "high"}),
+            "reasoning_effort",
+        ),
+    ] {
+        let error = start_arguments(&target(backend, profile)).unwrap_err();
+        assert!(error.to_string().contains(field), "{field}: {error}");
+    }
 }
 
 pub(super) fn require_host_target(target: &InferenceTarget) -> Result<()> {
@@ -68,6 +127,26 @@ pub(super) fn require_host_target(target: &InferenceTarget) -> Result<()> {
             ),
         "host suites support only unauthenticated OpenAI-compatible inference targets; {} is not one",
         target.name
+    );
+    let backend = target.backend("did:key:host");
+    let mut unsupported = Vec::new();
+    if backend
+        .openai_wire_api
+        .is_some_and(|wire| wire != gents::OpenAiWireApi::ChatCompletions)
+    {
+        unsupported.push("openai_wire_api");
+    }
+    if backend.connect_timeout_secs.is_some() {
+        unsupported.push("connect_timeout_secs");
+    }
+    if backend.discovery_timeout_secs.is_some() {
+        unsupported.push("discovery_timeout_secs");
+    }
+    ensure!(
+        unsupported.is_empty(),
+        "host suites provision the backend with gents init; target {} sets unsupported backend field(s) {}",
+        target.name,
+        unsupported.join(", ")
     );
     let profile = serde_json::to_value(target.profile("did:key:host"))?;
     let unsupported = profile
@@ -453,7 +532,8 @@ impl Host {
     }
 
     pub async fn start(evidence: &Path, target: &InferenceTarget) -> Result<Self> {
-        let receipt = control(&start_arguments(target)?).await?;
+        let arguments = start_arguments(target)?;
+        let receipt = control(&arguments.iter().map(String::as_str).collect::<Vec<_>>()).await?;
         Self::from_start_receipt(evidence, receipt, target.endpoint().to_owned()).await
     }
 

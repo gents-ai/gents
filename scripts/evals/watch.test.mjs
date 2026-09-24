@@ -101,7 +101,12 @@ test("usage counts saved calls once and distinguishes unknown tokens from zero",
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "gents-watch-test-"));
-  const evidence = join(directory, "trials", "target-001-trial-001", "evidence");
+  const evidence = join(
+    directory,
+    "trials",
+    "target-001-trial-001",
+    "evidence",
+  );
   await mkdir(evidence, { recursive: true });
   await writeFile(
     join(directory, "execution.json"),
@@ -117,7 +122,11 @@ async function fixture() {
       schema_version: 2,
       updated_at: "2026-09-16T00:00:00Z",
       targets: [
-        { name: "target", model: "model", endpoint: "http://inference.test/v1" },
+        {
+          name: "target",
+          model: "model",
+          endpoint: "http://inference.test/v1",
+        },
       ],
       planned: 2,
       unfinished: 2,

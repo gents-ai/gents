@@ -27,16 +27,25 @@ export async function control(argv, env = process.env) {
     }
   }
   if (operation === "start") {
-    if (argv.length !== 3)
-      throw new Error("start requires inference endpoint and model");
+    if (argv.length !== 5)
+      throw new Error(
+        "start requires inference endpoint, model, max concurrency and max queue depth",
+      );
     const [, endpoint, model] = argv;
+    const maxConcurrent = Number(argv[3]);
+    const maxQueueDepth = Number(argv[4]);
     const host = await HostEnvironment.start({
       runtime: true,
       endpoint,
       runtimeImage: env.GENTS_HOST_RUNTIME_IMAGE,
     });
     try {
-      const graphql = await host.provision({ endpoint, model });
+      const graphql = await host.provision({
+        endpoint,
+        model,
+        maxConcurrent,
+        maxQueueDepth,
+      });
       return {
         container_id: host.id,
         runtime_image: env.GENTS_HOST_RUNTIME_IMAGE,

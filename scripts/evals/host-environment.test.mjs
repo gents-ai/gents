@@ -45,6 +45,8 @@ test(
       const graphql = await original.provision({
         endpoint,
         model: "fixture-no-inference",
+        maxConcurrent: 1,
+        maxQueueDepth: 100,
       });
       const did = await principal(graphql);
       await original.inject("api-permission");
@@ -94,6 +96,8 @@ test(
       await host.provision({
         endpoint: "http://127.0.0.1:8000/v1",
         model: "fixture-no-inference",
+        maxConcurrent: 1,
+        maxQueueDepth: 100,
       });
       const archive = join(directory, "runtime");
       await host.archiveRuntime(archive);
@@ -325,10 +329,10 @@ test(
 test("host start takes its inference endpoint and model from the coordinator", async () => {
   await assert.rejects(
     control(["start"], {}),
-    /start requires inference endpoint and model/,
+    /start requires inference endpoint, model/,
   );
   await assert.rejects(
-    control(["start", "http://127.0.0.1:8000/v1"], {}),
-    /start requires inference endpoint and model/,
+    control(["start", "http://127.0.0.1:8000/v1", "model"], {}),
+    /start requires inference endpoint, model, max concurrency and max queue depth/,
   );
 });

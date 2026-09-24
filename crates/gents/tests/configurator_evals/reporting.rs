@@ -45,17 +45,52 @@ pub struct TargetLabel {
     model: String,
     endpoint: String,
     provider_kind: gents::BackendProviderKind,
+    reasoning_effort: Option<gents::config::ReasoningEffort>,
+    reasoning_effort_source: &'static str,
+}
+
+/// Effective effort for a target's eval profiles: the eval override wins over
+/// the target profile; neither leaves the provider default.
+fn effective_reasoning(
+    requested: Option<gents::config::ReasoningEffort>,
+    target: Option<gents::config::ReasoningEffort>,
+) -> (Option<gents::config::ReasoningEffort>, &'static str) {
+    match (requested, target) {
+        (Some(effort), _) => (Some(effort), "override"),
+        (None, Some(effort)) => (Some(effort), "target_profile"),
+        (None, None) => (None, "provider_default"),
+    }
 }
 
 impl TargetLabel {
-    pub fn new(target: &crate::support::live_inference::InferenceTarget) -> Self {
-        Self {
+    pub fn new(target: &crate::support::live_inference::InferenceTarget) -> Result<Self> {
+        let (reasoning_effort, reasoning_effort_source) = effective_reasoning(
+            super::eval_reasoning_effort()?,
+            target.profile("").reasoning_effort,
+        );
+        Ok(Self {
             name: target.name.clone(),
             model: target.model().to_owned(),
             endpoint: target.endpoint().to_owned(),
             provider_kind: target.provider_kind(),
-        }
+            reasoning_effort,
+            reasoning_effort_source,
+        })
     }
+}
+
+#[test]
+fn target_reasoning_reports_effective_effort_and_source() {
+    use gents::config::ReasoningEffort::{High, Low};
+    assert_eq!(
+        effective_reasoning(Some(High), Some(Low)),
+        (Some(High), "override")
+    );
+    assert_eq!(
+        effective_reasoning(None, Some(Low)),
+        (Some(Low), "target_profile")
+    );
+    assert_eq!(effective_reasoning(None, None), (None, "provider_default"));
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -436,6 +471,8 @@ fn test_target() -> TargetLabel {
         model: "model".into(),
         endpoint: "http://inference.test/v1".into(),
         provider_kind: gents::BackendProviderKind::OpenAiCompatible,
+        reasoning_effort: Some(gents::config::ReasoningEffort::Low),
+        reasoning_effort_source: "target_profile",
     }
 }
 
@@ -500,6 +537,11 @@ fn report_preserves_partial_results_and_failure_categories() {
     assert_eq!(initial["targets"][0]["name"], "target");
     assert_eq!(initial["targets"][0]["model"], "model");
     assert_eq!(initial["targets"][0]["provider_kind"], "OpenAiCompatible");
+    assert_eq!(initial["targets"][0]["reasoning_effort"], "low");
+    assert_eq!(
+        initial["targets"][0]["reasoning_effort_source"],
+        "target_profile"
+    );
     assert_eq!(initial["summaries"][0]["target"], "target");
     assert!(initial["outcome_taxonomy"]["failure_kinds"]
         .as_array()

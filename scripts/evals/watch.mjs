@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { assessRun, readJson, text } from "./report.mjs";
+import { assessRun, readJson, reasoning, text } from "./report.mjs";
 
 const number = (n) => (n == null ? "—" : Math.round(n).toLocaleString("en-US"));
 const duration = (ms) => {
@@ -286,7 +286,7 @@ export function renderDashboard(
     );
   else {
     lines.push(
-      `${report.targets.map((target) => `${text(target.name)} ${text(target.model)}`).join(" · ")}   n=${report.runs_per_target}   concurrency=${report.concurrency}   reasoning=${text(report.provenance?.inference?.requested_reasoning_effort ?? "server default")}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
+      `${report.targets.map((target) => `${text(target.name)} ${text(target.model)} reasoning=${reasoning(target)}`).join(" · ")}   n=${report.runs_per_target}   concurrency=${report.concurrency}${report.stage_timeout_secs ? `   stage budget=${duration(report.stage_timeout_secs * 1000)}` : ""}`,
     );
     lines.push(
       `Reported tokens  IN ${number(knownInput ? totals.input : null)}  OUT ${number(known ? totals.output : null)}   |   ${totals.calls} inference calls   ${totals.tools} saved tool calls`,

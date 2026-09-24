@@ -167,7 +167,13 @@ test("report renders provenance without treating missing sampling as zero", asyn
     JSON.stringify({
       ...report,
       targets: [
-        { name: "target", model: "model", endpoint: "http://inference.test/v1" },
+        {
+          name: "target",
+          model: "model",
+          endpoint: "http://inference.test/v1",
+          reasoning_effort: "low",
+          reasoning_effort_source: "target_profile",
+        },
       ],
       provenance: {
         cohort: "new-cohort",
@@ -187,7 +193,10 @@ test("report renders provenance without treating missing sampling as zero", asyn
   assert.match(output, /temperature=1, top_p=0.95, seed=provider default/);
   assert.match(output, /Fixture hashes: 1/);
   assert.match(output, /Requested reasoning effort: high/);
-  assert.match(output, /Inference: target \(model @ http:\/\/inference.test\/v1\)/);
+  assert.match(
+    output,
+    /Inference: target \(model @ http:\/\/inference.test\/v1; reasoning low from target profile\)/,
+  );
 });
 
 async function fakeRun(script, overrides = {}) {

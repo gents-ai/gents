@@ -929,7 +929,11 @@ async fn live_configurator_progressive_eval_matrix() {
         directory.clone(),
         suite_id(),
         suite_cases(),
-        targets.iter().map(reporting::TargetLabel::new).collect(),
+        targets
+            .iter()
+            .map(reporting::TargetLabel::new)
+            .collect::<anyhow::Result<_>>()
+            .expect("label eval targets"),
         runs,
         concurrency,
         stage_timeout.as_secs(),
@@ -1100,6 +1104,23 @@ fn targets_are_literal_and_never_hold_inline_keys() {
         )
     )
     .is_err());
+    let error = InferenceTarget::decode(
+        "t".into(),
+        serde_json::json!({
+            "agent_principal": {},
+            "inference_backends": [{
+                "backend_id": "b", "name": "b", "provider_kind": "ClaudeCliSubscription",
+                "endpoint": "https://api.anthropic.com", "auth": {"kind": "principal_oauth"}
+            }],
+            "inference_profiles": [profile]
+        }),
+    )
+    .unwrap_err();
+    assert!(
+        format!("{error:#}")
+            .contains("PrincipalOAuth targets are not supported for fresh-principal evals"),
+        "{error:#}"
+    );
     // `${PATH}` is set in every test process; a literal target must not expand it.
     assert!(InferenceTarget::decode(
         "t".into(),
