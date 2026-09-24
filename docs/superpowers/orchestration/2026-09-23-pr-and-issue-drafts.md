@@ -421,7 +421,12 @@ one revision from the verdicts.
 Coordinator's gate at `e2fca53b8`: `cargo fmt --all --check` clean; `cargo test -p gents` 3342/0;
 `cargo test -p gents-cli` 1148 passed plus the 20 known environmental failures; workspace check
 clean. Fix wave (3 commits) re-ran the eval CLI suite (97/0, 1 ignored live), `pack::tests` and
-`eval::checks`. Orchestrator's re-run of the full gate on `e9f3b515b`: (fill in).
+`eval::checks`. Orchestrator's re-run of the full gate on `e9f3b515b` (2026-09-24): `cargo test -p gents` all
+passed; `cargo test -p gents-cli --no-fail-fast` 1157 passed, 21 failed, 12 ignored, where the 21
+are the 18 wasm/pyodide afterburner and plugin tests, the `cli_enrollment` live endpoint, the
+`cli_config_tools` lock flake (#1640) and `cli_chat::chat_buffers_final_response_and_shows_tool_progress`
+(a refused connection to its test server under load, #1641's class); the last two pass alone on the
+tip. `cargo check --workspace --all-targets` clean; `cargo fmt --all --check` clean.
 
 **Notes**
 - Requires a served home: the author's requests are claimed by that runtime, as `gents chat` turns are.
