@@ -233,7 +233,7 @@ fn group_scores(
 mod tests {
     use super::*;
     use crate::eval::report::build::{build, SlotClass};
-    use crate::eval::report::compare::compare;
+    use crate::eval::report::compare::{compare, CompareOptions};
     use crate::eval::report::fixtures::{
         at, definition, fail, pass, record, trial_id, Outcome, Rows, RUN,
     };
@@ -244,7 +244,14 @@ mod tests {
         let definition = definition(cases);
         let run = record(RUN, &definition, &["baseline", "candidate"], 1);
         let report = build(&run, &rows.trials, &rows.verdicts, &definition, &[]).unwrap();
-        compare(&report, &report, "baseline", "candidate").unwrap()
+        compare(
+            &report,
+            &report,
+            "baseline",
+            "candidate",
+            &CompareOptions::default(),
+        )
+        .unwrap()
     }
 
     /// Case a: `captured_rows_count` improves and `second` ties at 10000.

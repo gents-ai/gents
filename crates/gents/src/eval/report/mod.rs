@@ -23,8 +23,8 @@ pub use build::{
     SlotReport, SlotScore, SlotVerdict, REPORT_VERSION,
 };
 pub use compare::{
-    compare, is_placeholder, CaseComparison, Comparison, GateView, PairedTrial, PolicyOutcome,
-    SideTrial,
+    compare, is_placeholder, CaseComparison, CompareOptions, Comparison, GateView, PairedTrial,
+    PolicyOutcome, SideTrial,
 };
 pub use evidence::{
     cell_trial_scores, cell_usage, concat_paired, counted_verdicts, latest_attempts, load_run_rows,

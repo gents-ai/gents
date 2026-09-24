@@ -57,6 +57,7 @@ pub fn run_header(record: &RunRecord) -> RunHeader {
         comparability_version: record.origin.definition.comparability_version,
         split: record.origin.split,
         invalidated: record.invalidated.is_some(),
+        purpose: record.origin.purpose.clone(),
     }
 }
 

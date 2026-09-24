@@ -317,6 +317,11 @@ pub fn headline_bp(trials: &[TrialScore]) -> Option<u32> {
     Some((total / means.len() as u64) as u32)
 }
 
+/// The `purpose` of a run an author launches to try a draft definition. A
+/// pilot is not evidence: it never counts as exposure, and `compare` refuses
+/// it unless asked.
+pub const PILOT_PURPOSE: &str = "pilot";
+
 /// The comparability-relevant header of one run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunHeader {
@@ -324,9 +329,11 @@ pub struct RunHeader {
     pub comparability_version: i64,
     pub split: EvalSplit,
     pub invalidated: bool,
+    pub purpose: String,
 }
 
-/// Split exposure is a count of rows, never a counter field.
+/// Split exposure is a count of rows, never a counter field. Pilot runs are
+/// drafts of a definition and never count.
 pub fn exposure(
     runs: &[RunHeader],
     definition_id: &str,
@@ -336,6 +343,7 @@ pub fn exposure(
     runs.iter()
         .filter(|run| {
             !run.invalidated
+                && run.purpose != PILOT_PURPOSE
                 && run.definition_id == definition_id
                 && run.comparability_version == comparability_version
                 && run.split == split
@@ -708,6 +716,7 @@ mod tests {
             comparability_version: 2,
             split,
             invalidated,
+            purpose: "eval".into(),
         };
         let runs = [
             run(EvalSplit::Validation, false),
@@ -716,5 +725,18 @@ mod tests {
         ];
         assert_eq!(exposure(&runs, "d", 2, EvalSplit::Validation), 1);
         assert_eq!(exposure(&runs, "d", 1, EvalSplit::Validation), 0);
+    }
+
+    #[test]
+    fn pilot_runs_are_not_exposure() {
+        let run = |purpose: &str| RunHeader {
+            definition_id: "d".into(),
+            comparability_version: 2,
+            split: EvalSplit::Validation,
+            invalidated: false,
+            purpose: purpose.into(),
+        };
+        let runs = [run("eval"), run(PILOT_PURPOSE)];
+        assert_eq!(exposure(&runs, "d", 2, EvalSplit::Validation), 1);
     }
 }

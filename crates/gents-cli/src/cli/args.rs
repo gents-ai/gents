@@ -3599,6 +3599,9 @@ pub(crate) struct EvalCompareArgs {
     /// Print this case's trials side by side with each verdict.
     #[arg(long = "case")]
     pub(crate) case_id: Option<String>,
+    /// Compare a pilot run (purpose `pilot`) as if it were evidence.
+    #[arg(long)]
+    pub(crate) include_pilot: bool,
     #[arg(long)]
     pub(crate) json: bool,
     #[command(flatten)]

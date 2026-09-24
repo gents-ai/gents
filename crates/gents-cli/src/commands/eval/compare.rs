@@ -6,8 +6,8 @@ use std::io::Write;
 
 use anyhow::Result;
 use gents::eval::report::{
-    by_check, by_stage, case_view, compare as compare_reports, load_report, EvalReport,
-    PolicyOutcome,
+    by_check, by_stage, case_view, compare as compare_reports, load_report, CompareOptions,
+    EvalReport, PolicyOutcome,
 };
 use serde::Serialize;
 
@@ -38,7 +38,16 @@ pub(super) async fn compare(
         args.candidate_cell.as_deref(),
         "--candidate-cell",
     )?;
-    let mut comparison = compare_reports(&baseline, &candidate, &baseline_cell, &candidate_cell)?;
+    let options = CompareOptions {
+        include_pilot: args.include_pilot,
+    };
+    let mut comparison = compare_reports(
+        &baseline,
+        &candidate,
+        &baseline_cell,
+        &candidate_cell,
+        &options,
+    )?;
     if let Some(policy) = &args.policy {
         comparison = comparison.with_policy(&load_policy(policy)?);
     }
@@ -209,10 +218,15 @@ mod tests {
             gents::eval::report::load_report(&ctx.access, &ctx.owner, &ctx.runs_dir(), "r1")
                 .await
                 .unwrap();
-        let mut comparison =
-            gents::eval::report::compare(&report, &report, "baseline", "candidate")
-                .unwrap()
-                .with_policy(&gents::optimization::PolicyV2::uncalibrated());
+        let mut comparison = gents::eval::report::compare(
+            &report,
+            &report,
+            "baseline",
+            "candidate",
+            &gents::eval::report::CompareOptions::default(),
+        )
+        .unwrap()
+        .with_policy(&gents::optimization::PolicyV2::uncalibrated());
         let gates = &mut comparison.policy.as_mut().unwrap().gates;
         gates.min_effect = None;
         gates.cost_ok = None;

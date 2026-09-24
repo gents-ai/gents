@@ -18,6 +18,7 @@ use crate::eval::report::build::{
 };
 use crate::eval::report::evidence::CellUsage;
 use crate::eval::report::refused;
+use crate::eval::scoring::PILOT_PURPOSE;
 use crate::eval::{pair_trials, CaseTrialScore, DefinitionRef, Pair, PairedEvidence, TrialScore};
 use crate::optimization::evidence::{decision_seed, totals};
 use crate::optimization::policy::{
@@ -115,16 +116,36 @@ pub struct Comparison {
     seed: u64,
 }
 
+/// What a caller may relax about [`compare`]'s refusals.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CompareOptions {
+    /// Compare a pilot run as if it were evidence.
+    pub include_pilot: bool,
+}
+
 /// Compare `baseline_cell` of one report with `candidate_cell` of another,
 /// or of the same one. Refused across comparability versions or definition
-/// digests, and for a cell a report does not have.
+/// digests, for a cell a report does not have, and for a pilot run unless
+/// `options` includes pilots.
 pub fn compare(
     baseline: &EvalReport,
     candidate: &EvalReport,
     baseline_cell: &str,
     candidate_cell: &str,
+    options: &CompareOptions,
 ) -> Result<Comparison> {
     let (left, right) = (&baseline.run, &candidate.run);
+    if !options.include_pilot {
+        if let Some(pilot) = [left, right]
+            .into_iter()
+            .find(|run| run.purpose == PILOT_PURPOSE)
+        {
+            return Err(refused(format!(
+                "run {} is a pilot (purpose {:?}); pilots are drafts of a definition, not evidence; pass --include-pilot to compare it anyway",
+                pilot.run_id, pilot.purpose
+            )));
+        }
+    }
     if left.definition.definition_id != right.definition.definition_id
         || left.definition.comparability_version != right.definition.comparability_version
     {
@@ -433,7 +454,14 @@ mod tests {
     fn cases_are_counted_by_the_sign_of_their_mean_difference() {
         let (definition, rows) = five_cases();
         let report = report(&definition, &rows, &["baseline", "candidate"], 1);
-        let comparison = compare(&report, &report, "baseline", "candidate").unwrap();
+        let comparison = compare(
+            &report,
+            &report,
+            "baseline",
+            "candidate",
+            &CompareOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             (comparison.improved, comparison.tied, comparison.worsened),
             (1, 2, 1)
@@ -473,7 +501,14 @@ mod tests {
     fn pairs_match_pair_trials_and_p_matches_the_permutation_test() {
         let (definition, rows) = five_cases();
         let report = report(&definition, &rows, &["baseline", "candidate"], 1);
-        let comparison = compare(&report, &report, "baseline", "candidate").unwrap();
+        let comparison = compare(
+            &report,
+            &report,
+            "baseline",
+            "candidate",
+            &CompareOptions::default(),
+        )
+        .unwrap();
 
         let documents = run_rows(&definition, &rows);
         let paired = pair_trials(
@@ -514,18 +549,68 @@ mod tests {
 
         let mut other_version = report.clone();
         other_version.run.definition.comparability_version = 2;
-        let reason = refusal(compare(&report, &other_version, "baseline", "candidate"));
+        let reason = refusal(compare(
+            &report,
+            &other_version,
+            "baseline",
+            "candidate",
+            &CompareOptions::default(),
+        ));
         assert!(reason.contains("one comparability version"), "{reason}");
 
         let mut other_digest = report.clone();
         other_digest.run.definition.digest = "sha256:elsewhere".into();
-        let reason = refusal(compare(&report, &other_digest, "baseline", "candidate"));
+        let reason = refusal(compare(
+            &report,
+            &other_digest,
+            "baseline",
+            "candidate",
+            &CompareOptions::default(),
+        ));
         assert!(reason.contains("different digests"), "{reason}");
 
-        let reason = refusal(compare(&report, &report, "ghost", "candidate"));
+        let reason = refusal(compare(
+            &report,
+            &report,
+            "ghost",
+            "candidate",
+            &CompareOptions::default(),
+        ));
         assert_eq!(reason, "run run has no cell \"ghost\"");
-        let reason = refusal(compare(&report, &report, "baseline", "ghost"));
+        let reason = refusal(compare(
+            &report,
+            &report,
+            "baseline",
+            "ghost",
+            &CompareOptions::default(),
+        ));
         assert_eq!(reason, "run run has no cell \"ghost\"");
+    }
+
+    #[test]
+    fn compare_refuses_a_pilot_run_unless_asked_to_include_it() {
+        let (definition, rows) = five_cases();
+        let report = report(&definition, &rows, &["baseline", "candidate"], 1);
+        let mut pilot = report.clone();
+        pilot.run.purpose = PILOT_PURPOSE.into();
+
+        let defaults = CompareOptions::default();
+        for (baseline, candidate) in [(&pilot, &report), (&report, &pilot)] {
+            let reason = refusal(compare(
+                baseline,
+                candidate,
+                "baseline",
+                "candidate",
+                &defaults,
+            ));
+            assert!(reason.contains("pilot"), "{reason}");
+            assert!(reason.contains("--include-pilot"), "{reason}");
+        }
+
+        let include = CompareOptions {
+            include_pilot: true,
+        };
+        compare(&pilot, &report, "baseline", "candidate", &include).unwrap();
     }
 
     /// `imputed` mirrors `pair_trials`' imputation rule: removing every
@@ -636,9 +721,15 @@ mod tests {
     ) -> (Comparison, DecisionReport) {
         let (definition, rows) = improving(cases, unmetered);
         let report = report(&definition, &rows, &[BASELINE_CELL, CANDIDATE_CELL], 2);
-        let comparison = compare(&report, &report, BASELINE_CELL, CANDIDATE_CELL)
-            .unwrap()
-            .with_policy(policy);
+        let comparison = compare(
+            &report,
+            &report,
+            BASELINE_CELL,
+            CANDIDATE_CELL,
+            &CompareOptions::default(),
+        )
+        .unwrap()
+        .with_policy(policy);
         let expected = decide(
             Mode::Improve,
             policy,
@@ -734,7 +825,14 @@ mod tests {
     fn a_comparison_has_no_policy_outcome_until_asked() {
         let (definition, rows) = five_cases();
         let report = report(&definition, &rows, &["baseline", "candidate"], 1);
-        let comparison = compare(&report, &report, "baseline", "candidate").unwrap();
+        let comparison = compare(
+            &report,
+            &report,
+            "baseline",
+            "candidate",
+            &CompareOptions::default(),
+        )
+        .unwrap();
         assert!(comparison.policy.is_none());
     }
 
@@ -756,11 +854,17 @@ mod tests {
                 }
             }
             let report = report(&definition, &rows, &[BASELINE_CELL, CANDIDATE_CELL], 2);
-            let outcome = compare(&report, &report, BASELINE_CELL, CANDIDATE_CELL)
-                .unwrap()
-                .with_policy(policy)
-                .policy
-                .unwrap();
+            let outcome = compare(
+                &report,
+                &report,
+                BASELINE_CELL,
+                CANDIDATE_CELL,
+                &CompareOptions::default(),
+            )
+            .unwrap()
+            .with_policy(policy)
+            .policy
+            .unwrap();
             let expected = decide(
                 Mode::Improve,
                 policy,
@@ -829,11 +933,17 @@ mod tests {
             }
         }
         let report = report(&definition, &rows, &[BASELINE_CELL, CANDIDATE_CELL], 2);
-        let outcome = compare(&report, &report, BASELINE_CELL, CANDIDATE_CELL)
-            .unwrap()
-            .with_policy(&policy)
-            .policy
-            .unwrap();
+        let outcome = compare(
+            &report,
+            &report,
+            BASELINE_CELL,
+            CANDIDATE_CELL,
+            &CompareOptions::default(),
+        )
+        .unwrap()
+        .with_policy(&policy)
+        .policy
+        .unwrap();
         let expected = decide(
             Mode::Improve,
             &policy,

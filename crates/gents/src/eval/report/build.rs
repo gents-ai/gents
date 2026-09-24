@@ -790,6 +790,7 @@ mod tests {
             comparability_version: 1,
             split,
             invalidated,
+            purpose: "eval".into(),
         };
         let peers = [
             header(EvalSplit::Validation, false),
