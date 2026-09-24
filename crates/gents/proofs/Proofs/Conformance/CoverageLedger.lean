@@ -1062,7 +1062,7 @@ def caseCoverage : List CoverageEntry :=
       "ReservedChildMaterializationCases"
       "tool_call_lifecycle::admission_fixture::tests::generated_reserved_child_cases_drive_actual_transaction_owner"
       "The native consumer drives reserved-child create, replay and conflict through the transaction owner and checks physical rows. It does not prove arbitrary parent authorization or host-independent child execution.")
-      "subagent" [Surface.runtimeInternal]
+      "tool-call" [Surface.runtimeInternal]
   , tagged (consumerCoverage
       "restart_disposition_cases"
       "RestartDispositionCases"
@@ -1810,5 +1810,9 @@ def CoverageEntry.toJson (entry : CoverageEntry) : String :=
 
 def coverageLedgerJson : String :=
   jsonArray (coverageLedger.map CoverageEntry.toJson)
+
+example : coverageLedger.all (fun entry =>
+    featureSurfaceRequirements.any (fun requirement => requirement.feature == entry.feature))
+    = true := by native_decide
 
 end Conformance.Contracts
