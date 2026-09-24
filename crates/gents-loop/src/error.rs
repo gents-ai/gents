@@ -70,8 +70,8 @@ pub enum InferenceError {
     #[error("permanent inference failure: {reason}")]
     PermanentFailure { reason: String },
 
-    #[error("inference timed out after {timeout_secs}s")]
-    Timeout { timeout_secs: u64 },
+    #[error("inference timed out after {timeout:?}")]
+    Timeout { timeout: std::time::Duration },
 
     #[error("rate limited, retry after {retry_after_secs}s")]
     RateLimited { retry_after_secs: u64 },

@@ -131,6 +131,8 @@ where
             .admission
             .acquire_current_call(&self.connection)
             .await?;
+        permit
+            .observe_provider_activity(crate::rendered_request::scope::current_attempt_activity());
         let token = current_context().ok().and_then(|c| c.inference_token);
         match token {
             Some(token) => {

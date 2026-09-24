@@ -445,6 +445,7 @@ pub(super) fn config(max_turns: usize) -> LoopConfig {
         context_window: crate::config::DEFAULT_CONTEXT_WINDOW,
         compaction_threshold: crate::config::DEFAULT_COMPACTION_THRESHOLD,
         retry_policy: crate::agent::completion_retry::CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: None,
         deadline: None,
         max_turns,
         output_obligation_gate: None,

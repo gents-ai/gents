@@ -4,6 +4,10 @@ namespace CompletionRetry
 
 inductive Action where
   | issue
+  /-- Any provider-attempt failure, classified. Provider idle expiry (no
+  transport activity within the configured window, including the header wait)
+  is a `.transport` observation of this action, independent of the execution
+  lease; it adds no transition or budget of its own. -/
   | observeFailure (failure : FailureClass) (error : String) (wake : Time)
   /-- Enabled only after CanonicalOutput.Execution.retractBeforeRetry has
   durably appended the Retracted closure. -/

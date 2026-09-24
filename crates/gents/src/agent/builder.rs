@@ -18,7 +18,8 @@ use crate::compaction::CompactionStrategy;
 use crate::config::{
     ResolvedBehavior, SamplingConfig, DEFAULT_COMPACTION_THRESHOLD, DEFAULT_CONTEXT_WINDOW,
     DEFAULT_DEADLINE_DURATION_SECS, DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_TURNS,
-    DEFAULT_MODEL_NAME, DEFAULT_STREAM_BATCH_MS, DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
+    DEFAULT_MODEL_NAME, DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS, DEFAULT_STREAM_BATCH_MS,
+    DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS,
 };
 use crate::health_checker::HealthCheckerOptions;
 use crate::hook::{BackgroundExecutionRegistry, FailurePolicy};
@@ -452,6 +453,11 @@ impl BehaviorBuilder {
         self
     }
 
+    pub fn provider_idle_timeout_secs(mut self, provider_idle_timeout_secs: u64) -> Self {
+        self.behavior.provider_idle_timeout = Duration::from_secs(provider_idle_timeout_secs);
+        self
+    }
+
     pub fn deadline_duration_secs(mut self, deadline_duration_secs: u64) -> Self {
         self.behavior.deadline_duration = Duration::from_secs(deadline_duration_secs);
         self
@@ -491,6 +497,7 @@ pub(crate) struct PendingAgentBehavior {
     compaction_strategy: CompactionStrategy,
     stream_batch_ms: u64,
     stream_liveness_timeout: Duration,
+    provider_idle_timeout: Duration,
     deadline_duration: Duration,
     sampling: SamplingConfig,
     skills: Vec<crate::skills::Skill>,
@@ -514,6 +521,7 @@ impl PendingAgentBehavior {
             compaction_strategy: CompactionStrategy::StripThenSummarize,
             stream_batch_ms: DEFAULT_STREAM_BATCH_MS,
             stream_liveness_timeout: Duration::from_secs(DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS),
+            provider_idle_timeout: Duration::from_secs(DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS),
             deadline_duration: Duration::from_secs(DEFAULT_DEADLINE_DURATION_SECS),
             sampling: SamplingConfig::default(),
             skills: Vec::new(),
@@ -633,6 +641,7 @@ impl PendingAgentBehavior {
             max_total_tokens: None,
             stream_batch_ms: self.stream_batch_ms,
             stream_liveness_timeout: self.stream_liveness_timeout,
+            provider_idle_timeout: self.provider_idle_timeout,
             deadline_duration: self.deadline_duration,
             completion_retry: CompletionRetryProfileFields::default(),
             sampling: self.sampling,

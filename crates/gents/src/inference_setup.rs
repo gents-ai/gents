@@ -156,6 +156,10 @@ pub fn inference_setup_catalog() -> InferenceSetupCatalog {
                 Some(crate::config::DEFAULT_STREAM_LIVENESS_TIMEOUT_SECS as i64),
             ),
             (
+                "providerIdleSecs",
+                Some(crate::config::DEFAULT_PROVIDER_IDLE_TIMEOUT_SECS as i64),
+            ),
+            (
                 "deadlineSecs",
                 Some(crate::config::DEFAULT_DEADLINE_DURATION_SECS as i64),
             ),

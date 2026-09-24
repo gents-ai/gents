@@ -239,6 +239,7 @@ fn test_loop_config() -> LoopConfig {
         context_window: 128_000,
         compaction_threshold: 0.75,
         retry_policy: crate::completion_retry::CompletionRetryPolicy::interactive_default(),
+        provider_idle_timeout: None,
         deadline: None,
         max_turns: 8,
         output_obligation_gate: None,

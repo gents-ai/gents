@@ -117,6 +117,7 @@ pub(crate) fn loop_config(
         context_window: behavior.context_window,
         compaction_threshold: behavior.compaction_threshold(),
         retry_policy: CompletionRetryPolicy::scheduled_default(),
+        provider_idle_timeout: Some(behavior.provider_idle_timeout),
         deadline: None,
         max_turns: behavior.max_turns,
         output_obligation_gate: None,

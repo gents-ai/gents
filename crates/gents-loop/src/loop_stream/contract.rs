@@ -167,6 +167,12 @@ pub struct LoopConfig {
     pub context_window: usize,
     pub compaction_threshold: f64,
     pub retry_policy: CompletionRetryPolicy,
+    /// Longest silence tolerated from an open provider stream, before its
+    /// first item and between items. Expiry fails the attempt as transport
+    /// through `retry_policy`. It runs only while the loop awaits provider
+    /// output, never across admission queueing, tool dispatch or retry
+    /// backoff. `None` waits for the request deadline.
+    pub provider_idle_timeout: Option<std::time::Duration>,
     pub deadline: Option<DateTime<Utc>>,
     pub max_turns: usize,
     pub output_obligation_gate: Option<Arc<dyn OutputObligationCheck>>,

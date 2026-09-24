@@ -165,7 +165,12 @@ impl StreamPlan {
 #[derive(Clone, Debug)]
 pub enum StreamResponse {
     Stream(StreamScript),
-    HttpStatus { status: u16, body: String },
+    /// Withhold response headers until the script's marker is released.
+    HoldHeaders(StreamScript),
+    HttpStatus {
+        status: u16,
+        body: String,
+    },
 }
 
 impl StreamResponse {
@@ -670,6 +675,10 @@ async fn handle_chat(State(state): State<Arc<StreamingState>>, body: String) -> 
     if request_is_streaming(&body) {
         return match state.next_response(&body).await {
             StreamResponse::Stream(script) => streaming_response(script, state),
+            StreamResponse::HoldHeaders(script) => {
+                state.wait_for_release_or_stop(&script.marker).await;
+                streaming_response(script, state)
+            }
             StreamResponse::HttpStatus { status, body } => (
                 StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                 [(header::CONTENT_TYPE, "application/json")],

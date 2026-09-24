@@ -1993,6 +1993,7 @@ export function createDesktopUiHarness(
           maxTotalTokens: null,
           streamBatchMs: 100,
           streamLivenessSecs: 1800,
+          providerIdleSecs: 300,
           deadlineSecs: 86400,
         },
         contractVersion: 1,

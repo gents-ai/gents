@@ -6,6 +6,7 @@ type InferenceExecution @branchable @index(fields: ["agent_did", "execution_id"]
     max_total_tokens: Int
     stream_batch_ms: Int
     stream_liveness_timeout_secs: Int
+    provider_idle_timeout_secs: Int
     deadline_duration_secs: Int
     retry_policy_id: String @index
     tags: [String!]
