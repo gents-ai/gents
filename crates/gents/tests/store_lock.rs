@@ -45,6 +45,23 @@ fn a_second_holder_cannot_lock_a_store() {
     lock_store(&home, &data).expect("the lock is released with its holder");
 }
 
+#[test]
+fn a_held_store_lock_is_classified_with_its_home_and_holder() {
+    let _guard = exclusive();
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+
+    let _held = gents::home::lock_store(home.path(), &data).unwrap();
+    let error = gents::home::lock_store(home.path(), &data).unwrap_err();
+
+    let held = error
+        .downcast_ref::<gents::home::StoreLockHeld>()
+        .expect("a contended store lock is classified, not just described");
+    assert_eq!(held.home, home.path());
+    assert_eq!(held.holder_pid, Some(std::process::id()));
+}
+
 #[cfg(unix)]
 #[test]
 fn every_alias_of_a_store_takes_the_same_lock() {

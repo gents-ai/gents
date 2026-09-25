@@ -145,6 +145,33 @@ pub fn lock_home_store(home_dir: &Path) -> Result<StoreLock> {
     }
 }
 
+/// A store lock this process could not take because another holder has it.
+///
+/// `holder_pid` is absent when the lock file does not carry a parseable pid,
+/// which happens if the holder was killed between creating the file and
+/// writing to it.
+#[derive(Debug)]
+pub struct StoreLockHeld {
+    pub home: PathBuf,
+    pub holder_pid: Option<u32>,
+}
+
+impl std::fmt::Display for StoreLockHeld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let holder = self
+            .holder_pid
+            .map(|pid| format!(" (process {pid})"))
+            .unwrap_or_default();
+        let home = self.home.display();
+        write!(
+            f,
+            "another Gents runtime{holder} is already using {home}. Stop it first: `gents service stop --home {home}` if it runs as the background service, or Ctrl-C in the terminal running `gents server`"
+        )
+    }
+}
+
+impl std::error::Error for StoreLockHeld {}
+
 fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
     use std::io::{Read as _, Seek as _, Write as _};
 
@@ -172,15 +199,10 @@ fn lock_path(home_dir: &Path, path: PathBuf) -> Result<StoreLock> {
         Err(fs::TryLockError::WouldBlock) => {
             let mut holder = String::new();
             let _ = (&mut file).take(32).read_to_string(&mut holder);
-            let holder = holder
-                .trim()
-                .parse::<u32>()
-                .map(|pid| format!(" (process {pid})"))
-                .unwrap_or_default();
-            anyhow::bail!(
-                "another Gents runtime{holder} is already using {home}. Stop it first: `gents service stop --home {home}` if it runs as the background service, or Ctrl-C in the terminal running `gents server`",
-                home = home_dir.display()
-            );
+            return Err(anyhow::Error::new(StoreLockHeld {
+                home: home_dir.to_path_buf(),
+                holder_pid: holder.trim().parse::<u32>().ok(),
+            }));
         }
         Err(fs::TryLockError::Error(error)) => {
             return Err(error).with_context(|| format!("locking {}", path.display()))
