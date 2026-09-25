@@ -171,15 +171,18 @@ def OrphanedBackgroundToolRow.parentResolvable
 /-- The periodic orphan sweep uses the same precedence as startup recovery.
     Owner resolution precedes expiry, since neither deadline nor unclaimed
     status licenses a write to a tool whose parent scope is unavailable.
-    A live registered worker owns its row unless its task was deleted. A
-    process the owner still observes running keeps its row running; one whose
-    stop the owner could not observe is settled as lost, never as a stop. -/
+    A live registered worker owns its row unless its task was deleted; that
+    worker is proven ownership, and like an explicit cancellation its terminal
+    cause is persisted before the worker is signalled, so the worker cannot
+    replace it. Without a live worker, a process the owner still observes
+    running keeps its row running, and one whose stop the owner could not
+    observe settles as lost, never as a stop. -/
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
   if !row.parentResolvable then
     none
-  else if row.executionRegistered && !row.ownerTaskDeleted then
-    none
+  else if row.executionRegistered then
+    if row.ownerTaskDeleted then some .taskDeleted else none
   else
     match row.process with
     | .stillRunning => none
@@ -207,10 +210,12 @@ theorem orphanedBackgroundTool_no_parent_no_cause
     orphanedBackgroundToolCause row = none := by
   simp [orphanedBackgroundToolCause, h]
 
-/-- A settled row never claims a stop the owner did not observe. -/
+/-- Without a live worker, a settled row never claims a stop the owner did
+    not observe. -/
 theorem orphanedBackgroundTool_unstopped_settles_lost
     (row : OrphanedBackgroundToolRow) (cause : ToolRecoveryCause)
     (h_cause : orphanedBackgroundToolCause row = some cause)
+    (h_unregistered : row.executionRegistered = false)
     (h_process : row.process ≠ .stopped) :
     cause = .processLost := by
   unfold orphanedBackgroundToolCause at h_cause
