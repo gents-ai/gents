@@ -911,7 +911,7 @@ export function SetupScreen({
     return (
       <Frame>
         <Mark className="mb-6 h-6 text-ink" />
-        <Title note="Gents runs agents whose every step is a document. Start one here, or connect to one that already runs.">
+        <Title note="Gents keeps a record of every step an agent takes, so you can see what it did and it can pick up where it left off. Start an agent here, or connect to one that already runs.">
           Let’s get set up
         </Title>
         <div className="grid gap-3">
@@ -1271,7 +1271,11 @@ export function SetupScreen({
         onClick={discoverModels}
       >
         {busy ? <Spinner /> : null}{" "}
-        {discovery ? "Refresh models" : "Connect and find models"}
+        {discovery
+          ? "Refresh models"
+          : oauthProvider && signedIn[provider]
+            ? "Find models"
+            : "Connect and find models"}
       </Button>
       {discovery ? (
         <section

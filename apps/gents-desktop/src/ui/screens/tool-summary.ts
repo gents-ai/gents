@@ -38,6 +38,10 @@ export const DIFF_MARK: Record<ToolDiffLineKind, string> = {
 export const diffText = (diff: ToolDiffLineView[]) =>
   diff.map((line) => `${DIFF_MARK[line.kind]}${line.text}`).join("\n");
 
+/* a final newline ends the last line; it does not start another */
+export const lineCount = (text: string) =>
+  text ? text.replace(/\r?\n$/, "").split("\n").length : 0;
+
 export const isAbsolutePath = (path: string) => /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(path);
 
 const compact = (value: string | null | undefined, max = 80) => {

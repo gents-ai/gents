@@ -22,6 +22,14 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- Desktop onboarding explains what Gents keeps for you (a record of every step,
+  so work can be reviewed and resumed) instead of saying every step is a
+  document. After a subscription sign-in the next button reads "Find models"
+  rather than asking to connect again, and the empty mailbox says what arrives
+  there before offering to start a session (#1619).
+- A running command's live output in the desktop transcript stays on its
+  newest line unless you scroll up, and multi-line command output says how many
+  lines it holds (#1620).
 - CLI integration tests recover from a port taken between allocation and the
   server's bind, instead of failing the run (#1641).
 - A runtime with one permanently invalid behavior it is not using now settles

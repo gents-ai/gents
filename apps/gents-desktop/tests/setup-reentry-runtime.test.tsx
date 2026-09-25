@@ -264,6 +264,12 @@ describe("setup re-entry at the provider step", () => {
     expect(
       screen.queryByRole("button", { name: "Retry save" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Find models", exact: true }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Connect and find models" }),
+    ).not.toBeInTheDocument();
   });
 
   it("offers Retry save again after leaving and re-entering setup", async () => {
