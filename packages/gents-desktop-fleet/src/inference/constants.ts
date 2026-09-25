@@ -6,9 +6,9 @@ export const LOCAL_PROBE_URLS = [
   "http://127.0.0.1:11434/v1",
 ];
 export const CODEX_ENDPOINT = "https://chatgpt.com/backend-api/codex";
-export const CODEX_DEFAULT_MODEL = "gpt-5.5";
+export const CODEX_DEFAULT_MODEL = "gpt-6-astra";
 export const GROK_ENDPOINT = "https://cli-chat-proxy.grok.com/v1";
-export const GROK_DEFAULT_MODEL = "grok-4.5";
+export const GROK_DEFAULT_MODEL = "grok-4.7";
 
 export const PROVIDER_OPENAI = "OpenAiCompatible";
 export const PROVIDER_CODEX = "ChatGptCodex";
