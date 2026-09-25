@@ -18,6 +18,32 @@ pub(crate) struct LivenessToolCallRow {
     pub(crate) await_mode: Option<String>,
 }
 
+/// Durable activity for one processing request: a tool call (`started_at`,
+/// `completed_at`) or an inference call (`started_at`, `ended_at`), including
+/// finished ones. The newest of these timestamps and `claimed_at` is the
+/// request's progress; rows are never deleted and timestamps are written once,
+/// so that maximum cannot move back in time while the request advances.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(crate) struct LivenessActivityRow {
+    #[serde(default)]
+    pub(crate) request_doc_id: Option<String>,
+    #[serde(default)]
+    pub(crate) started_at: Option<String>,
+    #[serde(default)]
+    pub(crate) completed_at: Option<String>,
+    #[serde(default)]
+    pub(crate) ended_at: Option<String>,
+}
+
+impl LivenessActivityRow {
+    fn latest_at(&self) -> Option<DateTime<Utc>> {
+        [&self.started_at, &self.completed_at, &self.ended_at]
+            .into_iter()
+            .filter_map(|value| parse_optional_rfc3339(value.as_deref()))
+            .max()
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct RuntimeLivenessSnapshot {
     pub(crate) active_request_ids: Vec<String>,
@@ -60,6 +86,7 @@ pub(crate) fn compute_request_liveness_summary(
     local_agent_did: &str,
     requests: Vec<LivenessRequestRow>,
     tool_calls: Vec<LivenessToolCallRow>,
+    activity: Vec<LivenessActivityRow>,
 ) -> RuntimeLivenessSnapshot {
     let local_agent_did = local_agent_did.trim();
     let local_request_count = requests
@@ -120,17 +147,15 @@ pub(crate) fn compute_request_liveness_summary(
         }
         let deadline_age_ms = deadline.map(|deadline| millis_between(deadline, now));
 
-        let latest_tool_activity = active_tool_calls
+        let request_doc_id = row.doc_id.as_deref().map(str::trim);
+        let progress_at = activity
             .iter()
-            .filter(|tc| tc.request_id == row.request_id)
-            .filter_map(|tc| parse_optional_rfc3339(tc.started_at.as_deref()))
+            .filter(|activity| {
+                request_doc_id.is_some() && activity.request_doc_id.as_deref() == request_doc_id
+            })
+            .filter_map(LivenessActivityRow::latest_at)
+            .chain(claimed_at)
             .max();
-        let progress_at = match (claimed_at, latest_tool_activity) {
-            (Some(claimed), Some(tool)) => Some(claimed.max(tool)),
-            (Some(claimed), None) => Some(claimed),
-            (None, Some(tool)) => Some(tool),
-            (None, None) => None,
-        };
         let last_progress_age_ms = progress_at
             .map(|progress| millis_between(progress, now).max(0))
             .unwrap_or(0);
@@ -179,7 +204,7 @@ fn parse_optional_rfc3339(value: Option<&str>) -> Option<DateTime<Utc>> {
         .map(|dt| dt.with_timezone(&Utc))
 }
 
-fn owns_liveness_row(local_agent_did: &str, row_agent_did: &str) -> bool {
+pub(crate) fn owns_liveness_row(local_agent_did: &str, row_agent_did: &str) -> bool {
     local_agent_did.is_empty() || row_agent_did.trim() == local_agent_did
 }
 
@@ -206,6 +231,7 @@ mod tests {
         deadline_offset_secs: i64,
     ) -> LivenessRequestRow {
         serde_json::from_value(serde_json::json!({
+            "_docID": format!("doc-{request_id}"),
             "request_id": request_id,
             "agent_did": "did:test:local",
             "claimed_at": iso(claimed_offset_secs),
@@ -239,8 +265,13 @@ mod tests {
             request("req-expired", -120, -30),
             request("req-fresh", -10, 60),
         ];
-        let snapshot =
-            compute_request_liveness_summary(now(), "did:test:local", requests, Vec::new());
+        let snapshot = compute_request_liveness_summary(
+            now(),
+            "did:test:local",
+            requests,
+            Vec::new(),
+            Vec::new(),
+        );
 
         assert_eq!(snapshot.expired_processing_count, 1);
         assert!(snapshot
@@ -271,7 +302,8 @@ mod tests {
     fn active_tool_calls_carry_tool_name_and_running_age() {
         let requests = vec![request("req-1", -45, 60)];
         let tools = vec![tool_call("req-1", "tc-1", "glob", -30, Some(60), None)];
-        let snapshot = compute_request_liveness_summary(now(), "did:test:local", requests, tools);
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:test:local", requests, tools, Vec::new());
 
         assert_eq!(snapshot.active_tool_calls.len(), 1);
         let tc = &snapshot.active_tool_calls[0];
@@ -296,40 +328,164 @@ mod tests {
             None,
             Some("bridge"),
         )];
-        let snapshot = compute_request_liveness_summary(now(), "did:test:local", requests, tools);
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:test:local", requests, tools, Vec::new());
 
         let tc = &snapshot.active_tool_calls[0];
         assert_eq!(tc.await_mode.as_deref(), Some("bridge"));
     }
 
-    #[test]
-    fn last_progress_age_ms_uses_most_recent_tool_activity_over_claimed_at() {
-        let requests = vec![request("req-1", -300, 60)];
-        let tools = vec![tool_call("req-1", "tc-1", "bash", -10, Some(60), None)];
-        let snapshot = compute_request_liveness_summary(now(), "did:test:local", requests, tools);
+    fn tool_activity(
+        request_id: &str,
+        started_offset_secs: i64,
+        completed_offset_secs: Option<i64>,
+    ) -> LivenessActivityRow {
+        LivenessActivityRow {
+            request_doc_id: Some(format!("doc-{request_id}")),
+            started_at: Some(iso(started_offset_secs)),
+            completed_at: completed_offset_secs.map(iso),
+            ended_at: None,
+        }
+    }
 
-        let req = snapshot
-            .requests
-            .iter()
-            .find(|r| r.request_id == "req-1")
-            .unwrap();
-        assert!(
-            req.last_progress_age_ms < 60_000,
-            "tool started 10s ago must beat claimed_at 300s ago, got {}",
-            req.last_progress_age_ms
+    fn inference_activity(
+        request_id: &str,
+        started_offset_secs: i64,
+        ended_offset_secs: Option<i64>,
+    ) -> LivenessActivityRow {
+        LivenessActivityRow {
+            request_doc_id: Some(format!("doc-{request_id}")),
+            started_at: Some(iso(started_offset_secs)),
+            completed_at: None,
+            ended_at: ended_offset_secs.map(iso),
+        }
+    }
+
+    fn progress_age_ms(
+        at: chrono::DateTime<chrono::Utc>,
+        tools: Vec<LivenessToolCallRow>,
+        activity: Vec<LivenessActivityRow>,
+    ) -> i64 {
+        let snapshot = compute_request_liveness_summary(
+            at,
+            "did:test:local",
+            vec![request("req-1", -300, 600)],
+            tools,
+            activity,
         );
-        assert!(
-            req.last_progress_age_ms >= 10_000,
-            "progress age must reflect tool start, got {}",
-            req.last_progress_age_ms
+        snapshot.requests[0].last_progress_age_ms
+    }
+
+    #[test]
+    fn last_progress_age_ms_uses_running_tool_start_over_claimed_at() {
+        let age = progress_age_ms(
+            now(),
+            vec![tool_call("req-1", "tc-1", "bash", -10, Some(60), None)],
+            vec![tool_activity("req-1", -10, None)],
         );
+        assert_eq!(age, 10_000, "running tool started 10s ago beats claim");
+    }
+
+    #[test]
+    fn last_progress_age_ms_uses_newest_completed_tool_call_with_none_active() {
+        let activity = (0..200)
+            .map(|i| tool_activity("req-1", -290 + i, Some(-289 + i)))
+            .chain([tool_activity("req-1", -8, Some(-4))])
+            .collect();
+        let age = progress_age_ms(now(), Vec::new(), activity);
+        assert_eq!(
+            age, 4_000,
+            "newest completion (4s ago) is progress, not claimed_at (300s ago)"
+        );
+    }
+
+    #[test]
+    fn in_flight_inference_between_tool_batches_is_not_stale() {
+        let activity = vec![
+            tool_activity("req-1", -120, Some(-90)),
+            inference_activity("req-1", -80, Some(-60)),
+            inference_activity("req-1", -3, None),
+        ];
+        let age = progress_age_ms(now(), Vec::new(), activity);
+        assert_eq!(age, 3_000, "in-flight inference started 3s ago");
+    }
+
+    #[test]
+    fn foreign_request_activity_does_not_count_as_progress() {
+        let mut other = tool_activity("req-other", -1, Some(0));
+        other.request_doc_id = Some("doc-req-other".to_string());
+        let age = progress_age_ms(now(), Vec::new(), vec![other]);
+        assert_eq!(age, 300_000, "only this request's activity counts");
+    }
+
+    /// #1782: a tool call leaving the running set must not move progress
+    /// back to `claimed_at`. Across samples of an advancing request, progress
+    /// time never decreases and the age never exceeds the gap since the last
+    /// durable event.
+    #[test]
+    fn progress_never_moves_back_in_time_across_samples() {
+        let running_read = || vec![tool_call("req-1", "tc-1", "read_file", -1, None, None)];
+        // (sample offset secs, running tool calls, durable activity)
+        let samples = vec![
+            (0, running_read(), vec![tool_activity("req-1", -1, None)]),
+            // tc-1 completed: it left the running set.
+            (5, Vec::new(), vec![tool_activity("req-1", -1, Some(2))]),
+            // Waiting on the model between tool batches.
+            (
+                10,
+                Vec::new(),
+                vec![
+                    tool_activity("req-1", -1, Some(2)),
+                    inference_activity("req-1", 6, None),
+                ],
+            ),
+            (
+                20,
+                Vec::new(),
+                vec![
+                    tool_activity("req-1", -1, Some(2)),
+                    inference_activity("req-1", 6, Some(18)),
+                ],
+            ),
+            (
+                25,
+                Vec::new(),
+                vec![
+                    tool_activity("req-1", -1, Some(2)),
+                    inference_activity("req-1", 6, Some(18)),
+                    tool_activity("req-1", 21, Some(24)),
+                ],
+            ),
+        ];
+        let mut previous_progress_at = None;
+        for (offset, running, activity) in samples {
+            let sample_at = now() + chrono::Duration::seconds(offset);
+            let age = progress_age_ms(sample_at, running, activity);
+            assert!(
+                age <= 5_000,
+                "sample +{offset}s: advancing request aged {age}ms"
+            );
+            let progress_at = sample_at - chrono::Duration::milliseconds(age);
+            if let Some(previous) = previous_progress_at {
+                assert!(
+                    progress_at >= previous,
+                    "sample +{offset}s: progress moved back from {previous} to {progress_at}"
+                );
+            }
+            previous_progress_at = Some(progress_at);
+        }
     }
 
     #[test]
     fn last_progress_age_ms_falls_back_to_claimed_at_when_no_tool_calls() {
         let requests = vec![request("req-1", -45, 60)];
-        let snapshot =
-            compute_request_liveness_summary(now(), "did:test:local", requests, Vec::new());
+        let snapshot = compute_request_liveness_summary(
+            now(),
+            "did:test:local",
+            requests,
+            Vec::new(),
+            Vec::new(),
+        );
 
         let req = &snapshot.requests[0];
         assert!(
@@ -345,8 +501,13 @@ mod tests {
         foreign.agent_did = Some("did:test:foreign".to_string());
         let requests = vec![request("req-local", -120, -30), foreign];
 
-        let snapshot =
-            compute_request_liveness_summary(now(), "did:test:local", requests, Vec::new());
+        let snapshot = compute_request_liveness_summary(
+            now(),
+            "did:test:local",
+            requests,
+            Vec::new(),
+            Vec::new(),
+        );
 
         assert_eq!(snapshot.expired_processing_count, 1);
         assert_eq!(snapshot.ignored_foreign_processing_count, 1);
@@ -365,7 +526,8 @@ mod tests {
             foreign_tool,
         ];
 
-        let snapshot = compute_request_liveness_summary(now(), "did:test:local", requests, tools);
+        let snapshot =
+            compute_request_liveness_summary(now(), "did:test:local", requests, tools, Vec::new());
 
         assert_eq!(snapshot.active_tool_calls.len(), 1);
         assert_eq!(snapshot.active_tool_calls[0].tool_call_id, "tc-local");

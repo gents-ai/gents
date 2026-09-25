@@ -10,13 +10,18 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::http::liveness::{
-    compute_request_liveness_summary, with_active_native_executors, LivenessRequestRow,
-    LivenessToolCallRow, RuntimeLivenessSnapshot,
+    compute_request_liveness_summary, owns_liveness_row, with_active_native_executors,
+    LivenessActivityRow, LivenessRequestRow, LivenessToolCallRow, RuntimeLivenessSnapshot,
 };
 use crate::post_graphql;
+use gents::graphql::escape_graphql_string;
 
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
+/// Processing requests per activity document; each contributes four
+/// indexed `limit: 1` reads, so a sample is O(processing requests) rows no
+/// matter how many tool or inference calls a request has accumulated.
+const LIVENESS_ACTIVITY_CHUNK: usize = 32;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct MetricsQueryData {
@@ -1260,6 +1265,7 @@ pub(crate) async fn load_metrics_query_data(
             AgentRequest(filter: {
                 lifecycle_state: { _eq: "processing" }
             }) {
+                _docID
                 request_id
                 agent_did
                 claimed_at
@@ -1288,11 +1294,13 @@ pub(crate) async fn load_metrics_query_data(
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
+    let activity = load_liveness_activity(graphql, local_agent_did, &envelope.requests).await?;
     let liveness = compute_request_liveness_summary(
         Utc::now(),
         local_agent_did,
         envelope.requests,
         envelope.tool_calls,
+        activity,
     );
     Ok(MetricsQueryData {
         agent_runtimes: envelope.agent_runtimes,
@@ -1300,6 +1308,74 @@ pub(crate) async fn load_metrics_query_data(
         inference_backends: envelope.inference_backends,
         liveness,
     })
+}
+
+/// Newest tool-call and inference-call activity for each local processing
+/// request, keyed by the immutable, indexed `request_doc_id`.
+async fn load_liveness_activity(
+    graphql: &str,
+    local_agent_did: &str,
+    requests: &[LivenessRequestRow],
+) -> Result<Vec<LivenessActivityRow>> {
+    let request_doc_ids = requests
+        .iter()
+        .filter(|row| {
+            owns_liveness_row(
+                local_agent_did.trim(),
+                row.agent_did.as_deref().unwrap_or_default(),
+            )
+        })
+        .filter_map(|row| row.doc_id.as_deref().map(str::trim))
+        .filter(|doc_id| !doc_id.is_empty())
+        .collect::<Vec<_>>();
+    let mut activity = Vec::new();
+    for chunk in request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK) {
+        let response = post_graphql(graphql, &liveness_activity_query(chunk)).await?;
+        let data = response
+            .get("data")
+            .cloned()
+            .unwrap_or_else(|| Value::Object(Default::default()));
+        let pages: BTreeMap<String, Vec<LivenessActivityRow>> =
+            serde_json::from_value(data).context("decoding liveness activity response")?;
+        activity.extend(pages.into_values().flatten());
+    }
+    Ok(activity)
+}
+
+fn liveness_activity_query(request_doc_ids: &[&str]) -> String {
+    let mut selections = String::new();
+    for (index, request_doc_id) in request_doc_ids.iter().enumerate() {
+        let request_doc_id = escape_graphql_string(request_doc_id);
+        for (alias, collection, field, fields) in [
+            (
+                "ts",
+                "AgentToolCall",
+                "started_at",
+                "started_at completed_at",
+            ),
+            (
+                "tc",
+                "AgentToolCall",
+                "completed_at",
+                "started_at completed_at",
+            ),
+            ("is", "InferenceCall", "started_at", "started_at ended_at"),
+            ("ie", "InferenceCall", "ended_at", "started_at ended_at"),
+        ] {
+            selections.push_str(&format!(
+                r#"
+            {alias}{index}: {collection}(
+                filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, {field}: {{ _ne: null }} }},
+                order: {{ {field}: DESC }},
+                limit: 1
+            ) {{
+                request_doc_id
+                {fields}
+            }}"#
+            ));
+        }
+    }
+    format!("{{{selections}\n}}")
 }
 
 pub(crate) fn with_local_native_executors(mut data: MetricsQueryData) -> MetricsQueryData {
