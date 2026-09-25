@@ -1242,10 +1242,32 @@ fn nonnegative_metric_value(value: Option<i64>) -> Option<i64> {
     value.map(|value| value.max(0))
 }
 
+/// Core health rows (runtime, readiness, backends, processing requests and
+/// running tool calls), before the optional progress observation.
+pub(crate) struct MetricsCoreData {
+    envelope: MetricsQueryEnvelope,
+    local_agent_did: String,
+}
+
 pub(crate) async fn load_metrics_query_data(
     graphql: &str,
     local_agent_did: &str,
 ) -> Result<MetricsQueryData> {
+    let core = load_metrics_core_data(graphql, local_agent_did).await?;
+    Ok(core
+        .with_liveness_activity(
+            graphql,
+            tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET,
+        )
+        .await)
+}
+
+/// Reads core health only. Callers with their own deadline bound this read,
+/// then pass what remains to [`MetricsCoreData::with_liveness_activity`].
+pub(crate) async fn load_metrics_core_data(
+    graphql: &str,
+    local_agent_did: &str,
+) -> Result<MetricsCoreData> {
     let response = post_graphql(
         graphql,
         r#"{
@@ -1300,20 +1322,42 @@ pub(crate) async fn load_metrics_query_data(
         .unwrap_or_else(|| Value::Object(Default::default()));
     let envelope: MetricsQueryEnvelope =
         serde_json::from_value(data).context("decoding runtime HTTP query response")?;
-    let activity = load_liveness_activity(graphql, local_agent_did, &envelope.requests).await;
-    let liveness = compute_request_liveness_summary(
-        Utc::now(),
-        local_agent_did,
-        envelope.requests,
-        envelope.tool_calls,
-        activity,
-    );
-    Ok(MetricsQueryData {
-        agent_runtimes: envelope.agent_runtimes,
-        behavior_readiness: envelope.behavior_readiness,
-        inference_backends: envelope.inference_backends,
-        liveness,
+    Ok(MetricsCoreData {
+        envelope,
+        local_agent_did: local_agent_did.to_string(),
     })
+}
+
+impl MetricsCoreData {
+    /// Adds the optional progress observation. Activity reads stop at
+    /// `deadline`, capped at [`LIVENESS_ACTIVITY_BUDGET`] from now; a deadline
+    /// already passed skips them and progress falls back to `claimed_at`.
+    pub(crate) async fn with_liveness_activity(
+        self,
+        graphql: &str,
+        deadline: tokio::time::Instant,
+    ) -> MetricsQueryData {
+        let Self {
+            envelope,
+            local_agent_did,
+        } = self;
+        let deadline = deadline.min(tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET);
+        let activity =
+            load_liveness_activity(graphql, &local_agent_did, &envelope.requests, deadline).await;
+        let liveness = compute_request_liveness_summary(
+            Utc::now(),
+            &local_agent_did,
+            envelope.requests,
+            envelope.tool_calls,
+            activity,
+        );
+        MetricsQueryData {
+            agent_runtimes: envelope.agent_runtimes,
+            behavior_readiness: envelope.behavior_readiness,
+            inference_backends: envelope.inference_backends,
+            liveness,
+        }
+    }
 }
 
 /// Newest tool-call and inference-call activity for each local processing
@@ -1323,11 +1367,12 @@ pub(crate) async fn load_metrics_query_data(
 /// Progress is an observation layered on the processing-request read: a
 /// failed activity read drops that chunk's activity (its requests fall back
 /// to `claimed_at`) instead of failing `/healthz`, `/status`, `/metrics` or
-/// `/self`. The phase shares one [`LIVENESS_ACTIVITY_BUDGET`] deadline.
+/// `/self`. All chunks share the caller's single `deadline`.
 async fn load_liveness_activity(
     graphql: &str,
     local_agent_did: &str,
     requests: &[LivenessRequestRow],
+    deadline: tokio::time::Instant,
 ) -> Vec<LivenessActivityRow> {
     let request_doc_ids = requests
         .iter()
@@ -1343,7 +1388,6 @@ async fn load_liveness_activity(
             (!doc_id.is_empty() && !agent_did.is_empty()).then_some((doc_id, agent_did))
         })
         .collect::<Vec<_>>();
-    let deadline = tokio::time::Instant::now() + LIVENESS_ACTIVITY_BUDGET;
     let mut activity = Vec::new();
     let mut chunks = request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK);
     while let Some(chunk) = chunks.next() {
