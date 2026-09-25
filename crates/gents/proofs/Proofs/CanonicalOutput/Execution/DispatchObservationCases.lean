@@ -1,6 +1,7 @@
 import Proofs.CanonicalOutput.Execution.DispatchObservation
 import Proofs.CanonicalOutput.Execution.Examples
 import Proofs.CanonicalOutput.Execution.GateCases
+import Proofs.Recovery.Sweeps.ToolCalls
 
 namespace CanonicalOutput.Execution.DispatchObservation.Cases
 
@@ -175,6 +176,46 @@ example : afterPolicySettlement policyRejected =
 example : afterPolicySettlement wonThenReplay = none := by native_decide
 
 example : afterPolicySettlement lostThenReplay = none := by native_decide
+
+structure ParentFailureRecovery where
+  state : ToolExecution.ToolCallState
+  dispatchable : Bool
+  terminalized : Nat
+  deriving DecidableEq, Repr
+
+/-- The sweep's view of an owned tool once its parent failed. -/
+def terminalParentRow (tool : ToolExecution.ToolCallContext) : Recovery.TerminalParentToolRow :=
+  { call := tool, parentTerminal := true, parentInterrupted := false
+    parentCleanCompleted := false }
+
+/-- Eventual settlement of a call handed off by parent failure. The existing
+terminal-parent sweep owns it, projected from the exact handed-off context.
+Its premise is that a foreground executor lives only inside the owning loop,
+which has ended once the parent is terminal; it does not observe that any
+external effect ran or stopped. The settled context is terminal, so neither a
+lost receipt nor a replay can reopen it for dispatch. `none` means the sweep
+has nothing to settle. -/
+def afterParentFailureRecovery (inputs : List Input) : Option (Option ParentFailureRecovery) := do
+  let (after, _) ← runWorld inputs
+  let held ← acquire after 1 true
+  let terminal ← commit held 1 5 (.terminalize 7 parentOutcome (.message 501))
+  let tool ← ownedToolByDocument? terminal 600
+  let row := terminalParentRow tool.context
+  if Recovery.terminalParentToolStale row then
+    let recovered := Recovery.terminalParentToolRecover row
+    pure (some ⟨recovered.call.state,
+      (ToolExecution.ToolCallContext.step? recovered.call .dispatch).isSome,
+      (terminal.toolContexts.filter (fun owned =>
+        Recovery.terminalParentToolStale (terminalParentRow owned.context))).length⟩)
+  else pure none
+
+example : afterParentFailureRecovery lostThenReplay = some (some ⟨.failed, false, 1⟩) := by
+  native_decide
+
+example : afterParentFailureRecovery wonThenReplay = some (some ⟨.failed, false, 1⟩) := by
+  native_decide
+
+example : afterParentFailureRecovery policyRejected = some none := by native_decide
 
 example : afterParentFailure lostThenReplay = some (true, false, true, 1) := by native_decide
 

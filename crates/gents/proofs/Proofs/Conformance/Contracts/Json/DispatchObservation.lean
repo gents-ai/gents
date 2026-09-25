@@ -46,9 +46,8 @@ def caseJson (entry : String × List Input) : String :=
     ",\"expected_after_parent_failure\":" ++
     (match afterParentFailure entry.2 with
       | none => "null"
-      | some (running, inFlight, needsRecovery, messages) =>
+      | some (running, _, needsRecovery, messages) =>
           "{\"running\":" ++ jsonOptionalBool (some running) ++
-          ",\"in_flight\":" ++ jsonOptionalBool (some inFlight) ++
           ",\"needs_recovery\":" ++ jsonOptionalBool (some needsRecovery) ++
           ",\"message_count\":" ++ toString messages ++ "}") ++
     ",\"expected_after_policy_settlement\":" ++
@@ -60,7 +59,14 @@ def caseJson (entry : String × List Input) : String :=
           ",\"started\":" ++ jsonOptionalBool (some settlement.started) ++
           ",\"failure_class\":" ++ failureClassJson settlement.failureClass ++
           ",\"completion_accepted\":" ++
-            jsonOptionalBool (some settlement.completionAccepted) ++ "}") ++ "}"
+            jsonOptionalBool (some settlement.completionAccepted) ++ "}") ++
+    ",\"expected_after_parent_recovery\":" ++
+    (match afterParentFailureRecovery entry.2 with
+      | some (some recovery) =>
+          "{\"state\":" ++ jsonString recovery.state.toDefraDB ++
+          ",\"dispatchable\":" ++ jsonOptionalBool (some recovery.dispatchable) ++
+          ",\"terminalized\":" ++ toString recovery.terminalized ++ "}"
+      | _ => "null") ++ "}"
 
 def casesJson : String := jsonArray (cases.map caseJson)
 

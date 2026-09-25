@@ -21,6 +21,15 @@ pub(crate) struct LeanDispatchObservationCase {
     pub(crate) parent_outcome: String,
     pub(crate) expected_after_parent_failure: LeanDispatchParentFailure,
     pub(crate) expected_after_policy_settlement: Option<LeanDispatchPolicySettlement>,
+    pub(crate) expected_after_parent_recovery: Option<LeanDispatchParentRecovery>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct LeanDispatchParentRecovery {
+    pub(crate) state: String,
+    pub(crate) dispatchable: bool,
+    pub(crate) terminalized: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,7 +65,6 @@ pub(crate) struct LeanSpawnedTargetRejection {
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanDispatchParentFailure {
     pub(crate) running: bool,
-    pub(crate) in_flight: bool,
     pub(crate) needs_recovery: bool,
     pub(crate) message_count: usize,
 }

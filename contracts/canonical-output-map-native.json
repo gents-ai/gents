@@ -7,12 +7,13 @@
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.completionProbe" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterPolicySettlement" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterSpawnedTargetRejection" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.afterParentFailureRecovery" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" }
       ],
       "constructors": [],
       "generated_groups": ["canonical_dispatch_observation_cases", "canonical_spawned_target_rejection_cases"],
       "fixture_status": "concrete_inputs",
-      "native_owner_paths": ["crates/gents/src/hook/persistence/prompt_hook.rs", "crates/gents/src/hook.rs", "crates/gents/src/tool_call_lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/toolset/bash_tools.rs", "crates/gents/src/hook/persistence/background_tools.rs"],
+      "native_owner_paths": ["crates/gents/src/hook/persistence/prompt_hook.rs", "crates/gents/src/hook.rs", "crates/gents/src/tool_call_lifecycle/transition/native.rs", "crates/gents-loop/src/loop_stream.rs", "crates/gents-loop/src/tool.rs", "crates/gents/src/toolset/bash_tools.rs", "crates/gents/src/hook/persistence/background_tools.rs", "crates/gents/src/tool_call_lifecycle/recovery.rs"],
       "consumer_paths": ["crates/gents/src/lean_vocab_test/canonical_execution.rs", "crates/gents/src/hook/tests.rs", "crates/gents-loop/src/end_to_end_test.rs", "crates/gents/src/agent/loop_stream/tests/tool_execution.rs", "crates/gents/src/hook/tests/background_admission.rs"],
       "native_status": "pending",
       "required_cases": [
@@ -23,7 +24,8 @@
         "spawn_process_target_policy_denied fails the Running parent with policyDenied through the command-denial owner before any spawned lifecycle is admitted, and request completion is then accepted",
         "Bind both persistence policies to the actual call hook and prove zero external dispatch after receipt loss or replay",
         "Normal request completion rejects a committed foreground dispatch through durable tool accounting, without changing the request before failure handoff",
-        "Bind recovery accounting and special control-tool failures after committed effects; ordinary result-write failure policy is not dispatch authorization"
+        "Bind recovery accounting and special control-tool failures after committed effects; ordinary result-write failure policy is not dispatch authorization",
+        "After parent failure the terminal-parent sweep settles the handed-off Running call to the modeled terminal state, and a restored replay is never re-elected"
       ],
       "retired_bindings": []
     },
