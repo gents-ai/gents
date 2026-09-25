@@ -657,7 +657,8 @@ pub(crate) fn dangerously_overwrite_home(home: &Path, keep: &Path) -> Result<()>
 
 /// Resolves the directory an overwrite of `home_dir` would wipe, through
 /// every symlink and `.`/`..` alias, and refuses the filesystem root, the
-/// user home and any ancestor of it. `None` when the home does not exist.
+/// user home and any ancestor of it. An unknown user home is refused, not
+/// skipped. `None` when the home does not exist.
 pub(crate) fn overwritable_home(
     home_dir: &Path,
     user_home: Option<&Path>,
@@ -678,15 +679,25 @@ pub(crate) fn overwritable_home(
             home_dir.display()
         );
     }
-    if let Some(user_home) = user_home {
-        let user_home = fs::canonicalize(user_home).unwrap_or_else(|_| user_home.to_path_buf());
-        if user_home.starts_with(&home) {
-            anyhow::bail!(
-                "refusing to dangerously overwrite {}: it resolves to {}, which is or contains the user home directory; pass a dedicated gents home instead",
-                home_dir.display(),
-                home.display()
-            );
-        }
+    let Some(user_home) = user_home.filter(|path| !path.as_os_str().is_empty()) else {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {}: the user home directory cannot be determined, so it cannot be shown not to be inside the home",
+            home_dir.display()
+        );
+    };
+    let user_home = fs::canonicalize(user_home).with_context(|| {
+        format!(
+            "refusing to dangerously overwrite {}: the user home directory {} cannot be resolved, so it cannot be shown not to be inside the home",
+            home_dir.display(),
+            user_home.display()
+        )
+    })?;
+    if user_home.starts_with(&home) {
+        anyhow::bail!(
+            "refusing to dangerously overwrite {}: it resolves to {}, which is or contains the user home directory; pass a dedicated gents home instead",
+            home_dir.display(),
+            home.display()
+        );
     }
     if !home.is_dir() {
         anyhow::bail!("{} is not a directory", home_dir.display());

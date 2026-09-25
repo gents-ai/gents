@@ -73,7 +73,8 @@ fn lock_init_store(
     data_dir: &Path,
     overwrite: bool,
 ) -> Result<gents::home::StoreLock> {
-    let user_home = std::env::var_os("HOME").map(PathBuf::from);
+    // $HOME first, then the password database.
+    let user_home = std::env::home_dir();
     lock_init_store_for_user(home_dir, data_dir, overwrite, user_home.as_deref())
 }
 
@@ -1435,6 +1436,30 @@ mod tests {
             );
         }
         drop(held);
+    }
+
+    #[test]
+    fn an_overwrite_is_refused_when_the_user_home_is_unknown_or_unresolvable() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        fs::create_dir_all(home.join("data")).unwrap();
+        fs::write(home.join("init.json"), "{}").unwrap();
+        for unknown in [None, Some(Path::new(""))] {
+            let error = lock_init_store_for_user(&home, &home.join("data"), true, unknown)
+                .expect_err("an overwrite needs a known user home")
+                .to_string();
+            assert!(error.contains("cannot be determined"), "{error}");
+        }
+        let missing = temp.path().join("missing-user-home");
+        let error = lock_init_store_for_user(&home, &home.join("data"), true, Some(&missing))
+            .expect_err("an unresolvable user home is not compared lexically");
+        assert!(
+            format!("{error:#}").contains("cannot be resolved"),
+            "{error:#}"
+        );
+        assert!(home.join("init.json").is_file(), "nothing was wiped");
+        lock_init_store_for_user(&home, &home.join("data"), false, None)
+            .expect("init without an overwrite does not need the user home");
     }
 
     #[test]
