@@ -24,6 +24,18 @@ use crate::plugin::PluginVerdict;
 use crate::workspace::journal::advance;
 use crate::workspace::{ActionJournalEntry, ActionJournalState};
 
+/// A plugin writes only a pack's own collections: never the runtime's
+/// documents (requests, triggers, callbacks and the rest) and never a
+/// protected collection.
+fn writable_output_collection(collection: &str) -> Result<()> {
+    crate::graphql::validate_collection_identifier(collection)?;
+    anyhow::ensure!(
+        !gents_protocol::schemas::ALL_COLLECTION_NAMES.contains(&collection),
+        "a plugin cannot write {collection}, which belongs to the runtime"
+    );
+    crate::document_config::reject_protected_collection_name(collection)
+}
+
 /// Refuses a plugin handler that could never run or write its outputs.
 pub fn validate_handler(
     plugin: &str,
@@ -42,7 +54,7 @@ pub fn validate_handler(
     }
     let mut names = std::collections::BTreeSet::new();
     for output in outputs {
-        crate::graphql::validate_collection_identifier(&output.collection)?;
+        writable_output_collection(&output.collection)?;
         crate::graphql::validate_graphql_name(&output.correlation_field)?;
         anyhow::ensure!(
             names.insert(output.name.as_str()),
@@ -89,6 +101,7 @@ pub(crate) fn output_documents(
     };
     let mut documents = Vec::new();
     for (port, value) in per_port {
+        writable_output_collection(&port.collection).map_err(|error| format!("{error:#}"))?;
         let rows: Vec<&Value> = match (&port.cardinality, value) {
             (_, None | Some(Value::Null)) => Vec::new(),
             (PortCardinality::One, Some(value)) => vec![value],
@@ -347,6 +360,19 @@ mod tests {
         assert!(output_documents(&json!({}), &two, Some("r"))
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn a_plugin_cannot_write_the_runtimes_own_collections() {
+        let mut protected = port("a", PortCardinality::One, true);
+        protected.collection = "AgentRequest".into();
+        let outputs = [protected];
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert!(validate_handler("team/lint", &digest, Some("run_id"), &outputs).is_err());
+        assert!(output_documents(&json!({"x": 1}), &outputs, Some("r")).is_err());
+        let mut eval = port("a", PortCardinality::One, true);
+        eval.collection = gents_protocol::schemas::EVAL_RUN_NAME.into();
+        assert!(output_documents(&json!({"x": 1}), &[eval], Some("r")).is_err());
     }
 
     #[test]
