@@ -84,24 +84,42 @@ async fn accepted_remote_bridge(
     (node, path, tool, agent_did)
 }
 
+/// Fixture writes to a `@branchable` collection also advance its collection
+/// head, so two back-to-back writes can conflict; retry those, bounded.
+async fn execute_fixture_write(node: &crate::defra_node::EmbeddedNode, mutation: &str) {
+    let mut backoff = std::time::Duration::from_millis(5);
+    for _ in 0..8 {
+        let result = node.execute(mutation).await;
+        let conflicted = result.errors.iter().any(|error| {
+            error
+                .extensions
+                .as_ref()
+                .is_some_and(|extensions| extensions.code == "TXN_CONFLICT")
+        });
+        if !conflicted {
+            assert!(!result.has_errors(), "{:?}", result.errors);
+            return;
+        }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(std::time::Duration::from_millis(200));
+    }
+    panic!("fixture write kept conflicting: {mutation}");
+}
+
 async fn update(node: &crate::defra_node::EmbeddedNode, doc_id: &str, fields: &str) {
     let doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let result = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
+    execute_fixture_write(node, &format!(
+        r#"mutation {{ update_AgentToolCall(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+    ))
+    .await;
 }
 
 async fn update_request(node: &crate::defra_node::EmbeddedNode, doc_id: &str, fields: &str) {
     let doc_id = crate::graphql::escape_graphql_string(doc_id);
-    let result = node
-        .execute(&format!(
-            r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
-        ))
-        .await;
-    assert!(!result.has_errors(), "{:?}", result.errors);
+    execute_fixture_write(node, &format!(
+        r#"mutation {{ update_AgentRequest(filter: {{ _docID: {{ _eq: "{doc_id}" }} }}, input: {{ {fields} }}) {{ _docID }} }}"#
+    ))
+    .await;
 }
 
 async fn remove_parent(node: &crate::defra_node::EmbeddedNode, doc_id: &str) {
