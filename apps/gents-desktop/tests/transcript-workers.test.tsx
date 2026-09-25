@@ -10,7 +10,12 @@ import type {
 } from "@source-inc/gents-desktop-client";
 import type { Shell } from "@/hooks/useShell";
 
-import { MAX_LINEAGE_ROOTS, lineageRoots, useWorkers } from "../src/ui/screens/workers";
+import {
+  LINEAGE_REFRESH_MS,
+  MAX_LINEAGE_ROOTS,
+  lineageRoots,
+  useWorkers,
+} from "../src/ui/screens/workers";
 import { workerNow } from "../src/ui/screens/WorkerStep";
 
 const AGENT = "did:key:parent";
@@ -245,6 +250,8 @@ describe("worker lineage freshness", () => {
       partialErrors: [],
     }));
     rerender({ sessionId: "session-b" });
+    /* not even for the render that switches sessions */
+    expect(result.current.byChildRequest("child-a")?.node ?? null).toBeNull();
     await waitFor(() =>
       expect(result.current.byChildRequest("child-b")?.node).toBeTruthy(),
     );
@@ -288,6 +295,81 @@ describe("worker lineage freshness", () => {
     rerender({ sessions: [{ sessionId: "other", turnState: "idle" }] });
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(tree).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("worker lineage settling", () => {
+  it("treats a tree with partial errors as unsettled and asks again on the next cue", async () => {
+    const tree = lineage({ "req-1": [["child-a", "completed"]] }, "completed");
+    const partial = async (request: DesktopListSubagentTreeRequest) => ({
+      ...(await tree.getMockImplementation()!(request)),
+      partialErrors: ["peer-b: unreachable"],
+    });
+    tree.mockImplementationOnce(partial);
+    const api = apiWith(tree);
+    const items = [group(spawn("req-1", "child-a"))];
+    const { rerender } = renderHook(
+      ({ sessions }: { sessions: unknown[] }) =>
+        useWorkers(shellFor(api, "req-1", items, { sessions })),
+      { initialProps: { sessions: [] as unknown[] } },
+    );
+    await waitFor(() => expect(tree).toHaveBeenCalledTimes(1));
+    rerender({ sessions: [{ sessionId: "other", turnState: "running" }] });
+    await waitFor(() => expect(tree).toHaveBeenCalledTimes(2));
+    rerender({ sessions: [{ sessionId: "other", turnState: "idle" }] });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(tree).toHaveBeenCalledTimes(2);
+  });
+
+  it("asks again on the next cue after a failed refresh of a settled tree", async () => {
+    const tree = lineage({ "req-1": [["child-a", "completed"]] }, "completed");
+    const api = apiWith(tree);
+    const { result, rerender } = renderHook(
+      ({ status, sessions }: { status: string; sessions: unknown[] }) =>
+        useWorkers(
+          shellFor(api, "req-1", [group(spawn("req-1", "child-a", status))], {
+            sessions,
+          }),
+        ),
+      { initialProps: { status: "running", sessions: [] as unknown[] } },
+    );
+    await waitFor(() =>
+      expect(result.current.byChildRequest("child-a")?.node).toBeTruthy(),
+    );
+    tree.mockRejectedValueOnce(new Error("bridge busy"));
+    rerender({ status: "success", sessions: [] });
+    await waitFor(() => expect(tree).toHaveBeenCalledTimes(2));
+    expect(result.current.byChildRequest("child-a")?.node).toBeTruthy();
+    rerender({ status: "success", sessions: [{ sessionId: "other" }] });
+    await waitFor(() => expect(tree).toHaveBeenCalledTimes(3));
+  });
+
+  it("polls an unsettled tree with no local cue, and stops once it settles", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const children: Record<string, [string, string][]> = {
+        "req-1": [["child-remote", "processing"]],
+      };
+      const tree = lineage(children, "completed");
+      const shell = shellFor(apiWith(tree), "req-1", [
+        group(spawn("req-1", "child-remote", "success")),
+      ]);
+      const { result } = renderHook(() => useWorkers(shell));
+      await waitFor(() => expect(tree).toHaveBeenCalledTimes(1));
+
+      children["req-1"] = [["child-remote", "completed"]];
+      await vi.advanceTimersByTimeAsync(LINEAGE_REFRESH_MS + 1_000);
+      await waitFor(() =>
+        expect(
+          result.current.byChildRequest("child-remote")?.node?.lifecycleState,
+        ).toBe("completed"),
+      );
+      const asked = tree.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(LINEAGE_REFRESH_MS * 3);
+      expect(tree).toHaveBeenCalledTimes(asked);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

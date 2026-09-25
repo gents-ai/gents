@@ -261,6 +261,7 @@ mod tests {
             "data": {
                 "AgentRequest": [
                     {
+                        "_docID": "doc-root",
                         "request_id": "req-root",
                         "session_id": "sess-root",
                         "agent_did": "deployment-a",
@@ -600,6 +601,7 @@ mod tests {
             "data": {
                 "AgentRequest": [
                     {
+                        "_docID": "doc-root",
                         "request_id": "req-root",
                         "agent_did": "deployment-a",
                         "lifecycle_state": "processing",
@@ -742,6 +744,7 @@ mod tests {
             "data": {
                 "AgentRequest": [
                     {
+                        "_docID": "doc-root",
                         "request_id": "req-root",
                         "agent_did": "deployment-a",
                         "lifecycle_state": "processing",

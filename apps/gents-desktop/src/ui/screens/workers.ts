@@ -70,22 +70,41 @@ export function lineageRoots(
   return new Map(recent.map(([root, s]) => [root, s.join()]));
 }
 
-/* A tree whose nodes or edges are still in flight can change without the
-   parent's rows changing: a background spawn row settles when its receipt
-   arrives, long before the child finishes. */
-export const treeInFlight = (tree: SubagentTreeView) =>
-  tree.nodes.some((n) => isLive(n.lifecycleState)) ||
-  tree.edges.some((e) => isLive(e.lifecycleState));
+/* A tree is settled when every node and edge is terminal and every access
+   answered. An unsettled tree can change without the parent's rows
+   changing: a background spawn row settles when its receipt arrives, long
+   before the child finishes, and a child on another deployment moves no
+   local session summary. */
+export const treeSettled = (tree: SubagentTreeView) =>
+  tree.partialErrors.length === 0 &&
+  !tree.nodes.some((n) => isLive(n.lifecycleState)) &&
+  !tree.edges.some((e) => isLive(e.lifecycleState));
+
+/* While any held tree is unsettled it is asked again at most this often,
+   besides on transcript and session-list changes: a remote child's progress
+   reaches no local cue. Settled trees are never polled. */
+export const LINEAGE_REFRESH_MS = 10_000;
+
+type Held<T> = { scope: string; value: T };
 
 export function useWorkers(shell: Shell): Workers {
   const session = shell.selectedSession;
   const sessionId = session?.sessionId ?? null;
   const agentDid = shell.selectedDeployment?.agentDid ?? null;
   const sessions = shell.selectedDeployment?.sessions;
-  const [trees, setTrees] = useState<ReadonlyMap<string, SubagentTreeView>>(
-    () => new Map(),
+  /* trees belong to one agent's session, ops to one agent; state held for
+     another scope is ignored from the render that changes it */
+  const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}`;
+  const [held, setHeld] = useState<Held<ReadonlyMap<string, SubagentTreeView>>>(() => ({
+    scope,
+    value: new Map(),
+  }));
+  const [heldOps, setHeldOps] = useState<Held<DesktopOperationsSnapshot> | null>(null);
+  const trees = useMemo<ReadonlyMap<string, SubagentTreeView>>(
+    () => (held.scope === scope ? held.value : new Map()),
+    [held, scope],
   );
-  const [ops, setOps] = useState<DesktopOperationsSnapshot | null>(null);
+  const ops = heldOps?.scope === agentDid ? heldOps.value : null;
   /* the transcript's tool states change as children finish; that is the
      cue to ask for the operations snapshot again, along with the session
      list the summaries live in */
@@ -116,8 +135,13 @@ export function useWorkers(shell: Shell): Workers {
       ) ?? false,
     [session?.timelineItems],
   );
-  /* trees belong to one agent's session */
-  const scope = `${agentDid ?? ""}\u0000${sessionId ?? ""}`;
+  const unsettled = [...trees.values()].some((t) => !treeSettled(t));
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!unsettled) return;
+    const timer = window.setInterval(() => setTick((t) => t + 1), LINEAGE_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [unsettled]);
   const scoped = useRef(scope);
   /* per root: the row statuses its tree was asked for, and the ask in flight */
   const asked = useRef(new Map<string, string>());
@@ -130,8 +154,6 @@ export function useWorkers(shell: Shell): Workers {
       scoped.current = scope;
       asked.current = new Map();
       pending.current = new Map();
-      treesRef.current = new Map();
-      setTrees(new Map());
     }
     if (!agentDid) return;
     const wanted = rootsRef.current;
@@ -141,21 +163,31 @@ export function useWorkers(shell: Shell): Workers {
         pending.current.delete(root);
       }
     }
-    setTrees((held) => {
-      const kept = [...held].filter(([root]) => wanted.has(root));
-      return kept.length === held.size ? held : new Map(kept);
+    const put = (
+      update: (
+        trees: ReadonlyMap<string, SubagentTreeView>,
+      ) => ReadonlyMap<string, SubagentTreeView>,
+    ) =>
+      setHeld((prev) => {
+        const base = prev.scope === scope ? prev.value : new Map();
+        const value = update(base);
+        return prev.scope === scope && value === prev.value ? prev : { scope, value };
+      });
+    put((base) => {
+      const kept = [...base].filter(([root]) => wanted.has(root));
+      return kept.length === base.size ? base : new Map(kept);
     });
     for (const [root, statuses] of wanted) {
       if (pending.current.has(root)) continue;
-      const held = treesRef.current.get(root);
-      /* unchanged rows keep a settled tree; a tree still in flight is asked
-         again on the next transcript or session-list change */
-      if (asked.current.get(root) === statuses && held && !treeInFlight(held)) continue;
+      const tree = treesRef.current.get(root);
+      /* unchanged rows keep a settled tree; an unsettled one is asked again
+         on every cue and refresh tick */
+      if (asked.current.get(root) === statuses && tree && treeSettled(tree)) continue;
       const ask = ++generation.current;
       asked.current.set(root, statuses);
       pending.current.set(root, ask);
       const settle = () => {
-        if (pending.current.get(root) !== ask) return false;
+        if (scoped.current !== scope || pending.current.get(root) !== ask) return false;
         pending.current.delete(root);
         return true;
       };
@@ -163,25 +195,25 @@ export function useWorkers(shell: Shell): Workers {
       void shell.api
         .listSubagentTree({ rootRequestId: root, agentDid, includeTerminal: true })
         .then(
-          (tree) => {
-            if (settle()) setTrees((prev) => new Map(prev).set(root, tree));
+          (next) => {
+            if (settle()) put((base) => new Map(base).set(root, next));
           },
           () => {
-            /* the last known tree stays; asked again on the next change */
-            if (settle() && !treesRef.current.has(root)) asked.current.delete(root);
+            /* the last known tree stays; the next cue asks again */
+            if (settle()) asked.current.delete(root);
           },
         );
     }
-  }, [shell.api, agentDid, scope, rootsKey, cue, sessionsCue]);
+  }, [shell.api, agentDid, scope, rootsKey, cue, sessionsCue, tick]);
   useEffect(() => {
     if (!hasWorkers || !agentDid) {
-      setOps(null);
+      setHeldOps(null);
       return;
     }
     let live = true;
     void shell.api.fetchOperationsSnapshot({ agentDid }).then(
-      (o) => live && setOps(o),
-      () => live && setOps(null),
+      (o) => live && setHeldOps({ scope: agentDid, value: o }),
+      () => live && setHeldOps(null),
     );
     return () => {
       live = false;

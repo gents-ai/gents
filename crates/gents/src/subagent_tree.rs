@@ -125,7 +125,9 @@ pub async fn build_local_subagent_tree(
 /// that principal on each access, and descendants are walked from that exact
 /// document; a request of another principal that reuses the id is never the
 /// root. Without it, a logical id that names more than one request fails
-/// that access instead of picking one.
+/// that access instead of picking one. Accesses merge on the root's physical
+/// document: an access whose root is a different document with the same
+/// logical id is recorded as a partial error and contributes nothing.
 pub async fn build_subagent_tree(
     accesses: &[SubagentTreeAccess],
     root_request_id: &str,
@@ -136,10 +138,39 @@ pub async fn build_subagent_tree(
     let mut nodes: BTreeMap<String, SubagentTreeNode> = BTreeMap::new();
     let mut partial_errors: Vec<String> = Vec::new();
     let mut dead_accesses: BTreeSet<usize> = BTreeSet::new();
+    let mut root_doc_id: Option<String> = None;
 
     for (index, entry) in accesses.iter().enumerate() {
         match fetch_root_request(&entry.access, root_request_id, agent_did).await {
             Ok(Some(root)) => {
+                let Some(doc_id) = clean_optional_string(root.doc_id.as_deref()) else {
+                    let error = anyhow::anyhow!("root request {root_request_id} has no _docID");
+                    record_dead_access(
+                        &mut partial_errors,
+                        &mut dead_accesses,
+                        index,
+                        entry,
+                        &error,
+                    );
+                    continue;
+                };
+                match root_doc_id.as_deref() {
+                    Some(held) if held != doc_id => {
+                        let error = anyhow::anyhow!(
+                            "root request {root_request_id} is document {doc_id} here but {held} on another access"
+                        );
+                        record_dead_access(
+                            &mut partial_errors,
+                            &mut dead_accesses,
+                            index,
+                            entry,
+                            &error,
+                        );
+                        continue;
+                    }
+                    Some(_) => {}
+                    None => root_doc_id = Some(doc_id),
+                }
                 let mut node = request_row_into_node(root);
                 node.resolved_via = entry.label.clone();
                 nodes.entry(node.request_id.clone()).or_insert(node);
@@ -319,6 +350,7 @@ async fn fetch_root_request(
                 filter: {{ request_id: {{ _eq: "{escaped}" }}{principal} }},
                 limit: 2
             ) {{
+                _docID
                 request_id
                 session_id
                 agent_did
