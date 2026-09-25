@@ -600,28 +600,3 @@ pub async fn wait_for_assistant_answer(
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
 }
-
-/// The live backend the smoke test runs against, chosen the way the
-/// configurator evals choose theirs.
-pub fn live_provider_from_env() -> (String, serde_json::Value, String) {
-    let model = std::env::var("GENTS_D4F_MODEL").unwrap_or_else(|_| "GLM-5.3-Flash-NVFP4".into());
-    match std::env::var("GENTS_LIVE_CONFIG_PROVIDER")
-        .unwrap_or_else(|_| "d4f".into())
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "d4f" => (
-            d4f_endpoint(),
-            serde_json::json!({"kind": "unauthenticated"}),
-            model,
-        ),
-        "openrouter" => (
-            gents::inference_setup::OPENROUTER_ENDPOINT.to_string(),
-            serde_json::json!({"kind": "environment", "variable": "OPENROUTER_API_KEY"}),
-            model,
-        ),
-        other => {
-            panic!("unsupported GENTS_LIVE_CONFIG_PROVIDER {other:?}; expected d4f or openrouter")
-        }
-    }
-}

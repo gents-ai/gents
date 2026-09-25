@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 use gents::config_client::{
     apply_desired_state_plan, DesiredStateApplyDocument, DesiredStateApplyPlan,
 };
-use gents::document_config::{EvalDefinition, EvalSplit};
+use gents::document_config::{EvalDefinition, EvalSplit, InferenceBackend, InferenceProfile};
 use gents::eval::checks::CheckRegistry;
 use gents::eval::runner::embedded::{EmbeddedExecutor, EmbeddedHome};
 use gents::eval::runner::{Capture, RunOptions};
@@ -88,7 +88,7 @@ enum Baseline {
 }
 
 #[tokio::test]
-#[ignore = "M5: needs GENTS_LIVE_CONFIG_PROVIDER, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
+#[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
 async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_promote() {
     let fixture = Fixture::new("live-accept", Baseline::Thin).await;
     // The candidate is the pack's own golden prompt; the baseline is the thin one.
@@ -119,7 +119,7 @@ async fn live_accept_the_golden_prompt_beats_a_thin_one_and_reaches_ready_to_pro
 }
 
 #[tokio::test]
-#[ignore = "M5: needs GENTS_LIVE_CONFIG_PROVIDER, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
+#[ignore = "M5: needs GENTS_EVAL_TARGET, GENTS_OPTIMIZATION_LIVE_PACK, GENTS_OPTIMIZATION_LIVE_DEFINITION_ID and a real backend"]
 async fn live_reject_a_prompt_that_ignores_the_task_never_reaches_ready_to_promote() {
     // The baseline is M3's golden subject, which passes these cases, so the
     // rejection is of a real regression and not a tie between two failing arms.
@@ -234,7 +234,7 @@ impl Fixture {
             }
         };
 
-        let (endpoint, auth, model) = support::live_inference::live_provider_from_env();
+        let target = support::live_inference::live_target();
         install(
             &access,
             vec![
@@ -244,17 +244,11 @@ impl Fixture {
                 ),
                 (
                     Collection::InferenceBackend,
-                    json!({
-                        "agent_did": owner,
-                        "backend_id": "live",
-                        "name": "Live optimization backend",
-                        "provider_kind": "OpenAiCompatible",
-                        "openai_wire_api": "chat_completions",
-                        "endpoint": endpoint,
-                        "auth": auth,
-                        "max_concurrent": 4,
-                        "max_queue_depth": 100,
-                    }),
+                    serde_json::to_value(InferenceBackend {
+                        backend_id: "live".into(),
+                        ..target.backend(&owner)
+                    })
+                    .unwrap(),
                 ),
                 (
                     Collection::InferenceSampling,
@@ -262,13 +256,14 @@ impl Fixture {
                 ),
                 (
                     Collection::InferenceProfile,
-                    json!({
-                        "agent_did": owner,
-                        "profile_id": "live",
-                        "backend_id": "live",
-                        "model_name": model,
-                        "sampling_id": "live",
-                    }),
+                    serde_json::to_value(InferenceProfile {
+                        profile_id: "live".into(),
+                        backend_id: "live".into(),
+                        sampling_id: Some("live".into()),
+                        execution_id: None,
+                        ..target.profile(&owner)
+                    })
+                    .unwrap(),
                 ),
                 // Ruling R5: the live context must hold the pack's prompt.
                 (
