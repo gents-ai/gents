@@ -95,6 +95,39 @@ impl ConfigReferences {
 
     /// Validate the full retained candidate, including unchanged inbound links.
     /// Membership checks permit cycles and impose no collection ordering.
+    /// A profile and the backend it selects, decoded from this snapshot, for
+    /// admission against the backend's advertised catalog. `None` when the
+    /// profile is absent.
+    pub(crate) fn profile_with_backend(
+        &self,
+        profile_id: &str,
+    ) -> Result<Option<(InferenceProfile, InferenceBackend)>> {
+        let Some(profile) = self
+            .documents
+            .get(&(Collection::InferenceProfile, profile_id.to_owned()))
+        else {
+            return Ok(None);
+        };
+        let profile: InferenceProfile = decode(profile)?;
+        let backend = self
+            .documents
+            .get(&(Collection::InferenceBackend, profile.backend_id.clone()))
+            .with_context(|| format!("profile {profile_id} references a missing backend"))?;
+        Ok(Some((profile, decode(backend)?)))
+    }
+
+    /// Profiles that select `backend_id` in this snapshot.
+    pub(crate) fn profiles_on_backend(&self, backend_id: &str) -> Vec<String> {
+        self.documents
+            .iter()
+            .filter(|((collection, _), value)| {
+                *collection == Collection::InferenceProfile
+                    && value["backend_id"].as_str() == Some(backend_id)
+            })
+            .map(|((_, id), _)| id.clone())
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<()> {
         for ((collection, _), document) in &self.documents {
             self.validate_document(*collection, document)?;

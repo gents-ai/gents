@@ -921,3 +921,59 @@ async fn canonical_replacement_preserves_revocation_and_attested_creation() {
     }
     node.shutdown().await;
 }
+
+#[tokio::test]
+async fn preview_rejects_a_context_window_above_the_advertised_maximum() -> Result<()> {
+    let node = Arc::new(EmbeddedNode::builder().build().await?);
+    register_config_schemas(&node).await?;
+    let access = ConfigAccess::Local(node.clone());
+    let owner = "did:key:owner";
+    let profile = |window: Value| {
+        config(
+            Collection::InferenceProfile,
+            json!({"agent_did":owner,"profile_id":"profile","backend_id":"backend","model_name":"model","context_window":window}),
+        )
+    };
+    apply(
+        &access,
+        vec![document(backend(owner, "backend")), profile(Value::Null)],
+    )
+    .await?;
+    let typed: crate::document_config::InferenceBackend =
+        serde_json::from_value(backend(owner, "backend"))?;
+    crate::backend_registry::record_model_catalog(
+        &node,
+        &typed,
+        serde_json::from_value(json!({
+            "agent_did": null,
+            "observed_at": "2026-09-25T00:00:00Z",
+            "models": [{"model_name":"model","context_window":272000,"max_context_window":872000}],
+        }))?,
+    )
+    .await?;
+
+    let rejected = preview_window(&access, &profile, 900_000)
+        .await
+        .expect_err("above the advertised maximum");
+    assert!(
+        format!("{rejected:#}").contains("exceeds model model advertised maximum 872000"),
+        "{rejected:#}"
+    );
+    preview_window(&access, &profile, 500_000).await?;
+    preview_window(&access, &profile, 872_000).await?;
+    Ok(())
+}
+
+async fn preview_window(
+    access: &ConfigAccess,
+    profile: &dyn Fn(Value) -> DesiredStateApplyDocument,
+    window: u64,
+) -> Result<()> {
+    let plan = DesiredStateApplyPlan::new(vec![profile(json!(window))])?;
+    access
+        .transact("test.preview.context_window", |txn| {
+            let plan = &plan;
+            Box::pin(async move { validate_desired_state_plan(txn, plan).await })
+        })
+        .await
+}
