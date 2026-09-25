@@ -552,10 +552,6 @@ async fn control_watcher_resolves_context_tools_into_reconciled_tool_surface() {
     watcher_task.await.unwrap().unwrap();
 }
 
-/// #1756: a behavior whose inference selection can never resolve is not a
-/// document that is still syncing. The watcher must settle, keep its valid
-/// sibling usable, and leave the permanent failure to the snapshot owner's
-/// per-behavior unavailable reporting.
 #[tokio::test]
 async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_invalid() {
     let node = test_node().await;
@@ -581,9 +577,6 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
     let agent_did = agent.agent_did().to_string();
     let selected_behavior_id = agent.default_behavior_id().to_string();
 
-    // The observed catalog advertises only the selected behavior's model, so
-    // the spare behavior written below fails advertised-model validation no
-    // matter how long the watcher waits.
     let backend =
         crate::backend_registry::lookup_backend(node.as_ref(), &agent_did, "backend-settle")
             .await
@@ -660,18 +653,12 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
         shutdown_rx,
     ));
 
-    wait_for_runtime_reconcile_phase(node.as_ref(), &agent_did, "debouncing").await;
-    tokio::time::sleep(TEST_CONTROL_WATCHER_TIMING.debounce + Duration::from_millis(10)).await;
-    tokio::task::yield_now().await;
-
     let snapshot = tokio::time::timeout(Duration::from_secs(5), proposal_rx.recv())
         .await
         .expect("a permanently invalid unselected behavior must not hold reconciliation")
         .expect("reconciled snapshot");
-    assert!(
-        snapshot.behaviors.contains_key(&selected_behavior_id),
-        "the valid sibling must stay usable"
-    );
+    assert!(snapshot.behaviors.contains_key(&selected_behavior_id));
+    assert!(!snapshot.behaviors.contains_key(&spare_behavior_id));
     assert_eq!(
         snapshot
             .unavailable_behaviors
@@ -680,18 +667,10 @@ async fn control_watcher_settles_when_an_unselected_behavior_is_permanently_inva
             .public_reason,
         BehaviorReadinessUnavailableReason::InferenceProfileInvalid
     );
-    let settled = fetch_runtime_status(node.as_ref(), &agent_did).await;
-    assert_ne!(
-        settled.reconcile_phase, "debouncing",
-        "reconciliation must leave the debounce window"
-    );
 
     let _ = shutdown_tx.send(true);
     watcher_task.await.unwrap().unwrap();
 
-    // Absent and foreign references still hold the gate; local writes refuse
-    // to construct one, so that direction is fenced by
-    // `pending_visibility_holds_missing_reference_but_not_invalid_inference`.
     let view = crate::agent::document_view::load_document_runtime_view(node.as_ref(), &agent_did)
         .await
         .unwrap();

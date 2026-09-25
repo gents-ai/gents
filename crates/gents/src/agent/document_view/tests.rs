@@ -2197,10 +2197,6 @@ fn expand_eth_tools_fails_closed_on_missing_and_foreign() {
     assert!(err.to_string().contains("different agent"));
 }
 
-/// #1756: the control watcher's visibility gate waits only for documents that
-/// can still arrive. A referenced document that is absent or foreign holds the
-/// gate; an inference selection that is present but permanently invalid does
-/// not, because the snapshot owner already reports it per behavior.
 #[test]
 fn pending_visibility_holds_missing_reference_but_not_invalid_inference() {
     let owner = "did:key:owner";
