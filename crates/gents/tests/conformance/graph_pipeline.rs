@@ -66,7 +66,9 @@ fn valid_fixture() -> (GraphIntent, Vec<StageCapability>) {
         agent_did: CALLER_DID.to_owned(),
         capability_id: "approved-worker".to_owned(),
         revision: "v1".to_owned(),
-        task_id: "worker-v1-task".to_owned(),
+        target: gents::graph_pipeline::StageTarget::Task {
+            task_id: "worker-v1-task".to_owned(),
+        },
         input_ports: vec![input],
         output_ports: vec![output],
         allowed_callers: vec![CALLER_DID.to_owned()],
@@ -156,7 +158,7 @@ fn successful_compilation_supplies_stable_publication_identity() {
 
     assert_eq!(first, second);
     assert!(first.digest.starts_with("sha256:"));
-    assert_eq!(first.nodes[0].task_id, "worker-v1-task");
+    assert_eq!(first.nodes[0].target.task_id(), Some("worker-v1-task"));
 }
 
 #[test]

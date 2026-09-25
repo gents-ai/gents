@@ -247,17 +247,19 @@ fn load_package_from_assets(
             capability.agent_did == options.agent_did,
             "foreign graph capability owner"
         );
+        // A plugin node's artifact was matched and pinned when the config loaded.
+        let Some(task_id) = capability.target.task_id() else {
+            continue;
+        };
         anyhow::ensure!(
             config
                 .tasks
                 .iter()
-                .filter(|task| task.agent_did == capability.agent_did
-                    && task.task_id == capability.task_id)
+                .filter(|task| task.agent_did == capability.agent_did && task.task_id == task_id)
                 .count()
                 == 1,
-            "graph capability {} must reference exactly one owned task {}",
+            "graph capability {} must reference exactly one owned task {task_id}",
             capability.capability_id,
-            capability.task_id
         );
     }
     Ok(LoadedGraphPackage {
@@ -380,7 +382,8 @@ mod tests {
             .tasks
             .iter()
             .filter(|task| {
-                task.agent_did == capability.agent_did && task.task_id == capability.task_id
+                task.agent_did == capability.agent_did
+                    && Some(task.task_id.as_str()) == capability.target.task_id()
             })
             .collect::<Vec<_>>();
         assert_eq!(rows.len(), 1);

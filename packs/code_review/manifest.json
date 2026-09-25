@@ -35,7 +35,7 @@
     "graphs/code_review.plan.json"
   ],
   "dependencies": [],
-  "compiler_version": "graph-intent-v3",
+  "compiler_version": "graph-intent-v4",
   "schemas": [
     "schemas/review_job.graphql",
     "schemas/evidence_manifest.graphql",

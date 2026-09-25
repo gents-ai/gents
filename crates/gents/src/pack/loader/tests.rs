@@ -29,10 +29,10 @@ fn load(value: Value, graph: bool) -> Result<PackConfig> {
 #[test]
 fn explicit_pack_caller_uses_selected_owner_and_cannot_be_spoofed_by_environment() {
     let value = json!({"agent_principal":{},"graph_capabilities":[{
-        "capability_id":"review","revision":"1","task_id":"review",
+        "capability_id":"review","revision":"1","target":{"kind":"task","task_id":"review"},
         "allowed_callers":["${GENTS_PACK_AGENT_DID}"]
     },{
-        "capability_id":"closed","revision":"1","task_id":"review"
+        "capability_id":"closed","revision":"1","target":{"kind":"task","task_id":"review"}
     }]});
     let config = load_pack_config(
         &manifest(true),
@@ -227,5 +227,74 @@ fn skill_instructions_load_from_a_literal_sidecar() {
     assert_eq!(
         config.skills[0].instructions.as_deref(),
         Some("literal {{ task.input }} ${HOST_SHELL}")
+    );
+}
+
+fn plugin_pack_config(target: Value) -> Result<PackConfig> {
+    let manifest: PackManifest = serde_json::from_value(json!({
+        "manifest_version":1,"name":"example","namespace":"team","version":"1",
+        "description":"Example","kind":"graph","authors":["Example"],
+        "assets":["README.md","config/bundle.json","plugins/lint.afb"],
+        "config":"config/bundle.json",
+        "compiler_version": crate::graph_pipeline::COMPILER_VERSION,
+        "plugins":[{"name":"lint","description":"Lints a diff","artifact":"plugins/lint.afb",
+                    "language":"rust","input_schema":{"type":"object"}}],
+    }))
+    .unwrap();
+    let config = json!({"agent_principal":{},"graph_capabilities":[{
+        "capability_id":"lint","revision":"1","target":target,
+    }]});
+    load_pack_config(
+        &manifest,
+        &PackInstallOptions {
+            agent_did: "did:key:owner".into(),
+        },
+        &|path| match path {
+            "config/bundle.json" => Ok(serde_json::to_vec(&config)?),
+            "plugins/lint.afb" => Ok(b"artifact bytes".to_vec()),
+            _ => anyhow::bail!("unexpected asset {path}"),
+        },
+        &|_| None,
+    )
+}
+
+fn shipped_digest() -> String {
+    format!(
+        "sha256:{:x}",
+        <sha2::Sha256 as sha2::Digest>::digest(b"artifact bytes")
+    )
+}
+
+#[test]
+fn a_plugin_node_runs_the_packs_own_artifact() {
+    let config = plugin_pack_config(json!({"kind":"plugin","plugin":"lint"})).unwrap();
+    assert_eq!(
+        config.graph_capabilities[0].target,
+        crate::graph_pipeline::StageTarget::Plugin {
+            plugin: "team/lint".into(),
+            digest: Some(shipped_digest()),
+        }
+    );
+    // An author's pin that matches the shipped artifact is kept.
+    plugin_pack_config(json!({"kind":"plugin","plugin":"lint","digest":shipped_digest()})).unwrap();
+}
+
+#[test]
+fn a_plugin_node_the_pack_cannot_run_is_refused() {
+    let undeclared = plugin_pack_config(json!({"kind":"plugin","plugin":"missing"})).unwrap_err();
+    assert!(format!("{undeclared:#}").contains("does not declare"));
+    let wrong_pin = plugin_pack_config(
+        json!({"kind":"plugin","plugin":"lint","digest":format!("sha256:{}", "0".repeat(64))}),
+    )
+    .unwrap_err();
+    assert!(format!("{wrong_pin:#}").contains("the pack ships"));
+    // A plugin from outside the pack keeps its author's coordinate and pin.
+    let external = plugin_pack_config(json!({"kind":"plugin","plugin":"other/tool"})).unwrap();
+    assert_eq!(
+        external.graph_capabilities[0].target,
+        crate::graph_pipeline::StageTarget::Plugin {
+            plugin: "other/tool".into(),
+            digest: None,
+        }
     );
 }

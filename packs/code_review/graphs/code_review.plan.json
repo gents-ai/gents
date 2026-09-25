@@ -1,31 +1,43 @@
 {
-  "compiler_version": "graph-intent-v3",
+  "compiler_version": "graph-intent-v4",
   "graph_id": "code-review",
-  "digest": "sha256:963c8249fdc59ba6f5b3804e929948ab3d607e71a8dccb23f7e5469d4b7a8d7a",
+  "digest": "sha256:3f56f92ed645e0ceb1bf650784f3d9a6f31f7ecd56afcffabae906121a10b248",
   "nodes": [
     {
       "node_id": "recon",
       "capability_id": "review-recon",
       "capability_revision": "v1",
-      "task_id": "review-recon-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-recon-task"
+      }
     },
     {
       "node_id": "scan",
       "capability_id": "review-scan",
       "capability_revision": "v1",
-      "task_id": "review-scan-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-scan-task"
+      }
     },
     {
       "node_id": "triage",
       "capability_id": "review-triage",
       "capability_revision": "v1",
-      "task_id": "review-triage-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-triage-task"
+      }
     },
     {
       "node_id": "verify",
       "capability_id": "review-verify",
       "capability_revision": "v1",
-      "task_id": "review-verify-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-verify-task"
+      }
     }
   ],
   "edges": [
@@ -39,7 +51,10 @@
         "port": "area"
       },
       "source_collection": "CodeReviewArea",
-      "target_task_id": "review-scan-task",
+      "target": {
+        "kind": "task",
+        "task_id": "review-scan-task"
+      },
       "correlation_field": "run_id",
       "delivery": null,
       "concurrency": "parallel"
@@ -54,7 +69,10 @@
         "port": "scan_results"
       },
       "source_collection": "CodeReviewScanResult",
-      "target_task_id": "review-verify-task",
+      "target": {
+        "kind": "task",
+        "task_id": "review-verify-task"
+      },
       "correlation_field": "run_id",
       "delivery": {
         "expected_count": {
@@ -73,7 +91,10 @@
         "port": "summary"
       },
       "source_collection": "CodeReviewVerificationSummary",
-      "target_task_id": "review-triage-task",
+      "target": {
+        "kind": "task",
+        "task_id": "review-triage-task"
+      },
       "correlation_field": "run_id",
       "delivery": null,
       "concurrency": "serial"
@@ -89,7 +110,10 @@
         "node_id": "recon",
         "port": "job"
       },
-      "target_task_id": "review-recon-task",
+      "target": {
+        "kind": "task",
+        "task_id": "review-recon-task"
+      },
       "correlation_field": "run_id"
     }
   ],
@@ -129,22 +153,34 @@
     {
       "capability_id": "review-recon",
       "revision": "v1",
-      "task_id": "review-recon-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-recon-task"
+      }
     },
     {
       "capability_id": "review-scan",
       "revision": "v1",
-      "task_id": "review-scan-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-scan-task"
+      }
     },
     {
       "capability_id": "review-triage",
       "revision": "v1",
-      "task_id": "review-triage-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-triage-task"
+      }
     },
     {
       "capability_id": "review-verify",
       "revision": "v1",
-      "task_id": "review-verify-task"
+      "target": {
+        "kind": "task",
+        "task_id": "review-verify-task"
+      }
     }
   ],
   "limits": {

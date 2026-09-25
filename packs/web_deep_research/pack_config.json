@@ -1018,7 +1018,7 @@
       "allowed_callers": [
         "${GENTS_PACK_AGENT_DID}"
       ],
-      "task_id": "research-plan-task"
+      "target": {"kind": "task", "task_id": "research-plan-task"}
     },
     {
       "capability_id": "research-investigate",
@@ -1066,7 +1066,7 @@
       "allowed_callers": [
         "${GENTS_PACK_AGENT_DID}"
       ],
-      "task_id": "research-investigate-task"
+      "target": {"kind": "task", "task_id": "research-investigate-task"}
     },
     {
       "capability_id": "research-adjudicate",
@@ -1100,7 +1100,7 @@
       "allowed_callers": [
         "${GENTS_PACK_AGENT_DID}"
       ],
-      "task_id": "research-adjudicate-task"
+      "target": {"kind": "task", "task_id": "research-adjudicate-task"}
     },
     {
       "capability_id": "research-report",
@@ -1127,7 +1127,7 @@
       "allowed_callers": [
         "${GENTS_PACK_AGENT_DID}"
       ],
-      "task_id": "research-report-task"
+      "target": {"kind": "task", "task_id": "research-report-task"}
     }
   ]
 }

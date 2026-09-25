@@ -291,7 +291,7 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
             pack.require_new("graph_intents", "graph_id", &graph_id)?;
             pack.config()?;
             pack.manifest["kind"] = json!("graph");
-            pack.manifest["compiler_version"] = json!("graph-intent-v3");
+            pack.manifest["compiler_version"] = json!(gents::graph_pipeline::COMPILER_VERSION);
             pack.list("graphs")?.push(json!({ "graph_id": graph_id }));
             pack.list("graph_intents")?.push(json!({
                 "graph_id": graph_id,
@@ -309,10 +309,32 @@ pub(super) fn apply_add(pack: &mut PackEdit, command: PackAddCommand) -> Result<
             node,
             graph,
             task,
+            plugin,
             input,
             output,
             from,
-        } => add_stage(pack, &node, &graph, &task, &input, &output, from.as_deref()),
+        } => {
+            let target = match (task, plugin) {
+                (Some(task), _) => {
+                    anyhow::ensure!(
+                        pack.has("tasks", "task_id", &task),
+                        "the pack has no task {task:?}; add it first"
+                    );
+                    json!({"kind": "task", "task_id": task})
+                }
+                (None, Some(plugin)) => {
+                    anyhow::ensure!(
+                        pack.manifest["plugins"]
+                            .as_array()
+                            .is_some_and(|rows| rows.iter().any(|row| row["name"] == plugin)),
+                        "the pack has no plugin {plugin:?}; add it first"
+                    );
+                    json!({"kind": "plugin", "plugin": plugin})
+                }
+                (None, None) => anyhow::bail!("name the stage's --task or --plugin"),
+            };
+            add_stage(pack, &node, &graph, target, &input, &output, from.as_deref())
+        }
     }
 }
 
@@ -424,23 +446,19 @@ fn add_stage(
     pack: &mut PackEdit,
     node: &str,
     graph: &str,
-    task: &str,
+    target: Value,
     input: &str,
     output: &str,
     from: Option<&str>,
 ) -> Result<()> {
     check_id(node)?;
-    anyhow::ensure!(
-        pack.has("tasks", "task_id", task),
-        "the pack has no task {task:?}; add it first"
-    );
     let capability = format!("{graph}-{node}");
     pack.require_new("graph_capabilities", "capability_id", &capability)?;
     pack.list("graph_capabilities")?.push(json!({
         "capability_id": capability,
         "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
         "revision": "v1",
-        "task_id": task,
+        "target": target,
         "input_ports": [{
             "name": "input", "collection": input, "schema": format!("{input}/v1"),
             "correlation_field": "run_id", "cardinality": "one", "required": true,
@@ -724,7 +742,8 @@ mod tests {
             PackAddCommand::Stage {
                 node: "scan".into(),
                 graph: "review".into(),
-                task: "review-toolkit-worker-task".into(),
+                task: Some("review-toolkit-worker-task".into()),
+                plugin: None,
                 input: "ReviewJob".into(),
                 output: "ReviewNotes".into(),
                 from: None,
@@ -735,7 +754,8 @@ mod tests {
             PackAddCommand::Stage {
                 node: "report".into(),
                 graph: "review".into(),
-                task: "review-toolkit-worker-task".into(),
+                task: Some("review-toolkit-worker-task".into()),
+                plugin: None,
                 input: "ReviewNotes".into(),
                 output: "ReviewReport".into(),
                 from: Some("scan.output".into()),

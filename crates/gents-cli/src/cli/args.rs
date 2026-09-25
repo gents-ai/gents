@@ -417,8 +417,15 @@ pub(crate) enum PackAddCommand {
         node: String,
         #[arg(long)]
         graph: String,
-        #[arg(long)]
-        task: String,
+        #[arg(
+            long,
+            required_unless_present = "plugin",
+            conflicts_with = "plugin",
+            help = "The Task an agent node runs"
+        )]
+        task: Option<String>,
+        #[arg(long, help = "The pack's own plugin a plugin node runs")]
+        plugin: Option<String>,
         #[arg(long, help = "Collection the stage reads")]
         input: String,
         #[arg(long, help = "Collection the stage writes")]

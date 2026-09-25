@@ -177,7 +177,7 @@ pub(crate) fn scaffold(dir: &Path, name: &str, args: &PackScaffoldArgs) -> Resul
                     .as_array_mut()
                     .context("schemas list")?
                     .push(json!(format!("schemas/{}_result.graphql", names.name)));
-                manifest["compiler_version"] = json!("graph-intent-v3");
+                manifest["compiler_version"] = json!(gents::graph_pipeline::COMPILER_VERSION);
             }
             files.push((
                 "pack_config.json".into(),
@@ -392,7 +392,7 @@ fn config(names: &Names, template: PackTemplate) -> Value {
                 "capability_id": format!("{kebab}-worker"),
                 "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
                 "revision": "v1",
-                "task_id": format!("{kebab}-worker-task"),
+                "target": {"kind": "task", "task_id": format!("{kebab}-worker-task")},
                 "input_ports": [{
                     "name": "job", "collection": job, "schema": format!("{job}/v1"),
                     "correlation_field": "run_id", "cardinality": "one", "required": true,

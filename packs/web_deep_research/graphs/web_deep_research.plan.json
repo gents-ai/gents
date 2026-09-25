@@ -1,31 +1,43 @@
 {
-  "compiler_version": "graph-intent-v3",
+  "compiler_version": "graph-intent-v4",
   "graph_id": "web-deep-research",
-  "digest": "sha256:2035cae022f5a2b4012e7d6dd1c4414573eb4e38af543cf715050c5d90318e74",
+  "digest": "sha256:937552e503feac8870d41b046368a7ffbabf917725a2fbdb4846a93a17ea88b3",
   "nodes": [
     {
       "node_id": "adjudicate",
       "capability_id": "research-adjudicate",
       "capability_revision": "v1",
-      "task_id": "research-adjudicate-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-adjudicate-task"
+      }
     },
     {
       "node_id": "investigate",
       "capability_id": "research-investigate",
       "capability_revision": "v1",
-      "task_id": "research-investigate-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-investigate-task"
+      }
     },
     {
       "node_id": "plan",
       "capability_id": "research-plan",
       "capability_revision": "v1",
-      "task_id": "research-plan-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-plan-task"
+      }
     },
     {
       "node_id": "report",
       "capability_id": "research-report",
       "capability_revision": "v1",
-      "task_id": "research-report-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-report-task"
+      }
     }
   ],
   "edges": [
@@ -39,7 +51,10 @@
         "port": "draft"
       },
       "source_collection": "WebResearchDraft",
-      "target_task_id": "research-report-task",
+      "target": {
+        "kind": "task",
+        "task_id": "research-report-task"
+      },
       "correlation_field": "run_id",
       "delivery": null,
       "concurrency": "serial"
@@ -54,7 +69,10 @@
         "port": "investigations"
       },
       "source_collection": "WebResearchInvestigation",
-      "target_task_id": "research-adjudicate-task",
+      "target": {
+        "kind": "task",
+        "task_id": "research-adjudicate-task"
+      },
       "correlation_field": "run_id",
       "delivery": {
         "expected_count": {
@@ -73,7 +91,10 @@
         "port": "assignment"
       },
       "source_collection": "WebResearchAssignment",
-      "target_task_id": "research-investigate-task",
+      "target": {
+        "kind": "task",
+        "task_id": "research-investigate-task"
+      },
       "correlation_field": "run_id",
       "delivery": null,
       "concurrency": "parallel"
@@ -89,7 +110,10 @@
         "node_id": "plan",
         "port": "job"
       },
-      "target_task_id": "research-plan-task",
+      "target": {
+        "kind": "task",
+        "task_id": "research-plan-task"
+      },
       "correlation_field": "run_id"
     }
   ],
@@ -189,22 +213,34 @@
     {
       "capability_id": "research-adjudicate",
       "revision": "v1",
-      "task_id": "research-adjudicate-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-adjudicate-task"
+      }
     },
     {
       "capability_id": "research-investigate",
       "revision": "v1",
-      "task_id": "research-investigate-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-investigate-task"
+      }
     },
     {
       "capability_id": "research-plan",
       "revision": "v1",
-      "task_id": "research-plan-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-plan-task"
+      }
     },
     {
       "capability_id": "research-report",
       "revision": "v1",
-      "task_id": "research-report-task"
+      "target": {
+        "kind": "task",
+        "task_id": "research-report-task"
+      }
     }
   ],
   "limits": {

@@ -347,7 +347,7 @@ mod tests {
         }
         let mut graph = input.clone();
         graph["graph_capabilities"] =
-            json!([{"agent_did":owner,"capability_id":"cap","revision":"r","task_id":"task"}]);
+            json!([{"agent_did":owner,"capability_id":"cap","revision":"r","target":{"kind":"task","task_id":"task"}}]);
         assert!(
             apply_config_components(&node, &serde_json::from_value(graph)?)
                 .await

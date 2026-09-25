@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub const COMPILER_VERSION: &str = "graph-intent-v3";
+pub const COMPILER_VERSION: &str = "graph-intent-v4";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -29,10 +29,42 @@ pub struct PortSpec {
     pub required: bool,
 }
 
-/// Operator-approved interface around an existing Task document.
+/// What runs a graph node: an agent turn, or a plugin with no model.
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+pub enum StageTarget {
+    /// An agent node: the Task's behavior, prompt and tools run as a model turn.
+    Task { task_id: String },
+    /// A plugin node: deterministic WASM execution of an installed plugin.
+    Plugin {
+        /// `namespace/name` of the installed plugin. A pack names its own
+        /// plugin by `name`, and loading the pack qualifies it.
+        plugin: String,
+        /// `sha256:<hex>` of the artifact that runs. A pack's own plugin is
+        /// pinned when the pack is loaded; compiling an unpinned one fails.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "typescript", ts(optional = nullable))]
+        digest: Option<String>,
+    },
+}
+
+impl StageTarget {
+    /// The Task an agent node runs, if this is one.
+    pub fn task_id(&self) -> Option<&str> {
+        match self {
+            Self::Task { task_id } => Some(task_id),
+            Self::Plugin { .. } => None,
+        }
+    }
+}
+
+/// Operator-approved interface around a Task or an installed plugin.
 ///
 /// The model can select a capability revision, but cannot author the Task's
-/// behavior, prompt, tools, model, or output permissions.
+/// behavior, prompt, tools, model, or output permissions, nor the plugin that runs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
@@ -42,7 +74,7 @@ pub struct StageCapability {
     pub agent_did: String,
     pub capability_id: String,
     pub revision: String,
-    pub task_id: String,
+    pub target: StageTarget,
     #[serde(
         default,
         deserialize_with = "crate::document_config::deserialize_default_on_null",
@@ -243,6 +275,7 @@ pub enum DiagnosticCode {
     DepthLimitExceeded,
     FanOutLimitExceeded,
     PlatformLimitExceeded,
+    UnpinnedPlugin,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,7 +293,11 @@ pub struct PlannedNode {
     pub node_id: String,
     pub capability_id: String,
     pub capability_revision: String,
-    pub task_id: String,
+    pub target: StageTarget,
+    /// Where a plugin node writes its result. Empty for an agent node, whose
+    /// model writes its outputs through its own tools.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub output_ports: Vec<PortSpec>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -269,7 +306,7 @@ pub struct PlannedEdge {
     pub from: PortRef,
     pub to: PortRef,
     pub source_collection: String,
-    pub target_task_id: String,
+    pub target: StageTarget,
     pub correlation_field: String,
     pub delivery: DeliveryMode,
     pub concurrency: DeliveryConcurrency,
@@ -286,7 +323,7 @@ pub struct PlannedEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_contract: Option<String>,
     pub to: PortRef,
-    pub target_task_id: String,
+    pub target: StageTarget,
     pub correlation_field: String,
 }
 
@@ -354,7 +391,7 @@ pub struct PackagePlan {
 pub struct CapabilityManifestEntry {
     pub capability_id: String,
     pub revision: String,
-    pub task_id: String,
+    pub target: StageTarget,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

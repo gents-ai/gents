@@ -16,7 +16,67 @@ pub(super) struct Invocation {
 
 pub(super) struct Projection {
     pub requests: Vec<GraphRunRequestView>,
+    /// Plugin node calls. They count toward their stage but are not model
+    /// requests, so cancelling a run never tries to interrupt one.
+    pub plugin_calls: Vec<GraphRunRequestView>,
     pub invocations: Vec<Invocation>,
+}
+
+/// Plugin node invocations this run caused, each its own logical invocation.
+async fn plugin_invocations(
+    executor: &(impl GraphRunQuery + ?Sized),
+    correlation: &str,
+    plan: &GraphPlan,
+    routes: &BTreeMap<String, String>,
+    owner_did: &str,
+) -> Result<Vec<GraphRunRequestView>> {
+    let plugin_routes = routes
+        .iter()
+        .filter(|(_, node_id)| {
+            plan.nodes.iter().any(|node| {
+                &node.node_id == *node_id
+                    && matches!(
+                        node.target,
+                        crate::graph_pipeline::StageTarget::Plugin { .. }
+                    )
+            })
+        })
+        .map(|(route, _)| route.clone())
+        .collect::<Vec<_>>();
+    if plugin_routes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let response = executor
+        .execute_graph_query(&format!(
+            r#"{{ CallbackInvocation(filter: {{ owner_agent_did: {{ _eq: "{}" }},
+        caused_by_correlation: {{ _eq: "{}" }}, callback_id: {{ _in: {} }} }}) {{
+            invocation_id callback_id lifecycle_state error }} }}"#,
+            escape_graphql_string(owner_did),
+            escape_graphql_string(correlation),
+            graphql_string_list_literal(&plugin_routes),
+        ))
+        .await?;
+    Ok(rows(&response, "CallbackInvocation")
+        .iter()
+        .map(|row| {
+            let field = |name: &str| row.get(name).and_then(Value::as_str).unwrap_or_default();
+            let state = field("lifecycle_state");
+            let succeeded = state == crate::callback::LIFECYCLE_SUCCEEDED;
+            let terminal = succeeded
+                || state == crate::callback::LIFECYCLE_FAILED
+                || state == crate::callback::LIFECYCLE_DENIED;
+            GraphRunRequestView {
+                request_id: field("invocation_id").to_owned(),
+                session_id: None,
+                node_id: routes.get(field("callback_id")).cloned(),
+                behavior_id: String::new(),
+                lifecycle_state: Some(state.to_owned()),
+                failure_reason: Some(field("error").to_owned()).filter(|error| !error.is_empty()),
+                terminal,
+                succeeded,
+            }
+        })
+        .collect())
 }
 
 fn request_view(row: &AgentRequestRow, node_id: Option<String>) -> GraphRunRequestView {
@@ -206,9 +266,21 @@ pub(super) async fn load(
     }
     let mut requests = physical.into_values().collect::<Vec<_>>();
     requests.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+    let mut plugin_calls =
+        plugin_invocations(executor, correlation, plan, &routes, owner_did).await?;
+    plugin_calls.sort_by(|a, b| a.request_id.cmp(&b.request_id));
+    invocations.extend(plugin_calls.iter().map(|call| Invocation {
+        root_request_id: call.request_id.clone(),
+        member_doc_ids: BTreeSet::new(),
+        node_id: call.node_id.clone().unwrap_or_default(),
+        tip: Some(call.clone()),
+        outstanding: !call.terminal,
+        invalid: false,
+    }));
     invocations.sort_by(|a, b| a.root_request_id.cmp(&b.root_request_id));
     Ok(Projection {
         requests,
+        plugin_calls,
         invocations,
     })
 }

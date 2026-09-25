@@ -426,7 +426,7 @@
       "capability_id": "review-recon",
       "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
       "revision": "v1",
-      "task_id": "review-recon-task",
+      "target": {"kind": "task", "task_id": "review-recon-task"},
       "input_ports": [{"name": "job", "collection": "CodeReviewJob", "schema": "CodeReviewJob/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
       "output_ports": [{"name": "areas", "collection": "CodeReviewArea", "schema": "CodeReviewArea/v1", "correlation_field": "run_id", "cardinality": "one"}],
       "workspace_authority": "readOnly"
@@ -435,7 +435,7 @@
       "capability_id": "review-scan",
       "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
       "revision": "v1",
-      "task_id": "review-scan-task",
+      "target": {"kind": "task", "task_id": "review-scan-task"},
       "input_ports": [{"name": "area", "collection": "CodeReviewArea", "schema": "CodeReviewArea/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
       "output_ports": [
         {"name": "scan_results", "collection": "CodeReviewScanResult", "schema": "CodeReviewScanResult/v1", "correlation_field": "run_id", "cardinality": "one"},
@@ -447,7 +447,7 @@
       "capability_id": "review-verify",
       "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
       "revision": "v1",
-      "task_id": "review-verify-task",
+      "target": {"kind": "task", "task_id": "review-verify-task"},
       "input_ports": [{"name": "scan_results", "collection": "CodeReviewScanResult", "schema": "CodeReviewScanResult/v1", "correlation_field": "run_id", "cardinality": "many", "required": true}],
       "output_ports": [
         {"name": "summary", "collection": "CodeReviewVerificationSummary", "schema": "CodeReviewVerificationSummary/v1", "correlation_field": "run_id", "cardinality": "one"},
@@ -460,7 +460,7 @@
       "capability_id": "review-triage",
       "allowed_callers": ["${GENTS_PACK_AGENT_DID}"],
       "revision": "v1",
-      "task_id": "review-triage-task",
+      "target": {"kind": "task", "task_id": "review-triage-task"},
       "input_ports": [{"name": "summary", "collection": "CodeReviewVerificationSummary", "schema": "CodeReviewVerificationSummary/v1", "correlation_field": "run_id", "cardinality": "one", "required": true}],
       "output_ports": [{"name": "report", "collection": "CodeReviewTriageReport", "schema": "CodeReviewTriageReport/v1", "correlation_field": "run_id", "cardinality": "one"}]
     }

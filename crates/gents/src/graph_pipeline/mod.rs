@@ -49,11 +49,14 @@ pub use types::{
     DiagnosticCode, EntryBinding, GraphEdge, GraphIntent, GraphLimits, GraphNode, GraphPlan,
     GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedPackageArtifact,
     PlannedResult, PortCardinality, PortRef, PortSpec, RequiredSchemaDigest, ResultCardinality,
-    ResultContract, StageCapability, WorkspaceAuthority, COMPILER_VERSION,
+    ResultContract, StageCapability, StageTarget, WorkspaceAuthority, COMPILER_VERSION,
 };
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod plugin_node_tests;
 
 #[cfg(test)]
 mod logical_invocation_contract_tests;

@@ -7,7 +7,8 @@ use thiserror::Error;
 use super::types::{
     CapabilityManifestEntry, DeliveryMode, Diagnostic, DiagnosticCode, GraphIntent, GraphPlan,
     GroupCount, PackagePlan, PlannedEdge, PlannedEntry, PlannedNode, PlannedResult,
-    PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability, COMPILER_VERSION,
+    PortCardinality, PortRef, PortSpec, ResultCardinality, StageCapability, StageTarget,
+    COMPILER_VERSION,
 };
 use crate::graphql::{
     validate_collection_identifier, validate_graphql_filter_fragment, validate_graphql_name,
@@ -314,6 +315,17 @@ pub fn compile_graph(
                 format!("{node_path}/capability_id"),
                 format!(
                     "caller {caller_did:?} may not compose capability {:?}",
+                    capability.capability_id
+                ),
+            );
+        }
+        if matches!(&capability.target, StageTarget::Plugin { digest: None, .. }) {
+            diagnostic(
+                &mut diagnostics,
+                DiagnosticCode::UnpinnedPlugin,
+                format!("{node_path}/capability_id"),
+                format!(
+                    "capability {:?} runs a plugin that is not pinned to an artifact digest",
                     capability.capability_id
                 ),
             );
@@ -766,7 +778,11 @@ pub fn compile_graph(
                 node_id: node.node_id.clone(),
                 capability_id: capability.capability_id.clone(),
                 capability_revision: capability.revision.clone(),
-                task_id: capability.task_id.clone(),
+                target: capability.target.clone(),
+                output_ports: match capability.target {
+                    StageTarget::Plugin { .. } => capability.output_ports.clone(),
+                    StageTarget::Task { .. } => Vec::new(),
+                },
             }
         })
         .collect();
@@ -783,7 +799,7 @@ pub fn compile_graph(
                 from: edge.from.clone(),
                 to: edge.to.clone(),
                 source_collection: source_port.collection.clone(),
-                target_task_id: resolved[edge.to.node_id.as_str()].task_id.clone(),
+                target: resolved[edge.to.node_id.as_str()].target.clone(),
                 correlation_field: source_port.correlation_field.clone(),
                 delivery: edge.delivery.clone(),
                 concurrency: edge.concurrency.clone(),
@@ -818,7 +834,7 @@ pub fn compile_graph(
                 schema: target_port.schema.clone(),
                 input_contract: entry.input_contract.clone(),
                 to: entry.to.clone(),
-                target_task_id: target_capability.task_id.clone(),
+                target: target_capability.target.clone(),
                 correlation_field: target_port.correlation_field.clone(),
             }
         })
@@ -852,14 +868,14 @@ pub fn compile_graph(
         .map(|capability| CapabilityManifestEntry {
             capability_id: capability.capability_id.clone(),
             revision: capability.revision.clone(),
-            task_id: capability.task_id.clone(),
+            target: capability.target.clone(),
         })
         .collect();
     manifest.sort_by(|left, right| {
-        (&left.capability_id, &left.revision, &left.task_id).cmp(&(
+        (&left.capability_id, &left.revision, &left.target).cmp(&(
             &right.capability_id,
             &right.revision,
-            &right.task_id,
+            &right.target,
         ))
     });
     manifest.dedup();

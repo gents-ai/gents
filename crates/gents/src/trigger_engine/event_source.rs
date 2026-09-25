@@ -223,36 +223,46 @@ impl SourceSchemaCache {
         if let Some(fields) = guard.get(collection) {
             return Ok(fields.clone());
         }
-        let query = format!(
-            r#"query {{
-                __type(name: "{name}") {{
-                    fields {{ name }}
-                }}
-            }}"#,
-            name = collection,
-        );
-        let response = node.execute(&query).await;
+        let response = node.execute(&source_fields_query(collection)).await;
         if response.has_errors() {
             anyhow::bail!("introspect {} failed: {:?}", collection, response.errors);
         }
-        let Some(fields_arr) = response
-            .data
-            .as_ref()
-            .and_then(|d| d.get("__type"))
-            .and_then(|t| t.get("fields"))
-            .and_then(serde_json::Value::as_array)
-        else {
-            anyhow::bail!("introspection returned no fields for {}", collection);
-        };
-        let fields: Vec<String> = fields_arr
-            .iter()
-            .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
-            .filter(|name| !name.starts_with('_'))
-            .filter(|name| !is_defradb_aggregate_field(name))
-            .collect();
+        let fields = source_fields_from(response.data.as_ref(), collection)?;
         guard.insert(collection.to_string(), fields.clone());
         Ok(fields)
     }
+}
+
+/// The introspection query for a collection's own fields.
+pub(crate) fn source_fields_query(collection: &str) -> String {
+    format!(
+        r#"query {{
+            __type(name: "{collection}") {{
+                fields {{ name }}
+            }}
+        }}"#
+    )
+}
+
+/// A collection's own fields from [`source_fields_query`]'s data: no system
+/// fields and no aggregates.
+pub(crate) fn source_fields_from(
+    data: Option<&serde_json::Value>,
+    collection: &str,
+) -> anyhow::Result<Vec<String>> {
+    let Some(fields) = data
+        .and_then(|d| d.get("__type"))
+        .and_then(|t| t.get("fields"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        anyhow::bail!("introspection returned no fields for {}", collection);
+    };
+    Ok(fields
+        .iter()
+        .filter_map(|f| f.get("name").and_then(|n| n.as_str()).map(str::to_string))
+        .filter(|name| !name.starts_with('_'))
+        .filter(|name| !is_defradb_aggregate_field(name))
+        .collect())
 }
 
 fn is_defradb_aggregate_field(name: &str) -> bool {
