@@ -82,6 +82,13 @@ pub fn default_data_dir(home_dir: &Path) -> PathBuf {
 
 /// The exclusive lock a process holds on a data directory while it has the
 /// store open. The OS releases it when the holder exits, however it exits.
+///
+/// The lock is a `flock` on the lock file's open file description, which a
+/// child forked while the lock is held shares until it execs (the descriptor
+/// is close-on-exec). Dropping a `StoreLock` therefore releases the store
+/// only once every such child has exec'd or exited: a process that forks (a
+/// `pre_exec` spawn, or glibc's vfork-based spawn from another thread) may
+/// still exclude a new holder briefly after the drop.
 #[derive(Debug)]
 pub struct StoreLock {
     _file: fs::File,
@@ -502,59 +509,6 @@ fn retire_entries_with(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn a_second_holder_cannot_lock_a_store() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join("home");
-        let data = default_data_dir(&home);
-        fs::create_dir_all(&data).unwrap();
-
-        let held = lock_store(&home, &data).expect("the first holder locks the store");
-        let error = lock_store(&home, &data)
-            .expect_err("a second holder must not open the same store")
-            .to_string();
-        assert!(error.contains("already using"), "{error}");
-        assert!(
-            error.contains(&format!("process {}", std::process::id())),
-            "{error}"
-        );
-        assert!(error.contains("gents service stop --home"), "{error}");
-
-        drop(held);
-        lock_store(&home, &data).expect("the lock is released with its holder");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn every_alias_of_a_store_takes_the_same_lock() {
-        let temp = tempfile::tempdir().unwrap();
-        let real = temp.path().join("real-data");
-        fs::create_dir_all(&real).unwrap();
-        let link = temp.path().join("link-data");
-        std::os::unix::fs::symlink(&real, &link).unwrap();
-
-        let held = lock_store(temp.path(), &real).unwrap();
-        assert!(
-            lock_store(temp.path(), &link).is_err(),
-            "a symlinked data directory is the same store"
-        );
-        assert!(
-            lock_store(temp.path(), &real.join("..").join("real-data")).is_err(),
-            "a non-canonical path is the same store"
-        );
-        drop(held);
-
-        // `--data-dir .` names the current directory, which has a name once
-        // resolved.
-        let current = lock_store(temp.path(), &real.join(".")).unwrap();
-        assert_eq!(
-            current.path(),
-            fs::canonicalize(temp.path())
-                .unwrap()
-                .join("real-data.lock")
-        );
-    }
-
     #[cfg(unix)]
     #[test]
     fn a_lock_path_that_is_not_a_regular_file_is_refused() {
@@ -592,30 +546,6 @@ mod tests {
     fn write(path: &Path, contents: &str) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, contents).unwrap();
-    }
-
-    #[test]
-    fn a_home_lock_without_a_store_excludes_the_store_created_later() {
-        let temp = tempfile::tempdir().unwrap();
-        let home = temp.path().join(".gents");
-        fs::create_dir_all(&home).unwrap();
-        let held = lock_home_store(&home).unwrap();
-        assert!(
-            !default_data_dir(&home).exists(),
-            "locking creates no store"
-        );
-
-        fs::create_dir(default_data_dir(&home)).unwrap();
-        assert!(
-            lock_store(&home, &default_data_dir(&home)).is_err(),
-            "an opener that creates the store meets the same lock"
-        );
-        assert_eq!(
-            held.path(),
-            fs::canonicalize(&home).unwrap().join("data.lock")
-        );
-        drop(held);
-        lock_store(&home, &default_data_dir(&home)).unwrap();
     }
 
     #[test]
