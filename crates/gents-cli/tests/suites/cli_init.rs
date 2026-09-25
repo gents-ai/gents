@@ -194,6 +194,8 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
             r#"{{
                 Tools(filter: {{ tools_id: {{ _eq: "{}" }} }}) {{
                     tools_id
+                    self_config
+                    built_ins
                 }}
             }}"#,
             escape_graphql_string(&tools_id),
@@ -206,6 +208,22 @@ async fn init_bootstraps_backend_default_behavior_and_tools_idempotently() -> Re
             .and_then(Value::as_array)
             .map(Vec::len),
         Some(1)
+    );
+    // Plain init enables the same self-config preset as the desktop first run.
+    let tools = first_graphql_row(&tools_rows, "Tools")?;
+    let preset: Value = serde_json::from_str(gents_protocol::SETUP_SELF_CONFIG_JSON)?;
+    for (field, expected) in preset.as_object().context("preset object")? {
+        assert_eq!(
+            tools.pointer(&format!("/self_config/{field}")),
+            Some(expected),
+            "self_config.{field}"
+        );
+    }
+    assert_eq!(
+        tools
+            .pointer("/built_ins/enable_graph_tools")
+            .and_then(Value::as_bool),
+        Some(true)
     );
 
     Ok(())

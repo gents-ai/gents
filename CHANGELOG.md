@@ -14,6 +14,10 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- Plain `gents init` enables the Engineer's self-config tools and graph tools,
+  as the desktop first run does. The tool ceiling set at init still bounds what
+  they can change. `--setup-steward` now only seeds the Engineer identity, the
+  write package default and deferred inference (#1874).
 - `write_file` no longer replaces an existing file blindly: pass the
   `content_hash` from your latest read (rejected if the file changed since) or
   `overwrite: true`. Creating new files is unchanged (#1605).
