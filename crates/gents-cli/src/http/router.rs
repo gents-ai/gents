@@ -42,6 +42,9 @@ pub(crate) struct RuntimeHttpState {
     /// Lowercase `meta-only` / `readonly` / `readwrite`, matching `gents status`.
     pub(crate) tool_ceiling: String,
     pub(crate) tool_root: Option<String>,
+    /// The home this runtime serves, so a client that finds a different
+    /// runtime on its port can name it.
+    pub(crate) home: Option<String>,
     pub(crate) started_at: String,
     pub(crate) started_instant: Instant,
     pub(crate) backend_health: Option<gents::BackendHealthMap>,
@@ -121,6 +124,7 @@ pub(crate) fn runtime_contract_router(
     agent_did: String,
     tool_ceiling: String,
     tool_root: Option<String>,
+    home: Option<String>,
     // `Some(scope)` mounts the read-only `defra_query` MCP tool at `/mcp`;
     // `None` leaves it off. It is opt-in because it is an unauthenticated read
     // surface (same listener exposure as the GraphQL endpoint).
@@ -148,6 +152,7 @@ pub(crate) fn runtime_contract_router(
         agent_did,
         tool_ceiling,
         tool_root,
+        home,
         started_at: chrono::Utc::now().to_rfc3339(),
         started_instant: Instant::now(),
         backend_health,
@@ -512,6 +517,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
                 "agent_did": state.agent_did,
                 "tool_ceiling": state.tool_ceiling,
                 "tool_root": state.tool_root,
+                "home": state.home,
                 "runtime": runtime,
                 "runtimes": data.agent_runtimes,
                 "backends": data.inference_backends,
@@ -531,6 +537,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "agent_did": state.agent_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
+            "home": state.home,
             "runtime": Value::Null,
             "runtimes": [],
             "backends": [],
@@ -549,6 +556,7 @@ async fn status_handler(State(state): State<RuntimeHttpState>) -> Response {
             "agent_did": state.agent_did,
             "tool_ceiling": state.tool_ceiling,
             "tool_root": state.tool_root,
+            "home": state.home,
             "runtime": Value::Null,
             "runtimes": [],
             "backends": [],
@@ -839,6 +847,7 @@ mod tests {
             agent_did: "did:key:zAgent".to_string(),
             tool_ceiling: "readwrite".to_string(),
             tool_root: Some("/Users/test".to_string()),
+            home: None,
             started_at: "2026-06-04T00:00:00Z".to_string(),
             started_instant: Instant::now(),
             backend_health: None,

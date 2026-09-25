@@ -15,6 +15,7 @@ import {
   awaitManagedServerSettled,
   MANAGED_SERVER_BOOT_TIMEOUT_MS,
   ManagedServerStartupError,
+  managedServerWaitKind,
   nextManagedServerWait,
   observeManagedServerOperation,
   unsettledManagedServerError,
@@ -286,6 +287,76 @@ describe("managed server startup waits", () => {
       signal: abort.signal,
     });
     await expect(pending).resolves.toBe(false);
+  });
+
+  it("starts the configured agent with its stored authority once macOS allows it", async () => {
+    const statuses = [
+      managedStatus({
+        state: "stopped",
+        approvalRequired: true,
+        autoStart: true,
+        agentName: "Workshop Agent",
+      }),
+      managedStatus({ state: "stopped", autoStart: true, agentName: "Workshop Agent" }),
+    ];
+    const api = {
+      managedServerStatus: vi.fn(async () => statuses.shift() ?? managedStatus()),
+      startManagedServer: vi.fn(async () =>
+        managedStatus({ state: "running", agentName: "Workshop Agent" }),
+      ),
+    } as unknown as DesktopApiAdapter;
+
+    await expect(restoreManagedServer(api)).resolves.toBe(true);
+    expect(api.startManagedServer).toHaveBeenCalledExactlyOnceWith("Workshop Agent");
+  });
+
+  it("leaves a deliberately stopped agent stopped after macOS allows it", async () => {
+    const statuses = [
+      managedStatus({
+        state: "stopped",
+        approvalRequired: true,
+        autoStart: false,
+        agentName: "Workshop Agent",
+      }),
+      managedStatus({
+        state: "stopped",
+        autoStart: false,
+        agentName: "Workshop Agent",
+      }),
+    ];
+    const api = {
+      managedServerStatus: vi.fn(async () => statuses.shift() ?? managedStatus()),
+      startManagedServer: vi.fn(),
+    } as unknown as DesktopApiAdapter;
+
+    await expect(restoreManagedServer(api)).resolves.toBe(false);
+    expect(api.startManagedServer).not.toHaveBeenCalled();
+  });
+
+  it("reports a runtime that keeps dying during migrations instead of waiting on the update", () => {
+    const status = managedStatus({
+      state: "failed",
+      runtimeBooting: true,
+      error:
+        "The background agent keeps exiting before it becomes ready: it exited with code 78 and was restarted 2 times in a row.",
+    });
+    expect(managedServerWaitKind(status)).toBeNull();
+    expect(unsettledManagedServerError(status)?.message).toContain(
+      "exited with code 78",
+    );
+  });
+
+  it("does not wait on approval for a runtime that still serves", () => {
+    expect(
+      managedServerWaitKind(
+        managedStatus({ state: "running", approvalRequired: true }),
+      ),
+    ).toBeNull();
+    expect(
+      managedServerWaitKind(
+        managedStatus({ state: "starting", approvalRequired: true }),
+      ),
+    ).toBe("approval");
   });
 
   it("shows macOS approval guidance with a settings shortcut on the launch screen", async () => {

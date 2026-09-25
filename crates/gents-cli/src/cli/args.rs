@@ -1020,8 +1020,11 @@ pub(crate) struct ServeArgs {
     pub(crate) data_dir: Option<PathBuf>,
     #[arg(long, default_value = "127.0.0.1")]
     pub(crate) http_addr: IpAddr,
-    #[arg(long, default_value_t = crate::DEFAULT_HTTP_PORT)]
-    pub(crate) http_port: u16,
+    #[arg(
+        long,
+        help = "HTTP port. Defaults to 9191, where the desktop and CLI expect the default home's runtime"
+    )]
+    pub(crate) http_port: Option<u16>,
     #[arg(long)]
     pub(crate) agent_name: Option<String>,
     #[arg(long)]

@@ -23,7 +23,14 @@ export type ManagedServerWait = {
 export function managedServerWaitKind(
   status: ManagedServerStatus,
 ): ManagedServerWaitKind | null {
-  if (status.approvalRequired) return "approval";
+  // A serving runtime whose approval was revoked is not waited on; the
+  // agent screen reports it.
+  if (
+    status.approvalRequired &&
+    status.state !== "running" &&
+    status.state !== "external"
+  )
+    return "approval";
   if (status.state === "starting")
     return status.runtimeBooting ? "updating" : "booting";
   return null;

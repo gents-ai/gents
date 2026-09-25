@@ -17,6 +17,35 @@ pub const SERVICE_LABEL: &str = "ai.gents.runtime";
 pub const SYSTEMD_UNIT: &str = "gents-runtime.service";
 pub const BACKGROUND_APPROVAL_REQUIRED: &str = "macOS has not allowed Gents to run in the background. Approve Gents in System Settings > General > Login Items & Extensions, then start it again.";
 
+/// A start that macOS refused because the background item is not approved.
+/// Callers wait for approval and start again instead of failing. `detail` is
+/// launchd's refusal, when there was one.
+#[derive(Debug)]
+pub struct BackgroundApprovalPending {
+    pub detail: String,
+}
+
+impl std::fmt::Display for BackgroundApprovalPending {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(BACKGROUND_APPROVAL_REQUIRED)
+    }
+}
+
+impl std::error::Error for BackgroundApprovalPending {}
+
+/// macOS Background Task Management's record of the service definition
+/// (`SMAppService.statusForLegacyURL:`).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BackgroundItemStatus {
+    /// Not macOS, or this macOS has no Background Task Management API.
+    #[default]
+    Unavailable,
+    NotRegistered,
+    Enabled,
+    RequiresApproval,
+    NotFound,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeServicePlatform {
     Macos,
@@ -179,6 +208,10 @@ pub struct NativeServiceStatus {
     /// macOS Background Task Management blocks the job until the user allows
     /// it under Login Items.
     pub requires_approval: bool,
+    pub background_item: BackgroundItemStatus,
+    /// The supervisor gave up on the job: a systemd unit in its terminal
+    /// `failed` state. It is not loaded, and `last_exit` names the cause.
+    pub failed: bool,
     pub detail: Option<String>,
 }
 
@@ -187,10 +220,29 @@ impl NativeServiceStatus {
         self.job_loaded
     }
 
+    /// Whether macOS still withholds approval. After launchd refused a start
+    /// with [`BackgroundApprovalPending`], a fresh item that Background Task
+    /// Management has not registered (or cannot find) is pending too: it only
+    /// reports `RequiresApproval` or `Enabled` once the user acts on it.
+    pub fn approval_pending(&self, start_refused: bool) -> bool {
+        self.requires_approval
+            || (start_refused
+                && !self.job_loaded
+                && matches!(
+                    self.background_item,
+                    BackgroundItemStatus::NotRegistered | BackgroundItemStatus::NotFound
+                ))
+    }
+
     pub fn summary(&self) -> String {
         format!(
-            "installed={} running={} job_loaded={} enabled={} requires_approval={} (native service state only; runtime health is not checked)",
-            self.installed, self.running, self.job_loaded, self.enabled, self.requires_approval
+            "installed={} running={} job_loaded={} enabled={} requires_approval={} failed={} (native service state only; runtime health is not checked)",
+            self.installed,
+            self.running,
+            self.job_loaded,
+            self.enabled,
+            self.requires_approval,
+            self.failed
         )
     }
 }
@@ -205,8 +257,8 @@ pub struct CommandOutput {
 pub trait CommandRunner {
     fn run(&self, program: &OsStr, args: &[OsString]) -> Result<CommandOutput>;
 
-    fn background_approval_required(&self, _definition: &Path) -> bool {
-        false
+    fn background_item_status(&self, _definition: &Path) -> BackgroundItemStatus {
+        BackgroundItemStatus::Unavailable
     }
 }
 
@@ -271,8 +323,8 @@ impl CommandRunner for ProcessCommandRunner {
     }
 
     #[cfg(target_os = "macos")]
-    fn background_approval_required(&self, definition: &Path) -> bool {
-        macos_background::requires_approval(definition)
+    fn background_item_status(&self, definition: &Path) -> BackgroundItemStatus {
+        macos_background::item_status(definition)
     }
 }
 
@@ -294,6 +346,7 @@ pub fn open_background_approval_settings() -> Result<()> {
 mod macos_background {
     use std::path::Path;
 
+    use super::BackgroundItemStatus;
     use objc2::rc::autoreleasepool;
     use objc2::runtime::{AnyClass, Bool};
     use objc2::{msg_send, sel};
@@ -301,8 +354,6 @@ mod macos_background {
 
     #[link(name = "ServiceManagement", kind = "framework")]
     extern "C" {}
-
-    const SM_APP_SERVICE_STATUS_REQUIRES_APPROVAL: isize = 2;
 
     fn service_class() -> Option<&'static AnyClass> {
         AnyClass::get(c"SMAppService")
@@ -313,18 +364,25 @@ mod macos_background {
         responds.as_bool()
     }
 
-    pub(super) fn requires_approval(definition: &Path) -> bool {
+    pub(super) fn item_status(definition: &Path) -> BackgroundItemStatus {
         let Some(class) = service_class() else {
-            return false;
+            return BackgroundItemStatus::Unavailable;
         };
         if !responds(class, sel!(statusForLegacyURL:)) {
-            return false;
+            return BackgroundItemStatus::Unavailable;
         }
         autoreleasepool(|_| {
             let path = NSString::from_str(&definition.to_string_lossy());
             let url = NSURL::fileURLWithPath(&path);
             let status: isize = unsafe { msg_send![class, statusForLegacyURL: &*url] };
-            status == SM_APP_SERVICE_STATUS_REQUIRES_APPROVAL
+            // SMAppServiceStatus values.
+            match status {
+                0 => BackgroundItemStatus::NotRegistered,
+                1 => BackgroundItemStatus::Enabled,
+                2 => BackgroundItemStatus::RequiresApproval,
+                3 => BackgroundItemStatus::NotFound,
+                _ => BackgroundItemStatus::Unavailable,
+            }
         })
     }
 
@@ -454,11 +512,12 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         self.require_installed()?;
         self.prepare_stderr_log()?;
         if self.platform == NativeServicePlatform::Macos
-            && self
-                .runner
-                .background_approval_required(&self.config.definition_path(self.platform))
+            && self.background_item() == BackgroundItemStatus::RequiresApproval
         {
-            bail!(BACKGROUND_APPROVAL_REQUIRED);
+            return Err(BackgroundApprovalPending {
+                detail: "Background Task Management requires approval".to_string(),
+            }
+            .into());
         }
         let was_enabled = self.status()?.enabled;
         if enable_at_login {
@@ -487,6 +546,21 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                         &["kickstart".into(), target.into()],
                     )?;
                     if !kick.success {
+                        // Only an item Background Task Management has not
+                        // registered can become approved later; the same rule
+                        // as `approval_pending`, so the wait can observe it.
+                        if launchd_refused_bootstrap(&bootstrap)
+                            && matches!(
+                                self.background_item(),
+                                BackgroundItemStatus::NotRegistered
+                                    | BackgroundItemStatus::NotFound
+                            )
+                        {
+                            return Err(BackgroundApprovalPending {
+                                detail: output_detail(&bootstrap),
+                            }
+                            .into());
+                        }
                         bail!(
                             "launchctl could not start Gents: {} (bootstrap: {})",
                             output_detail(&kick),
@@ -513,6 +587,12 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             }
             NativeServicePlatform::Linux => {
                 self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
+                // A unit that hit its start limit refuses `start` until its
+                // failed state is cleared. A unit that is not failed ignores this.
+                self.run_allow_failure(
+                    "systemctl",
+                    &["--user".into(), "reset-failed".into(), SYSTEMD_UNIT.into()],
+                )?;
                 self.run_checked(
                     "systemctl",
                     &["--user".into(), "start".into(), SYSTEMD_UNIT.into()],
@@ -543,6 +623,12 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     &["--user".into(), "stop".into(), SYSTEMD_UNIT.into()],
                 )?;
                 self.wait_unloaded_or_inactive()?;
+                // A unit that ends `failed` because of this stop was stopped
+                // on purpose; clear it so status does not report a crash.
+                self.run_allow_failure(
+                    "systemctl",
+                    &["--user".into(), "reset-failed".into(), SYSTEMD_UNIT.into()],
+                )?;
             }
         }
         if disable_at_login && self.config.definition_path(self.platform).exists() {
@@ -580,6 +666,8 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                 job_loaded: false,
                 enabled: false,
                 requires_approval: false,
+                background_item: BackgroundItemStatus::Unavailable,
+                failed: false,
                 detail: None,
             });
         }
@@ -604,14 +692,15 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     );
                 }
                 let explicitly_disabled = launchd_is_disabled(&disabled.stdout)?;
+                let background_item = self.background_item();
                 Ok(NativeServiceStatus {
                     installed,
                     running: print.success && launchd_is_running(&print.stdout),
                     job_loaded: print.success,
                     enabled: !explicitly_disabled,
-                    requires_approval: self
-                        .runner
-                        .background_approval_required(&self.config.definition_path(self.platform)),
+                    requires_approval: background_item == BackgroundItemStatus::RequiresApproval,
+                    background_item,
+                    failed: false,
                     detail: Some(output_detail(&print)),
                 })
             }
@@ -659,14 +748,16 @@ impl<R: CommandRunner> NativeServiceManager<R> {
                     ),
                     enabled: enabled.success && enabled.stdout == "enabled",
                     requires_approval: false,
+                    background_item: BackgroundItemStatus::Unavailable,
+                    failed: active.stdout == "failed",
                     detail: Some(output_detail(&active)),
                 })
             }
         }
     }
 
-    /// Why a loaded job is not running: the supervisor's record of its last
-    /// exit. `None` while the process runs or has never exited.
+    /// Why a loaded or failed job is not running: the supervisor's record of
+    /// its last exit. `None` while the process runs or has never exited.
     pub fn last_exit(&self) -> Result<Option<ServiceExit>> {
         if !self.config.definition_path(self.platform).is_file() {
             return Ok(None);
@@ -863,6 +954,11 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             .trim()
             .parse()
             .context("parsing current user id")
+    }
+
+    fn background_item(&self) -> BackgroundItemStatus {
+        self.runner
+            .background_item_status(&self.config.definition_path(self.platform))
     }
 
     fn set_macos_enabled(&self, enabled: bool) -> Result<()> {
@@ -1287,6 +1383,16 @@ fn systemd_exit_failure(output: &str) -> Option<ServiceExit> {
         restarts: field("NRestarts").parse().unwrap_or_default(),
         clean: false,
     })
+}
+
+/// launchd answers `bootstrap` of a background item that Background Task
+/// Management withholds with error 5 (EIO). An already loaded job fails the
+/// same way, so callers also require the job to be absent.
+fn launchd_refused_bootstrap(output: &CommandOutput) -> bool {
+    !output.success
+        && [&output.stderr, &output.stdout]
+            .iter()
+            .any(|text| text.contains("Bootstrap failed: 5:"))
 }
 
 fn launchd_is_disabled(output: &str) -> Result<bool> {
@@ -1720,8 +1826,9 @@ mod tests {
         fs::create_dir_all(&config.home).unwrap();
         fs::write(config.home.join("keep"), b"durable").unwrap();
         let runner = QueueRunner {
-            // install reload+disable, status active+enabled, stop+inactive,
-            // uninstall stop+inactive+disable+reload
+            // install reload+disable, status active+enabled,
+            // stop+inactive+reset-failed,
+            // uninstall stop+inactive+reset-failed+disable+reload
             outputs: Mutex::new(vec![
                 output(true, ""),
                 output(true, ""),
@@ -1730,7 +1837,9 @@ mod tests {
                 output(true, ""),
                 output(false, "inactive"),
                 output(true, ""),
+                output(true, ""),
                 output(false, "inactive"),
+                output(true, ""),
                 output(true, ""),
                 output(true, ""),
             ]),
@@ -1906,8 +2015,8 @@ mod tests {
             Ok(self.0.lock().unwrap().remove(0))
         }
 
-        fn background_approval_required(&self, _: &Path) -> bool {
-            true
+        fn background_item_status(&self, _: &Path) -> BackgroundItemStatus {
+            BackgroundItemStatus::RequiresApproval
         }
     }
 
@@ -2023,9 +2132,141 @@ mod tests {
         assert!(status.requires_approval);
         assert!(!status.job_loaded);
 
-        let error = manager.start(false).unwrap_err().to_string();
-        assert_eq!(error, BACKGROUND_APPROVAL_REQUIRED);
+        let error = manager.start(false).unwrap_err();
+        assert!(error.is::<BackgroundApprovalPending>());
+        assert_eq!(error.to_string(), BACKGROUND_APPROVAL_REQUIRED);
         assert!(manager.runner.0.lock().unwrap().is_empty());
+    }
+
+    struct ItemStatusRunner {
+        outputs: Mutex<Vec<CommandOutput>>,
+        item: BackgroundItemStatus,
+    }
+
+    impl CommandRunner for ItemStatusRunner {
+        fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
+            Ok(self.outputs.lock().unwrap().remove(0))
+        }
+
+        fn background_item_status(&self, _: &Path) -> BackgroundItemStatus {
+            self.item
+        }
+    }
+
+    fn refused_bootstrap_start(item: BackgroundItemStatus) -> anyhow::Error {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Macos),
+            render_launchd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Macos,
+            ItemStatusRunner {
+                outputs: Mutex::new(vec![
+                    command_output(true, "501", ""),
+                    command_output(false, "", "Could not find service"),
+                    command_output(true, "501", ""),
+                    command_output(true, "", ""),
+                    command_output(true, "501", ""),
+                    command_output(true, "501", ""),
+                    command_output(false, "", "Bootstrap failed: 5: Input/output error"),
+                    command_output(false, "", "Could not find service"),
+                ]),
+                item,
+            },
+        );
+        manager.start(false).unwrap_err()
+    }
+
+    #[test]
+    fn a_refused_bootstrap_of_an_unapproved_item_is_pending_approval() {
+        for item in [
+            BackgroundItemStatus::NotRegistered,
+            BackgroundItemStatus::NotFound,
+        ] {
+            let error = refused_bootstrap_start(item);
+            assert!(error.is::<BackgroundApprovalPending>(), "{item:?}: {error}");
+        }
+        for item in [
+            BackgroundItemStatus::Enabled,
+            BackgroundItemStatus::Unavailable,
+        ] {
+            let error = refused_bootstrap_start(item);
+            assert!(!error.is::<BackgroundApprovalPending>(), "{item:?}");
+            assert!(error.to_string().contains("Bootstrap failed: 5"), "{error}");
+        }
+        let pending = refused_bootstrap_start(BackgroundItemStatus::NotFound)
+            .downcast::<BackgroundApprovalPending>()
+            .unwrap();
+        assert!(pending.detail.contains("Input/output error"));
+    }
+
+    #[test]
+    fn an_unregistered_item_is_pending_only_after_a_refused_start() {
+        let status = NativeServiceStatus {
+            installed: true,
+            running: false,
+            job_loaded: false,
+            enabled: true,
+            requires_approval: false,
+            background_item: BackgroundItemStatus::NotRegistered,
+            failed: false,
+            detail: None,
+        };
+        assert!(!status.approval_pending(false), "a fresh install may start");
+        assert!(status.approval_pending(true));
+        let approved = NativeServiceStatus {
+            background_item: BackgroundItemStatus::Enabled,
+            ..status.clone()
+        };
+        assert!(!approved.approval_pending(true));
+        let loaded = NativeServiceStatus {
+            job_loaded: true,
+            ..status
+        };
+        assert!(!loaded.approval_pending(true));
+    }
+
+    #[test]
+    fn linux_terminal_failure_is_reported_with_its_exit_cause() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        fs::write(
+            config.definition_path(NativeServicePlatform::Linux),
+            render_systemd(&config).unwrap(),
+        )
+        .unwrap();
+        let manager = NativeServiceManager::with_runner(
+            config,
+            NativeServicePlatform::Linux,
+            OrderedRunner(Mutex::new(vec![
+                command_output(false, "failed", ""),
+                command_output(true, "enabled", ""),
+                command_output(
+                    true,
+                    "ActiveState=failed\nSubState=failed\nResult=exit-code\nExecMainStatus=1\nNRestarts=5",
+                    "",
+                ),
+            ])),
+        );
+        let status = manager.status().unwrap();
+        assert!(status.failed);
+        assert!(!status.job_loaded, "a failed unit is not loaded");
+        assert_eq!(
+            manager.last_exit().unwrap(),
+            Some(ServiceExit {
+                reason: "exit-code (exit status 1)".into(),
+                restarts: 5,
+                clean: false,
+            })
+        );
     }
 
     #[test]

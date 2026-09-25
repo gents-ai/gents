@@ -73,15 +73,21 @@ pub(crate) async fn init(mut args: InitArgs) -> Result<()> {
         eprintln!("{YOLO_WARNING}");
     }
     crate::interactive_backend::resolve_backend_interactively(&mut args).await?;
-    if args.dangerously_overwrite {
-        dangerously_overwrite_home(&home_dir)?;
-    }
     let data_dir = args
         .data_dir
         .clone()
         .unwrap_or_else(|| default_data_dir(&home_dir));
+    if args.dangerously_overwrite {
+        // Refuse to wipe a home whose store a runtime has open. The lock file
+        // goes with the home, so it is taken again below.
+        if data_dir.is_dir() {
+            drop(gents::home::lock_store(&home_dir, &data_dir)?);
+        }
+        dangerously_overwrite_home(&home_dir)?;
+    }
     fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating data directory {}", data_dir.display()))?;
+    let _store_lock = gents::home::lock_store(&home_dir, &data_dir)?;
 
     if args.identity_only {
         if args.identity_backend != IdentityBackendArg::File && args.key_path.is_some() {

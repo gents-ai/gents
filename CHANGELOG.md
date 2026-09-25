@@ -74,6 +74,20 @@ every runtime you pair with to 0.19.0 together.
 - On macOS, desktop startup detects that Gents still needs approval under
   Login Items & Extensions, explains what to allow, offers a button that opens
   that settings pane, and continues once Gents is allowed (#1608).
+- Desktop status reports a background agent that exits a few seconds into
+  boot as failed, with its exit reason, instead of waiting five minutes. On
+  Linux, a unit systemd gave up on is reported with its exit cause, and Start
+  clears its failed state (#1745).
+- Two runtimes can no longer open one store: `gents server` and `gents init`
+  hold an exclusive lock beside the data directory (`data.lock`). When another agent serves port 9191,
+  setup, startup, Stop and Restart name its DID and home and say how to stop
+  or move it; Stop and Restart of the desktop's own agent are never blocked by
+  it. `gents server` for a non-default home warns when it takes port 9191
+  without `--http-port` (#1746).
+- On macOS, a start that launchd refuses before Gents is approved waits for
+  approval and retries instead of failing. Approval revoked while the agent
+  runs is shown on the agent screen, and after approval at launch the desktop
+  starts an agent that is enabled at login with its reviewed access (#1748).
 - Claude sign-in no longer discards a completed login when the runtime is not
   serving (#1614).
 - "New Behaviour" is no longer stored before you save it (#1610). The code
@@ -94,10 +108,6 @@ every runtime you pair with to 0.19.0 together.
 
 ### Known issues
 
-- The desktop's local agent listens on port 9191. If another `gents server`
-  already uses that port, setup stops with "port 9191 does not advertise the
-  initialized Gents identity". Stop that server or move it to another port
-  before setting up the desktop.
 - A desktop build that isn't signed with the release identity can sit on
   "Starting the secure client…" instead of reporting that it can't read its
   keychain identity (#1739). Install the published release.

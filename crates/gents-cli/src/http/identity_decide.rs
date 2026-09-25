@@ -319,6 +319,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             crate::http::enrollment::empty_issuer_handle(),
             crate::http::enrollment::empty_decision_service_handle(),
             activation_runtime,
