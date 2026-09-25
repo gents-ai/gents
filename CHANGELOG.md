@@ -6,6 +6,12 @@ source consistency checks, not a separate runtime compatibility version.
 
 ## Unreleased
 
+### Breaking
+
+- `gents subagent list` JSON: `state` replaced by `edge_state` (null on
+  root/forest rows) and `request_lifecycle_state`; table column `STATE` →
+  `EDGE_STATE`/`REQUEST_STATE` (#1783).
+
 ### Changed
 
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
