@@ -595,8 +595,8 @@ impl ToolCallLifecycle {
 
     /// True once `deadline_at` has passed (inclusive) relative to `now`. Single
     /// owner for the deadline-expiry check shared by the parent-deadline sweep
-    /// (`hook.rs::timeout_expired_tool_calls`) and the held-approval sweep
-    /// (`hook/persistence/approval.rs::drive_held_tool_call`).
+    /// (`hook.rs::timeout_expired_tool_calls`) and the `wait_process` deadline
+    /// check (`hook/persistence/background_tools.rs::persist_wait_tool_call`).
     /// Sweep eligibility is inclusive; fresh output admission instead follows
     /// `ToolExecution.ToolCallContext.deadlineExceeded` (`now > deadline`).
     /// At equality, output is admissible only until the sweep terminalizes the row.
