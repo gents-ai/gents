@@ -33,6 +33,9 @@ source consistency checks, not a separate runtime compatibility version.
   with the same arguments and error. The next identical call returns a notice
   instead of running, and repeating it again ends the request with a
   `repeated_tool_failure` reason instead of spinning to the turn cap (#1734).
+- Truncated tool output no longer drops an oversized line that follows a short
+  one: the model sees as much of that line as fits (its start, or its end for
+  shell output), and the notice says how many of its bytes are shown (#1726).
 
 ## 0.19.0 - 2026-09-24
 

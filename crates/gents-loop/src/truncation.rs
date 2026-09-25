@@ -111,15 +111,27 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
         TruncationMode::Head => {
             let mut result = String::new();
             let mut line_count = 0;
+            let mut partial = None;
 
             for line in &lines {
                 if line_count >= limits.max_lines {
                     break;
                 }
+                let separator = usize::from(line_count > 0);
                 if result.len() + line.len() + 1 > limits.max_bytes {
+                    let available = limits
+                        .max_bytes
+                        .saturating_sub(result.len() + separator)
+                        .min(line.len());
+                    let end = floor_char_boundary(line, available);
+                    if line_count > 0 && end > 0 && line.len() > limits.max_bytes {
+                        result.push('\n');
+                        result.push_str(&line[..end]);
+                        partial = Some((end, line.len()));
+                    }
                     break;
                 }
-                if !result.is_empty() {
+                if line_count > 0 {
                     result.push('\n');
                 }
                 result.push_str(line);
@@ -143,13 +155,22 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
             }
 
             let returned_bytes = result.len();
-            (
-                format!(
-                    "{}\n\n[Showing lines 1-{} of {} ({} bytes total)]",
-                    result, line_count, original_lines, original_bytes,
+            let notice = match partial {
+                Some((shown, line_bytes)) => format!(
+                    "[Showing lines 1-{} and the first {} of {} bytes of line {} of {} ({} bytes total)]",
+                    line_count,
+                    shown,
+                    line_bytes,
+                    line_count + 1,
+                    original_lines,
+                    original_bytes,
                 ),
-                returned_bytes,
-            )
+                None => format!(
+                    "[Showing lines 1-{} of {} ({} bytes total)]",
+                    line_count, original_lines, original_bytes,
+                ),
+            };
+            (format!("{}\n\n{}", result, notice), returned_bytes)
         }
         TruncationMode::Tail => {
             let start_line = if exceeds_lines {
@@ -160,17 +181,28 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
 
             let mut result = String::new();
             let mut included = 0;
+            let mut partial = None;
 
             for line in lines[start_line..].iter().rev() {
+                let separator = usize::from(included > 0);
                 if result.len() + line.len() + 1 > limits.max_bytes {
+                    let available = limits
+                        .max_bytes
+                        .saturating_sub(result.len() + separator)
+                        .min(line.len());
+                    let start = ceil_char_boundary(line, line.len() - available);
+                    if included > 0 && start < line.len() && line.len() > limits.max_bytes {
+                        result = format!("{}\n{}", &line[start..], result);
+                        partial = Some((line.len() - start, line.len()));
+                    }
                     break;
                 }
-                included += 1;
-                if result.is_empty() {
+                if included == 0 {
                     result = line.to_string();
                 } else {
                     result = format!("{}\n{}", line, result);
                 }
+                included += 1;
             }
 
             if included == 0 && exceeds_bytes && limits.max_lines > 0 {
@@ -194,13 +226,23 @@ pub fn truncate(text: &str, mode: TruncationMode, limits: &TruncationLimits) -> 
 
             let returned_bytes = result.len();
             let shown_start = original_lines - included + 1;
-            (
-                format!(
-                    "[Showing lines {}-{} of {} ({} bytes total)]\n\n{}",
-                    shown_start, original_lines, original_lines, original_bytes, result,
+            let notice = match partial {
+                Some((shown, line_bytes)) => format!(
+                    "[Showing last {} of {} bytes of line {} and lines {}-{} of {} ({} bytes total)]",
+                    shown,
+                    line_bytes,
+                    shown_start - 1,
+                    shown_start,
+                    original_lines,
+                    original_lines,
+                    original_bytes,
                 ),
-                returned_bytes,
-            )
+                None => format!(
+                    "[Showing lines {}-{} of {} ({} bytes total)]",
+                    shown_start, original_lines, original_lines, original_bytes,
+                ),
+            };
+            (format!("{}\n\n{}", notice, result), returned_bytes)
         }
     };
 
@@ -411,6 +453,137 @@ mod tests {
         let tail = truncate(&text, TruncationMode::Tail, &limits);
         assert_eq!(tail.returned_bytes, 4);
         assert!(tail.text.ends_with("[Showing last 4 of 20 bytes]\n\néé"));
+    }
+
+    fn results_then_one_large_json_line() -> String {
+        let payload = format!("{{\"items\":[{}]}}", vec!["\"v\""; 20_000].join(","));
+        format!("Results:\n{payload}")
+    }
+
+    #[test]
+    fn short_line_before_oversized_line_keeps_the_payload_head() {
+        let text = results_then_one_large_json_line();
+        let limits = TruncationLimits::default();
+        let head = truncate(&text, TruncationMode::Head, &limits);
+        let payload_bytes = text.len() - "Results:\n".len();
+        let shown = limits.max_bytes - "Results:\n".len();
+        assert!(head.truncated);
+        assert_eq!(head.returned_bytes, limits.max_bytes);
+        assert!(text.starts_with(&head.text[..head.returned_bytes]));
+        assert!(head.text.starts_with("Results:\n{\"items\":[\"v\""));
+        assert!(
+            head.text.ends_with(&format!(
+                "\n\n[Showing lines 1-1 and the first {shown} of {payload_bytes} bytes of line 2 of 2 ({} bytes total)]",
+                text.len()
+            )),
+            "{}",
+            &head.text[head.returned_bytes..]
+        );
+    }
+
+    #[test]
+    fn oversized_line_before_short_line_keeps_the_payload_tail() {
+        let payload = format!("{{\"items\":[{}]}}", vec!["\"v\""; 20_000].join(","));
+        let text = format!("{payload}\nexit status 1");
+        let limits = TruncationLimits::default();
+        let tail = truncate(&text, TruncationMode::Tail, &limits);
+        let shown = limits.max_bytes - "\nexit status 1".len();
+        assert!(tail.truncated);
+        assert_eq!(tail.returned_bytes, limits.max_bytes);
+        assert!(text.ends_with(&tail.text[tail.text.len() - tail.returned_bytes..]));
+        assert!(tail.text.ends_with("\"v\"]}\nexit status 1"));
+        assert!(
+            tail.text.starts_with(&format!(
+                "[Showing last {shown} of {} bytes of line 1 and lines 2-2 of 2 ({} bytes total)]\n\n",
+                payload.len(),
+                text.len()
+            )),
+            "{}",
+            &tail.text[..200]
+        );
+    }
+
+    #[test]
+    fn partial_crossing_line_respects_utf8_boundaries() {
+        let limits = TruncationLimits {
+            max_lines: 10,
+            max_bytes: 8,
+        };
+        // "ok\n" is 3 bytes; 5 remain, which splits the third "é".
+        let head = truncate(
+            &format!("ok\n{}", "é".repeat(10)),
+            TruncationMode::Head,
+            &limits,
+        );
+        assert_eq!(head.returned_bytes, 7);
+        assert!(head.text.starts_with(
+            "ok\néé\n\n[Showing lines 1-1 and the first 4 of 20 bytes of line 2 of 2"
+        ));
+
+        let tail = truncate(
+            &format!("{}\nok", "é".repeat(10)),
+            TruncationMode::Tail,
+            &limits,
+        );
+        assert_eq!(tail.returned_bytes, 7);
+        assert!(tail
+            .text
+            .starts_with("[Showing last 4 of 20 bytes of line 1 and lines 2-2 of 2"));
+        assert!(tail.text.ends_with("\n\néé\nok"));
+    }
+
+    #[test]
+    fn exhausted_line_budget_does_not_add_a_partial_line() {
+        let limits = TruncationLimits {
+            max_lines: 1,
+            max_bytes: 10,
+        };
+        let head = truncate("ok\nabcdefghijklmnop", TruncationMode::Head, &limits);
+        assert!(
+            head.text.starts_with("ok\n\n[Showing lines 1-1 of 2"),
+            "{}",
+            head.text
+        );
+        assert_eq!(head.returned_bytes, 2);
+    }
+
+    #[test]
+    fn empty_leading_line_keeps_a_contiguous_prefix() {
+        let limits = TruncationLimits {
+            max_lines: 10,
+            max_bytes: 5,
+        };
+        let text = "\nabcdefgh";
+        let head = truncate(text, TruncationMode::Head, &limits);
+        assert!(text.starts_with(&head.text[..head.returned_bytes]));
+        assert_eq!(&head.text[..head.returned_bytes], "\nabcd");
+    }
+
+    #[test]
+    fn partial_line_notices_carry_a_notice_prefix() {
+        let text = results_then_one_large_json_line();
+        for mode in [TruncationMode::Head, TruncationMode::Tail] {
+            let result = truncate(&text, mode, &TruncationLimits::default());
+            assert!(TRUNCATION_NOTICE_PREFIXES
+                .iter()
+                .any(|prefix| result.text.contains(prefix)));
+        }
+    }
+
+    #[test]
+    fn a_crossing_line_that_fits_the_budget_is_not_cut() {
+        let limits = TruncationLimits {
+            max_lines: 10,
+            max_bytes: 12,
+        };
+        for mode in [TruncationMode::Head, TruncationMode::Tail] {
+            let result = truncate("L1: alpha\nL2: beta\nL3: gamma", mode, &limits);
+            assert!(
+                !result.text.contains("bytes of line"),
+                "{mode:?}: {}",
+                result.text
+            );
+        }
     }
 
     #[test]
