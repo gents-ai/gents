@@ -399,6 +399,14 @@ async fn async_main() -> Result<()> {
         }
         command => command,
     };
+    if let Command::Eval { command } = &command {
+        if let Some(message) = commands::eval::usage_error(command) {
+            use clap::CommandFactory;
+            Cli::command()
+                .error(clap::error::ErrorKind::ArgumentConflict, message)
+                .exit();
+        }
+    }
 
     let telemetry = telemetry::init(DEFAULT_LOG_FILTER)?;
     let result = match command {
@@ -441,6 +449,8 @@ async fn async_main() -> Result<()> {
         Command::Chain { command } => commands::chain::dispatch(command).await,
         Command::Mailbox { command } => commands::mailbox::dispatch(command).await,
         Command::Subagent { command } => commands::subagent::dispatch(command).await,
+        Command::Eval { command } => commands::eval::dispatch(command).await,
+        Command::Optimization { command } => commands::optimization::dispatch(command).await,
         Command::NativeFsRunner(_) => unreachable!("handled before telemetry initialization"),
     };
     telemetry.shutdown();

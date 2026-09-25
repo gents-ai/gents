@@ -204,6 +204,14 @@ def featureSurfaceRequirements : List FeatureSurfaceRequirement :=
     , required := [Surface.operatorCli]
     , deferred := [(Surface.operatorUi, "#281")]
     }
+  , { feature := "eval"
+    , required := [Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#1515")]
+    }
+  , { feature := "optimization"
+    , required := [Surface.operatorCli]
+    , deferred := [(Surface.operatorUi, "#1455")]
+    }
   , { feature := "event-delivery"
     , required := [Surface.runtimeInternal]
     , deferred := []
@@ -416,6 +424,21 @@ def vocabularyCoverage : List CoverageEntry :=
       "MailboxSourceKind"
       "conformance::mailbox::rust_mailbox_vocabularies_and_machine_match_lean_contract")
       "mailbox" allSurfaces
+  , tagged (consumerCoverage
+      "vocabulary"
+      "EvalOutcomeKind"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "EvalProviderReason"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "EvalEvidenceClass"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
   ]
 
 def stateMachineCoverage : List CoverageEntry :=
@@ -718,6 +741,21 @@ def caseCoverage : List CoverageEntry :=
       "ApplyReconcileCases"
       "Regenerate the atomic-publication witnesses and bind them to the common config transaction owner. Rows invoke ApplyReconcile.publish directly; the old per-write Rust adapter does not implement this contract.")
       "apply-reconcile" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "publish_if_cases"
+      "PublishIfCases"
+      "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases")
+      "apply-reconcile" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "eval_outcome_cases"
+      "EvalOutcomeCases"
+      "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean")
+      "eval" [Surface.operatorCli]
+  , tagged (consumerCoverage
+      "optimization_cases"
+      "OptimizationCases"
+      "optimization::policy::tests::gates_costs_and_decisions_match_lean")
+      "optimization" [Surface.operatorCli]
   , tagged (consumerCoverage
       "tool_policy_cases"
       "ToolPolicyCases"

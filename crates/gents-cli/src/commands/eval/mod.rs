@@ -1,0 +1,645 @@
+//! `gents eval`: thin commands over `gents::eval`. Each resolves the
+//! launching home the way the other commands do, calls one library function,
+//! and writes a table or, with `--json`, the library's own structure.
+//!
+//! Refusals the library returns are re-raised with exactly their text
+//! ([`surface_refusal`]); `main` prints them and exits 1. Clap exits 2 on a
+//! usage error.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
+use gents::eval::checks::CheckRegistry;
+use gents::eval::runner::embedded::EmbeddedExecutor;
+use gents::eval::runner::{RunOptions, TrialExecutor};
+use gents::ConfigAccess;
+use serde::Serialize;
+use tokio_util::sync::CancellationToken;
+
+use crate::cli::{EvalCommand, EvalScopeArgs};
+
+/// The launching home a command acts for.
+pub(crate) struct EvalContext {
+    pub(crate) access: ConfigAccess,
+    pub(crate) home_dir: PathBuf,
+    /// The home's identity: owner of the runs it launches, and `by` on what
+    /// it invalidates.
+    pub(crate) owner: String,
+}
+
+impl EvalContext {
+    pub(crate) async fn resolve(scope: &EvalScopeArgs) -> Result<Self> {
+        let (access, home_dir) =
+            crate::resolve_config_access(scope.home.as_deref(), scope.graphql.as_deref()).await?;
+        let owner = crate::resolve_agent_did(Some(&home_dir), None)?;
+        Ok(Self {
+            access,
+            home_dir,
+            owner,
+        })
+    }
+
+    pub(crate) fn runs_dir(&self) -> PathBuf {
+        runs_dir(&self.home_dir)
+    }
+
+    /// `<home>/eval/jobs`: each job owns `<jobs_dir>/<job_id>/`.
+    pub(crate) fn jobs_dir(&self) -> PathBuf {
+        self.home_dir.join(gents::home::EVAL_DIR_NAME).join("jobs")
+    }
+}
+
+/// `<home>/eval/runs`, where the runner freezes every run.
+pub(crate) fn runs_dir(home_dir: &Path) -> PathBuf {
+    home_dir.join(gents::home::EVAL_DIR_NAME).join("runs")
+}
+
+/// What a command body runs trials with. `dispatch` supplies the embedded
+/// executor; tests supply a scripted one.
+pub(crate) struct Deps<'a> {
+    pub(crate) executor: &'a dyn TrialExecutor,
+    pub(crate) registry: &'a CheckRegistry,
+    pub(crate) cancel: CancellationToken,
+    pub(crate) options: RunOptions,
+}
+
+/// A usage error visible from argv alone that a value parser cannot see
+/// (it spans several flags). `async_main` raises it as a clap error, exit 2,
+/// before anything is read.
+pub(crate) fn usage_error(command: &EvalCommand) -> Option<String> {
+    match command {
+        EvalCommand::Run(args) => run::profiles_by_cell(args).err(),
+        _ => None,
+    }
+}
+
+pub(crate) async fn dispatch(command: EvalCommand) -> Result<()> {
+    if let EvalCommand::Cancel(args) = &command {
+        return cancel_without_context(args).await.map_err(surface_refusal);
+    }
+    if let EvalCommand::Watch(args) = &command {
+        return watch_while_held(args).await.map_err(surface_refusal);
+    }
+    // The catalog is the binary's own registry: no home, no node, no DID, so
+    // it answers while a run holds the store.
+    if let EvalCommand::Checks(args) = &command {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        return checks::checks(&CheckRegistry::builtin(), args, &mut out);
+    }
+    // The interview needs a terminal and a served home; both are checked
+    // before the home is opened.
+    if let EvalCommand::Init(args) = &command {
+        init::preflight(args).await?;
+    }
+    let ctx = EvalContext::resolve(command.scope()).await?;
+    let executor = EmbeddedExecutor::new(gents::DocumentRuntimeOptions::default(), ctx.runs_dir());
+    let registry = CheckRegistry::builtin();
+    // Only a command that hosts a loop replaces the default interrupt: a
+    // read-only command stays killable by Ctrl-C.
+    let cancel = if matches!(command, EvalCommand::Run(_) | EvalCommand::Resume(_)) {
+        cancel_on_ctrl_c(
+            "interrupt: the run stops launching; resume it to continue, or interrupt again to exit now",
+        )
+    } else {
+        CancellationToken::new()
+    };
+    let deps = Deps {
+        executor: &executor,
+        registry: &registry,
+        cancel,
+        options: RunOptions::default(),
+    };
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    execute(&ctx, command, &deps, &mut out).await
+}
+
+pub(crate) async fn execute(
+    ctx: &EvalContext,
+    command: EvalCommand,
+    deps: &Deps<'_>,
+    out: &mut dyn Write,
+) -> Result<()> {
+    let result = match command {
+        EvalCommand::Run(args) => run::run(ctx, &args, deps, out).await,
+        EvalCommand::Resume(args) => run::resume(ctx, &args, deps, out).await,
+        EvalCommand::List(args) => inspect::list(ctx, &args, out).await,
+        EvalCommand::Show(args) => inspect::show(ctx, &args, out).await,
+        EvalCommand::Trial(args) => inspect::trial(ctx, &args, out).await,
+        EvalCommand::Compare(args) => compare::compare(ctx, &args, out).await,
+        EvalCommand::Cancel(args) => manage::cancel_run(ctx, &args, out).await,
+        EvalCommand::Invalidate(args) => manage::invalidate(ctx, &args, out).await,
+        EvalCommand::Rm(args) => manage::rm(ctx, &args, out).await,
+        EvalCommand::Watch(args) => {
+            watch::watch(
+                &ctx.runs_dir(),
+                &args,
+                || async { Ok(watch::Documents::Open(ctx)) },
+                out,
+            )
+            .await
+        }
+        EvalCommand::Gc(args) => manage::gc(ctx, &args, out).await,
+        EvalCommand::Checks(args) => checks::checks(deps.registry, &args, out),
+        EvalCommand::Init(args) => init::run(ctx, &args, deps, out).await,
+    };
+    result.map_err(surface_refusal)
+}
+
+/// `gents eval cancel` from argv alone. The marker needs no database, and the
+/// process hosting the run may hold the home's embedded node (its store is
+/// locked exclusively), so the home's access is opened only after the marker
+/// is written, and only to find the job note.
+async fn cancel_without_context(args: &crate::cli::EvalRunIdArgs) -> Result<()> {
+    let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+    let purpose = async {
+        let ctx = EvalContext::resolve(&args.scope).await?;
+        manage::run_purpose(&ctx.access, &ctx.owner, &args.run_id).await
+    };
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    manage::cancel(&runs_dir(&home_dir), &args.run_id, purpose, &mut out).await
+}
+
+/// `gents eval watch` from argv. The process hosting the run may hold the
+/// home's embedded node; then the watch reads `progress.json` alone and
+/// tries the node again at each render. Only the store's lock degrades it:
+/// any other failure to open the home fails the command.
+async fn watch_while_held(args: &crate::cli::EvalWatchArgs) -> Result<()> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    match EvalContext::resolve(&args.scope).await {
+        Ok(ctx) => {
+            watch::watch(
+                &ctx.runs_dir(),
+                args,
+                || async { Ok(watch::Documents::Open(&ctx)) },
+                &mut out,
+            )
+            .await
+        }
+        Err(error) if watch::store_locked(&error) => {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "the home's node is held by another process; eval watch shows in-flight slots until it can read the report"
+            );
+            let home_dir = crate::home_state::resolve_home_dir(args.scope.home.as_deref());
+            watch::watch(
+                &runs_dir(&home_dir),
+                args,
+                || watch::reopen(|| EvalContext::resolve(&args.scope)),
+                &mut out,
+            )
+            .await
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// A token Ctrl-C cancels. The loop then stops launching, leaves in-flight
+/// trials open for a resume, and the command prints how to resume. A second
+/// Ctrl-C exits at once with 130, without waiting for in-flight trials.
+/// `first_warning` is logged at the first interrupt and says how the caller's
+/// command is resumed.
+pub(crate) fn cancel_on_ctrl_c(first_warning: &'static str) -> CancellationToken {
+    let token = CancellationToken::new();
+    let cancel = token.clone();
+    tokio::spawn(async move {
+        on_interrupts(tokio::signal::ctrl_c, &cancel, first_warning, || {
+            std::process::exit(130)
+        })
+        .await;
+    });
+    token
+}
+
+/// The first interrupt `next` yields logs `first_warning` and cancels
+/// `cancel`; the second calls `exit`. A failure to listen ends the handler:
+/// the token stays as it is.
+async fn on_interrupts<S>(
+    mut next: impl FnMut() -> S,
+    cancel: &CancellationToken,
+    first_warning: &str,
+    exit: impl FnOnce(),
+) where
+    S: std::future::Future<Output = std::io::Result<()>>,
+{
+    if next().await.is_err() {
+        return;
+    }
+    tracing::warn!("{first_warning}");
+    cancel.cancel();
+    if next().await.is_err() {
+        return;
+    }
+    tracing::warn!("second interrupt: exiting without waiting for in-flight trials");
+    exit();
+}
+
+/// How often a command hosting a loop reads the documents for progress.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// A progress read [`follow_progress`] repeats while a loop runs.
+pub(crate) trait Progress {
+    /// Print what landed since the last call. A failed read only delays the
+    /// lines; it never stops the loop.
+    async fn report(&mut self);
+}
+
+/// Drive `running` to its end, with `progress` reported on a timer and once
+/// more at the end when `print` is set. The read is polled beside the loop,
+/// never instead of it: the loop may hold a transaction the read waits on.
+pub(crate) async fn follow_progress<T>(
+    print: bool,
+    progress: &mut impl Progress,
+    running: impl std::future::Future<Output = T>,
+) -> T {
+    tokio::pin!(running);
+    let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
+    // A slow read delays the next one rather than being followed at once by
+    // the ticks it missed.
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let result = loop {
+        tokio::select! {
+            result = &mut running => break result,
+            () = async {
+                ticker.tick().await;
+                progress.report().await;
+            }, if print => {}
+        }
+    };
+    if print {
+        progress.report().await;
+    }
+    result
+}
+
+/// A refusal the library returned, re-raised with exactly its own text
+/// whatever context was added above it; any other error unchanged.
+pub(crate) fn surface_refusal(error: anyhow::Error) -> anyhow::Error {
+    let verbatim = gents::eval::report::report_refused(&error)
+        .map(ToString::to_string)
+        .or_else(|| gents::eval::runner::freeze_refused(&error).map(ToString::to_string))
+        .or_else(|| gents::eval::already_invalidated(&error).map(ToString::to_string))
+        .or_else(|| gents::eval::runner::provider_down(&error).map(ToString::to_string));
+    match verbatim {
+        Some(text) => anyhow::anyhow!(text),
+        None => error,
+    }
+}
+
+pub(crate) fn write_json<T: Serialize>(out: &mut dyn Write, value: &T) -> Result<()> {
+    serde_json::to_writer_pretty(&mut *out, value)?;
+    writeln!(out)?;
+    Ok(())
+}
+
+/// The commit this binary was built from, recorded on every run it freezes.
+pub(crate) fn source_commit() -> String {
+    option_env!("GENTS_BUILD_GIT_SHA")
+        .unwrap_or("unknown")
+        .to_owned()
+}
+
+pub(crate) fn source_dirty() -> bool {
+    option_env!("GENTS_BUILD_GIT_DIRTY") == Some("true")
+}
+
+/// `<definition>-<unix ms>-<4 random hex>`, unique per call. An
+/// operator who wants a run or job reused (the idempotent freeze, a resume)
+/// names it with `--run-id` or `--job-id`.
+pub(crate) fn default_id(definition_id: &str) -> String {
+    let random = uuid::Uuid::new_v4().as_u128() as u16;
+    format_default_id(definition_id, chrono::Utc::now().timestamp_millis(), random)
+}
+
+fn format_default_id(definition_id: &str, unix_ms: i64, random: u16) -> String {
+    format!("{definition_id}-{unix_ms}-{random:04x}")
+}
+
+/// Printed above a policy verdict computed with the placeholder defaults.
+pub(crate) const UNCALIBRATED_BANNER: &str =
+    "policy defaults are uncalibrated until an A/A calibration run has set them";
+
+pub(crate) fn load_policy(arg: &crate::cli::PolicyArg) -> Result<gents::optimization::PolicyV2> {
+    use anyhow::Context;
+    match arg {
+        crate::cli::PolicyArg::Defaults => Ok(gents::optimization::PolicyV2::uncalibrated()),
+        crate::cli::PolicyArg::File(path) => {
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("reading policy {}", path.display()))?;
+            serde_json::from_slice(&bytes)
+                .with_context(|| format!("parsing policy {}", path.display()))
+        }
+    }
+}
+
+mod checks;
+mod compare;
+mod init;
+mod inspect;
+pub(crate) mod manage;
+pub(crate) mod render;
+mod run;
+#[cfg(test)]
+pub(crate) mod testing;
+mod watch;
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+    use tokio_util::sync::CancellationToken;
+
+    use super::testing::{executor, Fixture, VALIDATION_CASES};
+    use super::*;
+    use crate::cli::{parse_cell, CellArg};
+
+    /// `EvalCommand` parsed on its own, without the `gents` parser above it.
+    #[derive(Parser)]
+    struct Probe {
+        #[command(subcommand)]
+        command: EvalCommand,
+    }
+
+    #[test]
+    fn the_read_commands_parse_with_their_scope() {
+        let probe = Probe::try_parse_from(["probe", "list", "--all", "--json", "--home", "/tmp/h"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::List(args) = &probe.command else {
+            panic!("not list");
+        };
+        assert!(args.all && args.json);
+        assert_eq!(
+            probe.command.scope().home.as_deref(),
+            Some(std::path::Path::new("/tmp/h"))
+        );
+        let probe = Probe::try_parse_from(["probe", "trial", "r1", "baseline", "val-a"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::Trial(args) = &probe.command else {
+            panic!("not trial");
+        };
+        assert_eq!((args.cell.as_str(), args.trial_index), ("baseline", None));
+    }
+
+    #[test]
+    fn init_parses_its_subject_out_and_defaults() {
+        let probe = Probe::try_parse_from(["probe", "init", "./subject", "--out", "/tmp/o"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::Init(args) = &probe.command else {
+            panic!("not init");
+        };
+        assert_eq!(args.subject, "./subject");
+        assert_eq!(args.out, std::path::PathBuf::from("/tmp/o"));
+        assert_eq!(args.validation_min, 6);
+        assert!(!args.pilot && !args.yes && !args.force);
+        assert!(Probe::try_parse_from(["probe", "init", "./subject"]).is_err());
+    }
+
+    #[test]
+    fn init_help_names_the_validation_floor_flag() {
+        use clap::CommandFactory;
+        let mut cli = crate::cli::Cli::command();
+        let help = cli
+            .find_subcommand_mut("eval")
+            .and_then(|eval| eval.find_subcommand_mut("init"))
+            .expect("eval init")
+            .render_long_help()
+            .to_string();
+        let after = &help[help.find("Needs a terminal").expect("the after-help")..];
+        for said in ["--validation-min", "default 6", "fewer validation cases"] {
+            assert!(after.contains(said), "{said}: {after}");
+        }
+    }
+
+    /// Only `gents eval init --pilot` records a pilot: its runs are left out
+    /// of exposure, so `run` may not claim the purpose.
+    #[test]
+    fn run_refuses_the_pilot_purpose() {
+        let error =
+            Probe::try_parse_from(["probe", "run", "d", "--cell", "a=p", "--purpose", "pilot"])
+                .err()
+                .expect("pilot is refused")
+                .to_string();
+        assert!(error.contains("gents eval init --pilot"), "{error}");
+        let probe = Probe::try_parse_from(["probe", "run", "d", "--cell", "a=p"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        let EvalCommand::Run(args) = &probe.command else {
+            panic!("not run");
+        };
+        assert_eq!(args.purpose, "eval");
+        assert!(Probe::try_parse_from([
+            "probe",
+            "run",
+            "d",
+            "--cell",
+            "a=p",
+            "--purpose",
+            "optimization:job-9",
+        ])
+        .is_ok());
+    }
+
+    /// `checks` reads no home, so it takes no scope flags.
+    #[test]
+    fn checks_takes_no_scope() {
+        let probe = Probe::try_parse_from(["probe", "checks", "--json"])
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert!(matches!(&probe.command, EvalCommand::Checks(args) if args.json));
+        assert!(probe.command.scope().home.is_none());
+        assert!(Probe::try_parse_from(["probe", "checks", "--home", "/tmp/h"]).is_err());
+    }
+
+    #[test]
+    fn a_stray_or_repeated_profile_is_a_usage_error_before_anything_is_read() {
+        let usage = |argv: &[&str]| usage_error(&super::testing::eval_command(argv));
+        assert_eq!(
+            usage(&["run", "d", "--cell", "a=p", "--profile", "other=local"]).as_deref(),
+            Some("--profile names cell \"other\", which no --cell declares")
+        );
+        assert_eq!(
+            usage(&[
+                "run",
+                "d",
+                "--cell",
+                "a=p",
+                "--profile",
+                "a=x",
+                "--profile",
+                "a=y"
+            ])
+            .as_deref(),
+            Some("--profile names cell \"a\" more than once")
+        );
+        assert_eq!(
+            usage(&["run", "d", "--cell", "a=p", "--cell", "a=q"]).as_deref(),
+            Some("--cell declares cell \"a\" more than once")
+        );
+        assert_eq!(
+            usage(&["run", "d", "--cell", "a=p", "--profile", "a=x"]),
+            None
+        );
+        assert_eq!(usage(&["list"]), None);
+    }
+
+    #[tokio::test]
+    async fn the_first_interrupt_cancels_and_the_second_exits() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let (send, receive) = tokio::sync::mpsc::unbounded_channel::<()>();
+        let receive = Arc::new(tokio::sync::Mutex::new(receive));
+        let token = CancellationToken::new();
+        let exited = Arc::new(AtomicBool::new(false));
+        let handler = {
+            let token = token.clone();
+            let exited = exited.clone();
+            tokio::spawn(async move {
+                let next = || {
+                    let receive = receive.clone();
+                    async move {
+                        receive
+                            .lock()
+                            .await
+                            .recv()
+                            .await
+                            .ok_or_else(|| std::io::Error::other("closed"))
+                    }
+                };
+                on_interrupts(next, &token, "interrupt", || {
+                    exited.store(true, Ordering::SeqCst)
+                })
+                .await;
+            })
+        };
+        let within = std::time::Duration::from_secs(10);
+        send.send(()).unwrap();
+        tokio::time::timeout(within, token.cancelled())
+            .await
+            .expect("the first interrupt cancels the token");
+        assert!(!exited.load(Ordering::SeqCst), "one interrupt only cancels");
+        send.send(()).unwrap();
+        tokio::time::timeout(within, handler)
+            .await
+            .expect("the second interrupt ends the handler")
+            .unwrap();
+        assert!(exited.load(Ordering::SeqCst), "a second interrupt exits");
+
+        let listening_failed = CancellationToken::new();
+        on_interrupts(
+            || async { Err(std::io::Error::other("no handler")) },
+            &listening_failed,
+            "interrupt",
+            || panic!("never exits"),
+        )
+        .await;
+        assert!(!listening_failed.is_cancelled());
+    }
+
+    #[test]
+    fn a_refusal_is_surfaced_with_exactly_its_own_text() {
+        use anyhow::Context as _;
+        let refusal = Err::<(), _>(anyhow::Error::from(gents::eval::report::ReportRefused(
+            "no eval run \"x\"".into(),
+        )))
+        .context("loading the report")
+        .unwrap_err();
+        assert_eq!(surface_refusal(refusal).to_string(), "no eval run \"x\"");
+        assert_eq!(
+            surface_refusal(anyhow::anyhow!("plain failure")).to_string(),
+            "plain failure"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_fixture_home_runs_a_scripted_two_cell_run() {
+        let fixture = Fixture::new().await;
+        let outcome = fixture
+            .scripted_run(
+                "r1",
+                &executor(&VALIDATION_CASES[..3]),
+                CancellationToken::new(),
+            )
+            .await;
+        assert_eq!(outcome.completed, 24);
+        assert!(fixture.ctx.runs_dir().join("r1").is_dir());
+    }
+
+    #[test]
+    fn a_cell_names_its_pack_and_optionally_a_behavior_with_colons() {
+        assert_eq!(
+            parse_cell("base=monitor:did:key:z6M:default").unwrap(),
+            CellArg {
+                cell_id: "base".into(),
+                pack: "monitor".into(),
+                behavior: Some("did:key:z6M:default".into()),
+            }
+        );
+        assert_eq!(parse_cell("base=/packs/monitor").unwrap().behavior, None);
+        assert!(parse_cell("no-equals").is_err());
+        assert!(parse_cell("base=").is_err());
+        assert!(parse_cell("base=monitor:").is_err());
+    }
+
+    #[test]
+    fn a_default_id_names_its_definition_the_time_and_four_random_hex() {
+        assert_eq!(
+            format_default_id("cli-def", 1_700, 0x0a),
+            "cli-def-1700-000a"
+        );
+        assert_ne!(
+            format_default_id("cli-def", 1_700, 0x0a),
+            format_default_id("cli-def", 1_700, 0x0b),
+            "the random part tells two ids of one millisecond apart"
+        );
+        let first = default_id("cli-def");
+        let parts: Vec<&str> = first.rsplitn(3, '-').collect();
+        assert_eq!(parts.len(), 3, "{first}");
+        assert_eq!(parts[2], "cli-def");
+        assert!(parts[1].parse::<i64>().is_ok(), "{first}");
+        assert!(
+            parts[0].len() == 4 && parts[0].bytes().all(|byte| byte.is_ascii_hexdigit()),
+            "{first}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_pack_name_resolves_like_pack_install_and_a_directory_names_its_behavior() {
+        let fixture = Fixture::new().await;
+        let directory = crate::commands::pack::resolve_subject_pack(
+            &fixture.ctx.home_dir,
+            &fixture.pack_arg(),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(directory.directory(), Some(fixture.pack.as_path()));
+        assert_eq!(directory.default_behavior().unwrap(), "monitor");
+
+        let bundled = gents::pack::pack_catalog().unwrap()[0].name.clone();
+        let named = crate::commands::pack::resolve_subject_pack(
+            &fixture.ctx.home_dir,
+            &bundled,
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(&named.source, gents::eval::runner::CellSource::InstalledPack { name } if *name == bundled),
+            "a compiled-in pack is handed to the runner by name"
+        );
+        let materialized = crate::commands::pack::resolve_subject_pack(
+            &fixture.ctx.home_dir,
+            &bundled,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+        assert!(materialized
+            .directory()
+            .is_some_and(|dir| dir.join("manifest.json").is_file()));
+    }
+}

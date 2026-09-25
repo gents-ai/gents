@@ -108,4 +108,56 @@ private def scenarioJson (name : String) (entries : List (DocRef × DesiredField
 def applyReconcileCasesJson : String :=
   jsonArray (scenarios.map fun (name, entries) => scenarioJson name entries)
 
+private def boolJson (b : Bool) : String := if b then "true" else "false"
+
+/-- `expected` rows: `content` is `null` when the document must be absent. -/
+private def expectedJson (rows : List (DocRef × Option DesiredFields)) : String :=
+  jsonArray (rows.map fun (d, f) =>
+    "{\"ref\":" ++ docRefJson d ++ ",\"content\":"
+      ++ (match f with | some x => jsonString x.content | none => "null") ++ "}")
+
+private def expectedFn (rows : List (DocRef × Option DesiredFields)) :
+    DocRef → Option DesiredFields :=
+  fun d => (rows.find? fun r => r.1 = d).bind Prod.snd
+
+private def ctx : DocRef := ⟨.agentContext, "context", "did:owner"⟩
+private def tools : DocRef := ⟨.tools, "tools", "did:owner"⟩
+private def absent : DocRef := ⟨.agentContext, "absent", "did:owner"⟩
+
+private def priorRows : List (DocRef × DesiredFields) :=
+  [(ctx, { content := "prompt-v1", refs := [tools] }), (tools, { content := "tools-v1", refs := [] })]
+
+private def candidateRows : List (DocRef × DesiredFields) :=
+  [(ctx, { content := "prompt-v2", refs := [tools] }), (tools, { content := "tools-v1", refs := [] })]
+
+private def publishIfScenarios : List (String × List (DocRef × Option DesiredFields)) :=
+  [("all_expectations_match",
+      [(ctx, some { content := "prompt-v1", refs := [tools] }),
+       (tools, some { content := "tools-v1", refs := [] })]),
+   ("target_drifted", [(ctx, some { content := "prompt-v0", refs := [tools] })]),
+   ("closure_document_drifted",
+      [(ctx, some { content := "prompt-v1", refs := [tools] }),
+       (tools, some { content := "tools-v0", refs := [] })]),
+   ("expected_absent_but_present", [(ctx, none)]),
+   ("expected_absent_and_absent", [(absent, none)]),
+   ("expected_present_but_absent", [(absent, some { content := "x", refs := [] })]),
+   ("empty_scope_is_publish", [])]
+
+private def publishIfScenarioJson (name : String)
+    (rows : List (DocRef × Option DesiredFields)) : String :=
+  let old : LiveState := { desired := (manifestOf priorRows).docs, live := fun _ => none }
+  let candidate := manifestOf candidateRows
+  let scope := rows.map Prod.fst
+  let after := publishIf old scope (expectedFn rows) candidate
+  let keys : List DocRef := [ctx, tools, absent]
+  "{\"name\":" ++ jsonString name
+    ++ ",\"expected\":" ++ expectedJson rows
+    ++ ",\"pre_desired\":" ++ desiredJson keys old.desired
+    ++ ",\"candidate\":" ++ desiredJson keys candidate.docs
+    ++ ",\"applied\":" ++ boolJson (expectationsHold old scope (expectedFn rows))
+    ++ ",\"expected_after_desired\":" ++ desiredJson keys after.desired ++ "}"
+
+def publishIfCasesJson : String :=
+  jsonArray (publishIfScenarios.map fun (name, rows) => publishIfScenarioJson name rows)
+
 end ApplyReconcile.ContractCases

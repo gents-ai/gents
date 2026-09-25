@@ -106,6 +106,31 @@ owns cadence. `EventSource` owns event observation and grouping configuration;
 `Trigger` binds a source to a task and owns delivery/concurrency policy. Runtime
 attempt and delivery observations remain separate from desired configuration.
 
+## Evals
+
+```text
+EvalDefinition -> cases[].stages[].checks[]
+
+EvalRun   -> origin.definition -> EvalDefinition
+EvalTrial -> run_id            -> EvalRun
+EvalVerdict -> run_id, trial_id
+```
+
+`EvalDefinition` is pack-carried configuration: cases, stages, checks, reducer,
+and the `comparability_version` that runs never compare across. `EvalRun`
+records one invocation frozen at creation; `invalidated` is the only field it
+ever admits a write to. `EvalTrial` records one execution of one case in one
+cell, with its identity written at provisioning and its `completion` written
+once. `EvalVerdict` records one check's result for one trial and is append-only;
+a re-grade appends a row naming the verdict it supersedes. None of the four
+carries a lifecycle, status, or state field: run progress derives from the
+trials and the requests they reference, and exposure is a count of rows rather
+than a counter. `EvalRun` and `EvalTrial` hold identifiers, counters, digests,
+and timestamps, so they carry no message bodies and are eligible to replicate;
+no P2P profile subscribes them in M1. `EvalDefinition` carries prompts and
+`EvalVerdict.feedback` can quote transcripts, so both are local-audit and never
+replicate.
+
 ## Authorization and storage
 
 DefraDB authenticates actors as DIDs and enforces document access through ACP.

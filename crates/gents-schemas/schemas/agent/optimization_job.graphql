@@ -1,0 +1,15 @@
+# Frozen origin and an append-only journal for one configuration optimization
+# job (#1455). The driver's durable notebook: the runtime never claims it, and
+# `state` is derived from the journal, never a second request lifecycle.
+# `origin` and `journal` are Strings holding serialized JSON: a JSON column
+# decodes numbers as f64 and would not round-trip u64 budgets above 2^53.
+# Local-only: the journal carries candidate system prompts.
+type OptimizationJob @index(fields: ["owner_agent_did", "job_id"], unique: true) {
+    job_id: String @immutable
+    owner_agent_did: String @index @immutable
+    origin: String @immutable
+    journal: String
+    journal_len: Int
+    state: String @index
+    created_at: String @index @immutable
+}

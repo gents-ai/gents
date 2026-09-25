@@ -6,6 +6,7 @@ mod compaction;
 mod context;
 mod datastore_tool_surface;
 mod eth_tool;
+mod eval_definition;
 mod event_trigger;
 mod graph_definition;
 mod inference_backend;
@@ -40,6 +41,11 @@ pub use callback::{
 };
 pub use compaction::CompactionConfig;
 pub use context::AgentContext;
+pub use eval_definition::{
+    EvalCapture, EvalCase, EvalCheckRef, EvalDefinition, EvalFixtureDocument, EvalFixtureFile,
+    EvalFixtures, EvalReducer, EvalSplit, EvalStage, EvalSubject, EvalSubjectKind, EvalTier,
+    LLM_JUDGE_CHECK,
+};
 pub use graph_definition::{GraphDefinition, GraphDefinitionObservation};
 pub use installation::{
     ProjectionAcpBinding, ProjectionAcpObservation, RepositoryPlacement, ToolServiceRegistry,
@@ -82,9 +88,11 @@ pub use tools::{
     LspTools, RemoteServiceTools, RemoteToolStyle, RemoteTools, SelfConfigTools, SubagentTools,
     Tools,
 };
+pub(crate) use write_tool::reject_protected_collection_name;
 pub use write_tool::{
     is_reserved_builtin_tool_name, OutputObligationDecision, WriteToolDecl, WriteToolField,
     WriteToolFieldFill, WriteToolOutputObligation, WriteToolOutputObligationScope,
+    PROTECTED_DATASTORE_COLLECTIONS,
 };
 
 pub use subagent_target::SubagentTargetDocument;

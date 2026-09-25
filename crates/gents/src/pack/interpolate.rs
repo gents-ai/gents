@@ -78,6 +78,12 @@ pub fn interpolate(input: &str) -> Result<String, Vec<String>> {
     interpolate_with(input, &|name| std::env::var(name).ok())
 }
 
+/// The authored form of `text` that [`interpolate_with`] reads back as
+/// exactly `text` under any environment: every `$` doubled.
+pub fn escape(text: &str) -> String {
+    text.replace('$', "$$")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -146,6 +152,18 @@ mod tests {
     fn double_dollar_escapes_a_literal_reference() {
         assert_eq!(expand("$${EP}", &[("EP", "substituted")]).unwrap(), "${EP}");
         assert_eq!(expand("costs $$5", &[]).unwrap(), "costs $5");
+    }
+
+    #[test]
+    fn an_escaped_text_interpolates_to_itself() {
+        for text in [
+            "${EP}", "$$", "${EP:-d}", "$", "costs $5", "${UNSET}", "plain",
+        ] {
+            assert_eq!(
+                expand(&escape(text), &[("EP", "substituted")]).unwrap(),
+                text
+            );
+        }
     }
 
     #[test]

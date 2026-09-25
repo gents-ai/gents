@@ -1,0 +1,19 @@
+# One execution of one case in one cell (#1515). Identity is written at
+# provisioning; `completion` is written once. A null completion is a fact: the
+# runner did not finish this trial. Trial state derives from the referenced
+# requests. `home_hint` is a locator, never identity.
+type EvalTrial @branchable @index(fields: ["owner_agent_did", "trial_id"], unique: true) {
+    trial_id: String @immutable
+    owner_agent_did: String @index @immutable
+    run_id: String @index @immutable
+    cell_id: String @immutable
+    case_id: String @immutable
+    trial_index: Int @immutable
+    attempt: Int @immutable
+    trial_agent_did: String @immutable
+    session_id: String @immutable
+    seed: Int @immutable
+    home_hint: String
+    created_at: String @immutable
+    completion: JSON
+}

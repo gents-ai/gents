@@ -57,6 +57,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
         ("EthSubmission", Module("conformance/eth_submission.rs")),
         ("Enrollment", Module("conformance/enrollment.rs")),
         ("EventDelivery", Module("conformance/event_delivery.rs")),
+        ("Eval", Module("conformance/eval.rs")),
         ("Fleet", Module("conformance/fleet.rs")),
         ("GoalAutomation", Module("conformance/goals.rs")),
         ("Goals", Module("conformance/goals.rs")),
@@ -73,6 +74,7 @@ fn model_homes() -> BTreeMap<&'static str, Home> {
             "Migration",
             WorkspaceTest("crates/gents-migration/tests/phase_b_steps.rs"),
         ),
+        ("Optimization", WorkspaceTest("crates/gents/src/optimization/policy.rs")),
         (
             "PairingReconcile",
             Module("conformance/pairing_reconcile.rs"),

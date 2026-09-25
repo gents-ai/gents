@@ -112,6 +112,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "native_input_admission_matches_lean",
         },
         ConformanceConsumer::RustTest {
+            id: "config_client::desired_state::tests::guarded_publication_matches_lean_publish_if_cases",
+            package: "gents",
+            source_path: "crates/gents/src/config_client/desired_state/tests.rs",
+            module_path: "config_client::desired_state::tests",
+            function: "guarded_publication_matches_lean_publish_if_cases",
+        },
+        ConformanceConsumer::RustTest {
             id: "agent::runtime::tests::behavior_resolution::explicit_behavior_resolution_matches_lean_binding_cases",
             package: "gents",
             source_path: "crates/gents/src/agent/runtime/tests/behavior_resolution.rs",
@@ -201,6 +208,20 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             source_path: "crates/gents/tests/conformance.rs",
             module_path: "conformance",
             function: "generated_slot_accounting_cases_pin_inference_and_fleet_contracts",
+        },
+        ConformanceConsumer::RustTest {
+            id: "conformance::rust_eval_outcome_vocabulary_and_projection_match_lean",
+            package: "gents",
+            source_path: "crates/gents/tests/conformance.rs",
+            module_path: "conformance",
+            function: "rust_eval_outcome_vocabulary_and_projection_match_lean",
+        },
+        ConformanceConsumer::RustTest {
+            id: "optimization::policy::tests::gates_costs_and_decisions_match_lean",
+            package: "gents",
+            source_path: "crates/gents/src/optimization/policy.rs",
+            module_path: "optimization::policy::tests",
+            function: "gates_costs_and_decisions_match_lean",
         },
         ConformanceConsumer::RustTest {
             id: "background_tools::tests::generated_child_failure_projections_match_bridge_owner",

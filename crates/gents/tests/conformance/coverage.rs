@@ -127,6 +127,14 @@ pub(super) fn lean_executable_contracts_cover_initial_domains() {
     assert_eq!(lean_contract_snapshot().request_transition_cases.len(), 81);
     assert_eq!(lean_contract_snapshot().process_transition_cases.len(), 25);
     assert_eq!(lean_contract_snapshot().apply_reconcile_cases.len(), 8);
+    assert_eq!(lean_contract_snapshot().eval_outcome_cases.len(), 33);
+    assert_eq!(
+        lean_contract_snapshot().optimization_cases.decisions.len(),
+        32
+    );
+    assert_eq!(lean_contract_snapshot().optimization_cases.gates.len(), 10);
+    assert_eq!(lean_contract_snapshot().optimization_cases.costs.len(), 6);
+    assert_eq!(lean_contract_snapshot().publish_if_cases.len(), 7);
     assert_eq!(lean_contract_snapshot().session_recovery_cases.len(), 16);
     assert_eq!(
         lean_contract_snapshot()
@@ -668,6 +676,21 @@ fn lean_contract_coverage_ledger_accounts_for_every_emitted_domain() {
             "apply_reconcile_cases".to_string(),
             "ApplyReconcileCases".to_string(),
         ));
+    }
+    if !snapshot.eval_outcome_cases.is_empty() {
+        emitted.insert((
+            "eval_outcome_cases".to_string(),
+            "EvalOutcomeCases".to_string(),
+        ));
+    }
+    if !snapshot.optimization_cases.gates.is_empty() {
+        emitted.insert((
+            "optimization_cases".to_string(),
+            "OptimizationCases".to_string(),
+        ));
+    }
+    if !snapshot.publish_if_cases.is_empty() {
+        emitted.insert(("publish_if_cases".to_string(), "PublishIfCases".to_string()));
     }
     if !snapshot.tool_policy_cases.is_empty() {
         emitted.insert((

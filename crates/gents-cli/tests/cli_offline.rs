@@ -14,6 +14,8 @@ mod cli_config_export_import;
 mod cli_config_native_root;
 #[path = "suites/cli_config_validate.rs"]
 mod cli_config_validate;
+#[path = "suites/cli_eval.rs"]
+mod cli_eval;
 #[path = "suites/cli_help.rs"]
 mod cli_help;
 #[path = "suites/cli_provision.rs"]

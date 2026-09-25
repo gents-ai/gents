@@ -92,3 +92,7 @@ import Proofs.SelfConfig.Auth
 import Proofs.GraphPipeline.Configuration
 
 import Proofs.TaskHooks
+
+import Proofs.Eval
+
+import Proofs.Optimization

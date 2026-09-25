@@ -55,7 +55,21 @@ impl BoundedQueryTool {
     }
 
     pub fn is_well_formed(&self) -> bool {
-        self.decl.is_well_formed()
+        self.ensure_well_formed().is_ok()
+    }
+
+    /// Mirrors [`crate::defra_write::BoundedWriteTool::ensure_well_formed`]:
+    /// the protected-collection rule holds at use as well as at configuration
+    /// validation, so a persisted surface that somehow names one is refused
+    /// here instead of reaching the datastore.
+    fn ensure_well_formed(&self) -> Result<()> {
+        if !self.decl.is_well_formed() {
+            bail!(
+                "query tool `{}` reached execution with an invalid declaration",
+                self.decl.tool_name
+            );
+        }
+        crate::document_config::reject_protected_collection_name(&self.decl.collection)
     }
 
     fn model_filter_fields(&self) -> impl Iterator<Item = &crate::document_config::WriteToolField> {
@@ -283,13 +297,7 @@ impl Tool for BoundedQueryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if !self.is_well_formed() {
-            return Err(anyhow!(
-                "query tool `{}` reached execution with an invalid declaration",
-                self.decl.tool_name
-            )
-            .into());
-        }
+        self.ensure_well_formed()?;
         let fields = self.resolve_projection(&args.0)?;
         let filter = self.resolve_filter(&args.0)?;
         let limit = self.resolve_limit(&args.0)?;
@@ -446,6 +454,19 @@ mod tests {
             },
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn rejects_a_persisted_protected_collection_at_execution() {
+        let node = node_with_findings().await;
+        let mut protected = decl();
+        protected.collection = gents_protocol::schemas::EVAL_VERDICT_NAME.into();
+        let tool = BoundedQueryTool::new(node, protected);
+        assert!(!tool.is_well_formed());
+        let err = Tool::call(&tool, BoundedQueryParams(Map::new()))
+            .await
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("protected"), "{err:#}");
     }
 
     #[tokio::test]

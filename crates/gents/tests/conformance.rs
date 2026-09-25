@@ -104,6 +104,8 @@ mod directory_projection;
 mod enrollment;
 #[path = "conformance/eth_submission.rs"]
 mod eth_submission;
+#[path = "conformance/eval.rs"]
+mod eval;
 #[path = "conformance/event_delivery.rs"]
 mod event_delivery;
 #[path = "conformance/fleet.rs"]
@@ -443,6 +445,11 @@ fn event_delivery_source_instances_match_runtime() {
 #[tokio::test]
 async fn event_delivery_convergence_traces_match_runtime_or_deviation() {
     event_delivery::event_delivery_convergence_traces_match_runtime_or_deviation().await;
+}
+
+#[test]
+fn rust_eval_outcome_vocabulary_and_projection_match_lean() {
+    eval::rust_eval_outcome_vocabulary_and_projection_match_lean();
 }
 
 #[path = "conformance/docs.rs"]
