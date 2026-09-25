@@ -843,6 +843,9 @@ async fn guarded_publication_matches_lean_publish_if_cases() -> Result<()> {
             "expected_absent_and_absent",
             "expected_present_but_absent",
             "empty_scope_is_publish",
+            "pack_scope_all_match",
+            "pack_scope_absent_member_present",
+            "pack_scope_member_drifted",
         ]
     );
     Ok(())

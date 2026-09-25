@@ -143,8 +143,27 @@ private def publishIfScenarios : List (String × List (DocRef × Option DesiredF
    ("expected_present_but_absent", [(absent, some { content := "x", refs := [] })]),
    ("empty_scope_is_publish", [])]
 
+/-- A document-pack install guards every document it writes, so its expectation
+scope is exactly the candidate's support and no smaller. These scenarios are
+emitted at that shape, over a candidate that also creates a member absent when
+the install reads it, so a native pack consumer can execute the modeled
+candidate itself instead of projecting members away. -/
+private def packCandidateRows : List (DocRef × DesiredFields) :=
+  (absent, { content := "created-v1", refs := [] }) :: candidateRows
+
+private def packScopedScenarios : List (String × List (DocRef × Option DesiredFields)) :=
+  [("pack_scope_all_match",
+      [(ctx, some { content := "prompt-v1", refs := [tools] }),
+       (tools, some { content := "tools-v1", refs := [] }), (absent, none)]),
+   ("pack_scope_absent_member_present",
+      [(ctx, none), (tools, some { content := "tools-v1", refs := [] }), (absent, none)]),
+   ("pack_scope_member_drifted",
+      [(ctx, some { content := "prompt-v0", refs := [tools] }),
+       (tools, some { content := "tools-v1", refs := [] }), (absent, none)])]
+
 private def publishIfScenarioJson (name : String)
-    (rows : List (DocRef × Option DesiredFields)) : String :=
+    (rows : List (DocRef × Option DesiredFields))
+    (candidateRows : List (DocRef × DesiredFields) := candidateRows) : String :=
   let old : LiveState := { desired := (manifestOf priorRows).docs, live := fun _ => none }
   let candidate := manifestOf candidateRows
   let scope := rows.map Prod.fst
@@ -158,6 +177,8 @@ private def publishIfScenarioJson (name : String)
     ++ ",\"expected_after_desired\":" ++ desiredJson keys after.desired ++ "}"
 
 def publishIfCasesJson : String :=
-  jsonArray (publishIfScenarios.map fun (name, rows) => publishIfScenarioJson name rows)
+  jsonArray ((publishIfScenarios.map fun (name, rows) => publishIfScenarioJson name rows)
+    ++ (packScopedScenarios.map fun (name, rows) =>
+          publishIfScenarioJson name rows packCandidateRows))
 
 end ApplyReconcile.ContractCases

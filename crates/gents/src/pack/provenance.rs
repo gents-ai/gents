@@ -369,16 +369,19 @@ mod tests {
 
     /// A document-pack install is the guarded publication `ApplyReconcile.publishIf`
     /// models, so its verdict and post-state are taken from that model's
-    /// executable cases rather than restated here. The pack layer refines the
-    /// model by fixing the expectation scope to exactly the documents the pack
-    /// writes, which is what [`replaced_document_expectations`] emits; a case
-    /// whose scope the pack cannot express — empty, or naming a document the
-    /// candidate does not write — is out of range here and stays with the
-    /// desired-state consumer of the same cases. Each Lean `content` maps onto
-    /// the `display_name` of a `Tools` document keyed by the Lean id: the Lean
-    /// collection is ignored because the scenario's ids are distinct across
-    /// collections, and Lean `refs` are not materialized because reference
-    /// closure is a separate gate with its own cases.
+    /// executable cases rather than restated here. The install publishes the
+    /// case's whole candidate and guards every member of it, which is the
+    /// scope [`replaced_document_expectations`] emits, so only a case whose
+    /// expectation scope already is its candidate's support is the same
+    /// execution natively; `packScopedScenarios` exists to emit that shape.
+    /// A case at any narrower scope is out of range here and stays with the
+    /// desired-state consumer of the same cases, because projecting its
+    /// candidate down to the scope would run inputs the emitted verdict was
+    /// not computed for. Each Lean `content` maps onto the `display_name` of
+    /// a `Tools` document keyed by the Lean id: the Lean collection is
+    /// ignored because the scenario's ids are distinct across collections,
+    /// and Lean `refs` are not materialized because reference closure is a
+    /// separate gate with its own cases.
     #[tokio::test]
     async fn pack_install_matches_lean_publish_if_cases() -> Result<()> {
         use crate::lean_vocab_test::lean_publish_if_cases;
@@ -445,17 +448,23 @@ mod tests {
         let mut exercised = Vec::new();
         let mut out_of_range = Vec::new();
         for case in lean_publish_if_cases() {
-            let candidate_content = |target: &crate::lean_vocab_test::LeanApplyDocRef| {
-                case.candidate
-                    .iter()
-                    .find(|row| &row.target == target)
-                    .map(|row| row.content.as_str())
+            let support = |target: &crate::lean_vocab_test::LeanApplyDocRef| {
+                (
+                    target.collection.clone(),
+                    target.id.clone(),
+                    target.agent_did.clone(),
+                )
             };
-            if case.expected.is_empty()
-                || !case
-                    .expected
+            if case
+                .expected
+                .iter()
+                .map(|row| support(&row.target))
+                .collect::<BTreeSet<_>>()
+                != case
+                    .candidate
                     .iter()
-                    .all(|row| candidate_content(&row.target).is_some())
+                    .map(|row| support(&row.target))
+                    .collect::<BTreeSet<_>>()
             {
                 out_of_range.push(case.name.as_str());
                 continue;
@@ -466,8 +475,6 @@ mod tests {
             crate::document_config::ensure_agent_principal(&node, OWNER).await?;
             let access = ConfigAccess::Local(node.clone());
 
-            // State when the install reads what it will replace: a Lean
-            // expectation row with no content means the document is absent.
             write(
                 &access,
                 case.expected
@@ -484,13 +491,10 @@ mod tests {
             let config: PackConfig = serde_json::from_value(json!({
                 "agent_principal": {"agent_did": OWNER},
                 "tools": case
-                    .expected
+                    .candidate
                     .iter()
-                    .map(|row| {
-                        let content = candidate_content(&row.target).context("candidate row")?;
-                        Ok(tools_document(&row.target.id, content))
-                    })
-                    .collect::<Result<Vec<_>>>()?,
+                    .map(|row| tools_document(&row.target.id, &row.content))
+                    .collect::<Vec<_>>(),
             }))?;
 
             let expected = replaced_document_expectations(&access, &config).await?;
@@ -507,8 +511,6 @@ mod tests {
                 case.name
             );
 
-            // Another writer moves the rows to the case's pre-publication
-            // desired state after the capture and before the install writes.
             write(
                 &access,
                 case.pre_desired
@@ -533,9 +535,6 @@ mod tests {
                 );
             }
 
-            // Durable post-state over every document the case names: a refused
-            // install leaves the concurrent writer's rows live and writes no
-            // member of the candidate set, and an applied one writes them all.
             let keys = case
                 .expected
                 .iter()
@@ -565,20 +564,21 @@ mod tests {
             node.shutdown().await;
             exercised.push(case.name.as_str());
         }
-        // A case reaches these lists only after all of its assertions hold, so
-        // emitter drift fails loudly instead of silently dropping coverage.
         assert_eq!(
             exercised,
             [
                 "all_expectations_match",
-                "target_drifted",
                 "closure_document_drifted",
-                "expected_absent_but_present",
+                "pack_scope_all_match",
+                "pack_scope_absent_member_present",
+                "pack_scope_member_drifted",
             ]
         );
         assert_eq!(
             out_of_range,
             [
+                "target_drifted",
+                "expected_absent_but_present",
                 "expected_absent_and_absent",
                 "expected_present_but_absent",
                 "empty_scope_is_publish",
