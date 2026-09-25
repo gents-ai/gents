@@ -19,9 +19,8 @@ use gents::graphql::escape_graphql_string;
 const INFERENCE_METRICS_WINDOW_SECS: i64 = 5 * 60;
 const INFERENCE_METRICS_PAGE_SIZE: usize = 500;
 /// Processing requests per activity document. Each contributes four
-/// `limit: 1` reads over the `request_doc_id` index, so a sample returns at
-/// most four rows per processing request; each read still scans that
-/// request's indexed tool or inference history to order it.
+/// `limit: 1` reads, which bound the rows returned per request, not the work
+/// to order that request's tool or inference history.
 const LIVENESS_ACTIVITY_CHUNK: usize = 32;
 
 #[derive(Debug, Serialize)]
@@ -1312,7 +1311,8 @@ pub(crate) async fn load_metrics_query_data(
 }
 
 /// Newest tool-call and inference-call activity for each local processing
-/// request, keyed by the immutable, indexed `request_doc_id`.
+/// request, keyed by the immutable `request_doc_id` and bound to the
+/// request's owning `agent_did`.
 ///
 /// Progress is an observation layered on the processing-request read: a
 /// failed activity read drops that chunk's activity (its requests fall back
@@ -1331,8 +1331,11 @@ async fn load_liveness_activity(
                 row.agent_did.as_deref().unwrap_or_default(),
             )
         })
-        .filter_map(|row| row.doc_id.as_deref().map(str::trim))
-        .filter(|doc_id| !doc_id.is_empty())
+        .filter_map(|row| {
+            let doc_id = row.doc_id.as_deref().map(str::trim)?;
+            let agent_did = row.agent_did.as_deref().map(str::trim)?;
+            (!doc_id.is_empty() && !agent_did.is_empty()).then_some((doc_id, agent_did))
+        })
         .collect::<Vec<_>>();
     let mut activity = Vec::new();
     for chunk in request_doc_ids.chunks(LIVENESS_ACTIVITY_CHUNK) {
@@ -1350,9 +1353,9 @@ async fn load_liveness_activity(
 
 async fn load_liveness_activity_chunk(
     graphql: &str,
-    request_doc_ids: &[&str],
+    requests: &[(&str, &str)],
 ) -> Result<Vec<LivenessActivityRow>> {
-    let response = post_graphql(graphql, &liveness_activity_query(request_doc_ids)).await?;
+    let response = post_graphql(graphql, &liveness_activity_query(requests)).await?;
     let data = response
         .get("data")
         .cloned()
@@ -1362,10 +1365,11 @@ async fn load_liveness_activity_chunk(
     Ok(pages.into_values().flatten().collect())
 }
 
-fn liveness_activity_query(request_doc_ids: &[&str]) -> String {
+fn liveness_activity_query(requests: &[(&str, &str)]) -> String {
     let mut selections = String::new();
-    for (index, request_doc_id) in request_doc_ids.iter().enumerate() {
+    for (index, (request_doc_id, agent_did)) in requests.iter().enumerate() {
         let request_doc_id = escape_graphql_string(request_doc_id);
+        let agent_did = escape_graphql_string(agent_did);
         for (alias, collection, field, fields) in [
             (
                 "ts",
@@ -1385,11 +1389,16 @@ fn liveness_activity_query(request_doc_ids: &[&str]) -> String {
             selections.push_str(&format!(
                 r#"
             {alias}{index}: {collection}(
-                filter: {{ request_doc_id: {{ _eq: "{request_doc_id}" }}, {field}: {{ _ne: null }} }},
+                filter: {{
+                    request_doc_id: {{ _eq: "{request_doc_id}" }},
+                    agent_did: {{ _eq: "{agent_did}" }},
+                    {field}: {{ _ne: null }}
+                }},
                 order: {{ {field}: DESC }},
                 limit: 1
             ) {{
                 request_doc_id
+                agent_did
                 {fields}
             }}"#
             ));

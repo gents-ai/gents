@@ -27,6 +27,11 @@ pub(crate) struct LivenessToolCallRow {
 pub(crate) struct LivenessActivityRow {
     #[serde(default)]
     pub(crate) request_doc_id: Option<String>,
+    /// Principal that wrote the row. Only rows written by the request's own
+    /// agent count: another principal's row can name the same request
+    /// document without being this request's progress.
+    #[serde(default)]
+    pub(crate) agent_did: Option<String>,
     #[serde(default)]
     pub(crate) started_at: Option<String>,
     #[serde(default)]
@@ -148,10 +153,14 @@ pub(crate) fn compute_request_liveness_summary(
         let deadline_age_ms = deadline.map(|deadline| millis_between(deadline, now));
 
         let request_doc_id = row.doc_id.as_deref().map(str::trim);
+        let request_agent_did = row.agent_did.as_deref().map(str::trim);
         let progress_at = activity
             .iter()
             .filter(|activity| {
-                request_doc_id.is_some() && activity.request_doc_id.as_deref() == request_doc_id
+                request_doc_id.is_some()
+                    && request_agent_did.is_some()
+                    && activity.request_doc_id.as_deref().map(str::trim) == request_doc_id
+                    && activity.agent_did.as_deref().map(str::trim) == request_agent_did
             })
             .filter_map(LivenessActivityRow::latest_at)
             .chain(claimed_at)
@@ -342,6 +351,7 @@ mod tests {
     ) -> LivenessActivityRow {
         LivenessActivityRow {
             request_doc_id: Some(format!("doc-{request_id}")),
+            agent_did: Some("did:test:local".to_string()),
             started_at: Some(iso(started_offset_secs)),
             completed_at: completed_offset_secs.map(iso),
             ended_at: None,
@@ -355,6 +365,7 @@ mod tests {
     ) -> LivenessActivityRow {
         LivenessActivityRow {
             request_doc_id: Some(format!("doc-{request_id}")),
+            agent_did: Some("did:test:local".to_string()),
             started_at: Some(iso(started_offset_secs)),
             completed_at: None,
             ended_at: ended_offset_secs.map(iso),
@@ -416,6 +427,24 @@ mod tests {
         other.request_doc_id = Some("doc-req-other".to_string());
         let age = progress_age_ms(now(), Vec::new(), vec![other]);
         assert_eq!(age, 300_000, "only this request's activity counts");
+    }
+
+    #[test]
+    fn foreign_principal_row_on_same_request_doc_does_not_count_as_progress() {
+        let mut foreign_tool = tool_activity("req-1", -2, Some(-1));
+        foreign_tool.agent_did = Some("did:test:foreign".to_string());
+        let mut foreign_inference = inference_activity("req-1", -1, None);
+        foreign_inference.agent_did = Some("did:test:foreign".to_string());
+        let own = tool_activity("req-1", -100, Some(-90));
+        let age = progress_age_ms(
+            now(),
+            Vec::new(),
+            vec![own, foreign_tool, foreign_inference],
+        );
+        assert_eq!(
+            age, 90_000,
+            "a newer row by another principal naming the same request doc is ignored"
+        );
     }
 
     /// #1782: a tool call leaving the running set must not move progress

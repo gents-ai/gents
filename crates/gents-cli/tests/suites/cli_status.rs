@@ -663,6 +663,33 @@ async fn status_liveness_progress_counts_completed_tools_and_inference() -> Resu
     )
     .await?;
 
+    // Another principal's newer row naming the same request document is not
+    // this request's progress.
+    graphql_query(
+        &graphql,
+        &format!(
+            r#"mutation {{
+                create_AgentToolCall(input: {{
+                    tool_call_key: "{batched}-foreign",
+                    agent_did: "did:key:zForeignProgress",
+                    request_id: "{batched}",
+                    request_doc_id: "{batched_doc}",
+                    session_id: "session-{batched}",
+                    message_sequence: 9,
+                    tool_name: "read_file",
+                    tool_call_id: "{batched}-foreign-call",
+                    status: "completed",
+                    lifecycle_state: "completed",
+                    started_at: "{started_at}",
+                    completed_at: "{completed_at}"
+                }}) {{ _docID }}
+            }}"#,
+            started_at = at(-2),
+            completed_at = at(-1),
+        ),
+    )
+    .await?;
+
     // Between tool batches, waiting on an in-flight inference started 5s ago.
     let thinking = format!("thinking-{}", Uuid::new_v4().simple());
     let thinking_doc = seed_request(thinking.clone()).await?;
