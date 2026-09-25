@@ -14,6 +14,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Changed
 
+- `write_file` no longer replaces an existing file blindly: pass the
+  `content_hash` from your latest read (rejected if the file changed since) or
+  `overwrite: true`. Creating new files is unchanged (#1605).
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 
@@ -29,6 +32,13 @@ source consistency checks, not a separate runtime compatibility version.
   start or completion, and any inference call's start or end for that request,
   so the age no longer jumps back to `claimed_at` when a tool call finishes
   (#1782).
+- The agent loop stops re-running a tool call that failed three times in a row
+  with the same arguments and error. The next identical call returns a notice
+  instead of running, and repeating it again ends the request with a
+  `repeated_tool_failure` reason instead of spinning to the turn cap (#1734).
+- Truncated tool output no longer drops an oversized line that follows a short
+  one: the model sees as much of that line as fits (its start, or its end for
+  shell output), and the notice says how many of its bytes are shown (#1726).
 
 ## 0.19.0 - 2026-09-24
 

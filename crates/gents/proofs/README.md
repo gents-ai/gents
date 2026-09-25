@@ -1735,8 +1735,41 @@ a strictly decreasing remaining allowance on accepted invalid outcomes, and
 absorbing exhaustion. This bounds invalid churn, not infinite valid work or
 storage/provider availability. Outcome classification and persistence ordering
 remain runtime consumer obligations. Eleven generated traces in
-`invalid_tool_progress_cases` drive the real owned loop and persistence hook;
-the model is not a second lifecycle or permission owner.
+`invalid_tool_progress_cases` drive the real owned loop and persistence hook,
+checked against their composition with `RepeatedToolFailure`; the model is not
+a second lifecycle or permission owner.
+
+### Repeated tool failure (#1734)
+
+`CompletionRetry.RepeatedToolFailure` folds the owned loop's dispatch record
+over `InvalidToolProgress.Outcome` and composes with that allowance. After
+three consecutive dispatches of one call (tool name and argument text) whose
+ordinary failure has the same error identity, the next identical call is not
+run: a policy-denied notice stands in as its result through the persistence
+hook, so transcript and provider input agree. Repeating it again ends the
+execution with `repeated_tool_failure:` through the existing stream error and
+terminal owners, which settle the accepted, undispatched call.
+
+Only ordinary failures with a derivable identity count. The native adapter
+derives it from the failure class and text. The result's owner supplies the
+identity: only a tool registered as the command runner drops the fields its
+envelope is known to vary between identical runs (duration and the timeout
+hint rendered from it), and its unparseable envelope has no identity. Any
+other tool's text is compared verbatim, even if it has the same shape. Outcomes the invalid allowance charges,
+successes, other arguments and other errors restart the streak. A call the
+persistence hook answers itself (`Skip`) restarts it too, unless the guard has
+already decided to stop that call: the stop is decided before the hook runs. The
+suppression notice is a policy denial, so the allowance charges it; with the
+allowance nearly spent, a suppression ends the execution as
+`invalidExhausted`.
+
+The model proves the streak and suppression bounds across composed steps,
+that a call at the limit is never dispatched, that other calls are, that
+charged outcomes never count, that hook-handled calls not stopped reset, that suppression
+spends one allowance unit, and that an unbounded identical failure stops on
+the fifth call. Interleaved repeats are left to the turn cap and other
+budgets. `repeated_tool_failure_cases` and the composed fields of
+`invalid_tool_progress_cases` drive the real owned loop and persistence hook.
 
 ### Logical invocation output obligations
 

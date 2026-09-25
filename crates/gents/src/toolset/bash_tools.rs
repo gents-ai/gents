@@ -134,6 +134,7 @@ impl UnrestrictedBashTool {
 
 impl Tool for ReadOnlyBashTool {
     const NAME: &'static str = "bash";
+    const EMITS_COMMAND_ENVELOPE: bool = true;
 
     type Error = ToolError;
     type Args = BashArgs;
@@ -202,6 +203,7 @@ impl Tool for ReadOnlyBashTool {
 
 impl Tool for UnrestrictedBashTool {
     const NAME: &'static str = "bash_unrestricted";
+    const EMITS_COMMAND_ENVELOPE: bool = true;
 
     type Error = ToolError;
     type Args = BashArgs;

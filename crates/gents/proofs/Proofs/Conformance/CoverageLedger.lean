@@ -1046,6 +1046,11 @@ def caseCoverage : List CoverageEntry :=
       "agent::loop_stream::tests::generated_invalid_tool_progress_cases_drive_owned_loop")
       "completion-retry" [Surface.runtimeInternal]
   , tagged (consumerCoverage
+      "repeated_tool_failure_cases"
+      "RepeatedToolFailureCases"
+      "agent::loop_stream::tests::generated_repeated_tool_failure_cases_drive_owned_loop")
+      "completion-retry" [Surface.runtimeInternal]
+  , tagged (consumerCoverage
       "workspace_path_alias_cases"
       "WorkspacePathAliasCases"
       "workspace::tests::path_alias_contract::generated_workspace_path_alias_cases_drive_real_git_delta")

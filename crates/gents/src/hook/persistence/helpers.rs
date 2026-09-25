@@ -609,6 +609,44 @@ mod tests {
     }
 
     #[test]
+    fn prepared_presentation_keeps_the_oversized_line_as_an_exact_range() {
+        use gents_protocol::output::{PayloadPresentation, PresentationPart};
+
+        let limits = crate::truncation::TruncationLimits::default();
+        let payload = format!("{{\"items\":[{}]}}", vec!["\"v\""; 20_000].join(","));
+        for (tool, raw) in [
+            ("wait_process", format!("Results:\n{payload}")),
+            ("bash", format!("{payload}\nexit status 1")),
+        ] {
+            let (bounded, presentation) =
+                bounded_tool_result_with_presentation(tool, &raw, &limits);
+            let Some(PayloadPresentation::Composed { parts }) = presentation else {
+                panic!("{tool}: oversized output must be truncated");
+            };
+            let range = parts
+                .iter()
+                .find_map(|part| match part {
+                    PresentationPart::OutputRange {
+                        start_byte,
+                        end_byte,
+                    } => Some(end_byte - start_byte),
+                    PresentationPart::Literal { .. } => None,
+                })
+                .unwrap_or_else(|| panic!("{tool}: selection must reference the source"));
+            assert_eq!(range, limits.max_bytes as u64, "{tool}");
+            assert_eq!(
+                crate::tool_call_lifecycle::delivery::render_presentation(
+                    &raw,
+                    &PayloadPresentation::Composed { parts }
+                )
+                .unwrap(),
+                bounded,
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
     fn prepared_presentation_handles_empty_selected_output() {
         let limits = crate::truncation::TruncationLimits {
             max_lines: 0,

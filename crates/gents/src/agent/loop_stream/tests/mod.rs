@@ -33,3 +33,4 @@ include!("streaming.rs");
 include!("tool_execution.rs");
 
 include!("invalid_tool_progress.rs");
+include!("repeated_tool_failure.rs");
