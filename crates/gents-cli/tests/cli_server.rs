@@ -1468,6 +1468,10 @@ async fn server_rejects_real_initialized_did_with_missing_key_file_without_creat
         !key_path.exists(),
         "server must not create a new key for a real initialized DID with missing key file"
     );
+    assert!(
+        !key_path.parent().expect("key parent").exists(),
+        "server must not create the missing key directory for an initialized DID"
+    );
 
     Ok(())
 }

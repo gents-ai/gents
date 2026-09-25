@@ -47,8 +47,12 @@ impl DesktopPaths {
     }
 
     pub async fn ensure_root_dirs(&self) -> Result<()> {
-        tokio::fs::create_dir_all(&self.root).await?;
-        tokio::fs::create_dir_all(&self.node_data_dir).await?;
+        let mut builder = tokio::fs::DirBuilder::new();
+        builder.recursive(true);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        builder.create(&self.root).await?;
+        builder.create(&self.node_data_dir).await?;
         Ok(())
     }
 
@@ -114,6 +118,22 @@ mod tests {
 
         assert_eq!(DESKTOP_HOME_ENV, "GENTS_DESKTOP_HOME");
         assert!(paths.root().ends_with(Path::new("gents").join("desktop")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn new_desktop_directories_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().expect("tempdir");
+        let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+
+        paths.ensure_root_dirs().await.expect("desktop directories");
+
+        for path in [paths.root(), paths.node_data_dir()] {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", path.display());
+        }
     }
 
     #[test]

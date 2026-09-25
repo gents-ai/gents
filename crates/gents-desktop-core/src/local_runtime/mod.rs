@@ -85,7 +85,7 @@ pub(crate) fn load_standard_runtime_identity(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        Arc::new(KeyIdentity::load_or_create(Path::new(path), None)?)
+        Arc::new(KeyIdentity::load_existing(Path::new(path), None)?)
     } else {
         match config.identity_backend.as_deref().map(str::trim) {
             Some("macos-keychain") => Arc::new(load_macos_keychain_identity(

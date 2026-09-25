@@ -1,8 +1,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use crypto::Key;
-use gents::identity::{register_ed25519_signing_identity, AgentIdentity, ServiceAccount};
+use gents::identity::{
+    load_file_identity, load_or_create_file_identity, register_ed25519_signing_identity,
+    AgentIdentity, ServiceAccount,
+};
 use identity::{FullIdentity as _, Identity as _, RawIdentity};
 use serde::{Deserialize, Serialize};
 
@@ -23,38 +25,33 @@ struct PrincipalMetadata {
 
 impl PrincipalIdentity {
     pub async fn load_or_create(paths: &DesktopPaths) -> Result<Self> {
-        let key_path = paths.identity_key_path();
+        let key_path = paths.identity_key_path().to_path_buf();
         let metadata_path = paths.principal_metadata_path();
-
-        if let Some(parent) = key_path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("creating principal directory {}", parent.display()))?;
-        }
-
-        let identity = match tokio::fs::read(key_path).await {
-            Ok(bytes) => RawIdentity::from_bytes(crypto::KeyType::Ed25519, &bytes)
-                .map_err(anyhow::Error::from)
-                .with_context(|| {
-                    format!("loading principal identity from {}", key_path.display())
-                })?,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let private_key = crypto::generate_ed25519().map_err(anyhow::Error::from)?;
-                let bytes = private_key.raw();
-                tokio::fs::write(key_path, &bytes).await.with_context(|| {
-                    format!("persisting principal key to {}", key_path.display())
-                })?;
-                RawIdentity::from_private_key(private_key)
-                    .map_err(anyhow::Error::from)
-                    .with_context(|| {
-                        format!("constructing principal identity at {}", key_path.display())
-                    })?
+        let metadata_exists = match tokio::fs::symlink_metadata(metadata_path).await {
+            Ok(metadata) => {
+                anyhow::ensure!(
+                    metadata.file_type().is_file(),
+                    "principal metadata {} is not a regular file",
+                    metadata_path.display()
+                );
+                true
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
             Err(error) => {
-                return Err(anyhow::Error::from(error))
-                    .with_context(|| format!("reading principal key {}", key_path.display()));
+                return Err(anyhow::Error::from(error)).with_context(|| {
+                    format!("inspecting principal metadata {}", metadata_path.display())
+                });
             }
         };
+        let identity = tokio::task::spawn_blocking(move || {
+            if metadata_exists {
+                load_file_identity(&key_path)
+            } else {
+                load_or_create_file_identity(&key_path)
+            }
+        })
+        .await
+        .context("joining principal identity load")??;
 
         let did = identity.did().map_err(anyhow::Error::from)?.to_string();
         let public_key_bytes = identity.public_key_bytes();
@@ -211,5 +208,111 @@ mod tests {
         assert_eq!(first.did(), second.did());
         assert_eq!(first.public_key_bytes(), second.public_key_bytes());
         assert_eq!(first.private_key_bytes(), second.private_key_bytes());
+    }
+
+    #[tokio::test]
+    async fn missing_key_after_principal_metadata_does_not_create_new_identity() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+        PrincipalIdentity::load_or_create(&paths).await.unwrap();
+        let original_metadata = std::fs::read(paths.principal_metadata_path()).unwrap();
+
+        std::fs::remove_file(paths.identity_key_path()).unwrap();
+        assert!(PrincipalIdentity::load_or_create(&paths).await.is_err());
+
+        assert!(!paths.identity_key_path().exists());
+        assert_eq!(
+            std::fs::read(paths.principal_metadata_path()).unwrap(),
+            original_metadata
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn dangling_metadata_symlink_does_not_create_a_key() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(root.path().join("desktop"));
+        paths.ensure_root_dirs().await.unwrap();
+        symlink(
+            root.path().join("absent.json"),
+            paths.principal_metadata_path(),
+        )
+        .unwrap();
+
+        let error = PrincipalIdentity::load_or_create(&paths).await.unwrap_err();
+        assert!(format!("{error:#}").contains("is not a regular file"));
+        assert!(!paths.identity_key_path().exists());
+        assert!(std::fs::symlink_metadata(paths.principal_metadata_path())
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn new_principal_key_and_directory_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+
+        paths.ensure_root_dirs().await.unwrap();
+        PrincipalIdentity::load_or_create(&paths).await.unwrap();
+
+        let directory_mode = std::fs::metadata(paths.root())
+            .unwrap()
+            .permissions()
+            .mode();
+        let key_mode = std::fs::metadata(paths.identity_key_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(directory_mode & 0o777, 0o700);
+        assert_eq!(key_mode & 0o777, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn principal_rejects_symlinked_key_without_touching_target() {
+        use std::os::unix::fs::symlink;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let target_paths = DesktopPaths::from_root(tempdir.path().join("target"));
+        PrincipalIdentity::load_or_create(&target_paths)
+            .await
+            .unwrap();
+        let target_key = target_paths.identity_key_path();
+        let original = std::fs::read(target_key).unwrap();
+
+        let linked_paths = DesktopPaths::from_root(tempdir.path().join("linked"));
+        linked_paths.ensure_root_dirs().await.unwrap();
+        symlink(target_key, linked_paths.identity_key_path()).unwrap();
+
+        assert!(PrincipalIdentity::load_or_create(&linked_paths)
+            .await
+            .is_err());
+        assert_eq!(std::fs::read(target_key).unwrap(), original);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn principal_rejects_insecure_existing_key_without_rewriting_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let paths = DesktopPaths::from_root(tempdir.path().join("desktop"));
+        PrincipalIdentity::load_or_create(&paths).await.unwrap();
+        let key_path = paths.identity_key_path();
+        let original = std::fs::read(key_path).unwrap();
+        std::fs::set_permissions(key_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(PrincipalIdentity::load_or_create(&paths).await.is_err());
+        assert_eq!(std::fs::read(key_path).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(key_path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
     }
 }
