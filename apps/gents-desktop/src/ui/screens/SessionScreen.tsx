@@ -1143,7 +1143,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       }
     } catch (e) {
       release();
-      toast(`Couldn't stop: ${String(e)}`);
+      toast(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -1540,7 +1540,8 @@ export function SessionScreen({ shell }: { shell: Shell }) {
         shell={shell}
         requestId={cascadeFor}
         onClose={() => setCascadeFor(null)}
-        onResult={(text) => toast(text)}
+        onStopRequested={setRequestedStop}
+        onFailure={(text) => toast(text)}
       />
     </div>
   );

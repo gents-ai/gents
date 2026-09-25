@@ -189,6 +189,10 @@ source consistency checks, not a separate runtime compatibility version.
 - Desktop: in a narrow window the session side panel and the fork notice take
   their turn with the shell's popovers, so opening one after the sync or
   context popover no longer stacks two dialogs (#1778).
+- Desktop: stopping a request that has children no longer shows an
+  "Interrupt requested" notification. Like a direct Stop, it shows
+  "Stopping…" until the request is terminal and then the stopped notice;
+  only a failure is announced, in plain language (#1616).
 
 ## 0.19.0 - 2026-09-24
 
