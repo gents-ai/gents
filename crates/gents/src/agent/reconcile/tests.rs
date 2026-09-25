@@ -9,7 +9,7 @@ use super::*;
 use crate::admission::BackendAdmissionConfig;
 use crate::agent::PendingAgentBehavior;
 use crate::backend_provider::BackendProviderKind;
-use crate::config::ResolvedBehavior;
+use crate::config::{MaxTurnsProvenance, ResolvedBehavior, DEFAULT_MAX_TURNS};
 use crate::ensure_runtime_schemas;
 use crate::graphql::escape_graphql_string;
 use crate::identity::{AgentIdentity as _, KeyIdentity, RuntimePrincipal};
@@ -49,6 +49,18 @@ async fn snapshot_for_behaviors(
     default_behavior_id: &str,
     behaviors: Vec<Arc<ResolvedBehavior>>,
 ) -> ResolvedRuntimeSnapshot {
+    snapshot_for_behaviors_with_principal(node, default_behavior_id, behaviors, stub_principal())
+        .await
+}
+
+/// Both snapshots must share one principal when a test isolates a single
+/// behavior field: the runtime fingerprint covers the local DID too.
+async fn snapshot_for_behaviors_with_principal(
+    node: &defra_node::EmbeddedNode,
+    default_behavior_id: &str,
+    behaviors: Vec<Arc<ResolvedBehavior>>,
+    principal: Arc<RuntimePrincipal>,
+) -> ResolvedRuntimeSnapshot {
     let mut tool_surfaces = HashMap::new();
     for behavior in &behaviors {
         let tool_surface = behavior
@@ -64,7 +76,7 @@ async fn snapshot_for_behaviors(
         tool_surfaces,
         HashMap::new(),
     )
-    .with_principal(stub_principal())
+    .with_principal(principal)
 }
 
 async fn snapshot_for_behaviors_with_admission(
@@ -167,6 +179,82 @@ async fn operator_write_changes_snapshot_fingerprint() {
     assert_eq!(diff.updated, 1);
     assert_eq!(diff.added, 0);
     assert_eq!(diff.removed, 0);
+}
+
+#[tokio::test]
+async fn max_turns_provenance_only_edit_reaches_the_running_behavior() {
+    let node = test_node().await;
+    ensure_runtime_schemas(node.as_ref()).await.unwrap();
+    let principal = stub_principal();
+
+    // Setting max_turns explicitly to the value the built-in default already
+    // produces changes nothing numeric, so only provenance distinguishes the
+    // two configurations. Both are built from one behavior so no other field
+    // can carry the difference.
+    let mut unset = PendingAgentBehavior::new("general")
+        .build_with_identity_for_test(test_identity("max-turns-provenance"));
+    unset.max_turns = DEFAULT_MAX_TURNS;
+    unset.max_turns_provenance = MaxTurnsProvenance::Default;
+    let mut explicit = unset.clone();
+    explicit.max_turns_provenance = MaxTurnsProvenance::ExecutionProfile;
+    assert_eq!(unset.max_turns, explicit.max_turns);
+
+    assert_ne!(
+        crate::completion_factory::behavior_slot_fingerprint(&unset),
+        crate::completion_factory::behavior_slot_fingerprint(&explicit),
+        "slot selection must rebuild when only max_turns provenance changed"
+    );
+
+    let unset = Arc::new(unset);
+    let explicit = Arc::new(explicit);
+    let unset_snapshot = snapshot_for_behaviors_with_principal(
+        node.as_ref(),
+        "general",
+        vec![Arc::clone(&unset)],
+        Arc::clone(&principal),
+    )
+    .await;
+    let explicit_snapshot = snapshot_for_behaviors_with_principal(
+        node.as_ref(),
+        "general",
+        vec![Arc::clone(&explicit)],
+        Arc::clone(&principal),
+    )
+    .await;
+
+    assert_ne!(
+        unset_snapshot.configuration_fingerprint(),
+        explicit_snapshot.configuration_fingerprint(),
+        "reconcile must not treat a provenance-only edit as a no-op"
+    );
+
+    // Setting the explicit value, and clearing it again, are both updates.
+    let active_unset = unset_snapshot.activate(1, HashMap::new());
+    let setting = diff_counts(&active_unset, &explicit_snapshot);
+    assert_eq!(setting.updated, 1);
+    assert_eq!(setting.added, 0);
+    assert_eq!(setting.removed, 0);
+
+    let explicit_snapshot = snapshot_for_behaviors_with_principal(
+        node.as_ref(),
+        "general",
+        vec![explicit],
+        Arc::clone(&principal),
+    )
+    .await;
+    let unset_snapshot =
+        snapshot_for_behaviors_with_principal(node.as_ref(), "general", vec![unset], principal)
+            .await;
+    let active_explicit = explicit_snapshot.activate(1, HashMap::new());
+    assert_ne!(
+        active_explicit.configuration_fingerprint(),
+        unset_snapshot.configuration_fingerprint(),
+        "clearing an explicit value equal to the default must also reconcile"
+    );
+    let clearing = diff_counts(&active_explicit, &unset_snapshot);
+    assert_eq!(clearing.updated, 1);
+    assert_eq!(clearing.added, 0);
+    assert_eq!(clearing.removed, 0);
 }
 
 #[tokio::test]

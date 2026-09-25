@@ -643,7 +643,7 @@ impl PendingAgentBehavior {
             max_output_tokens: self.max_output_tokens,
             max_turns: self.max_turns,
             max_turns_provenance: if self.max_turns_explicit {
-                crate::config::MaxTurnsProvenance::Explicit
+                crate::config::MaxTurnsProvenance::BuilderOverride
             } else {
                 crate::config::MaxTurnsProvenance::Default
             },
@@ -700,5 +700,52 @@ impl PendingAgentBehavior {
             &ToolCeiling::meta_only(),
         )
         .unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{MaxTurnsProvenance, DEFAULT_MAX_TURNS};
+    use crate::identity::KeyIdentity;
+
+    fn test_identity(name: &str) -> KeyIdentity {
+        let path = std::env::temp_dir().join(format!("{name}-{}.key", uuid::Uuid::new_v4()));
+        KeyIdentity::load_or_create(path, None).unwrap()
+    }
+
+    #[test]
+    fn builder_max_turns_resolves_to_a_programmatic_provenance() {
+        let behavior = GentsBuilder::default()
+            .behavior("general")
+            .max_turns(40)
+            .behavior
+            .build_with_identity_for_test(test_identity("builder-max-turns-explicit"));
+
+        assert_eq!(behavior.max_turns, 40);
+        assert_eq!(
+            behavior.max_turns_provenance,
+            MaxTurnsProvenance::BuilderOverride
+        );
+        let message = behavior.max_turns_provenance.describe();
+        assert!(
+            message.contains("BehaviorBuilder::max_turns"),
+            "a builder-configured limit must name the builder: {message}"
+        );
+        assert!(
+            message.contains("no InferenceExecution document"),
+            "a builder-configured limit has no owning document to edit: {message}"
+        );
+    }
+
+    #[test]
+    fn builder_without_max_turns_resolves_to_the_built_in_default() {
+        let behavior = GentsBuilder::default()
+            .behavior("general")
+            .behavior
+            .build_with_identity_for_test(test_identity("builder-max-turns-default"));
+
+        assert_eq!(behavior.max_turns, DEFAULT_MAX_TURNS);
+        assert_eq!(behavior.max_turns_provenance, MaxTurnsProvenance::Default);
     }
 }

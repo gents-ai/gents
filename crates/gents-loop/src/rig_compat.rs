@@ -445,11 +445,67 @@ pub fn from_rig_assistant_content(
     }
 }
 
+/// Native classification of a terminal stream failure, so runtime callers can
+/// act on the cause without matching rig's error enums outside this owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreamFailureKind {
+    MaxTurns,
+    Other,
+}
+
+pub fn classify_stream_failure(error: &rig::agent::StreamingError) -> StreamFailureKind {
+    match error {
+        rig::agent::StreamingError::Prompt(prompt_error)
+            if matches!(
+                **prompt_error,
+                rig::completion::PromptError::MaxTurnsError { .. }
+            ) =>
+        {
+            StreamFailureKind::MaxTurns
+        }
+        _ => StreamFailureKind::Other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::{json, Value};
 
     use super::*;
+
+    fn max_turns_stream_failure(max_turns: usize) -> rig::agent::StreamingError {
+        rig::agent::StreamingError::Prompt(Box::new(rig::completion::PromptError::MaxTurnsError {
+            max_turns,
+            chat_history: Box::new(Vec::new()),
+            prompt: Box::new(rig::completion::Message::user("classify me")),
+        }))
+    }
+
+    #[test]
+    fn turn_exhaustion_classifies_as_max_turns() {
+        assert_eq!(
+            classify_stream_failure(&max_turns_stream_failure(1_000)),
+            StreamFailureKind::MaxTurns
+        );
+    }
+
+    #[test]
+    fn provider_failure_does_not_classify_as_max_turns() {
+        let error = rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError("boom".to_string()),
+        );
+        assert_eq!(classify_stream_failure(&error), StreamFailureKind::Other);
+    }
+
+    #[test]
+    fn a_provider_failure_echoing_max_turn_wording_still_classifies_as_other() {
+        let error = rig::agent::StreamingError::Completion(
+            rig::completion::CompletionError::ProviderError(
+                "upstream mentioned MaxTurnError: (reached max turn limit: 1000)".to_string(),
+            ),
+        );
+        assert_eq!(classify_stream_failure(&error), StreamFailureKind::Other);
+    }
 
     // ===== #589/#590: argument-shape normalization at both converter seams =====
 
