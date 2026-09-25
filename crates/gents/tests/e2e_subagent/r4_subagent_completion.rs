@@ -648,8 +648,12 @@ fn skip_reason(action: ToolCallHookAction) -> String {
     reason
 }
 
+/// The accepted-turn runtime is still writing this request (its own
+/// terminalization and bookkeeping), so the fixture write goes through the
+/// transaction owner, whose conflict retry re-runs the whole update.
 async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &str) {
     let request_id = escape_graphql_string(request_id);
+    let state = escape_graphql_string(state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -658,12 +662,12 @@ async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &st
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "set request lifecycle failed: {:?}",
-        response.errors
-    );
+    ConfigAccess::transact_local(node, None, "test.set_request_lifecycle", |txn| {
+        let mutation = mutation.clone();
+        Box::pin(async move { txn.execute(&mutation).await.map(|_| ()) })
+    })
+    .await
+    .unwrap_or_else(|error| panic!("set request lifecycle failed: {error:#}"));
 }
 
 async fn set_child_processing_deadline(
@@ -1640,10 +1644,11 @@ async fn stale_hook_sequence_does_not_overwrite_background_notification() {
     assert!(resumed.sequence > notification.sequence);
 }
 
-/// #1806: a publication landing between the identity read and the content
-/// read of one observation must not mismatch metadata and content. The
-/// runtime is stopped while the identities are read and publishes before they
-/// are reconstructed, so this ordering is deterministic.
+/// #1806 pinned-identity regression for `load_parent_messages`: identities
+/// captured while the runtime is stopped still reconstruct to exactly their
+/// own rows after a later publication. This does not drive
+/// `fetch_parent_messages` itself across the race; that composition is covered
+/// only by repeated integration runs.
 #[tokio::test]
 async fn parent_message_observation_is_coherent_across_publication() {
     let (db, session_id, _parent_request_id) =
