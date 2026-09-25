@@ -494,20 +494,22 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
 
     let client = RenderedRequestCapturingHttpClient::new(MessagesTransport {
         fixture,
-        live: http.clone(),
+        live: crate::provider_http::ProviderHttpClient::new(http.clone()),
     });
     let response = match client.send_streaming(http_request).await {
         Ok(response) => response,
-        // rig's reqwest transport pre-checks the status and hands back the
-        // body text; bound it the same way as the streamed path.
+        // The transport pre-checks the status and hands back the body text
+        // with its rate-limit header marker; bound the body the same way as
+        // the streamed path and keep the marker whole.
         Err(http_client::Error::InvalidStatusCodeWithMessage(status, message)) => {
             if status.as_u16() == 401 {
                 bearer.invalidate().await;
             }
+            let (body, marker) = gents_loop::provider_limit::split_provider_limit_marker(&message);
             return Err(non_success_error(
                 status,
                 None,
-                &body_prefix(message.as_bytes()),
+                &format!("{}{marker}", body_prefix(body.as_bytes())),
             ));
         }
         Err(error) => return Err(error.into()),
@@ -518,8 +520,8 @@ pub(crate) async fn stream_messages_at<S: BearerSource>(
         .get("request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_string);
-    // Reachable only for non-reqwest transports (e.g. the fixture): rig's
-    // reqwest client pre-checks the status and errors above.
+    // Reachable only for non-reqwest transports (e.g. the fixture): the
+    // reqwest terminal pre-checks the status and errors above.
     if !status.is_success() {
         let prefix = read_body_prefix(response.into_body()).await;
         return Err(non_success_error(status, request_id.as_deref(), &prefix));
@@ -578,7 +580,7 @@ async fn read_body_prefix(mut body: http_client::sse::BoxedStream) -> String {
 #[derive(Clone)]
 struct MessagesTransport {
     fixture: Option<String>,
-    live: ReqwestClient,
+    live: crate::provider_http::ProviderHttpClient,
 }
 
 impl HttpClientExt for MessagesTransport {

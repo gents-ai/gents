@@ -53,7 +53,7 @@ fn failure_class_maps_transport_variants() {
     assert_eq!(
         failure_class(
             &InferenceError::RateLimited {
-                retry_after_secs: 60
+                retry_after: Some(Duration::from_secs(60))
             },
             "rate limited"
         ),
@@ -190,7 +190,7 @@ fn rate_limited_uses_provider_hint_when_larger_than_ladder() {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
     let now = Utc::now();
     let error = InferenceError::RateLimited {
-        retry_after_secs: 90,
+        retry_after: Some(Duration::from_secs(90)),
     };
     match state.on_pre_stream_failure(&error, "rate limited", now, None) {
         PreStreamDirective::RetryAfter { delay, kind } => {
@@ -207,7 +207,7 @@ fn rate_limited_keeps_ladder_delay_when_larger_than_hint() {
     let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
     let now = Utc::now();
     let error = InferenceError::RateLimited {
-        retry_after_secs: 1,
+        retry_after: Some(Duration::from_secs(1)),
     };
     match state.on_pre_stream_failure(&error, "rate limited", now, None) {
         PreStreamDirective::RetryAfter { delay, kind } => {
@@ -483,4 +483,41 @@ fn observed_retry_wake_is_deadline_bounded_and_inclusive() {
         deadline + chrono::Duration::days(1),
         None
     ));
+}
+
+#[test]
+fn usage_limit_fails_immediately_with_its_reset_time() {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
+    let limit = crate::provider_limit::UsageLimit {
+        resets_at: chrono::DateTime::parse_from_rfc3339("2026-09-25T18:40:00Z")
+            .ok()
+            .map(|at| at.with_timezone(&Utc)),
+        detail: "seat capped".into(),
+    };
+    let error = InferenceError::UsageLimited(limit);
+    assert_eq!(
+        failure_class(&error, "seat capped"),
+        FailureClass::Permanent
+    );
+    match state.on_pre_stream_failure(&error, "seat capped", Utc::now(), None) {
+        PreStreamDirective::Fail { reason } => assert_eq!(
+            reason,
+            "provider usage limit reached (resets at 2026-09-25T18:40:00Z): seat capped"
+        ),
+        other => panic!("expected Fail, got {other:?}"),
+    }
+    assert_eq!(state.retry_count(), 0);
+}
+
+#[test]
+fn rate_limited_without_hint_uses_the_ladder() {
+    let mut state = CompletionRetryState::new(CompletionRetryPolicy::scheduled_default());
+    let error = InferenceError::RateLimited { retry_after: None };
+    match state.on_pre_stream_failure(&error, "rate limited", Utc::now(), None) {
+        PreStreamDirective::RetryAfter { delay, kind } => {
+            assert_eq!(kind, RetryKind::Transport);
+            assert_in_range(delay, 3_750, 6_250);
+        }
+        other => panic!("expected RetryAfter, got {other:?}"),
+    }
 }

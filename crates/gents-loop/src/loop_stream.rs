@@ -434,7 +434,12 @@ where
                         // admission permit and provider connection before any
                         // retry backoff.
                         drop(stream);
-                        if !saw_stream_item {
+                        // A usage limit is permanent while streaming too
+                        // (Lean `observeFailure .permanent`); resampling
+                        // after partial output cannot clear it.
+                        if !saw_stream_item
+                            || matches!(classified, InferenceError::UsageLimited(_))
+                        {
                             match retry.on_pre_stream_failure(
                                 &classified,
                                 &error_text,

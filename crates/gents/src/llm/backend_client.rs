@@ -29,7 +29,7 @@ pub(crate) enum BackendClient {
         rig::providers::openai::CompletionsClient<
             crate::inference_http::SessionTaggingHttpClient<
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
-                    rig::http_client::ReqwestClient,
+                    crate::provider_http::ProviderHttpClient,
                 >,
             >,
         >,
@@ -39,7 +39,7 @@ pub(crate) enum BackendClient {
             crate::inference_http::SessionTaggingHttpClient<
                 crate::inference_http::ResponsesNormalizingHttpClient<
                     crate::rendered_request::RenderedRequestCapturingHttpClient<
-                        rig::http_client::ReqwestClient,
+                        crate::provider_http::ProviderHttpClient,
                     >,
                 >,
             >,
@@ -48,7 +48,7 @@ pub(crate) enum BackendClient {
     OpenRouter(
         rig::providers::openrouter::Client<
             crate::rendered_request::RenderedRequestCapturingHttpClient<
-                rig::http_client::ReqwestClient,
+                crate::provider_http::ProviderHttpClient,
             >,
         >,
     ),
@@ -57,7 +57,7 @@ pub(crate) enum BackendClient {
             crate::chatgpt_codex::ChatGptCodexHttpClient<
                 crate::oauth_credential::DbCredentialBearer,
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
-                    rig::http_client::ReqwestClient,
+                    crate::provider_http::ProviderHttpClient,
                 >,
             >,
         >,
@@ -103,7 +103,7 @@ pub(crate) async fn build_backend_client(
                     &behavior.backend_endpoint,
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                            rig::http_client::ReqwestClient,
+                            crate::provider_http::ProviderHttpClient,
                         >::default(),
                     ),
                 )
@@ -116,7 +116,7 @@ pub(crate) async fn build_backend_client(
                     crate::inference_http::SessionTaggingHttpClient::new(
                         crate::inference_http::ResponsesNormalizingHttpClient::new(
                             crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                                rig::http_client::ReqwestClient,
+                                crate::provider_http::ProviderHttpClient,
                             >::default(),
                         ),
                     ),
@@ -133,14 +133,14 @@ pub(crate) async fn build_backend_client(
             );
             let client: rig::providers::openrouter::Client<
                 crate::rendered_request::RenderedRequestCapturingHttpClient<
-                    rig::http_client::ReqwestClient,
+                    crate::provider_http::ProviderHttpClient,
                 >,
             > = rig::providers::openrouter::Client::builder()
                 .api_key(api_key)
                 .base_url(&behavior.backend_endpoint)
                 .http_client(
                     crate::rendered_request::RenderedRequestCapturingHttpClient::<
-                        rig::http_client::ReqwestClient,
+                        crate::provider_http::ProviderHttpClient,
                     >::default(),
                 )
                 .build()

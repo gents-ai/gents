@@ -35,6 +35,7 @@ pub mod output_obligation;
 pub mod prompt;
 pub mod provider_activity;
 pub mod provider_input;
+pub mod provider_limit;
 pub mod provider_patches;
 pub mod provider_stream;
 pub mod provider_usage;

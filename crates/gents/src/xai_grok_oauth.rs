@@ -303,7 +303,7 @@ async fn build_authenticated_http(
     Ok(XaiGrokOAuthHttpClient::with_inner(
         bearer,
         crate::rendered_request::RenderedRequestCapturingHttpClient::<
-            rig::http_client::ReqwestClient,
+            crate::provider_http::ProviderHttpClient,
         >::default(),
     ))
 }
@@ -311,7 +311,9 @@ async fn build_authenticated_http(
 /// Grok's OAuth transport wrapping the capture seam, which wraps reqwest.
 pub type CapturingXaiGrokOAuthHttpClient = XaiGrokOAuthHttpClient<
     DbCredentialBearer,
-    crate::rendered_request::RenderedRequestCapturingHttpClient<rig::http_client::ReqwestClient>,
+    crate::rendered_request::RenderedRequestCapturingHttpClient<
+        crate::provider_http::ProviderHttpClient,
+    >,
 >;
 
 pub async fn build_responses_client(
