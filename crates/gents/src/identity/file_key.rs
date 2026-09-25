@@ -1,10 +1,22 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use crypto::Key;
 use identity::RawIdentity;
+
+/// An existing identity key that group or other users can access. It is
+/// refused, never repaired: a key that was readable by others may already
+/// be exposed, so loading it (or tightening its mode in place) would keep
+/// using a possibly compromised identity. Typed so hosts can route the
+/// refusal (for example to a fresh start) instead of matching its message.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("identity key {} has insecure permissions {mode:o}; remove group/other access before loading it", path.display())]
+pub struct InsecureKeyPermissions {
+    pub path: PathBuf,
+    pub mode: u32,
+}
 
 /// Loads an existing file-backed Ed25519 identity without creating a key or
 /// directory. On Unix the opened inode must be a regular file inaccessible to
@@ -96,11 +108,11 @@ fn validate_opened_key(file: &File, path: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let mode = metadata.permissions().mode();
         if mode & 0o077 != 0 {
-            bail!(
-                "identity key {} has insecure permissions {:o}; remove group/other access before loading it",
-                path.display(),
-                mode & 0o777
-            );
+            return Err(InsecureKeyPermissions {
+                path: path.to_path_buf(),
+                mode: mode & 0o777,
+            }
+            .into());
         }
     }
     Ok(())
@@ -222,6 +234,13 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
         let error = load_or_create_file_identity(&target).unwrap_err();
         assert!(format!("{error:#}").contains("insecure permissions"));
+        assert_eq!(
+            error.downcast_ref::<InsecureKeyPermissions>(),
+            Some(&InsecureKeyPermissions {
+                path: target.clone(),
+                mode: 0o644
+            })
+        );
         assert!(load_file_identity(&target).is_err());
         assert_eq!(
             fs::metadata(&target).unwrap().permissions().mode() & 0o777,

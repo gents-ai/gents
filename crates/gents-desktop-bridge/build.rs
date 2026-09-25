@@ -5,6 +5,7 @@ const COMMANDS: &[&str] = &[
     "desktop_init_local_standard",
     "desktop_client_start",
     "desktop_client_shutdown",
+    "desktop_app_quit",
     "desktop_managed_server_status",
     "desktop_managed_server_start",
     "desktop_managed_server_stop",

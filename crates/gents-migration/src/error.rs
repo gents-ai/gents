@@ -78,3 +78,17 @@ pub enum Error {
 
 /// Result alias for this crate.
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl Error {
+    /// The store does not descend from this build's baseline: an older build
+    /// wrote it, and this release has no migration from it.
+    pub fn is_unknown_lineage(&self) -> bool {
+        matches!(self, Self::UnknownLineage { .. })
+    }
+
+    /// The store descends from this baseline but another build (for example
+    /// a newer one) added versions this build does not know.
+    pub fn is_foreign_version(&self) -> bool {
+        matches!(self, Self::ForeignVersion { .. })
+    }
+}

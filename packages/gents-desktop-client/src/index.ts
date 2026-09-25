@@ -25,7 +25,9 @@ export type {
   ManagedServerAuthorityInput,
   ManagedServerStatus,
   ManagedServerResetResult,
+  HomeResetDisposition,
 } from "./api/types.js";
+export type { IncompatibleStoreView } from "./generated/IncompatibleStoreView.js";
 export type { ManagedServerToolCeiling } from "./generated/ManagedServerToolCeiling.js";
 export * from "./events.js";
 export * from "./operationalState.js";

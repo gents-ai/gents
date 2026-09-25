@@ -39,6 +39,7 @@ pub async fn ensure_migrations_with_registry(
     let mut report = MigrationReport::default();
 
     let started = Instant::now();
+    reject_unknown_lineage(node, registry).await?;
     register_baseline(node, registry, &mut report).await?;
     let baseline_ready = Instant::now();
     apply_steps(node, registry, &mut report).await?;
@@ -658,6 +659,42 @@ async fn apply_patch_in_place(
 // Lineage verification (entire DAG of every managed collection)
 // ---------------------------------------------------------------------------
 
+/// Group non-placeholder versions by collection name.
+fn versions_by_name(
+    all_versions: &[CollectionVersion],
+) -> HashMap<String, Vec<&CollectionVersion>> {
+    let mut by_name: HashMap<String, Vec<&CollectionVersion>> = HashMap::new();
+    for v in all_versions {
+        if v.is_placeholder || v.name.is_empty() {
+            continue;
+        }
+        by_name.entry(v.name.clone()).or_default().push(v);
+    }
+    by_name
+}
+
+/// Reject a store whose existing managed collections descend from a lineage
+/// this registry does not know, before anything is registered or patched.
+///
+/// Baseline registration adds collections a store lacks, so running it first
+/// would write this build's schema into a store it then refuses to open. The
+/// check reads the version DAG only; collections absent from the store are
+/// left to baseline registration.
+async fn reject_unknown_lineage(node: &EmbeddedNode, registry: &Registry<'_>) -> Result<()> {
+    let all_versions = node
+        .get_all_collection_versions()
+        .await
+        .map_err(Error::Node)?;
+    let by_name = versions_by_name(&all_versions);
+    let known_pins = known_pin_set(registry);
+    for entry in registry.baseline {
+        if let Some(versions) = by_name.get(entry.name) {
+            check_known_lineage(entry, versions, &known_pins)?;
+        }
+    }
+    Ok(())
+}
+
 async fn verify_managed_lineages(
     node: &EmbeddedNode,
     registry: &Registry<'_>,
@@ -667,15 +704,7 @@ async fn verify_managed_lineages(
         .get_all_collection_versions()
         .await
         .map_err(Error::Node)?;
-
-    // Group non-placeholder versions by collection name.
-    let mut by_name: HashMap<String, Vec<&CollectionVersion>> = HashMap::new();
-    for v in &all_versions {
-        if v.is_placeholder || v.name.is_empty() {
-            continue;
-        }
-        by_name.entry(v.name.clone()).or_default().push(v);
-    }
+    let by_name = versions_by_name(&all_versions);
 
     let known_pins = known_pin_set(registry);
     let target_active = target_active_pins(registry);
@@ -773,7 +802,11 @@ fn verify_one_collection(
             collection: entry.name.to_string(),
         })?;
 
-    let non_ph: Vec<&&CollectionVersion> = versions.iter().filter(|v| !v.is_placeholder).collect();
+    let non_ph: Vec<&CollectionVersion> = versions
+        .iter()
+        .copied()
+        .filter(|v| !v.is_placeholder)
+        .collect();
 
     if non_ph.is_empty() {
         return Err(Error::CollectionMissing {
@@ -781,29 +814,7 @@ fn verify_one_collection(
         });
     }
 
-    // Multi-version DAGs are legal only when every non-placeholder version is a
-    // known pin (baseline root + step destinations).
-    if non_ph.len() > 1 {
-        let all_known = !known_pins.is_empty()
-            && non_ph
-                .iter()
-                .all(|v| known_pins.contains(v.version_id.as_str()));
-        if !all_known {
-            let ids: Vec<&str> = non_ph.iter().map(|v| v.version_id.as_str()).collect();
-            for v in &non_ph {
-                if !known_pins.is_empty() && !known_pins.contains(v.version_id.as_str()) {
-                    return Err(Error::ForeignVersion {
-                        collection: entry.name.to_string(),
-                        version_id: v.version_id.clone(),
-                    });
-                }
-            }
-            return Err(Error::UnknownLineage {
-                collection: entry.name.to_string(),
-                versions: ids.join(", "),
-            });
-        }
-    }
+    check_known_lineage(entry, &non_ph, known_pins)?;
 
     let active = non_ph
         .iter()
@@ -813,22 +824,6 @@ fn verify_one_collection(
         .ok_or_else(|| Error::CollectionMissing {
             collection: entry.name.to_string(),
         })?;
-
-    // Root pin (if set) must appear in the DAG — it is not necessarily active
-    // after later PatchVersioned steps.
-    if let Some(root) = entry.expected_version {
-        let has_root = non_ph.iter().any(|v| v.version_id == root);
-        if !has_root {
-            return Err(Error::UnknownLineage {
-                collection: entry.name.to_string(),
-                versions: non_ph
-                    .iter()
-                    .map(|v| v.version_id.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            });
-        }
-    }
 
     // Active version must match the final target pin when one is known.
     if let Some(target) = target_active.get(entry.name) {
@@ -850,5 +845,61 @@ fn verify_one_collection(
             detail,
         })?;
 
+    Ok(())
+}
+
+/// A collection's DAG belongs to this registry's lineage: the baseline root
+/// pin is present and, when it has several versions, every one is a known pin.
+///
+/// A missing root means the store predates this baseline (an older build);
+/// a present root with extra unknown versions means another build extended
+/// this lineage (for example a newer one). Hosts word the two differently.
+fn check_known_lineage(
+    entry: &BaselineCollection<'_>,
+    versions: &[&CollectionVersion],
+    known_pins: &HashSet<String>,
+) -> Result<()> {
+    let non_ph: Vec<&CollectionVersion> = versions
+        .iter()
+        .copied()
+        .filter(|v| !v.is_placeholder)
+        .collect();
+    // Root pin (if set) must appear in the DAG — it is not necessarily active
+    // after later PatchVersioned steps.
+    if let Some(root) = entry.expected_version {
+        if !non_ph.iter().any(|v| v.version_id == root) {
+            return Err(Error::UnknownLineage {
+                collection: entry.name.to_string(),
+                versions: non_ph
+                    .iter()
+                    .map(|v| v.version_id.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            });
+        }
+    }
+    // Multi-version DAGs are legal only when every non-placeholder version is a
+    // known pin (baseline root + step destinations).
+    if non_ph.len() > 1 {
+        if let Some(foreign) = non_ph
+            .iter()
+            .find(|v| !known_pins.contains(v.version_id.as_str()))
+        {
+            if known_pins.is_empty() {
+                return Err(Error::UnknownLineage {
+                    collection: entry.name.to_string(),
+                    versions: non_ph
+                        .iter()
+                        .map(|v| v.version_id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                });
+            }
+            return Err(Error::ForeignVersion {
+                collection: entry.name.to_string(),
+                version_id: foreign.version_id.clone(),
+            });
+        }
+    }
     Ok(())
 }

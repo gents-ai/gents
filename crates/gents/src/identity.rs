@@ -10,7 +10,7 @@ use identity::{FullIdentity as _, Identity as _, RawIdentity};
 
 mod file_key;
 
-pub use file_key::{load_file_identity, load_or_create_file_identity};
+pub use file_key::{load_file_identity, load_or_create_file_identity, InsecureKeyPermissions};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccount {

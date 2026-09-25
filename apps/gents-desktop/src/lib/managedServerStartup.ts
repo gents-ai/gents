@@ -172,8 +172,11 @@ export function unsettledManagedServerError(
       status,
     );
   }
-  if (status.state === "failed" && status.error) {
-    return new ManagedServerStartupError(status.error, status);
+  if (status.state === "failed" && (status.error || status.errorCode)) {
+    return new ManagedServerStartupError(
+      status.error ?? "The background agent could not start.",
+      status,
+    );
   }
   return null;
 }

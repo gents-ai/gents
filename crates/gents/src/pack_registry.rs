@@ -317,7 +317,7 @@ pub async fn fetch_pack(
         coordinate.namespace, coordinate.name, coordinate.version
     );
     let cache_path = cache_home.map(|home| {
-        home.join("packs")
+        home.join(crate::home::PACKS_DIR_NAME)
             .join("registry-cache")
             .join(format!("{advertised}.tar.gz"))
     });
