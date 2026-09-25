@@ -25,6 +25,7 @@ use super::wasm::{plan_from_wasm_module, validate_callback_module};
 use super::{
     LIFECYCLE_CLAIMED, LIFECYCLE_DENIED, LIFECYCLE_FAILED, LIFECYCLE_RUNNING, LIFECYCLE_SUCCEEDED,
 };
+use crate::plugin::executor::PluginExecutor;
 
 /// Action N+1 must not enter Executing until N is ResultDocsWritten.
 pub fn can_start_executing(journal: &[ActionJournalEntry], index: u32) -> bool {
@@ -104,6 +105,9 @@ pub fn plan_from_callback(
                 &callback.capabilities.iter().cloned().collect(),
             )
         }
+        CallbackHandler::Plugin { plugin, .. } => Err(format!(
+            "callback plugin {plugin} runs the plugin itself and has no action plan"
+        )),
     }
 }
 
@@ -312,6 +316,7 @@ pub async fn run_owned_invocation(
     invocation: &CallbackInvocationDoc,
     callback: &crate::document_config::Callback,
     ceiling: Option<&Path>,
+    plugins: &PluginExecutor,
 ) -> Result<()> {
     if !invocation_is_claimable(&invocation.owner_agent_did, invocation)
         && invocation.lifecycle_state != LIFECYCLE_CLAIMED
@@ -330,7 +335,7 @@ pub async fn run_owned_invocation(
     }
 
     let source = claimed.input.clone();
-    execute_running_invocation(node, &mut claimed, callback, &source, ceiling).await
+    execute_running_invocation(node, &mut claimed, callback, &source, ceiling, plugins).await
 }
 
 async fn persist_claimed_to_running(
@@ -374,6 +379,7 @@ async fn execute_running_invocation(
     callback: &crate::document_config::Callback,
     source: &Value,
     ceiling: Option<&Path>,
+    plugins: &PluginExecutor,
 ) -> Result<()> {
     if callback.agent_did != invocation.owner_agent_did
         || callback.callback_id != invocation.callback_id
@@ -390,6 +396,21 @@ async fn execute_running_invocation(
     let mut journal = decode_journal(invocation.action_journal.as_deref())?;
     if !crate::workspace::action_journal_prefix_legal(&journal) {
         return deny(node, invocation, "illegal action journal prefix").await;
+    }
+    if let crate::document_config::CallbackHandler::Plugin {
+        plugin,
+        digest,
+        correlation_field,
+        outputs,
+    } = &callback.handler
+    {
+        let handler = super::plugin::PluginHandler {
+            plugin,
+            digest,
+            correlation_field: correlation_field.as_deref(),
+            outputs,
+        };
+        return super::plugin::execute(node, invocation, handler, source, plugins, journal).await;
     }
 
     // Recovery with a stored plan must not reload/re-validate the WASM module.
@@ -560,7 +581,7 @@ fn memory_from_outcome(
     docs
 }
 
-async fn persist_journal(
+pub(super) async fn persist_journal(
     node: &EmbeddedNode,
     invocation: &mut CallbackInvocationDoc,
     journal: &[ActionJournalEntry],
@@ -595,7 +616,7 @@ async fn emit_new_plan(
     }
 }
 
-async fn deny(
+pub(super) async fn deny(
     node: &EmbeddedNode,
     invocation: &mut CallbackInvocationDoc,
     reason: &str,
@@ -662,6 +683,7 @@ pub async fn recover_local_invocations(
     node: &EmbeddedNode,
     agent_did: &str,
     ceiling: Option<&Path>,
+    plugins: &PluginExecutor,
 ) -> Result<()> {
     let invocations = super::documents::list_recoverable_invocations(node, agent_did).await?;
     for invocation in invocations {
@@ -691,7 +713,9 @@ pub async fn recover_local_invocations(
             );
             continue;
         };
-        if let Err(error) = run_owned_invocation(node, &invocation, &callback, ceiling).await {
+        if let Err(error) =
+            run_owned_invocation(node, &invocation, &callback, ceiling, plugins).await
+        {
             tracing::warn!(
                 invocation_id = %invocation.invocation_id,
                 %error,

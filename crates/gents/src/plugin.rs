@@ -632,4 +632,4 @@ pub mod tool;
 pub use afterburner_core::manifold::Manifold;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

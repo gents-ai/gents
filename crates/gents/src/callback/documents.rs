@@ -676,11 +676,11 @@ pub async fn create_pending_invocation(
     }
 }
 
-pub async fn update_invocation(
-    node: &EmbeddedNode,
+/// The compare-and-set update of `invocation`, matched on `expected_state` when given.
+pub(super) fn update_invocation_mutation(
     invocation: &CallbackInvocationDoc,
     expected_state: Option<&str>,
-) -> Result<bool> {
+) -> String {
     let state_filter = expected_state
         .map(|state| {
             format!(
@@ -693,7 +693,7 @@ pub async fn update_invocation(
     let plan = invocation.action_plan.as_deref().unwrap_or("");
     let error = invocation.error.as_deref().unwrap_or("");
     let claimed_at = invocation.claimed_at.as_deref().unwrap_or("");
-    let mutation = format!(
+    format!(
         r#"mutation {{
             update_CallbackInvocation(
                 filter: {{
@@ -719,20 +719,21 @@ pub async fn update_invocation(
         journal = escape_graphql_string(journal),
         error = escape_graphql_string(error),
         claimed_at = escape_graphql_string(claimed_at),
-    );
+    )
+}
+
+pub async fn update_invocation(
+    node: &EmbeddedNode,
+    invocation: &CallbackInvocationDoc,
+    expected_state: Option<&str>,
+) -> Result<bool> {
+    let mutation = update_invocation_mutation(invocation, expected_state);
     let response = committed_mutation(node, "callback.update_invocation", &mutation).await?;
     Ok(crate::graphql::single_mutation_document(&response, "update_CallbackInvocation")?.is_some())
 }
 
-pub async fn create_callback_result(
-    node: &EmbeddedNode,
-    result: &CallbackResultDoc,
-) -> Result<CallbackResultDoc> {
-    if let Some(existing) =
-        load_callback_result(node, &result.invocation_id, &result.owner_agent_did).await?
-    {
-        return Ok(existing);
-    }
+/// The create mutation for `result`.
+pub(super) fn create_callback_result_mutation(result: &CallbackResultDoc) -> String {
     let now = result
         .created_at
         .clone()
@@ -741,7 +742,7 @@ pub async fn create_callback_result(
     let workspace = result.workspace_id.as_deref().unwrap_or("");
     let work_unit_id = result.work_unit_id.as_deref().unwrap_or("");
     let correlation = result.caused_by_correlation.as_deref().unwrap_or("");
-    let mutation = format!(
+    format!(
         r#"mutation {{
             create_CallbackResult(input: {{
                 result_id: "{result_id}",
@@ -762,7 +763,19 @@ pub async fn create_callback_result(
         work_unit_id = escape_graphql_string(work_unit_id),
         correlation = escape_graphql_string(correlation),
         created_at = escape_graphql_string(&now),
-    );
+    )
+}
+
+pub async fn create_callback_result(
+    node: &EmbeddedNode,
+    result: &CallbackResultDoc,
+) -> Result<CallbackResultDoc> {
+    if let Some(existing) =
+        load_callback_result(node, &result.invocation_id, &result.owner_agent_did).await?
+    {
+        return Ok(existing);
+    }
+    let mutation = create_callback_result_mutation(result);
     match committed_mutation(node, "callback.create_result", &mutation).await {
         Ok(_) => load_callback_result(node, &result.invocation_id, &result.owner_agent_did)
             .await?

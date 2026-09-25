@@ -52,6 +52,7 @@ impl CallbackEngine {
             node,
             agent_did,
             ceiling,
+            plugins: Arc::default(),
             subscription_source: subs,
             subscription: None,
             desired_collections: HashSet::new(),
@@ -334,6 +335,7 @@ impl CallbackEngine {
                 &stored,
                 callback,
                 self.ceiling.as_deref(),
+                &self.plugins,
             )
             .await
             {

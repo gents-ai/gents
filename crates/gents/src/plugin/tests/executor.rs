@@ -10,7 +10,7 @@ use crate::plugin::store::{self, InstalledPlugin};
 use crate::plugin::tool::PluginTool;
 
 /// Installs the echo plugin as `team/plugin` under a fresh home.
-fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
+pub(crate) fn installed_echo() -> (tempfile::TempDir, InstalledPlugin) {
     let (declaration, bytes) = build_plugin_pack("echo_pack", ECHO_WAT, None);
     let home = tempfile::tempdir().unwrap();
     let hex = format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(&bytes));

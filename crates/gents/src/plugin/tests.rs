@@ -56,7 +56,7 @@ fn build_plugin_afb(wat_source: &str) -> Vec<u8> {
 
 /// Packs a one-plugin pack around a compiled `.afb`, so `PluginRunner`
 /// is exercised exactly as an installed pack ships it.
-fn build_plugin_pack(
+pub(crate) fn build_plugin_pack(
     pack_name: &str,
     wat_source: &str,
     manifold: Option<serde_json::Value>,
@@ -107,7 +107,7 @@ fn build_plugin_pack(
 /// Reads fd 0 in one shot and writes exactly what it read to fd 1:
 /// the identity plugin, and the vehicle for every "does the ABI carry
 /// arguments through" test below.
-const ECHO_WAT: &str = r#"
+pub(crate) const ECHO_WAT: &str = r#"
       (module
         (import "wasi_snapshot_preview1" "fd_read"
           (func $fd_read (param i32 i32 i32 i32) (result i32)))
@@ -641,4 +641,4 @@ fn narrow_manifold_always_forces_listen_to_none() {
     );
 }
 
-mod executor;
+pub(crate) mod executor;

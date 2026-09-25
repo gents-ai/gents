@@ -390,11 +390,23 @@ impl ConfigReferences {
                     }
                 }
             }
-            Collection::Callback => {
-                if let CallbackHandler::Module { module_id } = decode::<Callback>(value)?.handler {
+            Collection::Callback => match decode::<Callback>(value)?.handler {
+                CallbackHandler::Module { module_id } => {
                     require(Collection::CallbackModule, &module_id, "handler.module_id")?;
                 }
-            }
+                CallbackHandler::Plugin {
+                    plugin,
+                    digest,
+                    correlation_field,
+                    outputs,
+                } => crate::callback::plugin::validate_handler(
+                    &plugin,
+                    &digest,
+                    correlation_field.as_deref(),
+                    &outputs,
+                )?,
+                CallbackHandler::BuiltIn { .. } => {}
+            },
             Collection::CallbackBinding => {
                 let doc: CallbackBinding = decode(value)?;
                 doc.projected_fields()?;
