@@ -31,6 +31,14 @@ pub fn init<R: Runtime>(config: BridgeConfig) -> TauriPlugin<R> {
                         "could not bring the packaged Gents runtime up to date"
                     );
                 }
+                if let Err(error) = tauri::async_runtime::block_on(
+                    tauri_commands::managed_server::restart_outdated_managed_job(&handle, &state),
+                ) {
+                    tracing::warn!(
+                        error = %error.message,
+                        "could not restart the agent service that predates this app"
+                    );
+                }
             });
             Ok(())
         })

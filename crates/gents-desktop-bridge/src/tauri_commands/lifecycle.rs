@@ -19,9 +19,10 @@ use crate::types::{
 };
 
 const CLIENT_START_STACK_SIZE: usize = 16 * 1024 * 1024;
-/// A client start that has not finished by then fails, so shutdown, init and
-/// quit, which wait for an in-flight start, are never held indefinitely.
-const CLIENT_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+/// A client start that completes no stage for this long fails, so callers
+/// waiting on an in-flight start are released. The store it may still open
+/// stays owned by the lifecycle lock until that start ends.
+const CLIENT_START_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 const NO_STAGE_COMPLETED: &str = "none";
 
 #[tauri::command]
@@ -182,11 +183,11 @@ async fn run_detached_client_start<R: Runtime>(
     // open, that refresh can observe no installed core while the detached
     // starter already holds the peer-directory lease, then fail trying to use
     // the offline writer for the same directory.
-    let _lifecycle_guard = state.client_lifecycle.lock().await;
-    let start_result = start_client_core_async(paths).await;
+    let lifecycle = Arc::clone(&state.client_lifecycle).lock_owned().await;
+    let start_result = start_client_core_async(paths, lifecycle).await;
 
     match start_result {
-        Ok(core) => {
+        Ok((core, _lifecycle_guard)) => {
             let core = Arc::new(core);
             let orphan = {
                 let mut bridge = state.bridge.lock().expect("desktop bridge lock poisoned");
@@ -355,11 +356,16 @@ pub async fn desktop_client_snapshot(
         .map_err(BridgeError::untyped)
 }
 
+type ClientLifecycleGuard = tokio::sync::OwnedMutexGuard<()>;
+type ClientStartDelivery<T> = (anyhow::Result<T>, ClientLifecycleGuard);
+
 /// Open the embedded node on a large-stack OS thread without blocking a Tokio
-/// worker: the worker awaits a oneshot instead of `thread::join`.
+/// worker: the worker awaits a oneshot instead of `thread::join`. The thread
+/// owns the lifecycle guard and hands it back with the core.
 async fn start_client_core_async(
     paths: gents_desktop_core::client::DesktopPaths,
-) -> Result<ClientCore, BridgeError> {
+    lifecycle: ClientLifecycleGuard,
+) -> Result<(ClientCore, ClientLifecycleGuard), BridgeError> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
     std::thread::Builder::new()
@@ -368,16 +374,10 @@ async fn start_client_core_async(
         .spawn(move || {
             tauri::async_runtime::block_on(async move {
                 let result = ClientCore::start_with_paths_reporting_stages(paths, stage_tx).await;
-                // The start outlived its bound and nobody owns the core. Close
-                // it so its store is released for the next start.
-                if let Err(Ok(core)) = tx.send(result) {
-                    tracing::warn!(
-                        "desktop client start: closing a core that opened after its start timed out"
-                    );
-                    if let Err(error) = core.shutdown().await {
-                        tracing::warn!(error = %error, "desktop client start: failed to close the late core");
-                    }
-                }
+                deliver_client_start(tx, result, lifecycle, |core: ClientCore| async move {
+                    core.shutdown().await
+                })
+                .await;
             })
         })
         .map_err(|error| {
@@ -386,29 +386,68 @@ async fn start_client_core_async(
                 format!("spawning desktop client startup thread: {error}"),
             )
         })?;
-    bounded_client_start(rx, stage_rx, CLIENT_START_TIMEOUT).await
+    bounded_client_start(rx, stage_rx, CLIENT_START_STALL_TIMEOUT).await
+}
+
+/// Hands the started core and the lifecycle guard to the waiting starter. A
+/// starter that gave up no longer owns them: the late core is closed first,
+/// and only then is the guard released, so init and reset never remove a
+/// store that is still open.
+async fn deliver_client_start<T, S, SF, E>(
+    tx: tokio::sync::oneshot::Sender<ClientStartDelivery<T>>,
+    result: anyhow::Result<T>,
+    lifecycle: ClientLifecycleGuard,
+    shutdown: S,
+) where
+    S: FnOnce(T) -> SF,
+    SF: std::future::Future<Output = Result<(), E>>,
+    E: std::fmt::Display,
+{
+    if let Err((Ok(late), lifecycle)) = tx.send((result, lifecycle)) {
+        tracing::warn!(
+            "desktop client start: closing a core that opened after its start timed out"
+        );
+        if let Err(error) = shutdown(late).await {
+            tracing::warn!(error = %error, "desktop client start: failed to close the late core");
+        }
+        drop(lifecycle);
+    }
 }
 
 async fn bounded_client_start<T>(
-    result: tokio::sync::oneshot::Receiver<anyhow::Result<T>>,
-    completed_stage: watch::Receiver<&'static str>,
-    timeout: std::time::Duration,
-) -> Result<T, BridgeError> {
-    match tokio::time::timeout(timeout, result).await {
-        Ok(Ok(Ok(core))) => Ok(core),
-        Ok(Ok(Err(error))) => Err(BridgeError::untyped(error.to_string())),
-        Ok(Err(_)) => Err(BridgeError::new(
-            BridgeErrorCode::ClientStartFailed,
-            "desktop client startup thread panicked or dropped its result",
-        )),
-        Err(_) => Err(BridgeError::new(
-            BridgeErrorCode::ClientStartFailed,
-            format!(
-                "the desktop client did not start within {} seconds (last completed stage: {})",
-                timeout.as_secs(),
-                *completed_stage.borrow()
-            ),
-        )),
+    mut delivered: tokio::sync::oneshot::Receiver<ClientStartDelivery<T>>,
+    mut completed_stage: watch::Receiver<&'static str>,
+    stall: std::time::Duration,
+) -> Result<(T, ClientLifecycleGuard), BridgeError> {
+    let mut deadline = tokio::time::Instant::now() + stall;
+    let mut reporting = true;
+    loop {
+        tokio::select! {
+            delivered = &mut delivered => {
+                return match delivered {
+                    Ok((Ok(core), lifecycle)) => Ok((core, lifecycle)),
+                    Ok((Err(error), _)) => Err(BridgeError::untyped(error.to_string())),
+                    Err(_) => Err(BridgeError::new(
+                        BridgeErrorCode::ClientStartFailed,
+                        "desktop client startup thread panicked or dropped its result",
+                    )),
+                };
+            }
+            changed = completed_stage.changed(), if reporting => match changed {
+                Ok(()) => deadline = tokio::time::Instant::now() + stall,
+                Err(_) => reporting = false,
+            },
+            () = tokio::time::sleep_until(deadline) => {
+                return Err(BridgeError::new(
+                    BridgeErrorCode::ClientStartFailed,
+                    format!(
+                        "the desktop client made no startup progress for {} seconds (last completed stage: {})",
+                        stall.as_secs(),
+                        *completed_stage.borrow()
+                    ),
+                ));
+            }
+        }
     }
 }
 
@@ -518,29 +557,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_stalled_client_start_fails_with_its_last_completed_stage() {
-        let (_result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
+    async fn a_stalled_client_start_keeps_the_store_locked_until_its_core_closes() {
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+        let (delivery_tx, delivery_rx) = tokio::sync::oneshot::channel::<ClientStartDelivery<u8>>();
         let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
+        let starter_guard = Arc::clone(&lifecycle).lock_owned().await;
         stage_tx.send_replace("embedded_node");
+
         let error = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            bounded_client_start(result_rx, stage_rx, std::time::Duration::from_millis(20)),
+            bounded_client_start(delivery_rx, stage_rx, std::time::Duration::from_millis(20)),
         )
         .await
-        .expect("the start is bounded")
+        .expect("a stalled start is bounded")
         .expect_err("a stalled start fails");
         assert_eq!(error.code, BridgeErrorCode::ClientStartFailed);
         assert!(error.message.contains("embedded_node"), "{}", error.message);
 
-        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
-        let (_stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
-        result_tx.send(Ok(7)).unwrap();
-        assert_eq!(
-            bounded_client_start(result_rx, stage_rx, std::time::Duration::from_secs(5))
-                .await
-                .unwrap(),
-            7
+        // Waiters are released, but init or a retry still waits for the lock
+        // the stalled start holds.
+        let init = tokio::spawn({
+            let lifecycle = Arc::clone(&lifecycle);
+            async move {
+                let _guard = lifecycle.lock().await;
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        assert!(
+            !init.is_finished(),
+            "the store is still owned by the late start"
         );
+
+        let closed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        deliver_client_start(delivery_tx, Ok(7), starter_guard, {
+            let closed = Arc::clone(&closed);
+            move |_late: u8| async move {
+                assert!(
+                    lifecycle.try_lock().is_err(),
+                    "the lock is released only after the late core closes"
+                );
+                closed.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok::<(), std::convert::Infallible>(())
+            }
+        })
+        .await;
+        assert!(closed.load(std::sync::atomic::Ordering::SeqCst));
+        tokio::time::timeout(std::time::Duration::from_secs(5), init)
+            .await
+            .expect("init proceeds once the late core is closed")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn client_start_is_bounded_by_time_without_progress() {
+        let lifecycle = Arc::new(tokio::sync::Mutex::new(()));
+        let (delivery_tx, delivery_rx) = tokio::sync::oneshot::channel::<ClientStartDelivery<u8>>();
+        let (stage_tx, stage_rx) = watch::channel(NO_STAGE_COMPLETED);
+        let guard = Arc::clone(&lifecycle).lock_owned().await;
+        let progress = tokio::spawn(async move {
+            // Each stage lands within the stall bound; together they exceed it.
+            for stage in [
+                "paths_and_identity",
+                "embedded_node",
+                "saved_peer",
+                "saved_peer",
+            ] {
+                tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+                stage_tx.send_replace(stage);
+            }
+            deliver_client_start(delivery_tx, Ok(7), guard, |_late: u8| async {
+                Ok::<(), std::convert::Infallible>(())
+            })
+            .await;
+        });
+        let (core, _lifecycle) =
+            bounded_client_start(delivery_rx, stage_rx, std::time::Duration::from_millis(150))
+                .await
+                .expect("a start that keeps progressing is not cut off");
+        assert_eq!(core, 7);
+        progress.await.unwrap();
     }
 
     #[test]

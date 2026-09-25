@@ -1,12 +1,13 @@
 use super::identity::{normalize_optional_string, resolve_p2p_peer_id};
 use super::{
-    augment_peer_status_payload_for_desktop, dangerously_overwrite_desktop_home,
-    default_agent_home, graphql_endpoint_for_desktop_access, load_standard_runtime_identity,
-    render_human_summary, reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url,
-    serving_runtime_ready,
-    DesktopInitSummary, LOCAL_STANDARD_SOURCE,
+    augment_peer_status_payload_for_desktop, await_serving_runtime_within,
+    dangerously_overwrite_desktop_home, default_agent_home, graphql_endpoint_for_desktop_access,
+    init_standard_local_runtime, load_standard_runtime_identity, render_human_summary,
+    reset_desktop_runtime_state, runtime_graphql_url, runtime_status_url, serving_runtime,
+    DesktopInitOptions, DesktopInitSummary, StoredRuntimeState, LOCAL_STANDARD_SOURCE,
 };
 use crate::client::DesktopPaths;
+use gents_protocol::serve_lifecycle::ObservedServeLifecycle;
 use serde_json::json;
 
 fn sample_summary() -> DesktopInitSummary {
@@ -235,19 +236,191 @@ fn dangerously_overwrite_desktop_home_removes_root_dir() {
 }
 
 #[test]
-fn discovery_waits_for_the_live_runtime_to_report_ready() {
+fn discovery_binds_to_the_live_ready_did() {
     let did = "did:key:z6MkLocal";
-    assert!(!serving_runtime_ready(&json!({ "agent_did": did }), did).unwrap());
-    assert!(
-        !serving_runtime_ready(&json!({ "agent_did": did, "lifecycle": "starting" }), did).unwrap()
+    let observe = |status: serde_json::Value| serving_runtime(&status, did);
+    assert_eq!(
+        observe(json!({ "agent_did": did, "lifecycle": "starting" })).unwrap(),
+        ObservedServeLifecycle::Starting
     );
-    assert!(
-        serving_runtime_ready(&json!({ "agent_did": did, "lifecycle": "ready" }), did).unwrap()
+    assert_eq!(
+        observe(json!({ "agent_did": did, "lifecycle": "ready" })).unwrap(),
+        ObservedServeLifecycle::Ready
     );
-    let error = serving_runtime_ready(
-        &json!({ "agent_did": "did:key:z6MkOther", "lifecycle": "ready" }),
-        did,
+    assert_eq!(
+        observe(json!({ "agent_did": did, "version": "0.18.2" })).unwrap(),
+        ObservedServeLifecycle::Outdated {
+            version: Some("0.18.2".to_string())
+        }
+    );
+    for live in [
+        json!({ "lifecycle": "ready" }),
+        json!({ "agent_did": "", "lifecycle": "ready" }),
+        json!({ "agent_did": "   ", "lifecycle": "ready" }),
+        json!({ "agent_did": 7, "lifecycle": "ready" }),
+        json!({ "agent_did": "z6MkLocal", "lifecycle": "ready" }),
+        json!({ "agent_did": "did:", "lifecycle": "ready" }),
+        json!({ "agent_did": "did:key:z6MkOther", "lifecycle": "ready" }),
+    ] {
+        assert!(observe(live.clone()).is_err(), "accepted {live}");
+    }
+    for blank in ["", "  "] {
+        assert!(
+            serving_runtime(&json!({ "agent_did": blank, "lifecycle": "ready" }), blank).is_err()
+        );
+    }
+}
+
+/// Answers every request with one JSON body, starting after `delay`.
+async fn serve_status_after(
+    listener: std::net::TcpListener,
+    delay: std::time::Duration,
+    body: serde_json::Value,
+) -> tokio::task::JoinHandle<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = body.to_string();
+    tokio::spawn(async move {
+        tokio::time::sleep(delay).await;
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut buffer = [0_u8; 4096];
+            let _ = stream.read(&mut buffer).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    })
+}
+
+fn seed_home(home: &std::path::Path, did: &str, graphql: &str) {
+    std::fs::create_dir_all(home).unwrap();
+    std::fs::write(
+        home.join("init.json"),
+        json!({ "agent_name": "Local", "agent_did": did }).to_string(),
     )
+    .unwrap();
+    std::fs::write(
+        home.join("runtime.json"),
+        json!({
+            "graphql": graphql,
+            "agent_name": "Local",
+            "agent_did": did,
+            "p2p_transport": "iroh",
+        })
+        .to_string(),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn discovery_rejects_a_bad_live_did_without_touching_the_peer_store() {
+    let did = "did:key:z6MkLocal";
+    for live in [
+        json!(null),
+        json!(""),
+        json!("not-a-did"),
+        json!("did:key:z6MkOther"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = serve_status_after(
+            listener,
+            std::time::Duration::ZERO,
+            json!({ "agent_did": live, "lifecycle": "ready" }),
+        )
+        .await;
+        let home = temp.path().join("agent");
+        seed_home(
+            &home,
+            did,
+            &format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        );
+        let paths = DesktopPaths::from_root(temp.path().join("desktop"));
+
+        let error = init_standard_local_runtime(DesktopInitOptions {
+            agent_home: home,
+            desktop_paths: paths.clone(),
+            label: "Local".to_string(),
+        })
+        .await
+        .expect_err("a live identity other than the initialized one is rejected");
+        assert!(error.to_string().contains("serves"), "{error:#}");
+        assert!(
+            !paths.peer_directory_path().exists(),
+            "no route is saved for {live}"
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn discovery_waits_for_a_runtime_that_is_not_listening_yet() {
+    let did = "did:key:z6MkLocal";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let runtime = StoredRuntimeState {
+        graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        agent_name: "Local".to_string(),
+        agent_did: did.to_string(),
+        p2p_transport: "iroh".to_string(),
+        p2p_peer_id: None,
+    };
+    // The socket is bound but not accepting, as while the runtime starts.
+    let server = serve_status_after(
+        listener,
+        std::time::Duration::from_millis(600),
+        json!({ "agent_did": did, "lifecycle": "ready" }),
+    )
+    .await;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(300))
+        .build()
+        .unwrap();
+    await_serving_runtime_within(&client, &runtime, std::time::Duration::from_secs(10))
+        .await
+        .expect("discovery waits for the runtime to answer");
+    server.abort();
+}
+
+#[tokio::test]
+async fn discovery_fails_at_once_for_a_runtime_that_predates_readiness() {
+    let did = "did:key:z6MkLocal";
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = serve_status_after(
+        listener,
+        std::time::Duration::ZERO,
+        json!({ "agent_did": did, "version": "0.18.2" }),
+    )
+    .await;
+    let runtime = StoredRuntimeState {
+        graphql: format!("http://127.0.0.1:{port}/api/v0/graphql"),
+        agent_name: "Local".to_string(),
+        agent_did: did.to_string(),
+        p2p_transport: "iroh".to_string(),
+        p2p_peer_id: None,
+    };
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        await_serving_runtime_within(
+            &reqwest::Client::new(),
+            &runtime,
+            std::time::Duration::from_secs(60),
+        ),
+    )
+    .await
+    .expect("an outdated runtime is not waited on")
     .unwrap_err();
-    assert!(error.to_string().contains("did:key:z6MkOther"), "{error}");
+    assert!(
+        error.to_string().contains("v0.18.2) predates this app"),
+        "{error:#}"
+    );
+    server.abort();
 }

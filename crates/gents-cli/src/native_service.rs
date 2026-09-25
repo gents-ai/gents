@@ -399,11 +399,7 @@ impl<R: CommandRunner> NativeServiceManager<R> {
             .context("native service definition has no parent")?;
         fs::create_dir_all(parent)
             .with_context(|| format!("creating service directory {}", parent.display()))?;
-        // Neither launchd nor systemd creates a missing log directory.
-        if let Some(log_dir) = self.config.stderr_path.as_deref().and_then(Path::parent) {
-            fs::create_dir_all(log_dir)
-                .with_context(|| format!("creating service log directory {}", log_dir.display()))?;
-        }
+        self.prepare_stderr_log()?;
         let contents = self.render_definition()?;
         if path.exists() {
             let installed = fs::read(&path)
@@ -456,6 +452,7 @@ impl<R: CommandRunner> NativeServiceManager<R> {
 
     pub fn start(&self, enable_at_login: bool) -> Result<()> {
         self.require_installed()?;
+        self.prepare_stderr_log()?;
         if self.platform == NativeServicePlatform::Macos
             && self
                 .runner
@@ -740,6 +737,35 @@ impl<R: CommandRunner> NativeServiceManager<R> {
         if self.platform == NativeServicePlatform::Linux {
             self.run_checked("systemctl", &["--user".into(), "daemon-reload".into()])?;
         }
+        Ok(())
+    }
+
+    /// Neither launchd nor systemd creates a missing log directory; systemd
+    /// fails the unit instead. The log can hold paths and error details, so
+    /// only the user can read it.
+    fn prepare_stderr_log(&self) -> Result<()> {
+        let Some(path) = self.config.stderr_path.as_deref() else {
+            return Ok(());
+        };
+        let directory = path.parent().context("service log path has no parent")?;
+        fs::create_dir_all(directory)
+            .with_context(|| format!("creating service log directory {}", directory.display()))?;
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .with_context(|| format!("creating service log {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).with_context(
+                || format!("restricting service log directory {}", directory.display()),
+            )?;
+            file.set_permissions(fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("restricting service log {}", path.display()))?;
+        }
+        #[cfg(not(unix))]
+        drop(file);
         Ok(())
     }
 
@@ -1527,6 +1553,45 @@ mod tests {
                 .to_string_lossy()
         )));
         assert_eq!(systemd_home(&unit).unwrap(), config.home.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_stderr_log_is_recreated_private_before_the_service_starts() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        struct Refuses;
+        impl CommandRunner for Refuses {
+            fn run(&self, _: &OsStr, _: &[OsString]) -> Result<CommandOutput> {
+                bail!("no service manager in this test")
+            }
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = config(temp.path());
+        fs::create_dir_all(&config.home).unwrap();
+        fs::create_dir_all(&config.service_config_dir).unwrap();
+        let log = temp.path().join("desktop/logs/runtime-errors.log");
+        config.stderr_path = Some(log.clone());
+        let manager = NativeServiceManager::with_runner(
+            config.clone(),
+            NativeServicePlatform::Linux,
+            Refuses,
+        );
+        fs::write(
+            config.definition_path(NativeServicePlatform::Linux),
+            manager.render_definition().unwrap(),
+        )
+        .unwrap();
+        // A desktop reset removed the directory after install.
+        assert!(!log.parent().unwrap().exists());
+
+        assert!(
+            manager.start(false).is_err(),
+            "the fake manager cannot start"
+        );
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(log.parent().unwrap()), 0o700);
+        assert_eq!(mode(&log), 0o600);
     }
 
     #[test]

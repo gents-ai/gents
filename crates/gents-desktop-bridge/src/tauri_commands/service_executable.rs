@@ -154,14 +154,19 @@ fn classify_with_package(
 }
 
 /// Refuses to record a runtime the service would lose. macOS runs a
-/// quarantined app from a randomized App Translocation mount and serves a disk
-/// image under `/Volumes` only until it is ejected; a service definition
-/// naming either stops launching once the app quits or moves.
+/// quarantined app from a randomized App Translocation mount, and serves a
+/// disk image read-only under `/Volumes` only until it is ejected; a service
+/// definition naming either stops launching once the app quits or moves. A
+/// writable volume holds a durable install.
 pub(crate) fn ensure_installable_location(path: &Path) -> Result<(), BridgeError> {
+    refuse_transient_location(path, read_only_mount(path))
+}
+
+fn refuse_transient_location(path: &Path, read_only: bool) -> Result<(), BridgeError> {
     let translocated = path
         .components()
         .any(|component| component.as_os_str() == "AppTranslocation");
-    if translocated || path.starts_with("/Volumes") {
+    if translocated || (read_only && path.starts_with("/Volumes")) {
         return Err(BridgeError::new(
             BridgeErrorCode::Unsupported,
             format!(
@@ -171,6 +176,27 @@ pub(crate) fn ensure_installable_location(path: &Path) -> Result<(), BridgeError
         ));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn read_only_mount(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    let mut stats = std::mem::MaybeUninit::<libc::statvfs>::uninit();
+    // SAFETY: `path` is NUL-terminated and `stats` is written before it is read.
+    if unsafe { libc::statvfs(path.as_ptr(), stats.as_mut_ptr()) } != 0 {
+        return false;
+    }
+    // SAFETY: statvfs returned success, so it initialized `stats`.
+    let stats = unsafe { stats.assume_init() };
+    stats.f_flag & libc::ST_RDONLY as libc::c_ulong != 0
+}
+
+#[cfg(not(unix))]
+fn read_only_mount(_path: &Path) -> bool {
+    false
 }
 
 /// Copies the packaged runtime to its durable path, keyed by content so an
@@ -566,11 +592,16 @@ mod tests {
 
     #[test]
     fn translocated_and_disk_image_runtimes_are_refused() {
-        for refused in [
+        let translocated = Path::new(
             "/private/var/folders/xy/abc/T/AppTranslocation/1F2E/d/Gents.app/Contents/MacOS/gents",
-            "/Volumes/Gents/Gents.app/Contents/MacOS/gents",
+        );
+        let disk_image = Path::new("/Volumes/Gents/Gents.app/Contents/MacOS/gents");
+        for (refused, read_only) in [
+            (translocated, false),
+            (translocated, true),
+            (disk_image, true),
         ] {
-            let error = ensure_installable_location(Path::new(refused)).expect_err(refused);
+            let error = refuse_transient_location(refused, read_only).expect_err("refused");
             assert_eq!(error.code, BridgeErrorCode::Unsupported);
             assert!(
                 error.message.contains("Applications folder"),
@@ -578,17 +609,34 @@ mod tests {
                 error.message
             );
         }
+        // A writable external volume or a development GENTS_BIN there is a
+        // durable install.
         for accepted in [
-            "/Applications/Gents.app/Contents/MacOS/gents",
-            "/Users/me/Applications/Gents.app/Contents/MacOS/gents",
-            "/home/user/.local/share/gents/desktop/runtime/gents",
-            "/usr/bin/gents",
+            "/Volumes/External/Applications/Gents.app/Contents/MacOS/gents",
+            "/Volumes/dev/gents/target/debug/gents",
         ] {
             assert!(
-                ensure_installable_location(Path::new(accepted)).is_ok(),
+                refuse_transient_location(Path::new(accepted), false).is_ok(),
                 "{accepted}"
             );
         }
+        for accepted in [
+            "/Applications/Gents.app/Contents/MacOS/gents",
+            "/Users/me/Applications/Gents.app/Contents/MacOS/gents",
+            "/usr/bin/gents",
+        ] {
+            assert!(
+                refuse_transient_location(Path::new(accepted), true).is_ok(),
+                "{accepted}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_writable_directory_is_not_a_read_only_mount() {
+        let temp = tempfile::tempdir().expect("temporary directory");
+        assert!(!read_only_mount(temp.path()));
     }
 
     #[test]

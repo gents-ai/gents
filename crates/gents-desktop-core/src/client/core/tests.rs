@@ -434,6 +434,7 @@ async fn restart_clears_and_defers_persisted_enrollment_until_current_authority(
         &options,
         core.principal(),
         &route_manager,
+        &mut || {},
     )
     .await;
     assert!(errors.is_empty());

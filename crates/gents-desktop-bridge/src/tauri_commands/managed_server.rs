@@ -9,7 +9,7 @@ use gents_desktop_core::client::ClientCore;
 use gents_desktop_core::local_runtime::{
     fetch_runtime_connection_payload, init_standard_local_runtime, DesktopInitOptions,
 };
-use gents_protocol::serve_lifecycle::ServeLifecycle;
+use gents_protocol::serve_lifecycle::{outdated_runtime_message, ObservedServeLifecycle};
 
 use crate::config::ManagedServerPolicy;
 use crate::contract::MANAGED_SERVER_UPDATED_EVENT;
@@ -193,6 +193,15 @@ async fn observe_managed_server_status<R: Runtime>(
         if let Some(agent_home) = state.policy.agent_home.as_deref() {
             if let Some(external) = matching_external_server(agent_home).await? {
                 status = project_external_status(external, &native);
+            } else if let PortReadiness::Outdated { version } =
+                observe_port_readiness(agent_home).await?
+            {
+                // Our own job is restarted at launch and reports starting
+                // meanwhile. An external one never becomes ready: say so now.
+                if !native.job_loaded {
+                    status.state = ManagedServerState::Failed;
+                    status.error = Some(outdated_runtime_message(version.as_deref()));
+                }
             }
         }
     }
@@ -462,8 +471,8 @@ async fn launch_managed_server<'a, L: ManagedLaunch>(
         (Ok(ready), Some(lifecycle)) => Ok((ready, lifecycle)),
         (Ok(_), None) => unreachable!("readiness relocks before it returns"),
         (Err(error), lifecycle) => Err(LaunchFailure {
+            attempted_start: attempted_start && !error.is::<RuntimeStillBooting>(),
             error,
-            attempted_start,
             lifecycle,
         }),
     }
@@ -509,23 +518,36 @@ async fn start_managed_server<'a, R: Runtime>(
     };
 
     let mut carried_wait = None;
-    let mut exited_while_loaded = false;
+    let mut replace_loaded_job = false;
     let (ready, initial_enabled, _lifecycle) = match matching_external_server(&agent_home).await? {
         Some(external) => (Some(external), false, lifecycle),
         None => {
+            // Before anything below unloads a job this launch could not replace.
+            ensure_launchable_here(app, state)?;
+            let outdated = match observe_port_readiness(&agent_home).await? {
+                PortReadiness::Outdated { version } => Some(version),
+                _ => None,
+            };
             let initial_native =
                 run_native(native_service(app, state)?, |service| service.status()).await?;
+            if let (Some(version), false) = (&outdated, initial_native.job_loaded) {
+                return Err(BridgeError::untyped(outdated_runtime_message(
+                    version.as_deref(),
+                )));
+            }
             let enabled = initial_native.enabled;
-            exited_while_loaded = initial_native.job_loaded
-                && !initial_native.running
-                && run_native(native_service(app, state)?, |service| {
-                    Ok(service.last_exit()?.is_some() || service.installed_executable_differs()?)
-                })
-                .await
-                .unwrap_or(false);
+            replace_loaded_job = outdated.is_some()
+                || (initial_native.job_loaded
+                    && !initial_native.running
+                    && run_native(native_service(app, state)?, |service| {
+                        Ok(service.last_exit()?.is_some()
+                            || service.installed_executable_differs()?)
+                    })
+                    .await
+                    .unwrap_or(false));
             if initial_native.is_active_or_transitioning()
                 && !initial_native.requires_approval
-                && !exited_while_loaded
+                && !replace_loaded_job
             {
                 match wait_for_booting_managed_server(app, state, &agent_home, lifecycle).await? {
                     BootOutcome::Ready(ready, lifecycle) => (Some(ready), enabled, lifecycle),
@@ -573,10 +595,11 @@ async fn start_managed_server<'a, R: Runtime>(
     emit_status(app, state).await;
 
     let provisioned: anyhow::Result<()> = async {
-        if exited_while_loaded {
-            // The loaded job will not run again by itself (a clean exit or a
-            // runtime that moved) or is crash looping. Unload it so an updated
-            // definition can be installed and the launch below starts it fresh.
+        if replace_loaded_job {
+            // The loaded job runs a runtime older than this app, will not run
+            // again by itself (a clean exit or a runtime that moved) or is
+            // crash looping. Unload it so the current definition can be
+            // installed and the launch below starts it fresh.
             run_native(native_service(app, state)?, |service| service.stop(false)).await?;
         }
         ensure_default_port_identity(&agent_home).await?;
@@ -1096,10 +1119,17 @@ where
     NF: Future<Output = Result<NativeProgress, BridgeError>>,
 {
     let started = tokio::time::Instant::now();
+    // Binding is the only progress a runtime reports before it is ready, so
+    // the bound restarts then. Migrations after an upgrade can take longer.
+    let mut progress_at = started;
+    let mut booting = false;
     let mut first_exit_restarts = None;
     loop {
-        match probe().await? {
+        let observed_booting = match probe().await? {
             PortReadiness::Ready(status) => return Ok(Readiness::Ready(status)),
+            PortReadiness::Outdated { version } => {
+                anyhow::bail!("{}", outdated_runtime_message(version.as_deref()))
+            }
             PortReadiness::Foreign { port, live_did } => {
                 let who = if live_did.trim().is_empty() {
                     "a listener that did not advertise an identity".to_string()
@@ -1110,7 +1140,12 @@ where
                     "port {port} is already in use by {who}. Stop that server before starting the managed agent."
                 );
             }
-            PortReadiness::NotListening | PortReadiness::Booting => {}
+            PortReadiness::Booting => true,
+            PortReadiness::NotListening => false,
+        };
+        if observed_booting && !booting {
+            booting = true;
+            progress_at = tokio::time::Instant::now();
         }
         match native().await? {
             NativeProgress::AwaitingApproval => return Ok(Readiness::ApprovalRequired),
@@ -1132,7 +1167,13 @@ where
             }
             NativeProgress::Loaded => {}
         }
-        if started.elapsed() >= timeout {
+        if progress_at.elapsed() >= timeout {
+            if observed_booting {
+                return Err(RuntimeStillBooting {
+                    waited: started.elapsed(),
+                }
+                .into());
+            }
             anyhow::bail!(
                 "the native Gents service is running but did not publish runtime readiness within {} seconds",
                 timeout.as_secs()
@@ -1141,6 +1182,25 @@ where
         tokio::time::sleep(interval).await;
     }
 }
+
+/// A running job whose runtime is bound but not ready when the wait ends. It
+/// is left running rather than rolled back: it may be migrating its data.
+#[derive(Debug)]
+struct RuntimeStillBooting {
+    waited: Duration,
+}
+
+impl std::fmt::Display for RuntimeStillBooting {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the Gents runtime is still starting after {} seconds, possibly migrating its data; it keeps starting in the background",
+            self.waited.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for RuntimeStillBooting {}
 
 enum BootOutcome<'a> {
     Ready(ManagedServerStatus, LifecycleGuard<'a>),
@@ -1284,6 +1344,10 @@ enum PortReadiness {
     },
     /// This home's runtime is bound but has not reported it finished starting.
     Booting,
+    /// This home's runtime predates the lifecycle field and never reports ready.
+    Outdated {
+        version: Option<String>,
+    },
     NotListening,
 }
 
@@ -1320,10 +1384,13 @@ fn port_readiness_from_payload(
     if ensure_matching_identity(initialized_did, &live_did, port).is_err() {
         return PortReadiness::Foreign { port, live_did };
     }
-    if !ServeLifecycle::observed(&payload).is_ready() {
-        return PortReadiness::Booting;
+    match ObservedServeLifecycle::observe(&payload) {
+        ObservedServeLifecycle::Ready => {
+            PortReadiness::Ready(managed_status_from_payload(payload, &live_did))
+        }
+        ObservedServeLifecycle::Starting => PortReadiness::Booting,
+        ObservedServeLifecycle::Outdated { version } => PortReadiness::Outdated { version },
     }
-    PortReadiness::Ready(managed_status_from_payload(payload, &live_did))
 }
 
 fn validate_ready_runtime(
@@ -1361,6 +1428,15 @@ fn validate_ready_runtime(
         );
     }
     Ok(())
+}
+
+/// Refuses a launch from a location the service could not keep running from.
+fn ensure_launchable_here<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let executable = resolve_service_executable(app, state.policy.desktop_paths.root())?;
+    ensure_installable_location(executable.service_path())
 }
 
 fn native_service<R: Runtime>(
@@ -1444,6 +1520,55 @@ pub(crate) fn refresh_packaged_install<R: Runtime>(
         return Ok(());
     }
     service.install().map_err(native_error)
+}
+
+/// Our own running job still runs a runtime older than this app, which never
+/// reports ready. Restart it on the refreshed definition and executable at
+/// launch; status reads report it starting meanwhile rather than stopped.
+pub(crate) async fn restart_outdated_managed_job<R: Runtime>(
+    app: &AppHandle<R>,
+    state: &DesktopAppState,
+) -> Result<(), BridgeError> {
+    let Some(agent_home) = state.policy.agent_home.clone() else {
+        return Ok(());
+    };
+    let _lifecycle = state.managed_server_lifecycle.lock().await;
+    let PortReadiness::Outdated { version } = observe_port_readiness(&agent_home).await? else {
+        return Ok(());
+    };
+    if !run_native(native_service(app, state)?, |service| service.status())
+        .await?
+        .running
+    {
+        return Ok(());
+    }
+    ensure_launchable_here(app, state)?;
+    tracing::info!(
+        target: "gents_desktop::managed_server",
+        version = version.as_deref().unwrap_or("unknown"),
+        "restarting the agent service, whose runtime predates this app"
+    );
+    state.managed_server.lock().await.starting = true;
+    emit_status(app, state).await;
+    let restarted = run_native(launchable_native_service(app, state)?, |service| {
+        service.stop(false)?;
+        service.install()?;
+        service.start(false)
+    })
+    .await;
+    {
+        let mut managed = state.managed_server.lock().await;
+        managed.starting = false;
+        if let Err(error) = &restarted {
+            managed.last_error = Some(format!(
+                "{} Restarting it failed: {}",
+                outdated_runtime_message(version.as_deref()),
+                error.message
+            ));
+        }
+    }
+    emit_status(app, state).await;
+    restarted
 }
 
 fn build_native_service<R: Runtime>(
@@ -1598,7 +1723,7 @@ async fn start_managed_runtime_pairing(
         .await;
         match paired {
             Ok(()) => {}
-            Err(_) if cancel.is_cancelled() => {
+            Err(PairingFailure::Cancelled) => {
                 tracing::info!(
                     target: "gents_desktop::managed_server",
                     agent_did = %target.agent_did,
@@ -1626,24 +1751,60 @@ const MANAGED_PAIRING_APPROVAL_WINDOW: Duration = Duration::from_secs(30);
 const MANAGED_PAIRING_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const MANAGED_PAIRING_CANCELLED: &str = "managed runtime pairing was cancelled";
 
-/// Runs pairing attempts until one succeeds, the attempts run out, or the
-/// pairing is cancelled.
+/// Why a pairing attempt ended without a chat-ready route.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PairingFailure {
+    Cancelled,
+    /// Retrying cannot help: the runtime is incompatible, outdated, or is
+    /// not the identity this home pairs with.
+    Permanent(String),
+    Transient(String),
+}
+
+/// Failures no retry of the same runtime can resolve.
+const PERMANENT_PAIRING_ERRORS: &[&str] = &["incompatible", "does not match", "predates this app"];
+
+impl PairingFailure {
+    fn classify(message: String) -> Self {
+        if PERMANENT_PAIRING_ERRORS
+            .iter()
+            .any(|permanent| message.contains(permanent))
+        {
+            Self::Permanent(message)
+        } else {
+            Self::Transient(message)
+        }
+    }
+}
+
+impl std::fmt::Display for PairingFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str(MANAGED_PAIRING_CANCELLED),
+            Self::Permanent(message) | Self::Transient(message) => f.write_str(message),
+        }
+    }
+}
+
+/// Runs pairing attempts until one succeeds, fails permanently, the attempts
+/// run out, or the pairing is cancelled.
 async fn retry_managed_pairing<A, AF>(
     cancel: &tokio_util::sync::CancellationToken,
     attempts: u32,
     delay: Duration,
     mut attempt: A,
-) -> Result<(), String>
+) -> Result<(), PairingFailure>
 where
     A: FnMut() -> AF,
-    AF: Future<Output = Result<(), String>>,
+    AF: Future<Output = Result<(), PairingFailure>>,
 {
     let mut failure = String::new();
     for number in 1..=attempts {
         match attempt().await {
             Ok(()) => return Ok(()),
-            Err(error) if cancel.is_cancelled() => return Err(error),
-            Err(error) => failure = error,
+            Err(_) if cancel.is_cancelled() => return Err(PairingFailure::Cancelled),
+            Err(PairingFailure::Transient(error)) => failure = error,
+            Err(terminal) => return Err(terminal),
         }
         if number == attempts {
             break;
@@ -1657,10 +1818,12 @@ where
         );
         tokio::select! {
             () = tokio::time::sleep(delay * number) => {}
-            () = cancel.cancelled() => return Err(MANAGED_PAIRING_CANCELLED.to_string()),
+            () = cancel.cancelled() => return Err(PairingFailure::Cancelled),
         }
     }
-    Err(format!("{failure} (after {attempts} attempts)"))
+    Err(PairingFailure::Transient(format!(
+        "{failure} (after {attempts} attempts)"
+    )))
 }
 
 enum PairingApproval {
@@ -1677,7 +1840,7 @@ async fn await_managed_pairing_approval<P, PF, A, AF, R, RF>(
     mut paired: P,
     mut approve: A,
     mut repair: R,
-) -> Result<(), String>
+) -> Result<(), PairingFailure>
 where
     P: FnMut() -> PF,
     PF: Future<Output = bool>,
@@ -1690,24 +1853,26 @@ where
     let mut approval_committed = false;
     loop {
         if cancel.is_cancelled() {
-            return Err(MANAGED_PAIRING_CANCELLED.to_string());
+            return Err(PairingFailure::Cancelled);
         }
         if paired().await {
             return Ok(());
         }
         if !approval_committed {
-            match approve().await? {
+            match approve().await.map_err(PairingFailure::classify)? {
                 PairingApproval::Committed => approval_committed = true,
                 PairingApproval::NotVisibleYet => {}
             }
         }
-        repair().await?;
+        repair().await.map_err(PairingFailure::Transient)?;
         if tokio::time::Instant::now() >= deadline {
-            return Err("timed out waiting for managed runtime pairing".to_string());
+            return Err(PairingFailure::Transient(
+                "timed out waiting for managed runtime pairing".to_string(),
+            ));
         }
         tokio::select! {
             () = tokio::time::sleep(interval) => {}
-            () = cancel.cancelled() => return Err(MANAGED_PAIRING_CANCELLED.to_string()),
+            () = cancel.cancelled() => return Err(PairingFailure::Cancelled),
         }
     }
 }
@@ -1735,10 +1900,13 @@ async fn fetch_managed_runtime_status(
             }
             () = cancel.cancelled() => return Err("managed runtime status wait was cancelled".to_string()),
         };
-        let published = fetched
-            .as_ref()
-            .is_ok_and(|status| ServeLifecycle::observed(status).is_ready());
-        if published || tokio::time::Instant::now() >= deadline {
+        let observed = fetched.as_ref().ok().map(ObservedServeLifecycle::observe);
+        if let Some(ObservedServeLifecycle::Outdated { version }) = observed {
+            return Err(outdated_runtime_message(version.as_deref()));
+        }
+        if observed.is_some_and(|observed| observed.is_ready())
+            || tokio::time::Instant::now() >= deadline
+        {
             return fetched;
         }
         tokio::select! {
@@ -1775,7 +1943,7 @@ async fn ensure_managed_runtime_pairing(
     agent_home: &std::path::Path,
     target: &ManagedPairingTarget,
     cancel: &tokio_util::sync::CancellationToken,
-) -> Result<(), String> {
+) -> Result<(), PairingFailure> {
     if core.peer_records().await.iter().any(|peer| {
         peer.agent_did == target.agent_did
             && peer.is_enrollment()
@@ -1785,15 +1953,38 @@ async fn ensure_managed_runtime_pairing(
         return Ok(());
     }
 
-    let status = fetch_managed_runtime_status(&target.graphql, cancel)
-        .await
-        .map_err(|error| format!("loading managed runtime enrollment offer: {error}"))?;
-    // Authoring installs and unwinds bootstrap replication state, so it is
-    // not interrupted; cancellation is observed once it returns.
-    let enrollment = core
-        .request_status_enrollment_with_label(&status, Some(&target.agent_name))
-        .await
-        .map_err(|error| format!("requesting managed runtime enrollment: {error:#}"))?;
+    // Each /status mints a fresh offer, so authoring again would leave the
+    // earlier request pending where it could still be approved. A request
+    // stays in use until it expires or is denied.
+    let request_id = match live_managed_request(&core, target).await {
+        Some(request_id) => request_id,
+        None => {
+            let status = fetch_managed_runtime_status(&target.graphql, cancel)
+                .await
+                .map_err(|error| {
+                    if cancel.is_cancelled() {
+                        PairingFailure::Cancelled
+                    } else {
+                        PairingFailure::classify(format!(
+                            "loading managed runtime enrollment offer: {error}"
+                        ))
+                    }
+                })?;
+            if cancel.is_cancelled() {
+                return Err(PairingFailure::Cancelled);
+            }
+            // Authoring installs and unwinds bootstrap replication state, so
+            // it is not interrupted; cancellation is observed once it returns.
+            core.request_status_enrollment_with_label(&status, Some(&target.agent_name))
+                .await
+                .map_err(|error| {
+                    PairingFailure::classify(format!(
+                        "requesting managed runtime enrollment: {error:#}"
+                    ))
+                })?
+                .request_id
+        }
+    };
 
     await_managed_pairing_approval(
         cancel,
@@ -1811,7 +2002,7 @@ async fn ensure_managed_runtime_pairing(
             match gents_server::server_host::approve_managed_client_enrollment(
                 agent_home,
                 &target.graphql,
-                &enrollment.request_id,
+                &request_id,
             )
             .await
             {
@@ -1820,7 +2011,7 @@ async fn ensure_managed_runtime_pairing(
                     let message = format!("{error:#}");
                     if enrollment_request_is_not_visible_yet(&message) {
                         tracing::debug!(
-                            request_id = %enrollment.request_id,
+                            request_id = %request_id,
                             "managed enrollment request is not yet visible to operator approval"
                         );
                         Ok(PairingApproval::NotVisibleYet)
@@ -1843,6 +2034,24 @@ async fn ensure_managed_runtime_pairing(
         "managed runtime desktop pairing is ready"
     );
     Ok(())
+}
+
+/// This desktop's unexpired, undenied request to pair with the runtime.
+async fn live_managed_request(core: &ClientCore, target: &ManagedPairingTarget) -> Option<String> {
+    match core.active_status_enrollment_requests().await {
+        Ok(requests) => requests
+            .into_iter()
+            .find(|request| request.owner_agent == target.agent_did)
+            .map(|request| request.request_id),
+        Err(error) => {
+            tracing::warn!(
+                target: "gents_desktop::managed_server",
+                error = %format!("{error:#}"),
+                "could not read this desktop's enrollment requests"
+            );
+            None
+        }
+    }
 }
 
 fn enrollment_request_is_not_visible_yet(message: &str) -> bool {
@@ -1911,7 +2120,7 @@ async fn matching_external_server(
     }
     // A booting runtime is observed through its native service until it
     // reports ready; discovery and pairing need its runtime.json.
-    if !ServeLifecycle::observed(&payload).is_ready() {
+    if !ObservedServeLifecycle::observe(&payload).is_ready() {
         return Ok(None);
     }
     Ok(Some(managed_status_from_payload(payload, &live_did)))
@@ -2077,6 +2286,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
             "managed server requires a local agent home",
         )
     })?;
+    ensure_launchable_here(&app, &state)?;
     let endpoint_running = default_port_payload(Some(&agent_home)).await?.is_some();
     let previous_did = matching_external_server(&agent_home)
         .await?
@@ -3065,6 +3275,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_runtime_that_predates_readiness_fails_the_wait_at_once() {
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            await_runtime_readiness(
+                Duration::from_secs(300),
+                Duration::from_millis(5),
+                || async {
+                    Ok(PortReadiness::Outdated {
+                        version: Some("0.18.2".to_string()),
+                    })
+                },
+                || async { Ok(NativeProgress::Loaded) },
+            ),
+        )
+        .await
+        .expect("an outdated runtime is not waited on")
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("(v0.18.2) predates this app"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn an_older_runtime_without_the_lifecycle_field_is_outdated() {
+        let did = "did:key:managed";
+        let observed = port_readiness_from_payload(
+            serde_json::json!({ "agent_did": did, "version": "0.18.2", "status": "ok" }),
+            did.to_string(),
+            Some(did),
+            9191,
+        );
+        let PortReadiness::Outdated { version } = observed else {
+            panic!("an older runtime is outdated, not booting");
+        };
+        assert_eq!(version.as_deref(), Some("0.18.2"));
+    }
+
+    #[tokio::test]
+    async fn a_booting_runtime_past_the_bound_is_left_running() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let probes = AtomicUsize::new(0);
+        let error = await_runtime_readiness(
+            Duration::from_millis(60),
+            Duration::from_millis(5),
+            || {
+                let attempt = probes.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(if attempt < 4 {
+                        PortReadiness::NotListening
+                    } else {
+                        PortReadiness::Booting
+                    })
+                }
+            },
+            || async { Ok(NativeProgress::Loaded) },
+        )
+        .await
+        .expect_err("the wait is bounded");
+        assert!(error.is::<RuntimeStillBooting>(), "{error}");
+
+        // The bound restarts at bind: time spent before it does not count.
+        let started = std::time::Instant::now();
+        await_runtime_readiness(
+            Duration::from_millis(200),
+            Duration::from_millis(5),
+            || {
+                let elapsed = started.elapsed();
+                async move {
+                    Ok(if elapsed < Duration::from_millis(150) {
+                        PortReadiness::NotListening
+                    } else if elapsed < Duration::from_millis(300) {
+                        PortReadiness::Booting
+                    } else {
+                        PortReadiness::Ready(ready_status("did:key:migrated"))
+                    })
+                }
+            },
+            || async { Ok(NativeProgress::Loaded) },
+        )
+        .await
+        .expect("binding restarts the bound");
+    }
+
+    #[tokio::test]
     async fn pairing_retries_a_failed_attempt_within_its_bounds() {
         use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -3072,7 +3368,7 @@ mod tests {
         let calls = AtomicU32::new(0);
         retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || async {
             if calls.fetch_add(1, Ordering::SeqCst) < 2 {
-                Err("runtime_not_ready".to_string())
+                Err(PairingFailure::Transient("runtime_not_ready".to_string()))
             } else {
                 Ok(())
             }
@@ -3084,11 +3380,12 @@ mod tests {
         let calls = AtomicU32::new(0);
         let error = retry_managed_pairing(&cancel, 3, Duration::from_millis(1), || async {
             calls.fetch_add(1, Ordering::SeqCst);
-            Err::<(), _>("offer_mint_failed".to_string())
+            Err::<(), _>(PairingFailure::Transient("offer_mint_failed".to_string()))
         })
         .await
         .expect_err("attempts are bounded");
         assert_eq!(calls.load(Ordering::SeqCst), 3);
+        let error = error.to_string();
         assert!(
             error.contains("offer_mint_failed") && error.contains("3 attempts"),
             "{error}"
@@ -3096,10 +3393,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pairing_is_not_retried_after_a_permanent_failure() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        for message in [
+            "requesting managed runtime enrollment: refusing to enroll with an incompatible runtime",
+            "loading managed runtime enrollment offer: the running agent (v0.18.2) predates this app; restart it so it runs this version",
+            "requesting managed runtime enrollment: enrollment server DID does not match the offer",
+        ] {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let calls = AtomicU32::new(0);
+            let failure = PairingFailure::classify(message.to_string());
+            assert!(matches!(failure, PairingFailure::Permanent(_)), "{message}");
+            let error = retry_managed_pairing(&cancel, 4, Duration::from_millis(1), || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let failure = failure.clone();
+                async move { Err::<(), _>(failure) }
+            })
+            .await
+            .unwrap_err();
+            assert_eq!(calls.load(Ordering::SeqCst), 1, "{message}");
+            assert_eq!(error.to_string(), message);
+        }
+        assert!(matches!(
+            PairingFailure::classify(
+                "approving managed runtime enrollment: connection refused".to_string()
+            ),
+            PairingFailure::Transient(_)
+        ));
+    }
+
+    #[tokio::test]
     async fn pairing_retry_ends_when_cancelled_during_its_backoff() {
         let cancel = tokio_util::sync::CancellationToken::new();
         let retry = retry_managed_pairing(&cancel, 4, Duration::from_secs(60), || async {
-            Err::<(), _>("runtime_not_ready".to_string())
+            Err::<(), _>(PairingFailure::Transient("runtime_not_ready".to_string()))
         });
         let cancelled = async {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -3110,7 +3438,7 @@ mod tests {
         })
         .await
         .expect("cancellation ends the backoff");
-        assert_eq!(result.unwrap_err(), MANAGED_PAIRING_CANCELLED);
+        assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
     }
 
     #[tokio::test]
@@ -3139,7 +3467,7 @@ mod tests {
         })
         .await
         .expect("a drain is not held for the approval window");
-        assert_eq!(result.unwrap_err(), MANAGED_PAIRING_CANCELLED);
+        assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
         assert!(
             approvals.load(Ordering::SeqCst) > 1,
             "approval was retried while waiting"
@@ -3319,6 +3647,7 @@ mod tests {
         start_calls: std::sync::atomic::AtomicUsize,
         approval_waits: std::sync::atomic::AtomicUsize,
         waiting: tokio::sync::Notify,
+        still_booting: bool,
     }
 
     impl ManagedLaunch for FakeLaunch {
@@ -3353,6 +3682,10 @@ mod tests {
             let next = self.readiness.lock().unwrap().pop_front();
             match next {
                 Some(readiness) => Ok(readiness),
+                None if self.still_booting => Err(RuntimeStillBooting {
+                    waited: Duration::from_secs(300),
+                }
+                .into()),
                 None => {
                     self.waiting.notify_one();
                     std::future::pending().await
@@ -3389,6 +3722,26 @@ mod tests {
             1
         );
         assert_eq!(launch.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_start_still_booting_at_the_bound_is_not_rolled_back() {
+        let (_temp, state) = orchestration_state();
+        let launch = FakeLaunch {
+            still_booting: true,
+            ..Default::default()
+        };
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let Err(failure) = launch_managed_server(&state, &token, lifecycle, &launch).await else {
+            panic!("a runtime still booting at the bound fails the start");
+        };
+        assert_eq!(launch.starts(), 1);
+        assert!(
+            !failure.attempted_start,
+            "a job that may be migrating is left running"
+        );
+        assert!(failure.error.is::<RuntimeStillBooting>());
     }
 
     #[tokio::test]

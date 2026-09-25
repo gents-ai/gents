@@ -126,9 +126,18 @@ impl ClientCore {
             Arc::new(principal.clone()),
         ));
 
-        let (peer_statuses, bootstrap_errors) = {
-            bootstrap_saved_peers(&node, &p2p, &records, &options, &principal, &route_manager).await
-        };
+        // Each saved peer can take a full dial timeout, so each one settled
+        // counts as startup progress.
+        let (peer_statuses, bootstrap_errors) = bootstrap_saved_peers(
+            &node,
+            &p2p,
+            &records,
+            &options,
+            &principal,
+            &route_manager,
+            &mut || checkpoint("saved_peer"),
+        )
+        .await;
         let (initial_health, initial_database_sync, initial_database_sync_error) =
             super::supervisor::probe_p2p_health(&p2p, &P2PHealth::default(), None, None).await;
         checkpoint("bootstrap_and_health");
@@ -217,6 +226,7 @@ pub(super) async fn bootstrap_saved_peers(
     options: &ClientCoreOptions,
     _actor: &PrincipalIdentity,
     route_manager: &Arc<ClientRouteManager>,
+    peer_settled: &mut (dyn FnMut() + Send),
 ) -> (Vec<ClientPeerStatus>, Vec<String>) {
     let mut statuses = Vec::with_capacity(records.len());
     let mut errors = Vec::new();
@@ -238,6 +248,7 @@ pub(super) async fn bootstrap_saved_peers(
         // projects that authority after schemas and subscriptions are live.
         if bootstrap_deferred_to_enrollment_authority(record) {
             statuses.push(status);
+            peer_settled();
             continue;
         }
 
@@ -267,6 +278,7 @@ pub(super) async fn bootstrap_saved_peers(
         }
 
         statuses.push(status);
+        peer_settled();
     }
 
     (statuses, errors)

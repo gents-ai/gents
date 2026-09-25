@@ -36,11 +36,11 @@ pub enum ClientStartProgress {
 
 pub struct DesktopAppState {
     pub bridge: Mutex<DesktopBridge>,
-    /// Serializes start *install* / shutdown mutations against bridge state.
-    /// Long-running node open does **not** hold this lock (see single-flight
-    /// `start_inflight` instead) so a cancelled Tauri command cannot drop the
-    /// lock while the store is still opening on a background thread.
-    pub client_lifecycle: tokio::sync::Mutex<()>,
+    /// Owns the desktop store for install, shutdown, init and reset. The
+    /// detached starter holds it from before the store opens until the core is
+    /// installed, or, after a start that stalled past its bound, until that
+    /// late core is closed.
+    pub client_lifecycle: Arc<tokio::sync::Mutex<()>>,
     /// Serializes managed server start/stop operations. Startup intentionally
     /// spans provisioning and server readiness, so the state flag alone is
     /// not sufficient to prevent two callers from racing the port bind.
@@ -253,7 +253,7 @@ impl DesktopAppState {
                 grok_login_cancel: None,
                 start_inflight: None,
             }),
-            client_lifecycle: tokio::sync::Mutex::new(()),
+            client_lifecycle: Arc::new(tokio::sync::Mutex::new(())),
             managed_server_lifecycle: tokio::sync::Mutex::new(()),
             policy,
             managed_server: tokio::sync::Mutex::new(ManagedServerState::default()),
