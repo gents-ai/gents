@@ -196,6 +196,7 @@ fn lean_source(source: &LeanCanonicalSource) -> OutputSource {
                 kind: match auxiliary_kind {
                     LeanAuxiliaryKind::Compaction => CaptureScopeKind::Compaction,
                     LeanAuxiliaryKind::CompactionFallback => CaptureScopeKind::CompactionFallback,
+                    LeanAuxiliaryKind::Title => CaptureScopeKind::Title,
                 },
                 seq: *scope,
             },
