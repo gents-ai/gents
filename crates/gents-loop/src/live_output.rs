@@ -449,6 +449,7 @@ impl LiveToolOutputWriter {
             self.canonical.is_some(),
             "command presentation requires a canonical live-output writer"
         );
+        self.flush_pending().await;
         self.registry
             .prepare_command_presentation(&self.tool_call_id, expected_text, layout, stdout, stderr)
             .await
@@ -459,59 +460,95 @@ impl LiveToolOutputWriter {
             let _serial = self.append_gate.lock().await;
             let text = {
                 let mut pending = self.pending_utf8.lock().await;
-                let pending = &mut pending[match stream {
-                    LiveOutputStream::Stdout => 0,
-                    LiveOutputStream::Stderr => 1,
-                }];
+                let pending = &mut pending[stream.index()];
                 pending.extend_from_slice(bytes);
-                match std::str::from_utf8(&pending) {
-                    Ok(text) => {
-                        let text = text.to_owned();
-                        pending.clear();
-                        text
-                    }
-                    Err(error) if error.error_len().is_none() => {
-                        // Preserve only the incomplete tail for the next
-                        // callback; the valid prefix is already a complete
-                        // immutable output fact.
-                        let valid = error.valid_up_to();
-                        let text = std::str::from_utf8(&pending[..valid])
-                            .expect("valid_up_to is valid UTF-8")
-                            .to_owned();
-                        pending.drain(..valid);
-                        text
-                    }
-                    Err(_) => {
-                        // Process output is modeled as text.  Invalid bytes
-                        // have no lossless representation in this stream, but
-                        // convert the *one combined buffer* once so a split
-                        // scalar can never produce two replacement characters.
-                        let text = String::from_utf8_lossy(&pending).into_owned();
-                        pending.clear();
-                        text
-                    }
-                }
+                drain_utf8(pending, false)
             };
-            match binding.append(&text).await {
-                Ok(source) => {
-                    if let Err(error) = self
-                        .registry
-                        .record_receipt(&self.tool_call_id, stream, source)
-                        .await
-                    {
-                        tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
-                            "canonical tool receipt recording failed");
-                    }
-                }
-                Err(error) => tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
-                    "canonical tool output append failed"),
-            }
+            self.commit(binding.as_ref(), stream, &text).await;
             return;
         }
         self.registry
             .append(&self.tool_call_id, stream, bytes)
             .await;
     }
+
+    /// Commits any incomplete trailing sequence as the replacement character
+    /// whole-stream lossy decoding gives it, so receipts cover the raw text.
+    async fn flush_pending(&self) {
+        let Some(binding) = &self.canonical else {
+            return;
+        };
+        let _serial = self.append_gate.lock().await;
+        for stream in [LiveOutputStream::Stdout, LiveOutputStream::Stderr] {
+            let text = {
+                let mut pending = self.pending_utf8.lock().await;
+                drain_utf8(&mut pending[stream.index()], true)
+            };
+            self.commit(binding.as_ref(), stream, &text).await;
+        }
+    }
+
+    async fn commit(
+        &self,
+        binding: &dyn CanonicalOutputAppender,
+        stream: LiveOutputStream,
+        text: &str,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+        match binding.append(text).await {
+            Ok(source) => {
+                if let Err(error) = self
+                    .registry
+                    .record_receipt(&self.tool_call_id, stream, source)
+                    .await
+                {
+                    tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
+                        "canonical tool receipt recording failed");
+                }
+            }
+            Err(error) => tracing::error!(tool_call_doc_id = %self.tool_call_id, %error,
+                "canonical tool output append failed"),
+        }
+    }
+}
+
+/// Decodes `pending` exactly as `String::from_utf8_lossy` decodes the whole
+/// stream: each invalid sequence becomes one U+FFFD, and an incomplete tail
+/// stays pending for the next read unless the stream has ended.
+fn drain_utf8(pending: &mut Vec<u8>, end_of_stream: bool) -> String {
+    let mut text = String::new();
+    let mut consumed = 0;
+    while consumed < pending.len() {
+        match std::str::from_utf8(&pending[consumed..]) {
+            Ok(valid) => {
+                text.push_str(valid);
+                consumed = pending.len();
+            }
+            Err(error) => {
+                let valid = error.valid_up_to();
+                text.push_str(
+                    std::str::from_utf8(&pending[consumed..consumed + valid])
+                        .expect("valid_up_to is valid UTF-8"),
+                );
+                consumed += valid;
+                match error.error_len() {
+                    Some(invalid) => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        consumed += invalid;
+                    }
+                    None if end_of_stream => {
+                        text.push(char::REPLACEMENT_CHARACTER);
+                        consumed = pending.len();
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+    pending.drain(..consumed);
+    text
 }
 
 #[derive(Debug, Clone)]
@@ -764,6 +801,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(render(source, &json), "éx");
+    }
+
+    #[test]
+    fn drained_reads_decode_as_the_whole_stream_does() {
+        let stream: &[u8] = b"a\xff\xc3\xa9\xc3\xe2\x82\xacz\xe2\x82";
+        for split in 0..=stream.len() {
+            for second in split..=stream.len() {
+                let mut pending = Vec::new();
+                let mut text = String::new();
+                for read in [&stream[..split], &stream[split..second], &stream[second..]] {
+                    pending.extend_from_slice(read);
+                    text.push_str(&drain_utf8(&mut pending, false));
+                }
+                text.push_str(&drain_utf8(&mut pending, true));
+                assert!(pending.is_empty());
+                assert_eq!(text, String::from_utf8_lossy(stream), "{split}/{second}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_and_split_bytes_cover_the_lossy_channel() {
+        let registry = LiveToolOutputRegistry::default();
+        let appender = Arc::new(MemoryAppender::default());
+        let writer = registry
+            .canonical_writer_for("tool".into(), appender.clone())
+            .await;
+        // An invalid byte beside a scalar split across reads, then a
+        // truncated trailing sequence the process never completes.
+        for read in [&b"\xff\xc3"[..], b"\xa9\xe2"] {
+            writer.append(LiveOutputStream::Stdout, read).await;
+        }
+        let raw = String::from_utf8_lossy(b"\xff\xc3\xa9\xe2").into_owned();
+        assert_eq!(raw, "\u{FFFD}é\u{FFFD}");
+        let text = format!("x\nstdout:\n{raw}\nstderr:\n");
+        writer
+            .prepare_command_presentation(
+                &text,
+                CommandPresentationLayout::Labeled {
+                    head: "x\n",
+                    json_string: false,
+                },
+                whole(&raw),
+                whole(""),
+            )
+            .await
+            .unwrap();
+        assert_eq!(*appender.0.lock().unwrap(), raw);
     }
 
     #[tokio::test]

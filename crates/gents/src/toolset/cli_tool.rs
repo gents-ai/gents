@@ -144,9 +144,6 @@ async fn run_cli_command(
         stdin: Vec::new(),
         environment: Some(cli_tool_environment(config)),
         tool_name: Some(config.name.clone()),
-        // This tool post-processes both command channels into a distinct JSON
-        // result and has no canonical composed-presentation owner.  Bash's
-        // shared command renderer is the sole streamed-command path.
         // Committed as captured, so a request deadline that stops this call
         // presents the output so far instead of only its cause.
         live_output: bounds.live_output.clone(),
@@ -486,8 +483,6 @@ mod tests {
             "printf 'partial stdout'; printf 'partial stderr' >&2; sleep 30"]})
         .to_string();
         let started = std::time::Instant::now();
-        // The loop hands the canonical writer to the dispatcher, which scopes
-        // it for the call.
         let outcome =
             gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
                 Some(chrono::Utc::now() + chrono::Duration::seconds(2)),
@@ -530,6 +525,13 @@ mod tests {
                 "cli-completed",
                 30,
                 "printf 'out \"q\"\\n'; printf 'err\\t' >&2; exit 4",
+            ),
+            (
+                // Output ending mid-sequence, and an invalid byte beside a
+                // complete scalar.
+                "cli-invalid-utf8",
+                30,
+                "printf 'ok\\303'; printf '\\377\\303\\251' >&2; exit 4",
             ),
             (
                 "cli-stopped",

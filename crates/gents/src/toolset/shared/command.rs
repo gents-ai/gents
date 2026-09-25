@@ -1553,9 +1553,8 @@ pub(crate) fn stopped_stream(text: &str, max_bytes: usize) -> TruncatedStream {
         text.to_owned()
     } else {
         format!(
-            "[Showing last {} of {} bytes]\n\n{tail}",
-            tail.len(),
-            text.len()
+            "{}{tail}",
+            gents_loop::truncation::tail_bytes_notice(tail.len(), text.len())
         )
     };
     TruncatedStream {
