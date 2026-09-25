@@ -91,11 +91,9 @@ fn task_templates_that_cannot_render_are_refused_at_configure_time() {
         serde_json::from_value::<Task>(value).unwrap()
     };
     for field in ["prompt_template", "goal_objective_template"] {
-        // The v0.19.0 RC configurator wrote this and apply accepted it; every
-        // fire then failed with "unknown filter: filter tojson is unknown".
         for template in [
-            "{{ doc.correlation | tojson }}",
-            "{% if doc.urgent %}{{ doc.correlation | tojson }}{% endif %}",
+            "{{ doc.correlation | toyaml }}",
+            "{% if doc.urgent %}{{ doc.correlation | toyaml }}{% endif %}",
             "{{ now() }}",
         ] {
             let error = task(field, template)
