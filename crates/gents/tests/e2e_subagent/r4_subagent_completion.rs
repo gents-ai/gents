@@ -648,8 +648,12 @@ fn skip_reason(action: ToolCallHookAction) -> String {
     reason
 }
 
+/// The accepted-turn runtime is still writing this request (its own
+/// terminalization and bookkeeping), so the fixture write goes through the
+/// transaction owner, whose conflict retry re-runs the whole update.
 async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &str) {
     let request_id = escape_graphql_string(request_id);
+    let state = escape_graphql_string(state);
     let mutation = format!(
         r#"mutation {{
             update_AgentRequest(
@@ -658,12 +662,12 @@ async fn set_request_lifecycle(node: &EmbeddedNode, request_id: &str, state: &st
             ) {{ _docID }}
         }}"#
     );
-    let response = node.execute(&mutation).await;
-    assert!(
-        !response.has_errors(),
-        "set request lifecycle failed: {:?}",
-        response.errors
-    );
+    ConfigAccess::transact_local(node, None, "test.set_request_lifecycle", |txn| {
+        let mutation = mutation.clone();
+        Box::pin(async move { txn.execute(&mutation).await.map(|_| ()) })
+    })
+    .await
+    .unwrap_or_else(|error| panic!("set request lifecycle failed: {error:#}"));
 }
 
 async fn set_child_processing_deadline(
