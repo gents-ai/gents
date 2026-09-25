@@ -45,9 +45,12 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
     let port = allocate_port()?;
     let graphql = graphql_url(port);
     let agent_name = format!("cli-enroll-{}", Uuid::new_v4().simple());
-    let reply_token = format!("ENROLL_LIVE_{}", Uuid::new_v4().simple());
+    // The nonce only makes the runtime request findable by prompt. Reply
+    // content is model-chosen: a live model may decline to echo a token, so
+    // replication is asserted against the runtime's own terminal output.
     let prompt = format!(
-        "This is an enrollment pairing smoke test. Reply with only the exact token {reply_token} and nothing else."
+        "Enrollment check {}: in one short sentence, say hello to the newly paired desktop.",
+        Uuid::new_v4().simple()
     );
 
     let init = run_init_json(
@@ -183,12 +186,14 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
                 Duration::from_secs(240),
             )
             .await?;
-            anyhow::ensure!(
-                runtime_text.contains(&reply_token),
-                "live inference response missing {reply_token}: {runtime_text}"
-            );
-
-            wait_for_client_complete_response(&core, &session_id, &agent_did, &request_id, &reply_token).await?;
+            wait_for_client_complete_response(
+                &core,
+                &session_id,
+                &agent_did,
+                &request_id,
+                &runtime_text,
+            )
+            .await?;
 
             let runtime_principals = graphql_query(
                 &graphql,
@@ -516,7 +521,7 @@ async fn wait_for_client_complete_response(
     session_id: &str,
     agent_did: &str,
     request_id: &str,
-    token: &str,
+    runtime_text: &str,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
@@ -568,7 +573,7 @@ async fn wait_for_client_complete_response(
                     .lifecycle_state
                     .is_some_and(|state| state.as_str() == "completed")
         });
-        if complete && message_text.contains(token) {
+        if complete && message_text.contains(runtime_text) {
             return Ok(());
         }
         if snapshot.requests.iter().any(|row| {
@@ -584,7 +589,7 @@ async fn wait_for_client_complete_response(
         }
         if Instant::now() >= deadline {
             bail!(
-                "client never received the complete live response for {request_id} containing {token}; requests={:?}; transcript_messages={:?}",
+                "client never received the runtime's terminal response for {request_id} ({runtime_text:?}); requests={:?}; transcript_messages={:?}",
                 snapshot.requests,
                 snapshot.transcript_messages
             );
