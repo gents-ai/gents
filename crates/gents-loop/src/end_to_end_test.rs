@@ -12,7 +12,7 @@ use rig::completion::{CompletionError, CompletionModel, CompletionRequest, Compl
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 
 use crate::backend_provider::BackendProviderKind;
-use crate::loop_stream::{run_loop_to_text, LoopConfig};
+use crate::loop_stream::{run_loop_to_text, LoopConfig, TaggedMessage};
 use crate::openai_wire::OpenAiWireApi;
 use crate::provider_input::ProviderInputCounter;
 use crate::session_hook::SessionHook;
@@ -381,7 +381,7 @@ async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
                 let stream = crate::loop_stream::run_loop_stream(
                     model,
                     Some(hook),
-                    Message::user("echo hi"),
+                    TaggedMessage::unassociated(Message::user("echo hi")),
                     Vec::new(),
                     tools,
                     config,
