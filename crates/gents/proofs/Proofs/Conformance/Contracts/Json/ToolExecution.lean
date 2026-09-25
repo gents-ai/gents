@@ -59,6 +59,16 @@ def managedExecLivenessCaseJson
       ++ boolString witness.killSignalRequired
     ++ "}"
 
+def processStopCaseJson (witness : ProcessStopCase) : String :=
+  "{"
+    ++ "\"name\":" ++ jsonString witness.name ++ ","
+    ++ "\"before\":" ++ jsonString witness.before ++ ","
+    ++ "\"after\":" ++ jsonString witness.after ++ ","
+    ++ "\"may_terminate\":" ++ boolString witness.mayTerminate ++ ","
+    ++ "\"outcome\":" ++ jsonString witness.outcome ++ ","
+    ++ "\"cancel_reply\":" ++ jsonString witness.cancelReply
+    ++ "}"
+
 def toolPreflightCaseJson (witness : ToolExecution.PreflightCase) : String :=
   "{"
     ++ "\"name\":" ++ jsonString witness.name ++ ","

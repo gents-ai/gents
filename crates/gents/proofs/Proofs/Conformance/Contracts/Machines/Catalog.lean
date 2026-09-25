@@ -43,6 +43,12 @@ def vocabularies : List VocabularyContract :=
   , { domain := "ToolCallState", values := toolCallStateNames }
   , { domain := "CancelCause", values := toolCallCancelCauseNames }
   , { domain := "ManagedExecState", values := managedExecStateNames }
+  , { domain := "ProcessStopOutcome"
+    , values := ManagedExec.StopOutcome.all.map ManagedExec.StopOutcome.toContract
+    }
+  , { domain := "CancelProcessReply"
+    , values := ManagedExec.CancelReply.all.map ManagedExec.CancelReply.toContract
+    }
   , { domain := "ToolFailureClass", values := failureClassNames }
   , { domain := "ToolRetryDisposition", values := toolRetryDispositionNames }
   , { domain := "AwaitMode"

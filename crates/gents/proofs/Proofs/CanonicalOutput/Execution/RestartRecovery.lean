@@ -5,9 +5,12 @@ import Proofs.Recovery.Sweeps.BackgroundRestart
 # Native background restart refinement
 
 This adapter is intentionally restricted to the existing orphan observation:
-the registry no longer reports an owned childless background execution. This
-does not prove that an OS process stopped; ManagedExec cleanup/stop evidence is
-a native recovery refinement. Parent expiry alone cannot construct it.
+the registry no longer reports an owned childless background execution, and
+the host owner's stop verdict (`ManagedExec.stopOutcome`) is part of that
+observation. Only an observed stop reaches the interruption/expiry causes; an
+unobserved one settles as `processLost`. The verdict itself is a native
+observation of the OS process group, not proved here. Parent expiry alone
+cannot construct it.
 -/
 
 namespace CanonicalOutput.Execution.RestartRecovery
@@ -33,7 +36,7 @@ def restartBindingValid (before : World) (document : DocId)
 
 def closeAction : Recovery.ToolRecoveryCause → ToolExecution.ToolCallContext.Action
   | .deadlineExceeded => .timeout
-  | .parentInterrupted | .terminalizeBackgroundedAsInterrupted =>
+  | .parentInterrupted | .terminalizeBackgroundedAsInterrupted | .taskDeleted =>
       .cancelDuringRun .interrupted
   | .unclaimedCrossPrincipalSpawn => .fail .serviceUnavailable
   | _ => .fail .external
@@ -298,8 +301,6 @@ theorem live_registered_process_cannot_use_restart_adapter
     (queue : SessionQueue.SessionQueueState)
     (hlive : binding.observation.executionRegistered = true) :
     recoverAndNotify? before document binding closing wake notificationBinding queue = none := by
-  have he : restartEvidence? binding.observation = none := by
-    simp [restartEvidence?, Recovery.orphanedBackgroundToolStale, hlive]
   simp [recoverAndNotify?, restartBindingValid, hlive]
 
 theorem logical_context_alias_cannot_select_another_physical_document

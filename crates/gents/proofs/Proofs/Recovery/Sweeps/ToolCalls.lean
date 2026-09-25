@@ -1,5 +1,6 @@
 import Proofs.Recovery.Sweeps.Requests
 import Proofs.ToolExecution
+import Proofs.ManagedExec.Ownership
 
 namespace Recovery
 
@@ -23,6 +24,11 @@ inductive ToolRecoveryCause where
   | childInterrupted
   | childSuperseded
   | unclaimedCrossPrincipalSpawn
+  /-- The host owner could not prove the process stopped: it was unrecorded,
+      its pid was reused, or it exited while no owner observed its result. -/
+  | processLost
+  /-- The task whose trigger started the owning request was deleted. -/
+  | taskDeleted
   deriving DecidableEq, Repr
 
 namespace ToolRecoveryCause
@@ -38,6 +44,8 @@ def toContract : ToolRecoveryCause → String
   | .childInterrupted => "childInterrupted"
   | .childSuperseded => "childSuperseded"
   | .unclaimedCrossPrincipalSpawn => "unclaimedCrossPrincipalSpawn"
+  | .processLost => "processLost"
+  | .taskDeleted => "taskDeleted"
 
 def terminalState : ToolRecoveryCause → ToolCallState
   | .deadlineExceeded => .timedOut
@@ -50,6 +58,8 @@ def terminalState : ToolRecoveryCause → ToolCallState
   | .childInterrupted => .cancelled
   | .childSuperseded => .failed
   | .unclaimedCrossPrincipalSpawn => .failed
+  | .processLost => .failed
+  | .taskDeleted => .cancelled
 
 theorem terminalState_terminal (cause : ToolRecoveryCause) :
     isTerminal cause.terminalState := by
@@ -144,6 +154,12 @@ structure OrphanedBackgroundToolRow where
   parentInterrupted : Bool
   parentTerminal : Bool
   executionRegistered : Bool
+  /-- The host owner's verdict after it stopped a proven-owned process
+      (`ManagedExec.stopOutcome`). -/
+  process : ManagedExec.StopOutcome
+  /-- The trigger or task that started the owning request is observed
+      deleted. Absence without a deletion record is not deletion. -/
+  ownerTaskDeleted : Bool
   deriving Repr
 
 /-- A missing exact physical parent is an incomplete owner observation. The
@@ -154,23 +170,36 @@ def OrphanedBackgroundToolRow.parentResolvable
 
 /-- The periodic orphan sweep uses the same precedence as startup recovery.
     Owner resolution precedes expiry, since neither deadline nor unclaimed
-    status licenses a write to a tool whose parent scope is unavailable. -/
+    status licenses a write to a tool whose parent scope is unavailable.
+    A live registered worker owns its row unless its task was deleted. A
+    process the owner still observes running keeps its row running; one whose
+    stop the owner could not observe is settled as lost, never as a stop. -/
 def orphanedBackgroundToolCause
     (row : OrphanedBackgroundToolRow) : Option ToolRecoveryCause :=
   if !row.parentResolvable then
     none
-  else if row.deadlineExpired then
-    some .deadlineExceeded
-  else if row.unclaimedExpired then
-    some .unclaimedCrossPrincipalSpawn
-  else if row.parentLive then
-    some .terminalizeBackgroundedAsInterrupted
-  else if row.parentInterrupted then
-    some .parentInterrupted
-  else if row.parentTerminal then
-    some .parentTerminal
-  else
+  else if row.executionRegistered && !row.ownerTaskDeleted then
     none
+  else
+    match row.process with
+    | .stillRunning => none
+    | .notOwned => some .processLost
+    | .alreadyExited => some .processLost
+    | .stopped =>
+      if row.deadlineExpired then
+        some .deadlineExceeded
+      else if row.unclaimedExpired then
+        some .unclaimedCrossPrincipalSpawn
+      else if row.ownerTaskDeleted then
+        some .taskDeleted
+      else if row.parentLive then
+        some .terminalizeBackgroundedAsInterrupted
+      else if row.parentInterrupted then
+        some .parentInterrupted
+      else if row.parentTerminal then
+        some .parentTerminal
+      else
+        none
 
 theorem orphanedBackgroundTool_no_parent_no_cause
     (row : OrphanedBackgroundToolRow)
@@ -178,11 +207,32 @@ theorem orphanedBackgroundTool_no_parent_no_cause
     orphanedBackgroundToolCause row = none := by
   simp [orphanedBackgroundToolCause, h]
 
+/-- A settled row never claims a stop the owner did not observe. -/
+theorem orphanedBackgroundTool_unstopped_settles_lost
+    (row : OrphanedBackgroundToolRow) (cause : ToolRecoveryCause)
+    (h_cause : orphanedBackgroundToolCause row = some cause)
+    (h_process : row.process ≠ .stopped) :
+    cause = .processLost := by
+  unfold orphanedBackgroundToolCause at h_cause
+  cases h_resolvable : row.parentResolvable <;>
+    cases h_registered : row.executionRegistered <;>
+    cases h_deleted : row.ownerTaskDeleted <;>
+    cases h_p : row.process <;>
+    simp_all
+
+/-- A live registered worker is never taken over unless its task was deleted. -/
+theorem orphanedBackgroundTool_registered_live_worker_untouched
+    (row : OrphanedBackgroundToolRow)
+    (h_registered : row.executionRegistered = true)
+    (h_deleted : row.ownerTaskDeleted = false) :
+    orphanedBackgroundToolCause row = none := by
+  simp [orphanedBackgroundToolCause, h_registered, h_deleted]
+
 def orphanedBackgroundToolStale (row : OrphanedBackgroundToolRow) : Prop :=
   row.call.state = .running ∧
   row.call.awaitMode = .background ∧
   row.call.childRequestId = none ∧
-  row.executionRegistered = false ∧
+  (row.executionRegistered = false ∨ row.ownerTaskDeleted = true) ∧
   (orphanedBackgroundToolCause row).isSome = true
 
 instance (row : OrphanedBackgroundToolRow) :

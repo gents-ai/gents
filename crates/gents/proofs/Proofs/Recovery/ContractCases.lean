@@ -26,7 +26,9 @@ def recoveryCase
 def orphanedBackgroundRecoveryCase
     (name : String)
     (deadlineExpired unclaimedExpired parentLive parentInterrupted
-      parentTerminal executionRegistered : Bool) : RecoverySweepCase :=
+      parentTerminal executionRegistered : Bool)
+    (process : ManagedExec.StopOutcome := .stopped)
+    (ownerTaskDeleted : Bool := false) : RecoverySweepCase :=
   let row : OrphanedBackgroundToolRow :=
     { call := r6NativeToolFixture
     , deadlineExpired := deadlineExpired
@@ -35,6 +37,8 @@ def orphanedBackgroundRecoveryCase
     , parentInterrupted := parentInterrupted
     , parentTerminal := parentTerminal
     , executionRegistered := executionRegistered
+    , process := process
+    , ownerTaskDeleted := ownerTaskDeleted
     }
   let recovered := orphanedBackgroundToolRecover row
   let cause := orphanedBackgroundToolCause row
@@ -52,6 +56,8 @@ def orphanedBackgroundRecoveryCase
         | .childInterrupted => "child_interrupted"
         | .childSuperseded => "child_superseded"
         | .unclaimedCrossPrincipalSpawn => "unclaimed_spawn_timeout"
+        | .processLost => "process_lost"
+        | .taskDeleted => "task_deleted"
     else
       none
   { (recoveryCase
@@ -68,6 +74,8 @@ def orphanedBackgroundRecoveryCase
     parentInterrupted := some row.parentInterrupted
     parentTerminal := some row.parentTerminal
     executionRegistered := some row.executionRegistered
+    processOutcome := some row.process.toContract
+    ownerTaskDeleted := some row.ownerTaskDeleted
     recoveryCause := cause.map ToolRecoveryCause.toContract
     notificationReason := notificationReason
   }
@@ -130,10 +138,10 @@ def recoverySweepCases : List RecoverySweepCase :=
       "terminal-parent-owned-tool-cleanup"
   , recoveryCase
       toolCallRecoverySweep
-      "tool_backgrounded_running_live_parent_to_cancelled"
+      "tool_backgrounded_running_unowned_process_to_failed"
       "running"
-      "cancelled"
-      "r6-TerminalizeBackgroundedAsInterrupted"
+      "failed"
+      "gents-1858-process-ownership"
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_without_execution_to_cancelled"
       false false true false false false
@@ -152,6 +160,21 @@ def recoverySweepCases : List RecoverySweepCase :=
   , orphanedBackgroundRecoveryCase
       "orphaned_background_tool_terminal_parent_to_failed"
       false false false false true false
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_unowned_process_to_failed"
+      false false true false false false (process := .notOwned)
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_exited_process_to_failed"
+      false false false false true false (process := .alreadyExited)
+  , orphanedBackgroundRecoveryCase
+      "orphaned_background_tool_still_running_deferred"
+      false false true false false false (process := .stillRunning)
+  , orphanedBackgroundRecoveryCase
+      "registered_background_tool_left_to_worker"
+      false false true false false true
+  , orphanedBackgroundRecoveryCase
+      "registered_background_tool_task_deleted_to_cancelled"
+      false false true false false true (ownerTaskDeleted := true)
   , recoveryCase
       backgroundCompletionSideEffectSweep
       "terminal_background_tool_missing_completion_side_effects_to_converged"
@@ -275,7 +298,8 @@ def restartDispositionCase
     (parent : ParentObservation)
     (theoremName : String)
     (deadlineExpired : Bool := false)
-    (unclaimedExpired : Bool := false) : RestartDispositionCase :=
+    (unclaimedExpired : Bool := false)
+    (process : ManagedExec.StopOutcome := .stopped) : RestartDispositionCase :=
   let row : RestartRow :=
     { awaitMode := awaitMode
     , cancelPolicy := cancelPolicy
@@ -283,6 +307,7 @@ def restartDispositionCase
     , parent := parent
     , deadlineExpired := deadlineExpired
     , unclaimedExpired := unclaimedExpired
+    , process := process
     }
   let disposition := restartDisposition row
   { name := name
@@ -293,6 +318,7 @@ def restartDispositionCase
   , parentObservation := parent.toContract
   , deadlineExpired := deadlineExpired
   , unclaimedExpired := unclaimedExpired
+  , processOutcome := process.toContract
   , disposition := disposition.toContract
   , cause := disposition.causeContract
   , terminalState := disposition.terminalStateContract
@@ -310,6 +336,21 @@ def restartDispositionCases : List RestartDispositionCase :=
       "restart_native_background_live_parent_interrupted"
       .background .cascade false .live
       "Recovery.native_background_tool_live_parent_interrupted_on_restart"
+  , restartDispositionCase
+      "restart_native_background_unowned_process_lost"
+      .background .cascade false .live
+      "Recovery.native_background_unstopped_process_settles_lost"
+      (process := .notOwned)
+  , restartDispositionCase
+      "restart_native_background_exited_process_lost"
+      .background .cascade false .otherTerminal
+      "Recovery.native_background_unstopped_process_settles_lost"
+      (process := .alreadyExited)
+  , restartDispositionCase
+      "restart_native_background_still_running_left_running"
+      .background .cascade false .live
+      "Recovery.native_background_still_running_left_running"
+      (process := .stillRunning)
   , restartDispositionCase
       "restart_background_subagent_live_parent_left_running"
       .background .cascade true .live
@@ -366,9 +407,9 @@ def restartDispositionCases : List RestartDispositionCase :=
     unclaimed rows whose missing physical parent defers classification. -/
 theorem restartDispositionCases_cover_both_dispositions :
     (restartDispositionCases.filter
-        (fun witness => witness.disposition = "leave_running")).length = 7 ∧
+        (fun witness => witness.disposition = "leave_running")).length = 8 ∧
       (restartDispositionCases.filter
-        (fun witness => witness.disposition = "terminalize")).length = 5 := by
+        (fun witness => witness.disposition = "terminalize")).length = 7 := by
   native_decide
 
 /-- Every terminal native background witness with a resolvable parent owes a
@@ -381,6 +422,16 @@ theorem restartDispositionCases_notifications_pinned :
             witness.queueKeyPrefix)) =
       [ ("restart_native_background_live_parent_interrupted"
         , some "interrupted_on_restart"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_unowned_process_lost"
+        , some "process_lost"
+        , some "background_completion"
+        , some "background_completion:"
+        )
+      , ("restart_native_background_exited_process_lost"
+        , some "process_lost"
         , some "background_completion"
         , some "background_completion:"
         )

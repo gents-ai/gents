@@ -146,7 +146,8 @@ def restartObservation (context : ToolExecution.ToolCallContext)
     (registered : Bool := false) : Recovery.OrphanedBackgroundToolRow :=
   { call := context, deadlineExpired := false, unclaimedExpired := false
     parentLive := true, parentInterrupted := false, parentTerminal := false
-    executionRegistered := registered }
+    executionRegistered := registered, process := .stopped
+    ownerTaskDeleted := false }
 
 def restartRawOutput : Segment := { toolOutputClose with close := none }
 

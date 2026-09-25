@@ -381,6 +381,22 @@ def vocabularyCoverage : List CoverageEntry :=
       "managed-exec" [Surface.agentFacing]
   , tagged (consumerCoverage
       "vocabulary"
+      "ProcessStopOutcome"
+      "managed_exec::tests::rust_process_stop_outcome_vocabulary_matches_lean_model")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "vocabulary"
+      "CancelProcessReply"
+      "managed_exec::tests::rust_cancel_process_reply_vocabulary_matches_lean_model")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerWithFollowUp
+      "process_stop_cases"
+      "ProcessStopCases"
+      "managed_exec::tests::generated_process_stop_cases_drive_host_owner"
+      "Each generated verdict is checked against the native mapping, and the reachable observations (a recorded running group, the same group after the owner's stop, a reused start identity) are produced by real test-owned process groups. A group that survives SIGKILL cannot be constructed on a test host, so stillRunning is checked only through the mapping.")
+      "managed-exec" [Surface.agentFacing]
+  , tagged (consumerCoverage
+      "vocabulary"
       "ToolFailureClass"
       "tool_call_lifecycle::tests::rust_failure_class_vocabulary_matches_lean_model")
       "tool-call" [Surface.agentFacing]
