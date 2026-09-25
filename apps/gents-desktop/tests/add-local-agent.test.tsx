@@ -132,6 +132,21 @@ describe("Add agent on a desktop that already runs its local agent", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("names the local agent from its home, not a stale remembered name", async () => {
+    const { api, shell } = fleet([remote]);
+    api.managedServerStatus.mockImplementation(async () =>
+      status({ state: "stopped", agentName: "Scout", agentDid: null }),
+    );
+    const dialog = await openAddAgent(shell);
+    const local = within(dialog).getByRole("radio", { name: /Local agent/ });
+    await waitFor(() => expect(local).toBeEnabled());
+    expect(local).toHaveTextContent("Reconnect Forge");
+    expect(local).not.toHaveTextContent("Scout");
+    await userEvent.click(local);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Reconnect" }));
+    await waitFor(() => expect(api.startManagedServer).toHaveBeenCalledWith("Forge"));
+  });
+
   it("keeps the dialog open with the reason when reconnecting fails, and a retry works", async () => {
     const { shell } = fleet([remote]);
     (shell.onInitLocalRuntime as ReturnType<typeof vi.fn>).mockRejectedValueOnce(

@@ -344,9 +344,11 @@ function AddAgentDialog({
   const [error, setError] = useState<string | null>(null);
   const [localStatus, setLocalStatus] = useState<ManagedServerStatus | null>(null);
   const bootstrap = shell.snapshot?.bootstrap;
+  /* The home's init config names the agent; the managed-server status of a
+     stopped runtime only repeats the desktop's remembered preference. */
   const localName =
-    localStatus?.agentName?.trim() || bootstrap?.initAgentName?.trim() || null;
-  const localDid = localStatus?.agentDid ?? bootstrap?.initAgentDid ?? null;
+    bootstrap?.initAgentName?.trim() || localStatus?.agentName?.trim() || null;
+  const localDid = bootstrap?.initAgentDid ?? localStatus?.agentDid ?? null;
   const localListed = shell.deployments.some((deployment) =>
     isLocalAgent(deployment, localDid),
   );

@@ -180,6 +180,12 @@ source consistency checks, not a separate runtime compatibility version.
   updating its data as a failure. It shows "Updating data…" and waits, and the
   menu bar's Restart Agent waits for the update instead of interrupting it
   (#1762).
+- Desktop: Add agent no longer claims to create a second local agent under a
+  new name while reusing the existing one. It reconnects this computer's
+  local agent by its real name, reports success only once the agent is listed,
+  and keeps the dialog open with the reason when that fails. First-run setup
+  shows an existing home's agent name instead of an editable name it would
+  ignore, and fails clearly rather than continuing under another name (#1615).
 
 ## 0.19.0 - 2026-09-24
 

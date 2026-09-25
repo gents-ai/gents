@@ -721,16 +721,23 @@ async fn start_managed_server<'a, R: Runtime>(
             },
         )
         .await?;
-        let (tool_ceiling, tool_root) = authority.stored();
-        save_preference(
-            state,
-            &StoredManagedServer {
-                agent_name: agent_name.to_string(),
-                tool_ceiling: Some(tool_ceiling),
-                tool_root,
-            },
-        )
-        .await?;
+        // Provisioning never renames an initialized home, so the requested
+        // name is only remembered once the home confirms it.
+        if name_confirmed_by_home(
+            agent_name,
+            read_initialized_name(&agent_home).await.as_deref(),
+        ) {
+            let (tool_ceiling, tool_root) = authority.stored();
+            save_preference(
+                state,
+                &StoredManagedServer {
+                    agent_name: agent_name.to_string(),
+                    tool_ceiling: Some(tool_ceiling),
+                    tool_root,
+                },
+            )
+            .await?;
+        }
         ensure_default_port_identity(&agent_home).await?;
         // Install even when a unit file already exists. `install` leaves a
         // matching definition alone and refuses while the service is active.
@@ -3432,6 +3439,23 @@ async fn read_initialized_did(agent_home: &std::path::Path) -> Option<String> {
         })
 }
 
+async fn read_initialized_name(agent_home: &std::path::Path) -> Option<String> {
+    tokio::fs::read(agent_home.join("init.json"))
+        .await
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| {
+            value
+                .get("agent_name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
+    initialized.is_some_and(|name| name.trim() == requested.trim())
+}
+
 fn ensure_matching_identity(
     initialized_did: Option<&str>,
     live_did: &str,
@@ -3490,6 +3514,23 @@ async fn save_preference(
 mod tests {
     use super::*;
     use crate::state::ManagedServerState as ManagedServerRuntimeState;
+
+    #[tokio::test]
+    async fn requested_name_is_remembered_only_when_the_home_confirms_it() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(!name_confirmed_by_home(
+            "Scout",
+            read_initialized_name(home.path()).await.as_deref()
+        ));
+        write(
+            &home.path().join("init.json"),
+            r#"{"agent_did":"did:key:forge","agent_name":"Forge"}"#,
+        );
+        let initialized = read_initialized_name(home.path()).await;
+        assert_eq!(initialized.as_deref(), Some("Forge"));
+        assert!(!name_confirmed_by_home("Scout", initialized.as_deref()));
+        assert!(name_confirmed_by_home("Forge", initialized.as_deref()));
+    }
 
     fn not_the_user_home() -> &'static Path {
         Path::new("/nonexistent-user-home")
