@@ -645,52 +645,107 @@ mod tests {
     }
 
     /// Every top-level name a runtime writes in its home is named through
-    /// this module, so retiring a home cannot miss one.
+    /// this module, so retiring a home cannot miss one. Scans every crate's
+    /// production sources for joins onto a home path: a literal must be in
+    /// the inventory, a constant must resolve to an inventory name, and a
+    /// computed (`format!`) top-level name is refused outright.
     #[test]
     fn runtime_writers_name_home_entries_only_from_the_inventory() {
+        /// Crates whose `home` is not a Gents home (a fixture plugin's own
+        /// application data directory).
+        const NOT_GENTS_HOMES: &[&str] = &["fixture-domain-plugin"];
         let crates = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-        let pattern = regex::Regex::new(
-            r#"\b(?:home|home_dir|agent_home|gents_home)\s*\.join\(\s*"([^"]+)"\s*\)"#,
+        let receiver = r"\b(?:home|home_dir|agent_home|gents_home|home_path)\s*\.join\(\s*";
+        let literal = regex::Regex::new(&format!(r#"{receiver}"([^"]+)""#)).unwrap();
+        let constant =
+            regex::Regex::new(&format!(r"{receiver}((?:[a-z_]+::)*[A-Z][A-Z0-9_]*)\s*\)")).unwrap();
+        let computed = regex::Regex::new(&format!(r"{receiver}format!")).unwrap();
+        let const_def = regex::Regex::new(
+            r#"const\s+([A-Z][A-Z0-9_]*)\s*:\s*&str\s*=\s*(?:"([^"]*)"|(?:[a-z_]+::)*([A-Z][A-Z0-9_]*))\s*;"#,
         )
         .unwrap();
-        let mut unlisted = Vec::new();
-        for krate in [
-            "gents",
-            "gents-cli",
-            "gents-desktop-core",
-            "gents-desktop-bridge",
-        ] {
-            let mut pending = vec![crates.join(krate).join("src")];
+
+        let mut sources = Vec::new();
+        for krate in fs::read_dir(&crates).unwrap() {
+            let krate = krate.unwrap().path();
+            let name = krate.file_name().unwrap().to_string_lossy().into_owned();
+            if NOT_GENTS_HOMES.contains(&name.as_str()) {
+                continue;
+            }
+            let mut pending = vec![krate.join("src")];
             while let Some(dir) = pending.pop() {
-                for entry in fs::read_dir(&dir).unwrap() {
+                let Ok(listing) = fs::read_dir(&dir) else {
+                    continue;
+                };
+                for entry in listing {
                     let path = entry.unwrap().path();
                     if path.is_dir() {
                         if path.file_name().is_some_and(|name| name != "tests") {
                             pending.push(path);
                         }
-                        continue;
+                    } else if path.extension().is_some_and(|ext| ext == "rs") {
+                        sources.push(path);
                     }
-                    let name = path.file_name().unwrap().to_string_lossy();
-                    if !name.ends_with(".rs") || name.contains("test") {
-                        continue;
+                }
+            }
+        }
+
+        // Constant name -> string value, following one level of aliasing
+        // (`const X: &str = gents::home::Y;`).
+        let mut values = std::collections::HashMap::<String, String>::new();
+        let mut aliases = std::collections::HashMap::<String, String>::new();
+        for path in &sources {
+            let text = fs::read_to_string(path).unwrap();
+            for capture in const_def.captures_iter(&text) {
+                match (capture.get(2), capture.get(3)) {
+                    (Some(value), _) => {
+                        values.insert(capture[1].to_string(), value.as_str().to_string());
                     }
-                    for (line_number, line) in
-                        fs::read_to_string(&path).unwrap().lines().enumerate()
-                    {
-                        if line.contains("#[cfg(test)]") {
-                            break;
+                    (None, Some(target)) => {
+                        aliases.insert(capture[1].to_string(), target.as_str().to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let resolve = |name: &str| -> Option<String> {
+            let name = name.rsplit("::").next().unwrap_or(name);
+            values.get(name).cloned().or_else(|| {
+                aliases
+                    .get(name)
+                    .and_then(|target| values.get(target).cloned())
+            })
+        };
+
+        let mut unlisted = Vec::new();
+        for path in &sources {
+            let file = path.file_name().unwrap().to_string_lossy();
+            if file.contains("test") {
+                continue;
+            }
+            let text = fs::read_to_string(path).unwrap();
+            for (line_number, line) in text.lines().enumerate() {
+                if line.contains("#[cfg(test)]") {
+                    break;
+                }
+                let at = || format!("{}:{}", path.display(), line_number + 1);
+                for capture in literal.captures_iter(line) {
+                    let top = capture[1].split('/').next().unwrap_or_default();
+                    if !RUNTIME_HOME_ENTRIES.contains(&top) {
+                        unlisted.push(format!("{}: {top}", at()));
+                    }
+                }
+                for capture in constant.captures_iter(line) {
+                    match resolve(&capture[1]) {
+                        Some(value) if RUNTIME_HOME_ENTRIES.contains(&value.as_str()) => {}
+                        Some(value) => {
+                            unlisted.push(format!("{}: {} = {value}", at(), &capture[1]))
                         }
-                        for capture in pattern.captures_iter(line) {
-                            let top = capture[1].split('/').next().unwrap_or_default().to_string();
-                            if !RUNTIME_HOME_ENTRIES.contains(&top.as_str()) {
-                                unlisted.push(format!(
-                                    "{}:{}: {top}",
-                                    path.display(),
-                                    line_number + 1
-                                ));
-                            }
-                        }
+                        None => unlisted.push(format!("{}: unresolved {}", at(), &capture[1])),
                     }
+                }
+                if computed.is_match(line) {
+                    unlisted.push(format!("{}: computed name", at()));
                 }
             }
         }
