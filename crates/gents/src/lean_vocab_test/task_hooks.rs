@@ -1,8 +1,7 @@
 use serde::Deserialize;
 
 /// `effective_timeout_secs` is resolved by the model, not authored. A host
-/// executor must consume it rather than re-deriving the default; nothing here
-/// enforces that, because no such executor exists yet (#1600).
+/// executor must consume it rather than re-deriving the default.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct LeanTaskHook {
