@@ -15,7 +15,8 @@ timeout_secs?: number | null,
 /**
  * Output budget for stdout and for stderr, each, in the result a
  * completed call returns; the rest is truncated. Counted in UTF-8 bytes,
- * cut on a character boundary. Unset uses 16,000. Must be between 1 and
+ * cut on a character boundary. Unset keeps the host CLI registration's
+ * budget (16,000 for every built-in registration). Must be between 1 and
  * 1,000,000. Interrupted-call diagnostics keep the default budget (#1770).
  */
 max_output_chars?: number | null, };
