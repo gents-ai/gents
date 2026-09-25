@@ -378,6 +378,8 @@ def snapshotJson : String :=
         (r6BackgroundingCases.map r6BackgroundingCaseJson) ++ ","
     ++ "\"descendant_graph_cases\":"
       ++ descendantGraphCasesJson ++ ","
+    ++ "\"descendant_cursor_cases\":"
+      ++ descendantCursorCasesJson ++ ","
     ++ "\"r5_cross_principal_cases\":"
       ++ jsonArray
         (r5CrossPrincipalCases.map r5CrossPrincipalCaseJson) ++ ","

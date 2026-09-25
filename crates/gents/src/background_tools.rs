@@ -567,6 +567,7 @@ pub async fn handle_list_subagents(
         read_at: Utc::now(),
         truncated,
         next_cursor,
+        stale_cursor: page.stale_cursor,
         entries,
     })
 }

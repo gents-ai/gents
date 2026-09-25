@@ -20,6 +20,20 @@ async fn setup_db(
     crate::support::TestDb,
     crate::support::fixtures::SubagentSourceGuard,
 ) {
+    let db = setup_db_without_subagent_source(name).await;
+    let agent_did = db.node_identity.did().to_string();
+    let source = spawn_subagent_source(
+        db.node.clone(),
+        &agent_did,
+        PARENT_BEHAVIOR_ID,
+        CHILD_BEHAVIOR_ID,
+    );
+    (db, source)
+}
+
+/// No `SubagentSource` runs, so no spawned child is ever materialized or
+/// claimed: every background bridge stays awaiting its child.
+async fn setup_db_without_subagent_source(name: &str) -> crate::support::TestDb {
     let db = test_db(name).await;
     let agent_did = db.node_identity.did().to_string();
     configure_subagent_behavior(
@@ -49,13 +63,7 @@ async fn setup_db(
         None,
     )
     .await;
-    let source = spawn_subagent_source(
-        db.node.clone(),
-        &agent_did,
-        PARENT_BEHAVIOR_ID,
-        CHILD_BEHAVIOR_ID,
-    );
-    (db, source)
+    db
 }
 
 async fn create_parent_hook(
@@ -125,6 +133,50 @@ async fn spawn_background_child(
     let child_session_id = wait_for_child_session_id(node, &child_request_id).await;
     receipt["child_session_id"] = Value::String(child_session_id);
     receipt
+}
+
+async fn spawn_unclaimed_background_child(
+    hook: &DefraSessionHook,
+    internal_call_id: &str,
+) -> String {
+    let args = json!({
+        "name": CHILD_BEHAVIOR_ID,
+        "prompt": "never claimed",
+        "await_mode": "background"
+    })
+    .to_string();
+    let action = accepted_call(
+        hook,
+        "spawn_subagent",
+        Some(format!("model-{internal_call_id}")),
+        internal_call_id,
+        &args,
+    )
+    .await;
+    let receipt = skip_reason_json(action);
+    assert_eq!(receipt["ok"], true);
+    receipt["child_request_id"]
+        .as_str()
+        .expect("child_request_id")
+        .to_string()
+}
+
+/// The unclaimed-spawn outcome the parent observes: the bridge fails while
+/// its child has never materialized.
+async fn fail_unclaimed_bridge(db: &crate::support::TestDb, session_id: &str, tool_call_id: &str) {
+    let native_id = format!("model-{tool_call_id}");
+    let mut lifecycle = ToolCallLifecycle::load(db.node.clone(), session_id, &native_id)
+        .await
+        .expect("load lifecycle")
+        .expect("bridge lifecycle should exist");
+    let failed = lifecycle
+        .bridge_failure(gents::tool_call_lifecycle::ChildTerminal::Failed {
+            reason: "no peer claimed subagent spawn before the unclaimed spawn deadline".into(),
+            failure_class: gents::tool_call_lifecycle::FailureClass::ServiceUnavailable,
+        })
+        .await
+        .expect("fail unclaimed bridge");
+    assert!(failed);
 }
 
 async fn wait_for_child_session_id(node: &EmbeddedNode, child_request_id: &str) -> String {
@@ -458,4 +510,80 @@ async fn list_subagents_lineage_matches_r4c_witness_shape() {
             .any(|entry| entry["child_request_id"].as_str() == Some(sibling_child_id)),
         "caller must not see sibling child"
     );
+}
+
+#[tokio::test]
+async fn list_subagents_stale_cursor_restarts_without_terminating_parent() {
+    let (db, _source) = setup_db("r4c-list-stale-cursor").await;
+    let hook = create_parent_hook(&db, "parent-stale", "session-stale").await;
+    spawn_background_child(db.node.as_ref(), &hook, "spawn-stale-a", "do A").await;
+    spawn_background_child(db.node.as_ref(), &hook, "spawn-stale-b", "do B").await;
+
+    // #1808: a cursor naming a child that is not in this scope once failed the
+    // control tool, which terminated the parent's stream.
+    let stale = "00000001\u{1f}2026-09-25T14:47:11.196551Z\u{1f}parent-stale\u{1f}toolu_gone\u{1f}child-gone";
+    let result = list_subagents(
+        &hook,
+        "list-stale-cursor",
+        json!({"status": "all", "after": stale}),
+    )
+    .await;
+    assert_eq!(result["stale_cursor"], true);
+    assert_eq!(result["entries"].as_array().expect("entries").len(), 2);
+}
+
+#[tokio::test]
+async fn fan_out_with_every_child_unclaimed_leaves_parent_able_to_report() {
+    let db = setup_db_without_subagent_source("r4c-list-unclaimed-fan-out").await;
+    let session_id = "session-unclaimed-fan-out";
+    let hook = create_parent_hook(&db, "parent-unclaimed-fan-out", session_id).await;
+    let mut children = Vec::new();
+    for index in 0..3 {
+        children.push(
+            spawn_unclaimed_background_child(&hook, &format!("spawn-unclaimed-{index}")).await,
+        );
+    }
+
+    // The parent pages its fan-out while every bridge still awaits its child.
+    let first = list_subagents(
+        &hook,
+        "list-unclaimed-first",
+        json!({"status": "all", "limit": 1}),
+    )
+    .await;
+    assert_eq!(
+        first["entries"][0]["status"],
+        "awaiting_child_materialization"
+    );
+    let cursor = first["next_cursor"]
+        .as_str()
+        .expect("next cursor")
+        .to_string();
+
+    for index in 0..3 {
+        fail_unclaimed_bridge(&db, session_id, &format!("spawn-unclaimed-{index}")).await;
+    }
+
+    // The cursor issued before the failures still names its (now failed) edge.
+    let rest = list_subagents(
+        &hook,
+        "list-unclaimed-rest",
+        json!({"status": "all", "after": cursor}),
+    )
+    .await;
+    assert!(rest.get("stale_cursor").is_none(), "{rest}");
+    assert_eq!(rest["entries"].as_array().expect("entries").len(), 2);
+
+    let all = list_subagents(&hook, "list-unclaimed-all", json!({"status": "all"})).await;
+    let entries = all["entries"].as_array().expect("entries");
+    assert_eq!(entries.len(), 3);
+    for entry in entries {
+        assert_eq!(entry["status"], "failed", "{entry}");
+        assert!(children
+            .iter()
+            .any(|child| entry["child_request_id"] == child.as_str()));
+        assert!(entry["diagnostic"]
+            .as_str()
+            .is_some_and(|text| text.contains("no materialized row")));
+    }
 }

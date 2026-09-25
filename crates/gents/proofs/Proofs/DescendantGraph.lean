@@ -209,6 +209,85 @@ theorem terminal_transition_preserves_cursor_anchor
       some [next] := by
   simp [afterCursor, lifecycle_change_preserves_cursor]
 
+/-- One page of the stable scoped edge sequence. `staleCursor` reports that the
+    caller's anchor no longer names an edge in this scope. -/
+structure Page where
+  edges : List Edge
+  staleCursor : Bool
+  deriving DecidableEq, Repr
+
+/-- A caller-held cursor is an observation of the graph, not state of the
+    request that holds it (#1808). An anchor that no longer resolves degrades
+    the lineage view: the page restarts at the head of the stable scoped
+    sequence and reports the stale anchor. It is never an error, so it cannot
+    fail the caller's control tool or terminate the caller's stream. -/
+def page (after : Option Cursor) (edges : List Edge) : Page :=
+  match after with
+  | none => ⟨edges, false⟩
+  | some target =>
+      match afterCursor target edges with
+      | some rest => ⟨rest, false⟩
+      | none => ⟨edges, true⟩
+
+/-- Failures a descendant control tool can meet while the parent stream is
+    live. Only the descendant observation may degrade (#1808). Canonical parent
+    publication and tool dispatch receipt errors (#1697) are the parent's own
+    durable facts and still fail closed. -/
+inductive ControlFault where
+  | staleDescendantCursor
+  | parentPublication
+  | dispatchReceipt
+  deriving DecidableEq, Repr
+
+inductive ParentDisposition where
+  | continueParent
+  | terminateParent
+  deriving DecidableEq, Repr
+
+def controlFaultDisposition : ControlFault → ParentDisposition
+  | .staleDescendantCursor => .continueParent
+  | .parentPublication | .dispatchReceipt => .terminateParent
+
+theorem only_stale_descendant_cursor_continues_parent (fault : ControlFault) :
+    controlFaultDisposition fault = .continueParent ↔
+      fault = .staleDescendantCursor := by
+  cases fault <;> simp [controlFaultDisposition]
+
+theorem page_without_anchor_is_whole_scope (edges : List Edge) :
+    page none edges = ⟨edges, false⟩ := rfl
+
+theorem stale_anchor_restarts_scope (target : Cursor) (edges : List Edge)
+    (h : afterCursor target edges = none) :
+    page (some target) edges = ⟨edges, true⟩ := by
+  simp [page, h]
+
+theorem resolved_anchor_is_not_stale (target : Cursor) (edges rest : List Edge)
+    (h : afterCursor target edges = some rest) :
+    page (some target) edges = ⟨rest, false⟩ := by
+  simp [page, h]
+
+theorem anchor_of_listed_edge_resolves (edge : Edge) (before after : List Edge) :
+    (afterCursor (cursor edge) (before ++ edge :: after)).isSome = true := by
+  induction before with
+  | nil => simp [afterCursor]
+  | cons head tail ih =>
+      simp only [List.cons_append, afterCursor]
+      split <;> simp_all
+
+/-- Settling a bridge (an unclaimed-spawn failure, a delivered notification)
+    rewrites only its lifecycle projection, so an anchor issued while the edge
+    was running is never reported stale afterwards. -/
+theorem settled_anchor_is_not_stale (edge : Edge) (lifecycle : Lifecycle)
+    (before after : List Edge) :
+    (page (some (cursor edge))
+      (before ++ { edge with lifecycle := lifecycle } :: after)).staleCursor = false := by
+  have hfound := anchor_of_listed_edge_resolves { edge with lifecycle := lifecycle } before after
+  rw [lifecycle_change_preserves_cursor] at hfound
+  cases h : afterCursor (cursor edge)
+      (before ++ { edge with lifecycle := lifecycle } :: after) with
+  | none => simp [h] at hfound
+  | some rest => simp [page, h]
+
 theorem pending_bridge_visible_without_child
     (viewer : Viewer) (edge : Edge)
     (hBridge : edge.bridgeDurable = true)

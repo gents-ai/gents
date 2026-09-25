@@ -1141,6 +1141,13 @@ pub fn registered_conformance_consumers() -> &'static [ConformanceConsumer] {
             function: "generated_descendant_graph_cases_fence_visibility_and_control",
         },
         ConformanceConsumer::RustTest {
+            id: "descendant_graph::tests::generated_descendant_cursor_cases_page_native_edges",
+            package: "gents",
+            source_path: "crates/gents/src/descendant_graph.rs",
+            module_path: "descendant_graph::tests",
+            function: "generated_descendant_cursor_cases_page_native_edges",
+        },
+        ConformanceConsumer::RustTest {
             id: "conformance::unmaterialized_child_status_matches_runtime_vocabulary",
             package: "gents",
             source_path: "crates/gents/tests/conformance.rs",

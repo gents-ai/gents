@@ -42,6 +42,10 @@ source consistency checks, not a separate runtime compatibility version.
 - Truncated tool output no longer drops an oversized line that follows a short
   one: the model sees as much of that line as fits (its start, or its end for
   shell output), and the notice says how many of its bytes are shown (#1726).
+- A stale `list_subagents` cursor no longer ends the parent request. A cursor
+  that names no subagent in scope restarts the listing and reports
+  `stale_cursor`, and settling a failed spawn no longer rewrites its start
+  time, so cursors handed out earlier keep resolving (#1808).
 
 ## 0.19.0 - 2026-09-24
 

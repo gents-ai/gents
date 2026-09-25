@@ -180,6 +180,7 @@ pub(crate) struct LeanContractSnapshot {
     pub(crate) codex_shim_binding_cases: Vec<LeanCodexShimBindingCase>,
     pub(crate) r6_backgrounding_cases: Vec<LeanR6BackgroundingCase>,
     pub(crate) descendant_graph_cases: Vec<LeanDescendantGraphCase>,
+    pub(crate) descendant_cursor_cases: Vec<LeanDescendantCursorCase>,
     pub(crate) r5_cross_principal_cases: Vec<LeanR5CrossPrincipalCase>,
     pub(crate) r5_scenario_cases: Vec<serde_json::Value>,
     pub(crate) composed_invariant_witnesses: Vec<LeanComposedInvariantWitness>,
@@ -1427,6 +1428,10 @@ pub(crate) fn lean_r6_backgrounding_cases() -> &'static [LeanR6BackgroundingCase
 
 pub(crate) fn lean_descendant_graph_cases() -> &'static [LeanDescendantGraphCase] {
     &lean_contract_snapshot().descendant_graph_cases
+}
+
+pub(crate) fn lean_descendant_cursor_cases() -> &'static [LeanDescendantCursorCase] {
+    &lean_contract_snapshot().descendant_cursor_cases
 }
 
 pub(crate) fn lean_r6_backgrounding_case(name: &str) -> &'static LeanR6BackgroundingCase {
