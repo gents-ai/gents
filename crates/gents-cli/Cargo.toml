@@ -44,6 +44,7 @@ gents = { path = "../gents" }
 gents-fs-runner = { path = "../gents-fs-runner" }
 gents-protocol.workspace = true
 defra-node.workspace = true
+storage.workspace = true
 defra-p2p-adapter.workspace = true
 futures-util = "0.3"
 flate2 = "1"

@@ -620,11 +620,31 @@ pub(crate) async fn resolve_config_access(
     Ok((ConfigAccess::Local(std::sync::Arc::new(node)), home_dir))
 }
 
+/// The store's server defaults budget roughly 640 MiB inside this process
+/// (64 MiB write buffers x2, plus a 512 MiB block cache), which a local agent
+/// pays out of its own address space. Take the engine's embedded profile and
+/// restore the server ceilings that bound what a document may contain rather
+/// than how much memory the store holds: a transcript larger than the
+/// embedded profile's 256 KiB value ceiling is ordinary here.
+fn local_agent_store_options() -> storage::RegolithStoreOptions {
+    let server = storage::RegolithStoreOptions::default();
+    let mut options = storage::RegolithStoreOptions::embedded();
+    options.engine.max_value_size = server.engine.max_value_size;
+    options.engine.max_key_size = server.engine.max_key_size;
+    options.engine.block_cache_size = LOCAL_AGENT_BLOCK_CACHE_BYTES;
+    options
+}
+
+/// Chosen for a desktop agent rather than inherited from a profile: the
+/// embedded profile caches nothing, which sends every read to disk.
+const LOCAL_AGENT_BLOCK_CACHE_BYTES: usize = 32 * 1024 * 1024;
+
 pub(crate) fn persistent_node_builder(data_dir: &Path) -> Result<NodeBuilder> {
     gents::storage_backend::reject_legacy_store(data_dir)?;
     Ok(EmbeddedNode::builder()
         .data_path(data_dir)
-        .with_storage_backend(StorageBackend::Regolith))
+        .with_storage_backend(StorageBackend::Regolith)
+        .with_regolith_options(local_agent_store_options()))
 }
 
 pub(crate) fn persistent_node_builder_with_stored_identity(
