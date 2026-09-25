@@ -22,6 +22,9 @@ source consistency checks, not a separate runtime compatibility version.
 
 ### Fixed
 
+- A pack scenario sidecar reference can no longer resolve outside its pack
+  directory: the CLI holds sidecar paths to the same canonical asset-path rule
+  the pack loader uses (#1642).
 - `gents subagent list --root` works while a fan-out is still running. Each row
   reports the parent bridge's `edge_state` (`running`,
   `awaiting_child_materialization`, `pending_child_authorization`, ...) apart
