@@ -2365,6 +2365,7 @@ mod tests {
                 reason: "exit-code (exit status 1)".into(),
                 restarts: 5,
                 clean: false,
+                code: Some(1),
             })
         );
     }

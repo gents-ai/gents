@@ -1006,15 +1006,30 @@ async fn retire_incompatible_home<R: Runtime>(
         HomeResetDisposition::Delete => None,
     };
 
-    if let Some((home, _)) = plan.runtime.as_ref() {
-        // The service definition names this home; a fresh setup installs it
-        // again. Removing it keeps login from launching a runtime on an
-        // emptied home.
-        run_native(native_service(app, state)?, |service| service.uninstall()).await?;
-        let native = run_native(native_service(app, state)?, |service| service.status()).await?;
-        ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
-        ensure_home_not_served(home).await?;
-    }
+    // The store lock every runtime takes while it has this home's store
+    // open; held (and left in place) until the entries are retired, so no
+    // runtime of any version can open the store meanwhile.
+    let _store_lock = match plan.runtime.as_ref() {
+        Some((home, _)) => {
+            // The service definition names this home; a fresh setup installs
+            // it again. Removing it keeps login from launching a runtime on an
+            // emptied home.
+            run_native(native_service(app, state)?, |service| service.uninstall()).await?;
+            let native =
+                run_native(native_service(app, state)?, |service| service.status()).await?;
+            ensure_managed_runtime_stopped(native.is_active_or_transitioning())?;
+            ensure_home_not_served(home).await?;
+            let data = gents::home::default_data_dir(home);
+            if present(&data)? {
+                Some(gents::home::lock_store(home, &data).map_err(|error| {
+                    BridgeError::new(BridgeErrorCode::InvalidArgument, format!("{error:#}"))
+                })?)
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
     // Held until the entries are retired: no client start can open the
     // store, peer directory or keys meanwhile.
     let _client = if plan.retires_client_state() {
@@ -1030,11 +1045,12 @@ async fn retire_incompatible_home<R: Runtime>(
 
     let result = settled.retire(disposition, backup.as_deref())?;
     drop(_client);
+    drop(_store_lock);
     {
         let mut managed = state.managed_server.lock().await;
         managed.incompatible_store = None;
         managed.last_error = None;
-        managed.exit_baseline = None;
+        managed.crash_loop = CrashLoopWatch::default();
     }
     state
         .bridge
@@ -1191,6 +1207,17 @@ fn own_home_key(home: &Path, keys: &Path) -> Option<PathBuf> {
     let parent = std::fs::canonicalize(key.parent()?).ok()?;
     let name = key.file_name()?;
     (parent == keys).then(|| keys.join(name))
+}
+
+fn is_store_lock(path: &Path) -> bool {
+    path.parent().is_some_and(|home| {
+        gents::home::default_data_dir(home)
+            .file_name()
+            .is_some_and(|data| {
+                path.file_name()
+                    .is_some_and(|name| *name == *format!("{}.lock", data.to_string_lossy()))
+            })
+    })
 }
 
 fn present(path: &Path) -> Result<bool, BridgeError> {
@@ -1378,7 +1405,13 @@ impl HomeResetPlan {
         for path in &self.client_entries {
             line("desktop", path);
         }
-        for path in &self.runtime_entries.retained {
+        // The store lock appears once the reset takes it; it is never retired.
+        for path in self
+            .runtime_entries
+            .retained
+            .iter()
+            .filter(|path| !is_store_lock(path))
+        {
             line("retained", path);
         }
         hasher.finalize().to_hex()[..12].to_string()
@@ -3939,6 +3972,36 @@ mod tests {
     }
 
     #[test]
+    fn the_store_lock_neither_moves_nor_changes_the_confirmation() {
+        let temp = tempfile::tempdir().unwrap();
+        let temp = std::fs::canonicalize(temp.path()).unwrap();
+        let (home, desktop) = dirty_home(&temp);
+        let refused = || Some(lineage_refusal(home.join("data")));
+        let preview = plan_home_reset(Some(&home), refused(), None, &desktop, not_the_user_home())
+            .unwrap()
+            .preview();
+
+        let lock = gents::home::lock_store(&home, &home.join("data")).unwrap();
+        let locked =
+            plan_home_reset(Some(&home), refused(), None, &desktop, not_the_user_home()).unwrap();
+        locked
+            .check_confirmation(&preview.confirmation, HomeResetDisposition::Archive)
+            .unwrap();
+        let reset = locked
+            .retire(
+                HomeResetDisposition::Archive,
+                Some(&locked.backup_path("20260924T000000.000Z").unwrap()),
+            )
+            .unwrap();
+        assert!(lock.path().is_file(), "the held lock stays in place");
+        assert!(!home.join("data").exists());
+        assert!(!reset
+            .retired_paths
+            .iter()
+            .any(|path| path.ends_with("data.lock")));
+    }
+
+    #[test]
     fn broad_roots_are_never_retired() {
         let temp = tempfile::tempdir().unwrap();
         let temp = std::fs::canonicalize(temp.path()).unwrap();
@@ -5112,6 +5175,8 @@ mod tests {
             enabled: true,
             requires_approval: false,
             detail: None,
+            background_item: Default::default(),
+            failed: false,
         };
         let managed = ManagedServerRuntimeState {
             incompatible_store: Some(lineage_refusal(PathBuf::from("/tmp/.gents/data"))),
@@ -5151,12 +5216,13 @@ mod tests {
             "a start in progress reports its own failure"
         );
 
+        let exit = service_exit(3);
         let crashed = status_from(
             &ManagedServerRuntimeState::default(),
             None,
             Some(&native),
-            Some(&service_exit(3)),
-            Some(3),
+            Some(&exit),
+            Some((&exit, 3)),
         );
         assert_eq!(crashed.state, ManagedServerState::Failed);
         assert_eq!(crashed.error_code, None);
@@ -6084,6 +6150,7 @@ mod tests {
                     reason: "exited normally".to_string(),
                     restarts: 9,
                     clean: true,
+                    code: Some(0),
                 })
             ),
             None
@@ -6135,6 +6202,7 @@ mod tests {
             reason: "exit-code (exit status 1)".to_string(),
             restarts: 5,
             clean: false,
+            code: None,
         };
         let idle = ManagedServerRuntimeState::default();
         let status = status_from(&idle, None, Some(&failed), Some(&exit), None);
@@ -6190,6 +6258,7 @@ mod tests {
                         reason: "start-limit-hit (exit status 1)".to_string(),
                         restarts: 5,
                         clean: false,
+                        code: None,
                     },
                 ))
             },
