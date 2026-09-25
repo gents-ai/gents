@@ -156,6 +156,24 @@ describe("transcript worker lineage", () => {
     );
   });
 
+  it("links no session to a child the lineage does not know, even when a summary's latest request is the child", async () => {
+    const tree = lineage({ "req-1": [] });
+    const items = [group(spawn("req-1", "child-unknown", "running"))];
+    const shell = shellFor(apiWith(tree), "req-1", items, {
+      sessions: [
+        {
+          sessionId: "unrelated-session",
+          latestRequestId: "child-unknown",
+        },
+      ],
+    });
+    const { result } = renderHook(() => useWorkers(shell));
+
+    await waitFor(() => expect(tree).toHaveBeenCalled());
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.byChildRequest("child-unknown")).toBeNull();
+  });
+
   it("asks the lineage for terminal nodes", async () => {
     const tree = lineage({ "req-1": [["child-done", "completed"]] });
     const shell = shellFor(apiWith(tree), "req-1", [

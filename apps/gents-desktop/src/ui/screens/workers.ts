@@ -234,13 +234,7 @@ export function useWorkers(shell: Shell): Workers {
       byChildRequest: (childRequestId) => {
         const node = nodes.get(childRequestId) ?? null;
         const edge = edges.get(childRequestId) ?? null;
-        /* without lineage, a summary whose latest request is the child is
-           the next best link */
-        const sessionId =
-          node?.sessionId ??
-          (sessions ?? []).find((s) => s.latestRequestId === childRequestId)
-            ?.sessionId ??
-          null;
+        const sessionId = node?.sessionId ?? null;
         if (!node && !edge && !sessionId) return null;
         const summary = sessionId ? (summaries.get(sessionId) ?? null) : null;
         return {
