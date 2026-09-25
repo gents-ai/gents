@@ -58,6 +58,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &first_child_request_id,
         1,
         "2026-05-20T12:00:01Z",
+        "pending",
     )
     .await?;
     let first_child_doc_id = seed_request(
@@ -83,6 +84,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &second_child_request_id,
         2,
         "2026-05-20T12:00:02Z",
+        "pending",
     )
     .await?;
     seed_request(
@@ -108,6 +110,7 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
         &grandchild_request_id,
         1,
         "2026-05-20T12:00:03Z",
+        "pending",
     )
     .await?;
     seed_request(
@@ -278,6 +281,194 @@ async fn subagent_list_shows_two_level_dispatch_lineage() -> Result<()> {
     Ok(())
 }
 
+/// #1783: a non-terminal fan-out carries bridge edge states that are not
+/// request lifecycle states. The rooted list must render them, and keep each
+/// child's own request lifecycle as a separate field.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subagent_list_renders_live_fan_out_edge_states() -> Result<()> {
+    let tempdir = tempfile::tempdir().context("creating tempdir")?;
+    let home_dir = tempdir.path().join("home");
+    fs::create_dir_all(&home_dir)?;
+
+    let model_name = format!("mock-subagent-fanout-model-{}", Uuid::new_v4().simple());
+    let mock_endpoint = MockModelEndpoint::start(&model_name)?;
+    let port = allocate_port()?;
+    let graphql = graphql_url(port);
+    let init = run_init_json(
+        &home_dir,
+        &[
+            "--agent-name",
+            "cli-subagent-fanout",
+            "--model-name",
+            &model_name,
+            "--inference-url",
+            mock_endpoint.endpoint(),
+        ],
+    )?;
+    let runtime_agent_did = agent_did_from_init(&init)?;
+    let mut serve = spawn_server(&home_dir, port)?;
+    wait_for_port(port, &mut serve)?;
+    wait_for_runtime_ready(&graphql, &runtime_agent_did, Duration::from_secs(30)).await?;
+
+    let agent_did = format!("did:key:zSubagentFanOut{}", Uuid::new_v4().simple());
+    let root_request_id = format!("root-{}", Uuid::new_v4().simple());
+    let running_child = format!("running-{}", Uuid::new_v4().simple());
+    let awaiting_child = format!("awaiting-{}", Uuid::new_v4().simple());
+    let unauthorized_child = format!("unauthorized-{}", Uuid::new_v4().simple());
+
+    let root_doc_id = seed_request_in_state(
+        &graphql,
+        &agent_did,
+        &root_request_id,
+        "parent-behavior",
+        None,
+        0,
+        "2026-09-25T14:13:33Z",
+        "processing",
+    )
+    .await?;
+
+    let (running_tool_call_id, running_bridge_doc_id) = seed_spawn_bridge(
+        &graphql,
+        &agent_did,
+        &root_request_id,
+        &root_doc_id,
+        &running_child,
+        1,
+        "2026-09-25T14:13:34Z",
+        "running",
+    )
+    .await?;
+    seed_request_in_state(
+        &graphql,
+        &agent_did,
+        &running_child,
+        "running-behavior",
+        Some(&ParentLink {
+            parent_request_id: &root_request_id,
+            parent_doc_id: &root_doc_id,
+            tool_call_id: &running_tool_call_id,
+            tool_call_doc_id: &running_bridge_doc_id,
+        }),
+        1,
+        "2026-09-25T14:13:34Z",
+        "processing",
+    )
+    .await?;
+
+    // Durable bridge whose child has not materialized yet.
+    seed_spawn_bridge(
+        &graphql,
+        &agent_did,
+        &root_request_id,
+        &root_doc_id,
+        &awaiting_child,
+        2,
+        "2026-09-25T14:13:35Z",
+        "running",
+    )
+    .await?;
+
+    // A child row exists under the bridged id but does not corroborate the
+    // bridge's physical provenance.
+    seed_spawn_bridge(
+        &graphql,
+        &agent_did,
+        &root_request_id,
+        &root_doc_id,
+        &unauthorized_child,
+        3,
+        "2026-09-25T14:13:36Z",
+        "running",
+    )
+    .await?;
+    seed_request_in_state(
+        &graphql,
+        &agent_did,
+        &unauthorized_child,
+        "unauthorized-behavior",
+        None,
+        1,
+        "2026-09-25T14:13:36Z",
+        "pending",
+    )
+    .await?;
+
+    let output = run_cli_json(
+        &home_dir,
+        &[
+            "subagent",
+            "list",
+            "--graphql",
+            &graphql,
+            "--root",
+            &root_request_id,
+            "--output",
+            "json",
+        ],
+    )?;
+    let rows = output
+        .get("rows")
+        .and_then(Value::as_array)
+        .context("subagent list JSON output missing rows array")?;
+    let states = |request_id: &str| -> Result<(Option<String>, Option<String>)> {
+        let row = rows
+            .iter()
+            .find(|row| row.get("child_request_id").and_then(Value::as_str) == Some(request_id))
+            .with_context(|| format!("missing row for {request_id}: {output}"))?;
+        Ok((
+            row.get("edge_state")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            row.get("request_lifecycle_state")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        ))
+    };
+    assert_eq!(rows.len(), 4, "root plus three fan-out edges: {output}");
+    assert_eq!(
+        states(&root_request_id)?,
+        (None, Some("processing".to_owned()))
+    );
+    assert_eq!(
+        states(&running_child)?,
+        (Some("running".to_owned()), Some("processing".to_owned()))
+    );
+    assert_eq!(
+        states(&awaiting_child)?,
+        (
+            Some(gents::descendant_graph::AWAITING_CHILD_MATERIALIZATION.to_owned()),
+            None
+        )
+    );
+    assert_eq!(
+        states(&unauthorized_child)?,
+        (
+            Some(gents::descendant_graph::PENDING_CHILD_AUTHORIZATION.to_owned()),
+            None
+        )
+    );
+
+    let tree = run_cli_text(
+        &home_dir,
+        &[
+            "subagent",
+            "list",
+            "--graphql",
+            &graphql,
+            "--root",
+            &root_request_id,
+        ],
+    )?;
+    assert!(
+        tree.contains("EDGE_STATE") && tree.contains("REQUEST_STATE"),
+        "tree output must name both states: {tree}"
+    );
+    assert!(tree.contains(&format!("  {awaiting_child}")), "{tree}");
+
+    Ok(())
+}
+
 fn line_index_starting_with(lines: &[&str], prefix: &str) -> Result<usize> {
     lines
         .iter()
@@ -359,6 +550,30 @@ async fn seed_request(
     subagent_depth: i64,
     created_at: &str,
 ) -> Result<String> {
+    seed_request_in_state(
+        graphql,
+        agent_did,
+        request_id,
+        behavior_id,
+        parent,
+        subagent_depth,
+        created_at,
+        "pending",
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn seed_request_in_state(
+    graphql: &str,
+    agent_did: &str,
+    request_id: &str,
+    behavior_id: &str,
+    parent: Option<&ParentLink<'_>>,
+    subagent_depth: i64,
+    created_at: &str,
+    lifecycle_state: &str,
+) -> Result<String> {
     let session_id = format!("session-{request_id}");
     let parent_fields = parent
         .map(|link| {
@@ -392,7 +607,7 @@ async fn seed_request(
                     retry_root_request: "{request_id}",
                     superseded_by_request: "",
                     content: "seeded subagent list row",
-                    lifecycle_state: "pending",
+                    lifecycle_state: "{lifecycle_state}",
                     backend_id: "",
                     execution_origin: "interactive",
                     failure_reason: "",
@@ -407,6 +622,7 @@ async fn seed_request(
             behavior_id = escape_graphql_string(behavior_id),
             session_id = escape_graphql_string(&session_id),
             created_at = escape_graphql_string(created_at),
+            lifecycle_state = escape_graphql_string(lifecycle_state),
         ),
     )
     .await?;
@@ -417,6 +633,7 @@ async fn seed_request(
 /// The descendant graph requires both the physical child link and the exact
 /// accepted invocation; neither a bare tool row nor nearby transcript content
 /// grants lineage. Returns `(tool_call_id, _docID)` for the child provenance.
+#[allow(clippy::too_many_arguments)]
 async fn seed_spawn_bridge(
     graphql: &str,
     agent_did: &str,
@@ -425,6 +642,7 @@ async fn seed_spawn_bridge(
     child_request_id: &str,
     message_sequence: u32,
     started_at: &str,
+    bridge_state: &str,
 ) -> Result<(String, String)> {
     use gents::config_client::ConfigAccess;
     use gents::session::canonical_rows::{
@@ -453,8 +671,8 @@ async fn seed_spawn_bridge(
                     message_sequence: {message_sequence},
                     tool_name: "spawn_subagent",
                     tool_call_id: "{tool_call_id}",
-                    status: "pending",
-                    lifecycle_state: "pending",
+                    status: "{bridge_state}",
+                    lifecycle_state: "{bridge_state}",
                     started_at: "{started_at}",
                     await_mode: "foreground",
                     child_request_id: "{child_request_id}",
@@ -468,6 +686,7 @@ async fn seed_spawn_bridge(
             agent_did = escape_graphql_string(agent_did),
             tool_call_id = escape_graphql_string(&tool_call_id),
             started_at = escape_graphql_string(started_at),
+            bridge_state = escape_graphql_string(bridge_state),
         ),
     )
     .await?;
@@ -582,7 +801,16 @@ fn assert_lineage_row(
         row.get("behavior_id").and_then(Value::as_str),
         Some(behavior_id)
     );
-    assert_eq!(row.get("state").and_then(Value::as_str), Some("pending"));
+    assert_eq!(
+        row.get("request_lifecycle_state").and_then(Value::as_str),
+        Some("pending")
+    );
+    let expected_edge_state = parent_request_id.map(|_| "pending");
+    assert_eq!(
+        row.get("edge_state").and_then(Value::as_str),
+        expected_edge_state,
+        "edge state comes from the parent bridge, never the request row: {row}"
+    );
     assert!(
         row.get("started_at")
             .and_then(Value::as_str)

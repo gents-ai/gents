@@ -11,6 +11,14 @@ source consistency checks, not a separate runtime compatibility version.
 - GitHub Releases attach the gents CLI archives again, with per-OS checksum
   files: Linux x86_64 and aarch64, and a signed, notarized macOS arm64 build.
 
+### Fixed
+
+- `gents subagent list --root` works while a fan-out is still running. Each row
+  reports the parent bridge's `edge_state` (`running`,
+  `awaiting_child_materialization`, `pending_child_authorization`, ...) apart
+  from the child request's own `request_lifecycle_state`, instead of failing
+  to decode the edge as a request (#1783).
+
 ## 0.19.0 - 2026-09-24
 
 This release changes how conversations are stored. Earlier stores are not

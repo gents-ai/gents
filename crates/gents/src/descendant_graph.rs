@@ -13,6 +13,7 @@ use gents_protocol::message::{AssistantContent, Message};
 use gents_protocol::output::{
     MessageBlock, MessagePublication, MessageRole, OutputOutcome, OutputSource, SourceClose,
 };
+use gents_protocol::request_lifecycle::RequestLifecycleState;
 use gents_protocol::row::AgentRequestRow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -120,7 +121,15 @@ pub struct DescendantEdge {
     pub await_mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cancel_policy: Option<String>,
+    /// Bridge-owned edge state (`running`, a bridge terminal, or one of
+    /// [`AWAITING_CHILD_MATERIALIZATION`] / [`PENDING_CHILD_AUTHORIZATION`]).
+    /// This is not a [`RequestLifecycleState`]; the child request's own state
+    /// is [`Self::child_lifecycle_state`].
     pub lifecycle_state: String,
+    /// Lifecycle of the corroborated child `AgentRequest`; `None` until a
+    /// child row materializes and corroborates the bridge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_lifecycle_state: Option<RequestLifecycleState>,
     pub materialization_state: DescendantMaterializationState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal_result_ref: Option<String>,
@@ -746,6 +755,7 @@ fn project_descendant_edge(
                 .unwrap_or_else(|| "foreground".to_string()),
             cancel_policy: clean(bridge.cancel_policy.as_deref()),
             lifecycle_state,
+            child_lifecycle_state: child.as_ref().and_then(|row| row.lifecycle_state),
             materialization_state,
             terminal_result_ref,
             transcript_cursor: 0,
@@ -1042,6 +1052,7 @@ async fn load_requests_filtered(
                 requester_did
                 behavior_id
                 session_id
+                lifecycle_state
                 caused_by_parent_request_id
                 caused_by_parent_request_doc_id
                 caused_by_parent_tool_call_id
