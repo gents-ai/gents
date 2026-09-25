@@ -627,6 +627,7 @@ async fn start_managed_server<'a, R: Runtime>(
         request.tool_root.as_deref(),
         stored.as_ref(),
     )?;
+    refuse_renaming_home(&agent_home, agent_name).await?;
 
     let mut carried_wait = None;
     let mut replace_loaded_job = false;
@@ -3103,6 +3104,7 @@ pub async fn desktop_managed_server_restart<R: Runtime>(
             "managed server requires a local agent home",
         )
     })?;
+    refuse_renaming_home(&agent_home, &request.agent_name).await?;
     ensure_launchable_here(&app, &state)?;
     let port = observe_port_readiness(&agent_home).await?;
     let previous_did = match &port {
@@ -3455,6 +3457,35 @@ async fn read_initialized_name(agent_home: &std::path::Path) -> Option<String> {
         })
 }
 
+/// Provisioning rewrites an initialized home's host authority but never its
+/// name, so a start or restart naming another agent is refused before
+/// anything (stop, provisioning, preferences) touches the home.
+async fn refuse_renaming_home(
+    agent_home: &std::path::Path,
+    requested: &str,
+) -> Result<(), BridgeError> {
+    if !gents_server::server_host::initialized_home(agent_home) {
+        return Ok(());
+    }
+    let initialized = read_initialized_name(agent_home).await;
+    if name_confirmed_by_home(requested, initialized.as_deref()) {
+        return Ok(());
+    }
+    let requested = requested.trim();
+    Err(BridgeError::new(
+        BridgeErrorCode::InvalidArgument,
+        match initialized {
+            Some(name) => format!(
+                "This computer already has a local agent named {name}, so {requested} was not created. Go back to continue with {name}."
+            ),
+            None => format!(
+                "The local agent home at {} has no readable agent name; it was left unchanged.",
+                agent_home.display()
+            ),
+        },
+    ))
+}
+
 fn name_confirmed_by_home(requested: &str, initialized: Option<&str>) -> bool {
     initialized.is_some_and(|name| name.trim() == requested.trim())
 }
@@ -3656,6 +3687,73 @@ mod tests {
             .unwrap()
             .reviewed_for
             .is_some());
+    }
+
+    /// Start and restart, driven through their IPC commands, with a
+    /// different name and a different authority than the initialized home.
+    fn invoke_on_forge_home(cmd: &str) -> (tempfile::TempDir, Vec<u8>, String) {
+        use tauri::ipc::InvokeBody;
+        use tauri::webview::InvokeRequest;
+
+        let (temp, state) = orchestration_state();
+        let agent_home = state.policy.agent_home.clone().expect("agent home");
+        let desktop_root = state.policy.desktop_paths.root().to_path_buf();
+        write_home(&agent_home, "did:key:forge", "MetaOnly", None);
+        let before = std::fs::read(agent_home.join("init.json")).unwrap();
+        let root = temp.path().join("work");
+        std::fs::create_dir_all(&root).unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![
+                desktop_managed_server_start,
+                desktop_managed_server_restart
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("mock desktop bridge app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let error = tauri::test::get_ipc_response(
+            &webview,
+            InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "http://tauri.localhost".parse().expect("invoke URL"),
+                body: InvokeBody::Json(serde_json::json!({
+                    "request": {
+                        "agentName": "Scout",
+                        "toolCeiling": "readwrite",
+                        "toolRoot": root.display().to_string(),
+                    }
+                })),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_string(),
+            },
+        )
+        .expect_err("a request naming another agent must be refused");
+        assert!(!desktop_root.join(MANAGED_SERVER_CONFIG).exists());
+        let after = std::fs::read(agent_home.join("init.json")).unwrap();
+        assert_eq!(after, before, "{cmd} rewrote the initialized home");
+        (temp, after, error.to_string())
+    }
+
+    #[test]
+    fn start_naming_another_agent_leaves_the_home_untouched() {
+        let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_start");
+        assert!(
+            error.contains("already has a local agent named Forge"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn restart_naming_another_agent_leaves_the_home_untouched() {
+        let (_temp, _, error) = invoke_on_forge_home("desktop_managed_server_restart");
+        assert!(
+            error.contains("already has a local agent named Forge"),
+            "{error}"
+        );
     }
 
     #[tokio::test]
