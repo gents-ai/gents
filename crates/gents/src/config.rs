@@ -183,7 +183,7 @@ impl MaxTurnsProvenance {
     pub fn describe(self) -> &'static str {
         match self {
             MaxTurnsProvenance::Default => {
-                "no max_turns is configured for this behavior; this is the built-in default, raised by setting max_turns on an InferenceExecution document bound to the behavior's inference profile"
+                "no max_turns is configured for this behavior; this is the built-in default, raised by setting max_turns on an InferenceExecution document bound to the behavior's inference profile, or through BehaviorBuilder::max_turns for a behavior built programmatically"
             }
             MaxTurnsProvenance::ExecutionProfile => {
                 "max_turns is set explicitly by the InferenceExecution document bound to this behavior's inference profile"
@@ -613,9 +613,15 @@ mod tests {
 
     #[test]
     fn max_turns_provenance_descriptions_name_a_reachable_knob() {
-        assert!(MaxTurnsProvenance::Default
-            .describe()
-            .contains("built-in default"));
+        let default = MaxTurnsProvenance::Default.describe();
+        assert!(default.contains("built-in default"));
+        // A default-limit behavior may have been built either way, so the
+        // advice has to cover both routes to a higher limit.
+        assert!(default.contains("InferenceExecution document"));
+        assert!(
+            default.contains("BehaviorBuilder::max_turns"),
+            "a programmatically built behavior has no document to edit: {default}"
+        );
         assert!(MaxTurnsProvenance::ExecutionProfile
             .describe()
             .contains("InferenceExecution document"));

@@ -53,8 +53,9 @@ async fn snapshot_for_behaviors(
         .await
 }
 
-/// Both snapshots must share one principal when a test isolates a single
-/// behavior field: the runtime fingerprint covers the local DID too.
+/// `runtime_snapshot::configuration_fingerprint` hashes the principal's DID
+/// alongside each behavior, so isolating one behavior field requires both
+/// snapshots to carry the same principal.
 async fn snapshot_for_behaviors_with_principal(
     node: &defra_node::EmbeddedNode,
     default_behavior_id: &str,
@@ -181,16 +182,16 @@ async fn operator_write_changes_snapshot_fingerprint() {
     assert_eq!(diff.removed, 0);
 }
 
+/// Covers the two fingerprint owners that gate a rebuild —
+/// `runtime_snapshot::configuration_fingerprint` and
+/// `completion_factory::behavior_slot_fingerprint` — plus `diff_counts` in both
+/// directions. It does not exercise a running daemon.
 #[tokio::test]
-async fn max_turns_provenance_only_edit_reaches_the_running_behavior() {
+async fn max_turns_provenance_only_edit_changes_snapshot_and_slot_fingerprints() {
     let node = test_node().await;
     ensure_runtime_schemas(node.as_ref()).await.unwrap();
     let principal = stub_principal();
 
-    // Setting max_turns explicitly to the value the built-in default already
-    // produces changes nothing numeric, so only provenance distinguishes the
-    // two configurations. Both are built from one behavior so no other field
-    // can carry the difference.
     let mut unset = PendingAgentBehavior::new("general")
         .build_with_identity_for_test(test_identity("max-turns-provenance"));
     unset.max_turns = DEFAULT_MAX_TURNS;
@@ -228,7 +229,6 @@ async fn max_turns_provenance_only_edit_reaches_the_running_behavior() {
         "reconcile must not treat a provenance-only edit as a no-op"
     );
 
-    // Setting the explicit value, and clearing it again, are both updates.
     let active_unset = unset_snapshot.activate(1, HashMap::new());
     let setting = diff_counts(&active_unset, &explicit_snapshot);
     assert_eq!(setting.updated, 1);

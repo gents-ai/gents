@@ -747,5 +747,12 @@ mod tests {
 
         assert_eq!(behavior.max_turns, DEFAULT_MAX_TURNS);
         assert_eq!(behavior.max_turns_provenance, MaxTurnsProvenance::Default);
+        // This behavior has no InferenceExecution document, so advice naming
+        // only that document would not raise its limit.
+        let message = behavior.max_turns_provenance.describe();
+        assert!(
+            message.contains("BehaviorBuilder::max_turns"),
+            "a default limit on a built behavior must name the builder knob: {message}"
+        );
     }
 }
