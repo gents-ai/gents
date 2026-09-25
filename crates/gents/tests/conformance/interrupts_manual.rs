@@ -736,14 +736,12 @@ async fn manual_run_preserves_lineage_through_claim_transition() {
     );
 }
 
-/// The interrupt owner's observable action is more than the latch: after
-/// stamping (or finding) `interrupt_requested_at`, `interrupt_request` drains
-/// the session's queued automated wake-ups through `drain_automated_wakeups`,
-/// whose query is scoped to the interrupted row's own `agent_did` (#664) and
-/// whose row predicate selects only scheduled coalesced background-completion
-/// wake-ups. A latched timestamp alone never exercises that action, so this
-/// test drives the real owner and observes which queued rows it actually
-/// terminalized — including the foreign-principal replica that must survive.
+/// On the first `interrupt_requested_at` latch, `interrupt_request` drains
+/// already-pending automated wake-ups in the same transaction. The query is
+/// scoped to the interrupted row's own `agent_did` (#664), and its predicate
+/// selects only scheduled coalesced background-completion wake-ups. A replay
+/// does not drain wakes queued after the latch. This test observes which rows
+/// the first latch terminalizes, including the foreign replica that survives.
 #[tokio::test]
 async fn interrupt_request_drains_automated_wakeups_in_owner_scope() {
     let db = test_db("interrupt-drain-wakeups").await;

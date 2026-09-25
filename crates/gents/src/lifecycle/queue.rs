@@ -34,7 +34,6 @@ pub use coalescing::reconcile_coalesced_pending_request;
 use coalescing::{
     parent_behavior_id, queue_row_to_enqueued_request, row_matches_coalesced_source_and_key,
 };
-pub use draining::drain_automated_wakeups;
 pub(crate) use draining::drain_automated_wakeups_in_txn;
 pub(crate) use draining::drain_automated_wakeups_returning_ids;
 pub(crate) use draining::drain_subagent_owned_queue;

@@ -1,8 +1,6 @@
 use super::*;
 
-use gents::__test_internals::{
-    drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
-};
+use gents::__test_internals::{reconcile_coalesced_pending_request, QueueSource};
 use gents::{DefraWatcher, Watcher, TERMINAL_REDRIVE_CAP};
 use gents_protocol::request_lifecycle::RequestLifecycleState;
 
@@ -701,6 +699,14 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     let db = test_db("convergence-drain-foreign").await;
     let session_id = "convergence-drain-foreign-session";
     let input = coalesce_wakeup_input(session_id);
+    let target_doc_id = create_owned_request(
+        &db.node,
+        "convergence-drain-active",
+        session_id,
+        OWNER_DID,
+        "processing",
+    )
+    .await;
 
     create_queue_request(
         &db.node,
@@ -723,18 +729,15 @@ pub(super) async fn drain_wakeups_never_interrupts_foreign_replica() {
     )
     .await;
 
-    let drained = drain_automated_wakeups(
-        &db.node,
-        session_id,
-        OWNER_DID,
-        None,
-        "automated wake-up drained because active request was interrupted",
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        drained, 1,
-        "exactly the owner's own automated wake-up is drained"
+    gents::interrupt_request_by_doc_id(&db.node, &target_doc_id, OWNER_DID, None)
+        .await
+        .unwrap();
+    assert!(
+        gents::fetch_interrupt_requested_at_by_doc_id(&db.node, &target_doc_id)
+            .await
+            .unwrap()
+            .is_some(),
+        "the exact owned request must be latched"
     );
 
     let owner = fetch_queue_convergence_row(&db.node, "convergence-drain-owner").await;

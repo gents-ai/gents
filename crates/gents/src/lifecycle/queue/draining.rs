@@ -1,19 +1,8 @@
 use super::*;
 
-pub async fn drain_automated_wakeups(
-    node: &EmbeddedNode,
-    session_id: &str,
-    agent_did: &str,
-    requester_did: Option<&str>,
-    reason: &str,
-) -> Result<usize> {
-    Ok(
-        drain_automated_wakeups_returning_ids(node, session_id, agent_did, requester_did, reason)
-            .await?
-            .len(),
-    )
-}
-
+/// Standalone queue control when there is no active request to latch. Active
+/// interruption must drain inside the latch transaction so replay cannot widen
+/// its cutoff to later completions.
 pub(crate) async fn drain_automated_wakeups_returning_ids(
     node: &EmbeddedNode,
     session_id: &str,

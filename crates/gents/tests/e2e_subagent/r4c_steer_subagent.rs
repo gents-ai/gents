@@ -569,6 +569,101 @@ async fn steer_subagent_interrupt_drains_automated_wakeups() {
 }
 
 #[tokio::test]
+async fn steer_subagent_interrupt_without_active_request_drains_visible_wakes_only() {
+    let (db, source) = setup_db("r4c-steer-no-active-drain").await;
+    let hook = create_parent_hook(&db, "parent-no-active", "session-no-active").await;
+    let child = spawn_background_child(db.node.as_ref(), &hook, "spawn-no-active", "do work").await;
+    let child_request_id = child["child_request_id"].as_str().unwrap();
+    let child_session_id = child["child_session_id"].as_str().unwrap();
+    drop(source);
+    assert_eq!(
+        fetch_request(db.node.as_ref(), child_request_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+
+    let wake_request_id = "r4c-steer-no-active-wake";
+    let user_request_id = "r4c-steer-no-active-user";
+    let key = format!("background_completion:{child_session_id}");
+    create_child_session_queued_request(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        wake_request_id,
+        child_session_id,
+        "scheduled",
+        &queue_metadata(
+            "background_completion",
+            "coalesce",
+            Some(&key),
+            Some(child_request_id),
+        ),
+    )
+    .await;
+    create_child_session_queued_request(
+        db.node.as_ref(),
+        db.node_identity.did(),
+        user_request_id,
+        child_session_id,
+        "interactive",
+        &queue_metadata("user", "append", None, None),
+    )
+    .await;
+
+    let result = steer_subagent(
+        &hook,
+        "steer-no-active",
+        json!({
+            "child_request_id": child_request_id,
+            "message": "redirect",
+            "interrupt": true
+        }),
+    )
+    .await;
+
+    assert_eq!(result["child_request_id"], child_request_id);
+    assert_eq!(result["child_session_id"], child_session_id);
+    let queued_request_id = result["queued_request_id"]
+        .as_str()
+        .expect("steering returns its admitted request identity");
+    assert_eq!(
+        fetch_request(db.node.as_ref(), queued_request_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+    assert_eq!(result["interrupted_active_request_id"], Value::Null);
+    assert_eq!(
+        result["drained_wake_up_request_ids"],
+        json!([wake_request_id])
+    );
+    assert_eq!(
+        fetch_request(db.node.as_ref(), wake_request_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Interrupted)
+    );
+    assert_eq!(
+        fetch_request(db.node.as_ref(), user_request_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+    assert_eq!(
+        fetch_request(db.node.as_ref(), child_request_id)
+            .await
+            .lifecycle_state,
+        Some(RequestLifecycleState::Pending)
+    );
+    assert_eq!(
+        fetch_interrupt_requested_at(db.node.as_ref(), child_request_id)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[tokio::test]
 async fn steer_subagent_interrupt_replay_preserves_later_automated_wakeup() {
     let (db, source) = setup_db("r4c-steer-late-wake").await;
     let hook = create_parent_hook(&db, "parent-late-wake", "session-late-wake").await;

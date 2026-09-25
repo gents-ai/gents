@@ -433,9 +433,7 @@ pub mod __test_internals {
     };
     pub use crate::lifecycle::activate_workspace_bound_request;
     pub use crate::lifecycle::materialize::EnqueuedAgentRequest;
-    pub use crate::lifecycle::queue::{
-        drain_automated_wakeups, reconcile_coalesced_pending_request, QueueSource,
-    };
+    pub use crate::lifecycle::queue::{reconcile_coalesced_pending_request, QueueSource};
     pub use crate::trigger_engine::run_subagent_source_for_test;
 
     /// Drive one scan through the same owner as the runtime's cancel-mirror loop.
