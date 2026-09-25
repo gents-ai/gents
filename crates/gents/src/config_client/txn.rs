@@ -173,6 +173,7 @@ struct SuccessfulMutationFault {
     fail_after: Option<usize>,
     count: AtomicUsize,
     lose_receipt: bool,
+    receipt_operation: Option<&'static str>,
     receipt_fired: AtomicBool,
     pause: Option<SuccessfulMutationPause>,
     write_gate_observation: Option<Arc<WriteGateObservation>>,
@@ -224,10 +225,14 @@ async fn after_successful_mutation_for_test() -> Result<()> {
 // itself once; only the transaction owner's retry re-enters against the
 // already-committed state, and no rollback is simulated.
 #[cfg(test)]
-fn post_commit_receipt_loss_for_test() -> bool {
+fn post_commit_receipt_loss_for_test(operation: Option<&str>) -> bool {
     SUCCESSFUL_MUTATION_FAULT
         .try_with(|fault| {
-            if !fault.lose_receipt {
+            if !fault.lose_receipt
+                || fault
+                    .receipt_operation
+                    .is_some_and(|target| Some(target) != operation)
+            {
                 return false;
             }
             // swap leaves the fired flag sticky; only the first call observes
@@ -548,6 +553,8 @@ pub struct ConfigApplyTxn<'a> {
     backend: TxnBackend<'a>,
     rollback_on_drop: Option<RollbackOnDrop>,
     affected_documents: AtomicU64,
+    #[cfg(test)]
+    operation: Option<&'static str>,
 }
 
 impl<'a> ConfigApplyTxn<'a> {
@@ -561,6 +568,7 @@ impl<'a> ConfigApplyTxn<'a> {
             fail_after,
             count: AtomicUsize::new(0),
             lose_receipt: false,
+            receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
             write_gate_observation: None,
@@ -573,10 +581,21 @@ impl<'a> ConfigApplyTxn<'a> {
 
     #[cfg(test)]
     pub(crate) async fn with_post_commit_receipt_loss<F: Future>(future: F) -> (F::Output, bool) {
+        Self::with_post_commit_receipt_loss_for_operation(None, future).await
+    }
+
+    /// Target a commit boundary without consuming the fault on earlier writes
+    /// (for example, publication before dispatch) in the same task.
+    #[cfg(test)]
+    pub(crate) async fn with_post_commit_receipt_loss_for_operation<F: Future>(
+        operation: Option<&'static str>,
+        future: F,
+    ) -> (F::Output, bool) {
         let fault = Arc::new(SuccessfulMutationFault {
             fail_after: None,
             count: AtomicUsize::new(0),
             lose_receipt: true,
+            receipt_operation: operation,
             receipt_fired: AtomicBool::new(false),
             pause: None,
             write_gate_observation: None,
@@ -601,6 +620,7 @@ impl<'a> ConfigApplyTxn<'a> {
             fail_after: None,
             count: AtomicUsize::new(0),
             lose_receipt: false,
+            receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: Some(SuccessfulMutationPause {
                 after,
@@ -636,6 +656,7 @@ impl<'a> ConfigApplyTxn<'a> {
             fail_after: None,
             count: AtomicUsize::new(0),
             lose_receipt: false,
+            receipt_operation: None,
             receipt_fired: AtomicBool::new(false),
             pause: None,
             write_gate_observation: Some(Arc::new(WriteGateObservation {
@@ -671,6 +692,8 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
+            #[cfg(test)]
+            operation: Some(operation.as_str()),
         })
     }
 
@@ -703,6 +726,8 @@ impl<'a> ConfigApplyTxn<'a> {
             },
             rollback_on_drop: Some(rollback_on_drop),
             affected_documents: AtomicU64::new(0),
+            #[cfg(test)]
+            operation: None,
         };
         Ok(txn)
     }
@@ -886,7 +911,7 @@ impl<'a> ConfigApplyTxn<'a> {
                         // existing retry replays the callback; no rollback is
                         // simulated.
                         #[cfg(test)]
-                        if post_commit_receipt_loss_for_test() {
+                        if post_commit_receipt_loss_for_test(self.operation) {
                             return Err(CommitFailure {
                                 error: retry::transaction_storage_failure(anyhow::anyhow!(
                                     "injected receipt loss after committed transaction"
