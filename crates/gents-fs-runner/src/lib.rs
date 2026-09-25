@@ -107,6 +107,7 @@ pub fn self_test() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 
     #[test]
     fn oversized_request_is_refused_before_decoding() {
@@ -124,7 +125,6 @@ mod tests {
         .unwrap();
         assert!(read_request(request.as_slice()).is_ok());
     }
-    use protocol::{GrepArgs, ListFilesArgs, NativeFsRunnerRequest};
 
     #[test]
     fn request_with_base_resolves_relative_paths_from_base() {
