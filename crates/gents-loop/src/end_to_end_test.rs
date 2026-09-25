@@ -4,11 +4,10 @@
 //! persistence call, and a plain [`ToolDyn`] tool is dispatched in between.
 //! Nothing here touches a socket or a filesystem.
 
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use gents_protocol::message::{Message, ToolResult};
+use gents_protocol::message::Message;
 use rig::completion::{CompletionError, CompletionModel, CompletionRequest, CompletionResponse};
 use rig::streaming::{RawStreamingChoice, RawStreamingToolCall, StreamingCompletionResponse};
 
@@ -57,6 +56,9 @@ impl CompletionModel for ScriptedModel {
         &self,
         _request: CompletionRequest,
     ) -> Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError> {
+        // This scripted provider has no transport. Claim the modeled attempt
+        // when scoped; this fixture does not establish durable input capture.
+        let _ = crate::rendered_request::scope::claim_pending();
         let items = self
             .turns
             .lock()
@@ -115,13 +117,12 @@ enum RecordedCall {
     CompletionCall { prompt: String },
     ToolCall { tool_name: String },
     ToolResult { tool_name: String, outcome: String },
-    PersistMessage { role: &'static str },
 }
 
 #[derive(Clone, Default)]
 struct RecordingHook {
     log: Arc<Mutex<Vec<RecordedCall>>>,
-    sequence: Arc<AtomicUsize>,
+    deny_dispatch: bool,
 }
 
 impl RecordingHook {
@@ -164,7 +165,13 @@ impl SessionHook for RecordingHook {
         self.log(RecordedCall::ToolCall {
             tool_name: tool_name.to_string(),
         });
-        ToolCallHookAction::Continue
+        if self.deny_dispatch {
+            ToolCallHookAction::Terminate {
+                reason: "dispatch not acknowledged".to_owned(),
+            }
+        } else {
+            ToolCallHookAction::Continue
+        }
     }
 
     async fn on_tool_result(
@@ -275,4 +282,97 @@ async fn the_loop_dispatches_a_tool_and_threads_messages_with_no_defradb_and_no_
         &["hi".to_string()],
         "the echo tool must have been dispatched exactly once"
     );
+}
+
+/// This binds the loop's hook-action boundary, not database receipt semantics.
+/// The native hook test separately checks actual receipt failures against the
+/// same generated permission outcomes.
+#[tokio::test]
+async fn modeled_dispatch_permissions_gate_real_tool_invocation() {
+    use futures::StreamExt;
+    let contract: serde_json::Value = gents_lean_contract::load_contract_snapshot().unwrap();
+    let cases = contract["canonical_dispatch_observation_cases"]
+        .as_array()
+        .unwrap();
+    assert!(!cases.is_empty());
+    for case in cases {
+        for expected in case["expected"].as_array().unwrap() {
+            let may_invoke = expected["may_invoke"].as_bool().unwrap();
+            let model = ScriptedModel::new(vec![
+                vec![scripted_tool_call(), RawStreamingChoice::FinalResponse(())],
+                vec![
+                    RawStreamingChoice::Message("done".into()),
+                    RawStreamingChoice::FinalResponse(()),
+                ],
+            ]);
+            let calls = Arc::new(Mutex::new(Vec::new()));
+            let tools: Arc<Vec<Box<dyn ToolDyn>>> = Arc::new(vec![Box::new(EchoTool {
+                calls: calls.clone(),
+            })]);
+            let hook = RecordingHook {
+                deny_dispatch: !may_invoke,
+                ..Default::default()
+            };
+            let observed_hook = hook.clone();
+            use crate::rendered_request::scope::{
+                ambient_arming_sink, scope_request, test_scope, CaptureScopeKind,
+            };
+            let scope = test_scope(
+                crate::rendered_request::RenderedRequestContext {
+                    request_doc_id: "dispatch-doc".into(),
+                    request_commit_cid: "dispatch-cid".into(),
+                    request_id: "dispatch-request".into(),
+                    agent_did: "did:test:agent".into(),
+                    requester_did: "did:test:requester".into(),
+                    behavior_id: "general".into(),
+                    session_id: "dispatch-session".into(),
+                    model_name: "scripted".into(),
+                },
+                Arc::new(|_| Box::pin(async { Ok(()) })),
+            );
+            let mut config = test_loop_config();
+            config.on_rendered_request = Some(ambient_arming_sink(CaptureScopeKind::Inference));
+            let failure = scope_request(scope, async {
+                let stream = crate::loop_stream::run_loop_stream(
+                    model,
+                    Some(hook),
+                    Message::user("echo hi"),
+                    Vec::new(),
+                    tools,
+                    config,
+                );
+                futures::pin_mut!(stream);
+                let mut failure = None;
+                while let Some(item) = stream.next().await {
+                    if let Err(error) = item {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                failure
+            })
+            .await;
+            assert_eq!(
+                failure.is_some(),
+                !may_invoke,
+                "{}: {expected}; {failure:?}",
+                case["name"]
+            );
+            assert_eq!(
+                calls.lock().unwrap().len(),
+                usize::from(may_invoke),
+                "{}: {expected}",
+                case["name"]
+            );
+            assert_eq!(
+                observed_hook
+                    .calls()
+                    .iter()
+                    .filter(|call| matches!(call, RecordedCall::ToolCall { .. }))
+                    .count(),
+                1,
+                "the test must reach the hook"
+            );
+        }
+    }
 }
