@@ -840,12 +840,15 @@ export function SessionScreen({ shell }: { shell: Shell }) {
   const { draft, setDraft } = shell;
   const [cascadeFor, setCascadeFor] = useState<string | null>(null);
   const [requestedStop, setRequestedStop] = useState<string | null>(null);
+  /* the fork notice keeps its session through its exit; the shell owner decides when it shows */
   const [forked, setForked] = useState<{ sessionId: string; title: string } | null>(
     null,
   );
+  const forkNotice = useExclusivePopover();
   const [traceOpenPref, setTracePref] = useTraceOpen();
-  /* the remembered state is a desktop habit; on a phone the sheet opens only by hand */
-  const [mobileTrace, setMobileTrace] = useState(false);
+  /* the remembered state is a desktop habit; on a phone the sheet opens only by
+     hand, and takes its turn with the shell's popovers like any other dialog */
+  const traceSheet = useExclusivePopover();
   /* the transcript column follows new content while the reader is near
      the bottom; a reader who has scrolled up is left where they are */
   const column = useRef<HTMLDivElement>(null);
@@ -904,9 +907,9 @@ export function SessionScreen({ shell }: { shell: Shell }) {
     return () => io.disconnect();
   }, [shell.selectedSessionId]);
   const wide = useMediaQuery(ROOMY_WINDOW);
-  const traceOpen = wide ? traceOpenPref : mobileTrace;
+  const traceOpen = wide ? traceOpenPref : traceSheet.open;
   const setTraceOpen = (open: boolean) =>
-    wide ? setTracePref(open) : setMobileTrace(open);
+    wide ? setTracePref(open) : traceSheet.onOpenChange(open);
   const trace = useResizableWidth({
     key: "gents-prototype-trace-width",
     initial: 520,
@@ -1154,6 +1157,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       const sessionId = await shell.forkSession(session.sessionId);
       /* the copy exists; moving to it is the person's call */
       setForked({ sessionId, title: `${session.title ?? "Session"} (fork)` });
+      forkNotice.onOpenChange(true);
     } catch (e) {
       toast(`Couldn't fork: ${String(e)}`);
     }
@@ -1489,8 +1493,13 @@ export function SessionScreen({ shell }: { shell: Shell }) {
       </div>
       {/* in a narrow window the panel is a sheet over the transcript */}
       {!wide && (
-        <Sheet open={traceOpen} onOpenChange={setTraceOpen}>
+        <Sheet
+          open={traceSheet.open}
+          onOpenChange={traceSheet.onOpenChange}
+          onOpenChangeComplete={traceSheet.onOpenChangeComplete}
+        >
           <SheetContent
+            ref={traceSheet.popupRef}
             side="right"
             className="w-[92vw] max-w-md border-0 bg-transparent p-2 shadow-none"
           >
@@ -1499,8 +1508,12 @@ export function SessionScreen({ shell }: { shell: Shell }) {
           </SheetContent>
         </Sheet>
       )}
-      <AlertDialog open={forked !== null} onOpenChange={(o) => !o && setForked(null)}>
-        <AlertDialogContent aria-modal="true">
+      <AlertDialog
+        open={forkNotice.open && forked !== null}
+        onOpenChange={forkNotice.onOpenChange}
+        onOpenChangeComplete={forkNotice.onOpenChangeComplete}
+      >
+        <AlertDialogContent ref={forkNotice.popupRef} aria-modal="true">
           <AlertDialogHeader>
             <AlertDialogTitle>Forked</AlertDialogTitle>
             <AlertDialogDescription>
@@ -1514,7 +1527,7 @@ export function SessionScreen({ shell }: { shell: Shell }) {
             <AlertDialogAction
               onClick={() => {
                 const target = forked;
-                setForked(null);
+                forkNotice.onOpenChange(false);
                 if (target) navigate({ name: "session", sessionId: target.sessionId });
               }}
             >

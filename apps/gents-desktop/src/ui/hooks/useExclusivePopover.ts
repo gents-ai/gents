@@ -25,7 +25,7 @@ function release(id: string) {
   activatePending();
 }
 
-/** Keep the shell to one mounted popover across Base UI exit animations. */
+/** Keep the shell to one mounted popover, sheet or dialog across Base UI exit animations. */
 export function useExclusivePopover(onClose?: () => void) {
   const id = useId();
   const [open, setOpen] = useState(false);

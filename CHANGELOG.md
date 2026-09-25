@@ -186,6 +186,9 @@ source consistency checks, not a separate runtime compatibility version.
   and keeps the dialog open with the reason when that fails. First-run setup
   shows an existing home's agent name instead of an editable name it would
   ignore, and fails clearly rather than continuing under another name (#1615).
+- Desktop: in a narrow window the session side panel and the fork notice take
+  their turn with the shell's popovers, so opening one after the sync or
+  context popover no longer stacks two dialogs (#1778).
 
 ## 0.19.0 - 2026-09-24
 
