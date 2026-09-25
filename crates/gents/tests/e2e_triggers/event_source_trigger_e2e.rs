@@ -137,6 +137,7 @@ async fn create_event_trigger_with_filter(
 async fn wait_for_runtime_snapshot<F>(
     node: &EmbeddedNode,
     agent_did: &str,
+    stage: &str,
     predicate: F,
 ) -> RuntimeSnapshot
 where
@@ -144,14 +145,16 @@ where
 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     loop {
-        if let Some(snapshot) = fetch_runtime_snapshot(node, agent_did).await {
-            if predicate(&snapshot) {
-                return snapshot;
+        let last_snapshot = fetch_runtime_snapshot(node, agent_did).await;
+        if let Some(snapshot) = last_snapshot.as_ref() {
+            if predicate(snapshot) {
+                return snapshot.clone();
             }
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "timed out waiting for runtime snapshot for {agent_did}"
+            "timed out waiting for {stage} runtime snapshot for {agent_did}; \
+             last_snapshot={last_snapshot:?}"
         );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
@@ -336,11 +339,9 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let handle = tokio::spawn(agent.run(shutdown_rx));
 
-    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation >= 1
-            && snapshot.last_reconcile_result == "startup"
+    let startup = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, "startup", |snapshot| {
+        super::write_tool_trigger_e2e::is_routed_ready_after(snapshot, 0)
+            && snapshot.default_behavior_id == default_behavior_id
     })
     .await;
     let initial_generation = startup.active_generation;
@@ -369,13 +370,12 @@ async fn event_trigger_fires_on_source_doc_create_end_to_end() {
     )
     .await;
 
-    let reconciled = wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, |snapshot| {
-        snapshot.process_state == "ready"
-            && snapshot.reconcile_phase == "idle"
-            && snapshot.active_generation > initial_generation
-            && snapshot.last_reconcile_result == "applied"
-    })
-    .await;
+    let reconciled =
+        wait_for_runtime_snapshot(db.node.as_ref(), &agent_did, "post-insert", |snapshot| {
+            super::write_tool_trigger_e2e::is_routed_ready_after(snapshot, initial_generation)
+                && snapshot.default_behavior_id == default_behavior_id
+        })
+        .await;
     assert!(
         reconciled.last_reconcile_error.is_empty(),
         "post-insert reconcile should be clean, got error={:?}",
