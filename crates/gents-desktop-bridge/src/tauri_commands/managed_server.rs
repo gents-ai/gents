@@ -5166,6 +5166,41 @@ mod tests {
         assert_eq!(typed.code, BridgeErrorCode::IncompatibleLocalStore);
     }
 
+    /// A runtime that binds, reports booting, then refuses its store fails
+    /// typed on that exit rather than being waited on as a slow migration.
+    #[tokio::test]
+    async fn a_refused_store_fails_typed_even_while_status_reports_booting() {
+        for code in [
+            gents_server::native_service::INCOMPATIBLE_STORE_EXIT_CODE,
+            gents_server::native_service::INSECURE_KEY_EXIT_CODE,
+            gents_server::native_service::FOREIGN_STORE_EXIT_CODE,
+        ] {
+            let error = await_runtime_readiness(
+                Duration::from_secs(60),
+                Duration::from_millis(5),
+                || async { Ok(PortReadiness::Booting) },
+                || async move {
+                    Ok(NativeProgress::Exited(
+                        gents_server::native_service::ServiceExit {
+                            reason: format!("exited with code {code}"),
+                            restarts: 0,
+                            clean: false,
+                            code: Some(code),
+                        },
+                    ))
+                },
+            )
+            .await
+            .expect_err("a refused store is final");
+            assert_eq!(
+                error.downcast_ref::<BridgeError>().map(|error| error.code),
+                Some(BridgeErrorCode::IncompatibleLocalStore),
+                "exit {code}"
+            );
+            assert!(refused_kind(&error).is_some(), "exit {code}");
+        }
+    }
+
     #[test]
     fn a_refused_store_exit_reports_an_incompatible_home_not_a_crash_loop() {
         let native = gents_server::native_service::NativeServiceStatus {
@@ -5422,7 +5457,8 @@ mod tests {
             .into())
         })
         .await;
-        let Err(error) = settle_adoption(&state, &token, adopted).await else {
+        let Err(error) = settle_adoption(&state, &token, Path::new("/tmp/home"), adopted).await
+        else {
             panic!("a job still booting does not adopt as ready");
         };
         assert_eq!(error.code, BridgeErrorCode::RuntimeStillBooting);
