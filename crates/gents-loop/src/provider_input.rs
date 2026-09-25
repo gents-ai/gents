@@ -135,6 +135,7 @@ impl ProviderInputCounter {
                 let mut body = self.responses_body(request)?;
                 set_streaming_fields(&mut body, false);
                 crate::responses_normalize::normalize_responses_assistant_items(&mut body);
+                crate::provider_patches::request_encrypted_reasoning_when_stateless(&mut body);
                 body
             }
             ProviderInputProfile::OpenRouterChatCompletions => {
