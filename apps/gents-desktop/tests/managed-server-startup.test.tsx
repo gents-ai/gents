@@ -15,6 +15,7 @@ import {
   awaitManagedServerSettled,
   MANAGED_SERVER_BOOT_TIMEOUT_MS,
   ManagedServerStartupError,
+  nextManagedServerWait,
   observeManagedServerOperation,
   unsettledManagedServerError,
   type ManagedServerWait,
@@ -111,6 +112,26 @@ describe("managed server startup waits", () => {
     await expect(
       observeManagedServerOperation(api, failing, () => {}, 1),
     ).rejects.toThrow("launchctl failed");
+  });
+
+  it("counts an interrupted update toward the booting bound", () => {
+    const updating = nextManagedServerWait(
+      null,
+      managedStatus({ state: "starting", runtimeBooting: true }),
+      1_000,
+    );
+    const booting = nextManagedServerWait(
+      updating,
+      managedStatus({ state: "starting" }),
+      9_000,
+    );
+    expect(booting).toEqual({ kind: "booting", since: 1_000 });
+    const approval = nextManagedServerWait(
+      booting,
+      managedStatus({ state: "starting", approvalRequired: true }),
+      12_000,
+    );
+    expect(approval).toEqual({ kind: "approval", since: 12_000 });
   });
 
   it("names a data update without offering a restart", () => {

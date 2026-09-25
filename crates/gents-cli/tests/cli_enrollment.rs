@@ -115,6 +115,20 @@ async fn status_enrollment_from_fresh_desktop_replicates_chat_without_agent_prin
                 "fresh desktop should surface the unpaired request as pending; got {active:?}"
             );
 
+            // Pushing the persisted request again is idempotent: the runtime
+            // still sees one request and approves it.
+            core.resend_status_enrollment(&pending.request_id)
+                .await
+                .context("resending the persisted enrollment request")?;
+            assert_eq!(
+                core.active_status_enrollment_requests()
+                    .await?
+                    .iter()
+                    .filter(|request| request.owner_agent == agent_did)
+                    .count(),
+                1,
+                "a resend never authors another request"
+            );
             wait_for_runtime_enrollment_request(&graphql, &pending.request_id).await?;
             run_cli_json(
                 &home_dir,

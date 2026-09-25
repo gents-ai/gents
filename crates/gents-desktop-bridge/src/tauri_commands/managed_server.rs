@@ -1270,17 +1270,36 @@ async fn wait_for_booting_managed_server<'a, R: Runtime>(
     if matches!(adopted, Ok(BootOutcome::NeedsLaunch(..))) {
         return adopted.map_err(|error| BridgeError::untyped(format!("{error:#}")));
     }
-    finish_start_wait(state, &token).await;
-    let result = adopted.map_err(|error| {
-        let message = format!("{error:#}");
-        tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
-        BridgeError::new(BridgeErrorCode::EndpointUnreachable, message)
-    });
-    if let Err(error) = &result {
-        state.managed_server.lock().await.last_error = Some(error.message.clone());
-    }
+    let result = settle_adoption(state, &token, adopted).await;
     emit_status(app, state).await;
     result
+}
+
+/// Ends the wait on a job that was already running. A job still booting at
+/// the bound is reported as such, not as a failure, like a launched one.
+async fn settle_adoption<'a>(
+    state: &'a DesktopAppState,
+    token: &StartWait,
+    adopted: anyhow::Result<BootOutcome<'a>>,
+) -> Result<BootOutcome<'a>, BridgeError> {
+    finish_start_wait(state, token).await;
+    let error = match adopted {
+        Ok(outcome) => return Ok(outcome),
+        Err(error) => error,
+    };
+    let message = format!("{error:#}");
+    if error.is::<RuntimeStillBooting>() {
+        return Err(BridgeError::new(
+            BridgeErrorCode::RuntimeStillBooting,
+            message,
+        ));
+    }
+    tracing::warn!(target: "gents_desktop::managed_server", error = %message, "managed Gents server did not become ready");
+    state.managed_server.lock().await.last_error = Some(message.clone());
+    Err(BridgeError::new(
+        BridgeErrorCode::EndpointUnreachable,
+        message,
+    ))
 }
 
 async fn native_requires_approval<R: Runtime>(
@@ -1995,6 +2014,7 @@ async fn ensure_managed_runtime_pairing(
     // earlier request pending where it could still be approved. A request
     // stays in use until it expires or is denied.
     let request_id = resolve_managed_request(
+        cancel,
         || async {
             core.active_status_enrollment_requests()
                 .await
@@ -2116,6 +2136,7 @@ fn select_managed_request(
 /// earlier push may have failed. Authors a new one only after a lookup that
 /// succeeded and found none.
 async fn resolve_managed_request<L, LF, R, RF, A, AF>(
+    cancel: &tokio_util::sync::CancellationToken,
     lookup: L,
     resend: R,
     author: A,
@@ -2128,7 +2149,13 @@ where
     A: FnOnce() -> AF,
     AF: Future<Output = Result<String, PairingFailure>>,
 {
-    match lookup().await {
+    let found = lookup().await;
+    // A stop during the lookup must not author or push. Once begun, those
+    // steps run to completion so authoring can unwind its replication state.
+    if cancel.is_cancelled() {
+        return Err(PairingFailure::Cancelled);
+    }
+    match found {
         Err(error) => Err(PairingFailure::Transient(format!(
             "reading this desktop's enrollment requests: {error}"
         ))),
@@ -3511,7 +3538,9 @@ mod tests {
     #[tokio::test]
     async fn a_failed_request_lookup_never_authors_another_request() {
         let authored = std::sync::atomic::AtomicU32::new(0);
+        let cancel = tokio_util::sync::CancellationToken::new();
         let failure = resolve_managed_request(
+            &cancel,
             || async { Err("decoding persisted enrollment request".to_string()) },
             |_| async { Ok(()) },
             || async {
@@ -3526,14 +3555,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_stop_during_the_request_lookup_authors_and_pushes_nothing() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        for existing in [
+            None,
+            Some(managed_request(
+                "enroll-1",
+                "peer-a",
+                "pending_approval",
+                "2026-09-24T12:00:00Z",
+            )),
+        ] {
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let (entered_tx, entered_rx) = tokio::sync::oneshot::channel::<()>();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            let (authored, resent) = (AtomicU32::new(0), AtomicU32::new(0));
+            let resolving = resolve_managed_request(
+                &cancel,
+                || async move {
+                    entered_tx.send(()).unwrap();
+                    release_rx.await.unwrap();
+                    Ok(existing)
+                },
+                |_| {
+                    resent.fetch_add(1, Ordering::SeqCst);
+                    async { Ok(()) }
+                },
+                || async {
+                    authored.fetch_add(1, Ordering::SeqCst);
+                    Ok("enroll-new".to_string())
+                },
+            );
+            let stop = async {
+                entered_rx.await.unwrap();
+                cancel.cancel();
+                release_tx.send(()).unwrap();
+            };
+            let (result, ()) = tokio::join!(resolving, stop);
+            assert_eq!(result.unwrap_err(), PairingFailure::Cancelled);
+            assert_eq!(authored.load(Ordering::SeqCst), 0);
+            assert_eq!(resent.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[tokio::test]
     async fn a_request_whose_push_failed_is_pushed_again_when_reused() {
         let store = std::sync::Mutex::new(None::<EnrollmentRequestResult>);
         let (resent, authored) = (
             std::sync::Mutex::new(Vec::<String>::new()),
             std::sync::atomic::AtomicU32::new(0),
         );
+        let cancel = tokio_util::sync::CancellationToken::new();
         let attempt = || {
             resolve_managed_request(
+                &cancel,
                 || async { Ok(store.lock().unwrap().clone()) },
                 |request_id| {
                     resent.lock().unwrap().push(request_id);
@@ -3936,6 +4012,30 @@ mod tests {
             1
         );
         assert_eq!(launch.starts(), 1);
+    }
+
+    #[tokio::test]
+    async fn adopting_a_job_still_booting_at_the_bound_reports_it_booting() {
+        let (_temp, state) = orchestration_state();
+        let token = begin_start_wait(&state).await;
+        let lifecycle = state.managed_server_lifecycle.lock().await;
+        let adopted = adopt_booting_runtime(&state, &token, lifecycle, async {
+            Err(RuntimeStillBooting {
+                waited: Duration::from_secs(300),
+            }
+            .into())
+        })
+        .await;
+        let Err(error) = settle_adoption(&state, &token, adopted).await else {
+            panic!("a job still booting does not adopt as ready");
+        };
+        assert_eq!(error.code, BridgeErrorCode::RuntimeStillBooting);
+        let managed = state.managed_server.lock().await;
+        assert!(
+            managed.last_error.is_none(),
+            "status keeps reporting it starting"
+        );
+        assert!(!managed.starting);
     }
 
     #[tokio::test]

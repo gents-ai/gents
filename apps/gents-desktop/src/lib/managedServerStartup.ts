@@ -36,7 +36,12 @@ export function nextManagedServerWait(
 ): ManagedServerWait | null {
   const kind = managedServerWaitKind(status);
   if (!kind) return null;
-  return previous?.kind === kind ? previous : { kind, since: now };
+  if (previous?.kind === kind) return previous;
+  // An update that stops reporting progress is still one boot: its time
+  // counts toward the booting bound.
+  if (previous?.kind === "updating" && kind === "booting")
+    return { kind, since: previous.since };
+  return { kind, since: now };
 }
 
 export function formatElapsed(ms: number): string {

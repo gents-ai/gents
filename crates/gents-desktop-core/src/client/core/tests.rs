@@ -1003,6 +1003,35 @@ async fn refresh_store_succeeds_with_selection_set() {
 }
 
 #[tokio::test]
+async fn resending_an_unknown_enrollment_request_fails_without_pushing() {
+    use crate::client::paths::DesktopPaths;
+
+    let tmp = tempfile::TempDir::new().expect("tmpdir");
+    let paths = DesktopPaths::from_root(tmp.path().to_path_buf());
+    let core = ClientCore::start_with_paths_and_options(paths, ClientCoreOptions::local_only())
+        .await
+        .expect("core");
+
+    let error = core
+        .resend_status_enrollment("enroll-missing")
+        .await
+        .expect_err("only a persisted request of this desktop is resent");
+    assert!(
+        error
+            .to_string()
+            .contains("no local enrollment request enroll-missing"),
+        "{error:#}"
+    );
+    assert!(core
+        .active_status_enrollment_requests()
+        .await
+        .unwrap()
+        .is_empty());
+
+    core.shutdown().await.expect("shutdown");
+}
+
+#[tokio::test]
 async fn ensure_agent_loaded_debounces_repeats() {
     use crate::client::paths::DesktopPaths;
 
