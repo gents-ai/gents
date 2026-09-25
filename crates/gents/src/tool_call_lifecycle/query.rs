@@ -6,6 +6,7 @@ pub use result::{
     load_tool_call_arguments, load_tool_call_presentation, load_tool_call_result,
     render_tool_result, CanonicalToolCallPresentation,
 };
+pub(crate) use result::{load_tool_call_read_in_txn, CanonicalToolCallRead};
 
 use std::sync::Arc;
 

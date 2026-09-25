@@ -1,11 +1,72 @@
 //! Canonical invocation-reply reads, keyed by physical tool identity.
 
-use crate::config_client::ConfigAccess;
+use crate::config_client::{ConfigAccess, ConfigApplyTxn};
 use crate::graphql::escape_graphql_string;
 use crate::llm::message::{AssistantContent, Message, ToolResultContent, UserContent};
 use anyhow::{anyhow, Context, Result};
-use gents_protocol::output::{MessageBlock, MessagePublication, MessageRole, TranscriptMessage};
+use gents_protocol::output::{
+    MessageBlock, MessagePublication, MessageRole, OutputSource, StreamPayload, ToolResultPart,
+    TranscriptMessage,
+};
 use serde::Deserialize;
+use serde_json::Value;
+
+use super::ToolCallState;
+
+#[derive(Clone, Copy)]
+enum ReadSource<'a, 'txn> {
+    Access(&'a ConfigAccess),
+    Txn(&'a ConfigApplyTxn<'txn>),
+}
+
+impl ReadSource<'_, '_> {
+    async fn execute(self, query: &str) -> Result<Value> {
+        match self {
+            Self::Access(access) => access.execute(query).await,
+            Self::Txn(txn) => txn.execute(query).await,
+        }
+    }
+
+    async fn canonical_message(
+        self,
+        header_doc_id: &str,
+        agent_did: &str,
+        requester_did: Option<&str>,
+    ) -> Result<(TranscriptMessage, Message)> {
+        match self {
+            Self::Access(access) => {
+                crate::session::load_canonical_message(
+                    access,
+                    header_doc_id,
+                    agent_did,
+                    requester_did,
+                )
+                .await
+            }
+            Self::Txn(txn) => {
+                crate::session::load_canonical_message_in_txn(
+                    txn,
+                    header_doc_id,
+                    agent_did,
+                    requester_did,
+                )
+                .await
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CanonicalToolCallRead {
+    pub(crate) request_doc_id: String,
+    pub(crate) tool_name: String,
+    pub(crate) lifecycle_state: ToolCallState,
+    pub(crate) arguments: String,
+    pub(crate) result: Option<Message>,
+    /// Exact persisted ToolOutput bytes behind the verified invocation reply.
+    /// Only populated by the transaction reader; rendered `result` may be bounded.
+    pub(crate) raw_result: Option<String>,
+}
 
 /// Load the native tool-result delivery for one physical AgentToolCall
 /// document.
@@ -42,7 +103,7 @@ pub async fn load_tool_call_result(
         requester_did,
     )
     .await?
-    .1
+    .result
     .ok_or_else(|| {
         anyhow!(
             "no invocation reply delivered for tool_call_doc_id={tool_call_doc_id}; the tool result has not been delivered"
@@ -56,15 +117,56 @@ async fn load_tool_call_read(
     agent_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
-) -> Result<(String, Option<Message>)> {
+) -> Result<CanonicalToolCallRead> {
+    load_tool_call_read_source(
+        ReadSource::Access(access),
+        tool_call_doc_id,
+        agent_did,
+        session_id,
+        requester_did,
+    )
+    .await
+}
+
+pub(crate) async fn load_tool_call_read_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    tool_call_doc_id: &str,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<CanonicalToolCallRead> {
+    load_tool_call_read_source(
+        ReadSource::Txn(txn),
+        tool_call_doc_id,
+        agent_did,
+        session_id,
+        requester_did,
+    )
+    .await
+}
+
+async fn load_tool_call_read_source(
+    source: ReadSource<'_, '_>,
+    tool_call_doc_id: &str,
+    agent_did: &str,
+    session_id: &str,
+    requester_did: Option<&str>,
+) -> Result<CanonicalToolCallRead> {
     let (call, headers, accepted_call_id, accepted_arguments) = load_accepted_tool_call(
-        access,
+        source,
         tool_call_doc_id,
         agent_did,
         session_id,
         requester_did,
     )
     .await?;
+    let lifecycle_state =
+        ToolCallState::from_persisted(&call.lifecycle_state).ok_or_else(|| {
+            anyhow!(
+                "AgentToolCall tool_call_doc_id={tool_call_doc_id} has invalid lifecycle state {}",
+                call.lifecycle_state
+            )
+        })?;
     let native_call_id = call.tool_call_id;
     let expected_request_doc_id = call.request_doc_id.ok_or_else(|| {
         anyhow!(
@@ -99,7 +201,14 @@ async fn load_tool_call_read(
             delivery_rows.is_empty(),
             "a ToolDelivery publication exists for tool_call_doc_id={tool_call_doc_id} but carries no native tool-result invocation reply"
         );
-        return Ok((accepted_arguments, None));
+        return Ok(CanonicalToolCallRead {
+            request_doc_id: expected_request_doc_id,
+            tool_name: call.tool_name,
+            lifecycle_state,
+            arguments: accepted_arguments,
+            result: None,
+            raw_result: None,
+        });
     };
     let header = &row.message;
     anyhow::ensure!(
@@ -136,6 +245,7 @@ async fn load_tool_call_read(
     let MessageBlock::ToolResult {
         id: block_id,
         call_id: block_call_id,
+        parts,
         ..
     } = header.blocks.first().ok_or_else(|| {
         anyhow!(
@@ -155,16 +265,45 @@ async fn load_tool_call_read(
          {block_id} but the call is {native_call_id}"
     );
 
-    let (_header, message) =
-        crate::session::load_canonical_message(access, &row.doc_id, agent_did, requester_did)
-            .await?;
+    let (_header, message) = source
+        .canonical_message(&row.doc_id, agent_did, requester_did)
+        .await?;
     verify_exact_call_identity(
         &message,
         &native_call_id,
         block_call_id.as_deref(),
         tool_call_doc_id,
     )?;
-    Ok((accepted_arguments, Some(message)))
+    let raw_result = if let (ReadSource::Txn(txn), [ToolResultPart::Text { text }]) =
+        (source, parts.as_slice())
+    {
+        let stream = crate::session::load_canonical_payload_in_txn(
+            txn,
+            &expected_request_doc_id,
+            agent_did,
+            requester_did,
+            &text.output,
+            &OutputSource::ToolCall {
+                tool_call_doc_id: tool_call_doc_id.to_owned(),
+            },
+        )
+        .await?;
+        anyhow::ensure!(
+            matches!(stream.declaration.payload, StreamPayload::ToolOutput),
+            "invocation reply for tool_call_doc_id={tool_call_doc_id} references another output source"
+        );
+        Some(stream.text)
+    } else {
+        None
+    };
+    Ok(CanonicalToolCallRead {
+        request_doc_id: expected_request_doc_id,
+        tool_name: call.tool_name,
+        lifecycle_state,
+        arguments: accepted_arguments,
+        result: Some(message),
+        raw_result,
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,7 +327,7 @@ pub async fn load_tool_call_presentation(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<CanonicalToolCallPresentation> {
-    let (arguments, result) = load_tool_call_read(
+    let read = load_tool_call_read(
         access,
         tool_call_doc_id,
         agent_did,
@@ -196,10 +335,10 @@ pub async fn load_tool_call_presentation(
         requester_did,
     )
     .await?;
-    let mut result = result.as_ref().map(render_tool_result).transpose()?;
+    let mut result = read.result.as_ref().map(render_tool_result).transpose()?;
     let mut live_output = None;
     let call = load_tool_call_identity(
-        access,
+        ReadSource::Access(access),
         tool_call_doc_id,
         agent_did,
         session_id,
@@ -237,7 +376,7 @@ pub async fn load_tool_call_presentation(
         }
     }
     Ok(CanonicalToolCallPresentation {
-        arguments,
+        arguments: read.arguments,
         result,
         live_output,
     })
@@ -256,7 +395,7 @@ pub async fn load_tool_call_arguments(
     session_id: &str,
     requester_did: Option<&str>,
 ) -> Result<String> {
-    let (arguments, _) = load_tool_call_read(
+    let read = load_tool_call_read(
         access,
         tool_call_doc_id,
         agent_did,
@@ -264,11 +403,11 @@ pub async fn load_tool_call_arguments(
         requester_did,
     )
     .await?;
-    Ok(arguments)
+    Ok(read.arguments)
 }
 
 async fn load_accepted_tool_call(
-    access: &ConfigAccess,
+    source: ReadSource<'_, '_>,
     tool_call_doc_id: &str,
     agent_did: &str,
     session_id: &str,
@@ -280,16 +419,16 @@ async fn load_accepted_tool_call(
     String,
 )> {
     let call = load_tool_call_identity(
-        access,
+        source,
         tool_call_doc_id,
         agent_did,
         session_id,
         requester_did,
     )
     .await?;
-    let admission = if let Some(parent_doc_id) = call.spawned_by_tool_call_doc_id.as_deref() {
+    let parent = if let Some(parent_doc_id) = call.spawned_by_tool_call_doc_id.as_deref() {
         let parent =
-            load_tool_call_identity(access, parent_doc_id, agent_did, session_id, requester_did)
+            load_tool_call_identity(source, parent_doc_id, agent_did, session_id, requester_did)
                 .await?;
         anyhow::ensure!(
             call.request_doc_id == parent.request_doc_id
@@ -297,21 +436,15 @@ async fn load_accepted_tool_call(
                 && parent.tool_name == crate::toolset::SPAWN_PROCESS_TOOL_NAME,
             "spawned tool presentation has incoherent accepted-parent provenance"
         );
-        parent
+        Some(parent)
     } else {
-        load_tool_call_identity(
-            access,
-            tool_call_doc_id,
-            agent_did,
-            session_id,
-            requester_did,
-        )
-        .await?
+        None
     };
+    let admission = parent.as_ref().unwrap_or(&call);
     let expected_request_doc_id = call.request_doc_id.as_deref().ok_or_else(|| {
         anyhow!("AgentToolCall tool_call_doc_id={tool_call_doc_id} carries no request document")
     })?;
-    let headers = scoped_canonical_headers(access, agent_did, session_id, requester_did).await?;
+    let headers = scoped_canonical_headers(source, agent_did, session_id, requester_did).await?;
     let accepted = headers
         .iter()
         .filter(|row| {
@@ -328,13 +461,9 @@ async fn load_accepted_tool_call(
         accepted.len() == 1,
         "tool call lacks a unique coordinator admission header"
     );
-    let (_, accepted_message) = crate::session::load_canonical_message(
-        access,
-        &accepted[0].doc_id,
-        agent_did,
-        requester_did,
-    )
-    .await?;
+    let (_, accepted_message) = source
+        .canonical_message(&accepted[0].doc_id, agent_did, requester_did)
+        .await?;
     let bindings = accepted[0]
         .message
         .blocks
@@ -425,7 +554,7 @@ fn is_invocation_reply(header: &TranscriptMessage, tool_call_doc_id: &str) -> bo
 /// publication matching happens after decode; the scope bounds the scan and
 /// no `limit` may hide a matching later header.
 async fn scoped_canonical_headers(
-    access: &ConfigAccess,
+    source: ReadSource<'_, '_>,
     agent_did: &str,
     session_id: &str,
     requester_did: Option<&str>,
@@ -437,7 +566,7 @@ async fn scoped_canonical_headers(
         fields = crate::session::canonical_rows::AGENT_MESSAGE_FIELDS,
     );
 
-    let resp = access.execute(&query).await?;
+    let resp = source.execute(&query).await?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
@@ -470,10 +599,11 @@ struct ToolCallIdentityRow {
     message_sequence: u32,
     request_doc_id: Option<String>,
     spawned_by_tool_call_doc_id: Option<String>,
+    lifecycle_state: String,
 }
 
 async fn load_tool_call_identity(
-    access: &ConfigAccess,
+    source: ReadSource<'_, '_>,
     tool_call_doc_id: &str,
     agent_did: &str,
     session_id: &str,
@@ -487,13 +617,13 @@ async fn load_tool_call_identity(
                 filter: {{ {scope}, _docID: {{ _eq: "{escaped_doc_id}" }} }},
                 limit: 2
             ) {{
-                _docID agent_did requester_did session_id tool_call_id tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id
+                _docID agent_did requester_did session_id tool_call_id tool_name message_sequence request_doc_id spawned_by_tool_call_doc_id lifecycle_state
             }}
         }}"#,
         scope = scope,
     );
 
-    let resp = access.execute(&query).await?;
+    let resp = source.execute(&query).await?;
     if resp
         .get("errors")
         .is_some_and(|errors| !errors.is_null() && !errors.as_array().is_some_and(Vec::is_empty))
@@ -713,5 +843,127 @@ mod tests {
             "call-1",
             &None,
         ));
+    }
+
+    #[tokio::test]
+    async fn transaction_reader_preserves_raw_beyond_bounded_reply_and_rejects_ambiguity() {
+        use crate::tool_call_lifecycle::admission_fixture::published_spawn_parent;
+        use gents_protocol::output::{PayloadPresentation, PresentationPart};
+
+        let (node, path, mut tool) = published_spawn_parent("txn-result-reader").await;
+        let raw = r#"{"ok":false,"error":{"reason":"wait_timeout"}}"#;
+        let bounded = "[bounded presentation]";
+        tool.complete_raw_with_presentation(
+            raw,
+            bounded,
+            PayloadPresentation::Composed {
+                parts: vec![PresentationPart::Literal {
+                    text: bounded.to_owned(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        let doc_id = tool.doc_id().unwrap().to_owned();
+        let agent_did = tool.agent_did().to_owned();
+        let session_id = tool.session_id().to_owned();
+        let request_doc_id = tool.request_doc_id().unwrap().to_owned();
+        let read =
+            ConfigAccess::transact_local(node.as_ref(), None, "tool_result.txn_read", |txn| {
+                Box::pin(load_tool_call_read_in_txn(
+                    txn,
+                    &doc_id,
+                    &agent_did,
+                    &session_id,
+                    None,
+                ))
+            })
+            .await
+            .unwrap();
+        assert_eq!(read.request_doc_id, request_doc_id);
+        assert_eq!(read.tool_name, crate::toolset::SPAWN_PROCESS_TOOL_NAME);
+        assert_eq!(read.lifecycle_state, ToolCallState::Completed);
+        assert!(!read.arguments.is_empty());
+        assert_eq!(
+            render_tool_result(read.result.as_ref().expect("canonical reply")).unwrap(),
+            bounded
+        );
+        assert_eq!(read.raw_result.as_deref(), Some(raw));
+
+        ConfigAccess::transact_local(node.as_ref(), None, "tool_result.ambiguous_reply", |txn| {
+            Box::pin(async {
+                let headers =
+                    scoped_canonical_headers(ReadSource::Txn(txn), &agent_did, &session_id, None)
+                        .await?;
+                let mut duplicate = headers
+                    .iter()
+                    .find(|row| is_invocation_reply(&row.message, &doc_id))
+                    .expect("fixture completed invocation reply")
+                    .message
+                    .clone();
+                duplicate.message_key.push_str(":duplicate");
+                duplicate.sequence += 1;
+                txn.execute_with_variables(
+                    crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                    &crate::session::canonical_rows::transcript_message_create_variables(
+                        &duplicate,
+                    )?,
+                )
+                .await?;
+                let error = load_tool_call_read_in_txn(txn, &doc_id, &agent_did, &session_id, None)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("ambiguous invocation reply"));
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn transaction_reader_rejects_tool_delivery_without_native_reply() {
+        use crate::tool_call_lifecycle::admission_fixture::published_spawn_parent;
+
+        let (node, path, tool) = published_spawn_parent("txn-malformed-delivery").await;
+        let doc_id = tool.doc_id().unwrap().to_owned();
+        let agent_did = tool.agent_did().to_owned();
+        let session_id = tool.session_id().to_owned();
+        ConfigAccess::transact_local(node.as_ref(), None, "tool_result.malformed_reply", |txn| {
+            Box::pin(async {
+                let headers =
+                    scoped_canonical_headers(ReadSource::Txn(txn), &agent_did, &session_id, None)
+                        .await?;
+                let mut malformed = headers
+                    .iter()
+                    .find(|row| row.message.role == MessageRole::Assistant)
+                    .expect("fixture accepted assistant header")
+                    .message
+                    .clone();
+                malformed.message_key.push_str(":malformed-delivery");
+                malformed.sequence += 1;
+                malformed.publication = MessagePublication::ToolDelivery {
+                    tool_call_doc_id: doc_id.clone(),
+                };
+                txn.execute_with_variables(
+                    crate::session::canonical_rows::CREATE_AGENT_MESSAGE_MUTATION,
+                    &crate::session::canonical_rows::transcript_message_create_variables(
+                        &malformed,
+                    )?,
+                )
+                .await?;
+                let error = load_tool_call_read_in_txn(txn, &doc_id, &agent_did, &session_id, None)
+                    .await
+                    .unwrap_err();
+                assert!(error.to_string().contains("carries no native tool-result"));
+                Ok(())
+            })
+        })
+        .await
+        .unwrap();
+        node.shutdown().await;
+        std::fs::remove_dir_all(path).unwrap();
     }
 }

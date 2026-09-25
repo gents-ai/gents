@@ -149,6 +149,44 @@ pub(crate) async fn load_canonical_payload_from_node(
     requester_did: Option<&str>,
     reference: &PayloadRef,
 ) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
+    load_canonical_payload(
+        ReadAccess::Node(node),
+        request_doc_id,
+        agent_did,
+        requester_did,
+        reference,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn load_canonical_payload_in_txn(
+    txn: &ConfigApplyTxn<'_>,
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    reference: &PayloadRef,
+    expected_source: &gents_protocol::output::OutputSource,
+) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
+    load_canonical_payload(
+        ReadAccess::Txn(txn),
+        request_doc_id,
+        agent_did,
+        requester_did,
+        reference,
+        Some(expected_source),
+    )
+    .await
+}
+
+async fn load_canonical_payload(
+    access: ReadAccess<'_, '_>,
+    request_doc_id: &str,
+    agent_did: &str,
+    requester_did: Option<&str>,
+    reference: &PayloadRef,
+    expected_source: Option<&gents_protocol::output::OutputSource>,
+) -> Result<gents_protocol::output::reconstruction::ReconstructedStream> {
     anyhow::ensure!(
         !request_doc_id.trim().is_empty(),
         "canonical payload request id is blank"
@@ -161,13 +199,21 @@ pub(crate) async fn load_canonical_payload_from_node(
         crate::graphql::escape_graphql_string(request_doc_id),
         crate::graphql::escape_graphql_string(agent_did),
     );
-    let response = ReadAccess::Node(node)
-        .query(&query, "load_canonical_payload")
-        .await?;
+    let response = access.query(&query, "load_canonical_payload").await?;
     let rows = rows_value(&response, "AgentOutputSegment")?
         .iter()
         .map(decode_output_segment_row)
         .collect::<Result<Vec<_>>>()?;
+    if let Some(expected_source) = expected_source {
+        anyhow::ensure!(
+            rows.iter().any(|row| {
+                row.doc_id == reference.close_doc_id
+                    && row.segment.source == *expected_source
+                    && row.segment.close.is_some()
+            }),
+            "canonical payload close does not belong to the expected tool source"
+        );
+    }
     let observed = rows
         .iter()
         .map(|row| ObservedSegment {

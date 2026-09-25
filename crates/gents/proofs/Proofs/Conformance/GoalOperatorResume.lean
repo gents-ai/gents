@@ -65,6 +65,7 @@ private def status (x : Goals.Status) : String := jsonString x.toDefraDB
 private def outcome : Outcome → String
  | .denied => "denied" | .stale => "stale" | .illegal => "illegal" | .conflict => "conflict"
  | .rolledBack => "rolled_back" | .created => "created" | .recovered => "recovered"
+ | .deferred => "deferred" | .invalidEvidence => "invalid_evidence"
 def bindingJson (x : Binding) : String :=
   "{\"goal\":" ++ toString x.goal ++ ",\"owner\":" ++ jsonString x.owner ++
   ",\"session\":" ++ jsonString x.session ++ ",\"predecessor\":" ++ toString x.predecessor ++

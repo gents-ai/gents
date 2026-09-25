@@ -29,6 +29,10 @@ structure Binding where
   childDocument : DocId
   childRequester : Option Nat
   childEntry : SessionQueue.QueueEntry
+  /-- Must be projected from the same authenticated ConfigApplyTxn as the Goal,
+  predecessor and child binding. Native must not supply an empty observation
+  when a relevant accepted wait or background row is unreadable. -/
+  observation : PublicationObservation
   authenticated : Bool
   deriving DecidableEq, Repr
 
@@ -73,10 +77,11 @@ structure Result where
   before : World
   after : World
   request : ClaimedRequest
+  observation : PublicationObservation
   binding : Binding
   entry : SessionQueue.QueueEntry
   outcome : GoalAutomation.OperatorResume.Outcome
-  ownerPublication : publishClaimed beforeGoal request true = (afterGoal, outcome)
+  ownerPublication : publishClaimed beforeGoal request observation true = (afterGoal, outcome)
   allowed : outcome = .created ∨ outcome = .recovered
   freshEnqueued : outcome = .created →
     SessionQueue.step? before.queue (.coalescePending entry) =
@@ -105,7 +110,7 @@ def publishGoalChild? (goal : Snapshot) (state : World)
       binding.childRequester != state.queue.scope.requester ||
       !goalEntryValid world request binding entry then none
   else
-    match hp : publishClaimed goal request true with
+    match hp : publishClaimed goal request binding.observation true with
     | (post, .created) =>
         if !canonicalParentTerminal world binding || !actualSessionIdle state ||
             !request.terminalParent || !request.sessionIdle then none
@@ -114,7 +119,7 @@ def publishGoalChild? (goal : Snapshot) (state : World)
         | some queue => some
             { beforeGoal := goal, afterGoal := post, before := state
             , after := { (releaseGate state now) with queue := queue }
-            , request := request, binding := binding, entry := entry
+            , request := request, observation := binding.observation, binding := binding, entry := entry
             , outcome := .created, ownerPublication := hp
             , allowed := Or.inl rfl
             , freshEnqueued := fun _ => hstep
@@ -129,7 +134,7 @@ def publishGoalChild? (goal : Snapshot) (state : World)
           some
             { beforeGoal := goal, afterGoal := post, before := state
             , after := state
-            , request := request, binding := binding, entry := entry
+            , request := request, observation := binding.observation, binding := binding, entry := entry
             , outcome := .recovered, ownerPublication := hp
             , allowed := Or.inr rfl
             , freshEnqueued := by simp
@@ -193,7 +198,7 @@ theorem successful_publication_uses_existing_goal_owner
     (request : ClaimedRequest)
     (binding : Binding) (entry : SessionQueue.QueueEntry) (result : Result)
     (h : publishGoalChild? goal state actor now request binding entry = some result) :
-    publishClaimed goal request true = (result.afterGoal, result.outcome) := by
+    publishClaimed goal request result.observation true = (result.afterGoal, result.outcome) := by
   obtain ⟨hg, _, hr⟩ := successful_publication_origin goal state actor now request binding entry result h
   simpa only [hg, hr] using result.ownerPublication
 
@@ -213,9 +218,10 @@ theorem paused_or_terminal_goal_cannot_fresh_publish
       result.beforeGoal.goal.status = .complete) :
     result.outcome ≠ .created := by
   intro hcreated
-  have hpublication : (publishClaimed result.beforeGoal result.request true).2 = .created := by
+  have hpublication :
+      (publishClaimed result.beforeGoal result.request result.observation true).2 = .created := by
     rw [result.ownerPublication, hcreated]
-  have current := created_requires_current_claim result.beforeGoal result.request true
+  have current := created_requires_current_claim result.beforeGoal result.request result.observation true
     hpublication
   rcases hstatus with hs | hs
   · rw [hs] at current

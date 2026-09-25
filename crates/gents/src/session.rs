@@ -46,11 +46,11 @@ pub(crate) use observations::{
     update_session_title_with_source,
 };
 pub use observations::{load_latest_request_in_txn, SessionRequestFact};
-pub(crate) use output::load_canonical_payload_from_node;
 pub use output::{
     load_canonical_message, load_canonical_message_from_node, CanonicalOutputReadError,
 };
 pub(crate) use output::{load_canonical_message_in_txn, load_request_headers_in_txn};
+pub(crate) use output::{load_canonical_payload_from_node, load_canonical_payload_in_txn};
 pub use query::{decode_session_row, session_scope_filter, AGENT_SESSION_FIELDS};
 pub(crate) use query::{load_session_behavior_id, require_session};
 pub use request_output::{
