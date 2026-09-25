@@ -4,6 +4,7 @@
       "model_symbols": [
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.attempt" },
         { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservation.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.replay_after_commit_never_authorizes" },
+        { "file": "crates/gents/proofs/Proofs/CanonicalOutput/Execution/DispatchObservationCases.lean", "symbol": "CanonicalOutput.Execution.DispatchObservation.Cases.completionProbe" },
         { "file": "crates/gents/proofs/Proofs/Conformance/Contracts/Json/DispatchObservation.lean", "symbol": "Conformance.DispatchObservationContracts.cases" }
       ],
       "constructors": [],
@@ -17,6 +18,7 @@
         "won_dispatch_then_replay grants authority only on the newly won acknowledged dispatch",
         "rejected_then_won_dispatch preserves Pending on policy rejection before fresh election",
         "Bind both persistence policies to the actual call hook and prove zero external dispatch after receipt loss or replay",
+        "Normal request completion rejects a committed foreground dispatch through durable tool accounting, without changing the request before failure handoff",
         "Bind recovery accounting and special control-tool failures after committed effects; ordinary result-write failure policy is not dispatch authorization"
       ],
       "retired_bindings": []
