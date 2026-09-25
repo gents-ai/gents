@@ -8,7 +8,9 @@ use crate::tool_call_lifecycle::runtime::tool_execution_bounds;
 use anyhow::{bail, Context, Result};
 
 use super::args::CliToolArgs;
-use super::shared::{cap_output, ToolError as LocalToolError};
+use super::shared::{
+    captured_channel, stopped_stream, truncate_stream, ToolError as LocalToolError,
+};
 use super::CliToolConfig;
 
 #[derive(Clone)]
@@ -145,18 +147,21 @@ async fn run_cli_command(
         // This tool post-processes both command channels into a distinct JSON
         // result and has no canonical composed-presentation owner.  Bash's
         // shared command renderer is the sole streamed-command path.
-        live_output: None,
+        // Committed as captured, so a request deadline that stops this call
+        // presents the output so far instead of only its cause.
+        live_output: bounds.live_output.clone(),
     })
     .await;
 
-    render_cli_outcome(config, &cwd, argv, outcome)
+    render_cli_outcome(config, &cwd, argv, outcome, bounds.live_output.as_ref()).await
 }
 
-fn render_cli_outcome(
+async fn render_cli_outcome(
     config: &CliToolConfig,
     cwd: &std::path::Path,
     argv: &[String],
     outcome: ManagedExecOutcome,
+    live_output: Option<&gents_loop::live_output::LiveToolOutputWriter>,
 ) -> Result<String, LocalToolError> {
     let timeout_secs = config.timeout_secs.max(1);
     let (exit_code, stdout_bytes, stderr_bytes, terminal_cause) = match outcome {
@@ -181,48 +186,69 @@ fn render_cli_outcome(
         ManagedExecOutcome::SpawnFailed { error } => return Err(anyhow::anyhow!(error).into()),
     };
 
-    let render_channel = |bytes: &[u8]| {
-        let text = String::from_utf8_lossy(bytes);
-        if terminal_cause.is_some() {
-            crate::tool_call_lifecycle::delivery::terminal_output_tail(
-                &text,
-                config.max_output_chars,
-            )
-            .to_owned()
-        } else {
-            cap_output(&text, config.max_output_chars).0
-        }
+    let stdout_raw = String::from_utf8_lossy(&stdout_bytes);
+    let stderr_raw = String::from_utf8_lossy(&stderr_bytes);
+    let channel = if terminal_cause.is_some() {
+        stopped_stream
+    } else {
+        truncate_stream
     };
-    let stdout = render_channel(&stdout_bytes);
-    let stderr = render_channel(&stderr_bytes);
+    let stdout = channel(&stdout_raw, config.max_output_chars);
+    let stderr = channel(&stderr_raw, config.max_output_chars);
     let command_line = std::iter::once(config.binary_path.display().to_string())
         .chain(argv.iter().cloned())
         .collect::<Vec<_>>()
         .join(" ");
 
-    let rendered = format!(
-        "cwd: {}\ncommand: {}\nexit_code: {}\nstdout:\n{}\nstderr:\n{}",
+    let mut head = match &terminal_cause {
+        Some(cause) => format!("{cause}\n"),
+        None => String::new(),
+    };
+    head.push_str(&format!(
+        "cwd: {}\ncommand: {}\nexit_code: {}\n",
         cwd.display(),
         command_line,
         exit_code
             .map(|code| code.to_string())
             .unwrap_or_else(|| "unavailable".to_owned()),
-        if stdout.is_empty() {
+    ));
+    let rendered = format!(
+        "{head}stdout:\n{}\nstderr:\n{}",
+        if stdout.content.is_empty() {
             "(empty)"
         } else {
-            &stdout
+            &stdout.content
         },
-        if stderr.is_empty() {
+        if stderr.content.is_empty() {
             "(empty)"
         } else {
-            &stderr
+            &stderr.content
         },
     );
+    // A completed call's text is the JSON string `call` returns; a stopped
+    // call's is the reported failure text itself.
+    let expected = match terminal_cause {
+        Some(_) => rendered.clone(),
+        None => serde_json::to_string(&rendered).context("encoding CLI tool output")?,
+    };
+    if let Some(writer) = live_output {
+        writer
+            .prepare_command_presentation(
+                &expected,
+                gents_loop::live_output::CommandPresentationLayout::Labeled {
+                    head: &head,
+                    json_string: terminal_cause.is_none(),
+                },
+                captured_channel(&stdout_raw, &stdout),
+                captured_channel(&stderr_raw, &stderr),
+            )
+            .await?;
+    }
     if let Some(cause) = terminal_cause {
         // Captured command text must not reclassify the terminal cause.
         return Err(LocalToolError::reported_failure(
             gents_loop::tool_call_lifecycle::runtime::classify_error_text(&cause),
-            format!("{cause}\n{rendered}"),
+            rendered,
         ));
     }
     Ok(rendered)
@@ -341,8 +367,11 @@ mod tests {
             .split_once("\nstderr:\n")
             .unwrap()
             .0;
-        assert!(stdout.ends_with("timeout unavailable transport"), "{err}");
-        assert_eq!(stdout.len(), super::super::DEFAULT_MAX_COMMAND_CHARS);
+        let tail = stdout
+            .strip_prefix("[Showing last 16000 of 17029 bytes]\n\n")
+            .unwrap_or_else(|| panic!("stopped output keeps a marked tail: {err}"));
+        assert!(tail.ends_with("timeout unavailable transport"), "{err}");
+        assert_eq!(tail.len(), super::super::DEFAULT_MAX_COMMAND_CHARS);
         assert!(err.to_string().contains("stderr:\nlast stderr"), "{err}");
         assert!(err.to_string().contains("exit_code: unavailable"), "{err}");
         assert!(matches!(
@@ -391,5 +420,164 @@ mod tests {
         assert!(err.to_string().contains("cancelled"), "{err}");
         assert!(err.to_string().contains("stdout:\npartial stdout"), "{err}");
         assert!(err.to_string().contains("stderr:\npartial stderr"), "{err}");
+    }
+
+    async fn committed_run(
+        name: &str,
+    ) -> (
+        std::sync::Arc<defra_node::EmbeddedNode>,
+        crate::tool_call_lifecycle::ToolCallLifecycle,
+        gents_loop::live_output::LiveToolOutputRegistry,
+        gents_loop::live_output::LiveToolOutputWriter,
+    ) {
+        let (node, _path, tool) =
+            crate::tool_call_lifecycle::admission_fixture::published_spawn_parent(name).await;
+        let binding = tool
+            .tool_output_binding()
+            .expect("running tool output binding");
+        let registry = gents_loop::live_output::LiveToolOutputRegistry::default();
+        let writer = registry
+            .canonical_writer_for(
+                tool.doc_id().unwrap().to_owned(),
+                std::sync::Arc::new(binding),
+            )
+            .await;
+        (node, tool, registry, writer)
+    }
+
+    async fn presented(
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
+    ) -> String {
+        crate::tool_call_lifecycle::load_tool_call_presentation(
+            &crate::config_client::ConfigAccess::Local(node.clone()),
+            tool.doc_id().unwrap(),
+            tool.agent_did(),
+            tool.session_id(),
+            tool.requester_did(),
+        )
+        .await
+        .unwrap()
+        .result
+        .expect("terminal delivery presentation")
+    }
+
+    async fn committed_output(
+        node: &std::sync::Arc<defra_node::EmbeddedNode>,
+        tool: &crate::tool_call_lifecycle::ToolCallLifecycle,
+    ) -> String {
+        crate::background_tools::canonical_tool_output(
+            node.as_ref(),
+            tool.doc_id().unwrap(),
+            tool.request_doc_id().unwrap(),
+            tool.session_id(),
+            tool.agent_did(),
+            tool.requester_did(),
+        )
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn request_deadline_presents_output_committed_before_the_cut() {
+        let (node, mut tool, _registry, writer) = committed_run("cli-request-deadline").await;
+        let tools: Vec<Box<dyn ToolDyn>> = vec![Box::new(CliTool::new(config(30)))];
+        let args = serde_json::json!({"argv": ["-c",
+            "printf 'partial stdout'; printf 'partial stderr' >&2; sleep 30"]})
+        .to_string();
+        let started = std::time::Instant::now();
+        // The loop hands the canonical writer to the dispatcher, which scopes
+        // it for the call.
+        let outcome =
+            gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+                Some(chrono::Utc::now() + chrono::Duration::seconds(2)),
+                tokio_util::sync::CancellationToken::new(),
+                None,
+                None,
+                None,
+                gents_loop::loop_stream::dispatch_tool(&tools, "sh", args, Some(writer), None),
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                crate::tool_call_lifecycle::ToolOutcome::TimedOut { .. }
+            ),
+            "{outcome:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(20));
+
+        let raw = committed_output(&node, &tool).await;
+        assert!(
+            raw.contains("partial stdout") && raw.contains("partial stderr"),
+            "captured output must be committed before the deadline: {raw:?}"
+        );
+        assert!(tool.timeout().await.unwrap());
+        let presented = presented(&node, &tool).await;
+        assert!(presented.starts_with(&raw), "{presented:?}");
+        assert!(
+            presented.contains("\ntool call deadline exceeded at "),
+            "{presented:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn committed_output_reconstructs_completed_and_stopped_results() {
+        use crate::tool_call_lifecycle::ToolOutcome;
+
+        for (name, timeout_secs, script) in [
+            (
+                "cli-completed",
+                30,
+                "printf 'out \"q\"\\n'; printf 'err\\t' >&2; exit 4",
+            ),
+            (
+                "cli-stopped",
+                1,
+                "printf '%17000s' ' '; printf 'last out'; printf 'last err' >&2; sleep 30",
+            ),
+        ] {
+            let (node, mut tool, registry, writer) = committed_run(name).await;
+            let cli = CliTool::new(config(timeout_secs));
+            let args = serde_json::json!({"argv": ["-c", script]}).to_string();
+            let outcome = ToolOutcome::from_dispatch(
+                "sh",
+                gents_loop::tool_call_lifecycle::runtime::scope_request_tool_execution_with_session(
+                    None,
+                    tokio_util::sync::CancellationToken::new(),
+                    None,
+                    Some(writer),
+                    None,
+                    cli.call(args),
+                )
+                .await,
+            );
+            let text = outcome.model_facing_text().to_owned();
+            let presentation = registry
+                .take_prepared_presentation(tool.doc_id().unwrap(), &text)
+                .await
+                .unwrap()
+                .expect("CLI tool prepares a presentation over committed output");
+            match outcome {
+                ToolOutcome::Completed(_) => {
+                    assert!(text.contains("exit_code: 4"), "{text}");
+                    tool.complete_with_presentation(&text, Some(presentation))
+                        .await
+                        .unwrap();
+                }
+                ToolOutcome::Failed { class, .. } => {
+                    assert!(text.starts_with("timed out after 1s\n"), "{text}");
+                    assert!(
+                        text.contains("[Showing last 16000 of 17008 bytes]"),
+                        "{text}"
+                    );
+                    tool.fail_with_presentation(&text, class, Some(presentation))
+                        .await
+                        .unwrap();
+                }
+                other => panic!("{name}: unexpected outcome {other:?}"),
+            }
+            assert_eq!(presented(&node, &tool).await, text, "{name}");
+        }
     }
 }

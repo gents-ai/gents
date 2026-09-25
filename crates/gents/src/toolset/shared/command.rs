@@ -508,8 +508,13 @@ pub(crate) async fn run_command(
     let stdout_raw = String::from_utf8_lossy(&stdout_bytes).into_owned();
     let stderr_raw = String::from_utf8_lossy(&stderr_bytes).into_owned();
 
-    let stdout = truncate_stream(&stdout_raw, max_output_chars);
-    let stderr = truncate_stream(&stderr_raw, max_output_chars);
+    let channel = if timed_out {
+        stopped_stream
+    } else {
+        truncate_stream
+    };
+    let stdout = channel(&stdout_raw, max_output_chars);
+    let stderr = channel(&stderr_raw, max_output_chars);
     let status = if timed_out {
         "timeout"
     } else if exit_code == Some(0) {
@@ -541,25 +546,31 @@ pub(crate) async fn run_command(
     };
     let output = CommandOutput {
         metadata,
-        stdout: stdout.content,
-        stderr: stderr.content,
+        stdout: stdout.content.clone(),
+        stderr: stderr.content.clone(),
     };
     let rendered = render_command_output(&output, raw_json).map_err(ToolError::from)?;
     if let Some(writer) = live_output {
         let metadata_json = serde_json::to_string(&output.metadata)
             .context("serializing command metadata for canonical presentation")
             .map_err(ToolError::from)?;
+        let head = format!("{OUTPUT_META_PREFIX}{metadata_json}\n");
+        let layout = if raw_json {
+            gents_loop::live_output::CommandPresentationLayout::JsonObject {
+                metadata_json: &metadata_json,
+            }
+        } else {
+            gents_loop::live_output::CommandPresentationLayout::Labeled {
+                head: &head,
+                json_string: false,
+            }
+        };
         writer
             .prepare_command_presentation(
                 &rendered,
-                &metadata_json,
-                &stdout_raw,
-                &output.stdout,
-                output.metadata.stdout_truncation.returned_bytes,
-                &stderr_raw,
-                &output.stderr,
-                output.metadata.stderr_truncation.returned_bytes,
-                raw_json,
+                layout,
+                captured_channel(&stdout_raw, &stdout),
+                captured_channel(&stderr_raw, &stderr),
             )
             .await
             .map_err(ToolError::from)?;
@@ -1507,12 +1518,14 @@ struct StreamTruncationMetadata {
     truncated: bool,
 }
 
-struct TruncatedStream {
-    content: String,
+pub(crate) struct TruncatedStream {
+    pub(crate) content: String,
+    /// Byte range of the raw channel shown verbatim in `content`.
+    pub(crate) shown: std::ops::Range<usize>,
     metadata: StreamTruncationMetadata,
 }
 
-fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
+pub(crate) fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
     let limits = TruncationLimits {
         max_bytes,
         max_lines: usize::MAX,
@@ -1520,12 +1533,51 @@ fn truncate_stream(text: &str, max_bytes: usize) -> TruncatedStream {
     let result = truncate(text, TruncationMode::Head, &limits);
     TruncatedStream {
         content: result.text,
+        shown: 0..result.returned_bytes,
         metadata: StreamTruncationMetadata {
             returned_bytes: result.returned_bytes,
             total_bytes: result.original_bytes,
             max_bytes,
             truncated: result.truncated,
         },
+    }
+}
+
+/// A stopped command's latest output shows where it stopped, so its channel
+/// keeps the byte-exact tail selected by the terminal diagnostic owner. The
+/// notice uses the shared truncation vocabulary that compaction recognizes.
+pub(crate) fn stopped_stream(text: &str, max_bytes: usize) -> TruncatedStream {
+    let tail = crate::tool_call_lifecycle::delivery::terminal_output_tail(text, max_bytes);
+    let start = text.len() - tail.len();
+    let content = if start == 0 {
+        text.to_owned()
+    } else {
+        format!(
+            "[Showing last {} of {} bytes]\n\n{tail}",
+            tail.len(),
+            text.len()
+        )
+    };
+    TruncatedStream {
+        content,
+        shown: start..text.len(),
+        metadata: StreamTruncationMetadata {
+            returned_bytes: tail.len(),
+            total_bytes: text.len(),
+            max_bytes,
+            truncated: start > 0,
+        },
+    }
+}
+
+pub(crate) fn captured_channel<'a>(
+    raw: &'a str,
+    stream: &'a TruncatedStream,
+) -> gents_loop::live_output::CapturedChannel<'a> {
+    gents_loop::live_output::CapturedChannel {
+        raw,
+        rendered: &stream.content,
+        shown: stream.shown.clone(),
     }
 }
 
