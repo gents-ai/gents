@@ -46,13 +46,13 @@ impl EvalContext {
 
     /// `<home>/eval/jobs`: each job owns `<jobs_dir>/<job_id>/`.
     pub(crate) fn jobs_dir(&self) -> PathBuf {
-        self.home_dir.join("eval").join("jobs")
+        self.home_dir.join(gents::home::EVAL_DIR_NAME).join("jobs")
     }
 }
 
 /// `<home>/eval/runs`, where the runner freezes every run.
 pub(crate) fn runs_dir(home_dir: &Path) -> PathBuf {
-    home_dir.join("eval").join("runs")
+    home_dir.join(gents::home::EVAL_DIR_NAME).join("runs")
 }
 
 /// What a command body runs trials with. `dispatch` supplies the embedded

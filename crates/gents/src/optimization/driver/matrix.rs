@@ -375,7 +375,7 @@ impl TrialExecutor for CancelsFirstValidationRun<'_> {
             .is_some_and(|key| key.cell_label == "candidate");
         if candidate && !self.marked.swap(true, Ordering::SeqCst) {
             let run_dir = spec
-                .home_dir
+                .trial_dir
                 .parent()
                 .and_then(Path::parent)
                 .expect("a trial home is <run dir>/trials/<trial_id>");

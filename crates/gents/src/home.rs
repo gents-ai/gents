@@ -53,6 +53,8 @@ pub const PACKS_DIR_NAME: &str = "packs";
 pub const PLUGINS_DIR_NAME: &str = "plugins";
 /// The Codex shim's own home.
 pub const CODEX_UI_DIR_NAME: &str = "codex-ui";
+/// Frozen eval runs and optimization job directories (`gents eval`).
+pub const EVAL_DIR_NAME: &str = "eval";
 
 /// Every top-level entry a gents runtime writes in its home. Writers name
 /// these entries through this module, and retiring a home (after an upgrade
@@ -70,6 +72,7 @@ pub const RUNTIME_HOME_ENTRIES: &[&str] = &[
     PACKS_DIR_NAME,
     PLUGINS_DIR_NAME,
     CODEX_UI_DIR_NAME,
+    EVAL_DIR_NAME,
 ];
 
 /// The default DefraDB data directory under a gents home.

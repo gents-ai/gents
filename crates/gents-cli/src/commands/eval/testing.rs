@@ -283,6 +283,17 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
                 "sampling_id": "sampling",
             }),
         ),
+        // The subject pack's own Tools and context: an optimization job's
+        // baseline pack must be the live configuration.
+        (
+            Collection::Tools,
+            json!({
+                "tools_id": "monitor-tools",
+                "agent_did": owner,
+                "display_name": "Monitor tools",
+                "host": {"bash": {"mode": "Off"}},
+            }),
+        ),
         (
             Collection::AgentContext,
             json!({
@@ -290,6 +301,7 @@ fn documents(owner: &str) -> Vec<(Collection, Value)> {
                 "agent_did": owner,
                 "display_name": "Monitor",
                 "system_prompt": BASELINE_PROMPT,
+                "tools_id": "monitor-tools",
             }),
         ),
         (
